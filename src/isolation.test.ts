@@ -1,7 +1,8 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // Guards the rule that packages/cli can be split out with git subtree split.
 // Source may import only the allowed runtime packages, node builtins and
-// relative paths that stay inside this package folder.
+// relative paths that stay inside this package folder. Every .ts file in the
+// package also carries the one-line Apache header.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +17,11 @@ const ALLOWED_BARE = new Set([
   'zod',
   '@noble/ed25519',
 ]);
-const TEST_ONLY_BARE = new Set(['vitest']);
+const TEST_ONLY_BARE = new Set(['vitest', 'tsup']);
+
+const HEADER =
+  '// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.';
+const SKIP_DIRS = new Set(['node_modules', 'dist']);
 
 const SPECIFIER_PATTERNS = [
   /\bimport\s+(?:type\s+)?[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
@@ -26,12 +31,18 @@ const SPECIFIER_PATTERNS = [
   /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
 ];
 
-function listSourceFiles(dir: string): string[] {
+function listFiles(dir: string, pattern: RegExp): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
-    if (entry.isDirectory()) return listSourceFiles(full);
-    return /\.(?:[cm]?[jt]sx?)$/.test(entry.name) ? [full] : [];
+    if (entry.isDirectory()) {
+      return SKIP_DIRS.has(entry.name) ? [] : listFiles(full, pattern);
+    }
+    return pattern.test(entry.name) ? [full] : [];
   });
+}
+
+function listSourceFiles(dir: string): string[] {
+  return listFiles(dir, /\.(?:[cm]?[jt]sx?)$/);
 }
 
 function extractSpecifiers(code: string): string[] {
@@ -99,5 +110,14 @@ describe('cli isolation', () => {
         .map((problem) => `${relative(packageDir, file)}: ${problem}`),
     );
     expect(problems).toEqual([]);
+  });
+
+  it('every .ts file in the package starts with the Apache header', () => {
+    const files = listFiles(packageDir, /\.[cm]?tsx?$/);
+    expect(files.length).toBeGreaterThan(0);
+    const missing = files
+      .filter((file) => readFileSync(file, 'utf8').split('\n')[0] !== HEADER)
+      .map((file) => relative(packageDir, file));
+    expect(missing).toEqual([]);
   });
 });

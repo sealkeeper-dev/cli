@@ -1,0 +1,117 @@
+// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import { randomUUID } from 'node:crypto';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { AgentId } from '@vouched/schema';
+import { z } from 'zod';
+
+export const DEFAULT_API_URL = 'https://api.vouched.run';
+
+export const Config = z
+  .object({
+    agentId: AgentId,
+    operatorLogin: z.string().min(1),
+    name: z.string().min(1),
+    version: z.string().min(1),
+    apiUrl: z.url({ protocol: /^https?$/ }).default(DEFAULT_API_URL),
+    registeredAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type Config = z.infer<typeof Config>;
+export type ConfigInput = z.input<typeof Config>;
+
+export class ConfigError extends Error {
+  override name = 'ConfigError';
+}
+
+export type Paths = {
+  home: string;
+  config: string;
+  key: string;
+  log: string;
+  cursor: string;
+  logFile(day: string): string;
+};
+
+// VOUCHED_HOME wins so tests and multiple agents on one machine can each have
+// their own directory. The default is ~/.vouched.
+export function vouchedHome(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.VOUCHED_HOME;
+  return override && override.length > 0
+    ? override
+    : join(homedir(), '.vouched');
+}
+
+// The only place file paths under the Vouched home are built.
+export function paths(home: string = vouchedHome()): Paths {
+  const log = join(home, 'log');
+  return {
+    home,
+    config: join(home, 'config.json'),
+    key: join(home, 'key'),
+    log,
+    cursor: join(home, 'cursor.json'),
+    logFile: (day) => join(log, `${day}.jsonl`),
+  };
+}
+
+// Creates the home directory if needed and makes sure only the owner can read
+// it, since it holds the private key.
+export async function ensureHome(p: Paths = paths()): Promise<void> {
+  await mkdir(p.home, { recursive: true, mode: 0o700 });
+  await chmod(p.home, 0o700);
+}
+
+// Returns null when there is no config yet. Throws ConfigError when the file
+// exists but is not valid JSON or does not match the schema.
+export async function readConfig(p: Paths = paths()): Promise<Config | null> {
+  let raw: string;
+  try {
+    raw = await readFile(p.config, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`Invalid config at ${p.config}: not valid JSON`);
+  }
+
+  const result = Config.safeParse(json);
+  if (!result.success) {
+    throw new ConfigError(
+      `Invalid config at ${p.config}:\n${z.prettifyError(result.error)}`,
+    );
+  }
+  return result.data;
+}
+
+// Validates, then writes to a temp file in the same directory and renames it
+// over config.json, so a crash never leaves a half written config behind.
+export async function writeConfig(
+  input: ConfigInput,
+  p: Paths = paths(),
+): Promise<Config> {
+  const config = Config.parse(input);
+  await ensureHome(p);
+
+  const tmp = `${p.config}.${randomUUID()}.tmp`;
+  try {
+    const file = await open(tmp, 'wx', 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify(config, null, 2)}\n`, 'utf8');
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await rename(tmp, p.config);
+  } catch (error) {
+    await rm(tmp, { force: true });
+    throw error;
+  }
+  return config;
+}
