@@ -42,6 +42,9 @@ export type Paths = {
   cursor: string;
   credential: string;
   score: string;
+  // Start time markers for hook adapters, one small file per session or tool
+  // call, so a later hook can compute a duration.
+  sessions: string;
   logFile(day: string): string;
 };
 
@@ -65,6 +68,7 @@ export function paths(home: string = vouchedHome()): Paths {
     cursor: join(home, 'cursor.json'),
     credential: join(home, 'credential.json'),
     score: join(home, 'score.json'),
+    sessions: join(home, 'sessions'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

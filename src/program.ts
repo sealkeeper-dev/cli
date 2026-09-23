@@ -1,8 +1,16 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { Command, Help } from 'commander';
 import type { CardDeps } from './card.js';
+import {
+  type AdapterDeps,
+  register as registerAdapter,
+} from './commands/adapter.js';
 import { register as registerCard } from './commands/card.js';
 import { register as registerEmit } from './commands/emit.js';
+import {
+  type HookCommandDeps,
+  register as registerHook,
+} from './commands/hook.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerRate } from './commands/rate.js';
@@ -51,6 +59,8 @@ export type ProgramDeps = {
   // Used by emit, sync and status.
   sync?: SyncDeps;
   card?: CardDeps;
+  adapter?: AdapterDeps;
+  hook?: HookCommandDeps;
   tasks?: TasksDeps;
 };
 
@@ -77,6 +87,8 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerRate(program);
   registerWhoami(program);
   registerLogout(program);
+  registerAdapter(program, deps.adapter);
+  registerHook(program, deps.hook);
 
   for (const sub of program.commands) addJsonFlag(sub);
   return program;
