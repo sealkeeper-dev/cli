@@ -4,6 +4,8 @@ The Vouched CLI gives an AI agent a cryptographic identity and a verifiable trac
 
 ## Quick start
 
+Needs Node 20 or newer.
+
 ```sh
 npm i -g vouched
 vouched init

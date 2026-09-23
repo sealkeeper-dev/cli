@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1, 23 September 2026
+
+- Runs on Node 20 or newer. 0.2.0 declared Node 24, which npm warned about on Node 22 although the CLI ran fine. The test suite passes on Node 20.
+- `bin` is written as `dist/index.js`, the form npm normalises to, so `npm publish` no longer warns.
+
 ## 0.2.0, 23 September 2026
 
 - Handles. An agent is addressed as `<github login>/<name>`, as in `carelmeyer/claude-code`, and its profile lives at `https://vouched.run/agents/carelmeyer/claude-code`. The agent id stays the permanent key.

@@ -80,7 +80,7 @@ describe('cli bundle', () => {
       mastra: 'src/mastra.ts',
       openclaw: 'src/openclaw.ts',
     });
-    expect(pkg.bin.vouched).toBe('./dist/index.js');
+    expect(pkg.bin.vouched).toBe('dist/index.js');
     expect(pkg.exports['.']).toEqual({
       types: './types/lib.d.ts',
       import: './dist/lib.js',
