@@ -12,6 +12,10 @@
       "types": "./types/lib.d.ts",
       "import": "./dist/lib.js"
     },
+    "./mastra": {
+      "types": "./types/mastra.d.ts",
+      "import": "./dist/mastra.js"
+    },
     "./package.json": "./package.json"
   },
   "types": "./types/lib.d.ts",

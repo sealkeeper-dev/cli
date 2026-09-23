@@ -1,8 +1,9 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // Builds the CLI with the real tsup options into a temp directory and checks
-// what ends up in the two bundles, the bin (index.js) and the importable API
-// (lib.js). The lib is then imported and used like an adapter would, and the
-// bin is run the way a user would run it.
+// what ends up in the bundles, the bin (index.js), the importable API
+// (lib.js) and the Mastra adapter (mastra.js). The lib and the adapter are
+// then imported and used like an agent would, and the bin is run the way a
+// user would run it.
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -26,6 +27,7 @@ describe('cli bundle', () => {
   let outDir: string;
   let bundle: string;
   let lib: string;
+  let mastra: string;
 
   beforeAll(async () => {
     // Inside the package so the bundle finds commander and zod in
@@ -38,12 +40,14 @@ describe('cli bundle', () => {
       entry: {
         index: join(packageDir, 'src/index.ts'),
         lib: join(packageDir, 'src/lib.ts'),
+        mastra: join(packageDir, 'src/mastra.ts'),
       },
       tsconfig: join(packageDir, 'tsconfig.json'),
       outDir,
     });
     bundle = await readFile(join(outDir, 'index.js'), 'utf8');
     lib = await readFile(join(outDir, 'lib.js'), 'utf8');
+    mastra = await readFile(join(outDir, 'mastra.js'), 'utf8');
   }, 60_000);
 
   afterAll(async () => {
@@ -62,18 +66,67 @@ describe('cli bundle', () => {
   it('does not pull in the database layer', () => {
     expect(bundle).not.toContain('drizzle');
     expect(lib).not.toContain('drizzle');
+    expect(mastra).not.toContain('drizzle');
   });
 
   it('builds the entries the package points at', () => {
     expect(options.entry).toEqual({
       index: 'src/index.ts',
       lib: 'src/lib.ts',
+      mastra: 'src/mastra.ts',
     });
     expect(pkg.bin.vouched).toBe('./dist/index.js');
     expect(pkg.exports['.']).toEqual({
       types: './types/lib.d.ts',
       import: './dist/lib.js',
     });
+    expect(pkg.exports['./mastra']).toEqual({
+      types: './types/mastra.d.ts',
+      import: './dist/mastra.js',
+    });
+  });
+
+  it('keeps the adapter free of Mastra, the CLI and @vouched/schema imports', () => {
+    expect(mastra).not.toMatch(/from ['"]@mastra\//);
+    expect(mastra).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(mastra).not.toMatch(/from ['"]commander['"]/);
+    expect(mastra).toMatch(/export\s*\{[^}]*\bwithVouched\b/);
+    expect(mastra).toMatch(/export\s*\{[^}]*\bvouchedSession\b/);
+  });
+
+  it('the built adapter wraps a tool and records a session', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vouched-mastra-'));
+    vi.stubEnv('VOUCHED_HOME', home);
+    try {
+      const mod = (await import(
+        pathToFileURL(join(outDir, 'mastra.js')).href
+      )) as typeof import('./mastra.js');
+      const session = mod.vouchedSession('bundle-session');
+      const tools = mod.withVouched({
+        echo: { id: 'echo', execute: async (x: number) => x + 1 },
+      });
+      expect(await tools.echo.execute(1)).toBe(2);
+      await session.onStepFinish({
+        usage: { promptTokens: 10, completionTokens: 5 },
+        response: { modelId: 'gpt-4o', timestamp: new Date() },
+      });
+      await session.end();
+
+      const [file] = await readdir(join(home, 'log'));
+      const types = (await readFile(join(home, 'log', file ?? ''), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => (JSON.parse(line) as { type: string }).type);
+      expect(types.sort()).toEqual([
+        'session.end',
+        'session.start',
+        'tool.call',
+        'usage',
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it('keeps the lib free of the CLI and of @vouched/schema imports', () => {

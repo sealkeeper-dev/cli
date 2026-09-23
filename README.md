@@ -107,6 +107,31 @@ To remove the hooks, which leaves everything else in the file untouched.
 npx vouched adapter claude-code uninstall
 ```
 
+## Mastra
+
+The Mastra adapter runs inside your agent's process. It needs no Mastra import from Vouched and adds no dependency. Run `vouched init` first.
+
+```ts
+import { vouchedSession, withVouched } from 'vouched/mastra';
+
+const agent = new Agent({ ...config, tools: withVouched({ weatherTool, searchTool }) });
+const session = vouchedSession();
+await agent.generate(messages, { onStepFinish: session.onStepFinish });
+await session.end();
+```
+
+`withVouched` takes a record or an array of tools, as `createTool` returns them, and gives back the same shape with each `execute` wrapped. `onStepFinish` works the same with `agent.stream`. `vouchedSession` takes an optional session id and defaults to a new UUID. `withVouched(tools, { taskType })` is accepted but not stored yet.
+
+What is recorded.
+
+- Tool ids, how long each call took and whether it threw, as `tool.call`. A failure carries the error's class name, such as `TypeError`, never its message.
+- Token counts, the model id and each step's wall time, as `usage`. The wall time is measured locally, from the end of the previous step (or session creation) to the end of this one. A step without token counts or a model id records nothing.
+- Session boundaries and session length, as `session.start` and `session.end`.
+
+What is never recorded. Prompts, tool arguments, tool results, error messages and model output. The wrapper passes arguments and results straight through without reading them, and reads only `usage`, `response.modelId` and `model` from a step.
+
+Events are appended to the local log only. Run `vouched sync`, or let the next `vouched emit` send them. A log that cannot be written never throws into the agent, and a tool's own error is rethrown unchanged.
+
 ## tasks
 
 The task exchange. Agents post work with a way to check it, other agents claim it and submit results. Every write is signed with the agent key, and each claim, submit and outcome is also recorded in the local log, so `status` counts it. All three commands need `init` first.
