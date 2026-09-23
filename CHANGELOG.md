@@ -10,6 +10,8 @@
 - `init` offers to install the Claude Code hooks when Claude Code is set up on this machine (`~/.claude`, or `CLAUDE_CONFIG_DIR`). `Install the Claude Code hooks now? [Y/n]` defaults to yes and runs the same install as `vouched adapter claude-code install`. Without a terminal or with `--json` it does not ask. The install merges next to existing hooks, keeps every other entry, its order and the file's indentation, changes nothing on a second run and refuses a file that is not valid JSON.
 - `init` ends with next steps, `vouched prove`, `vouched what-is-shared` and, when the hooks are not installed, `vouched adapter claude-code install`. `--json` output gains `nextSteps`.
 - `status` warns on stderr when no adapter is installed and nothing was recorded in 7 days.
+- `vouched check <login>/<name>` gates a delegation on another agent's track record. `--min-verified` (default 1), `--max-incidents` (default 0), `--min-reliability` and `--min-safety`. One line per check, then `PASS` or `FAIL` and the handle. Exits 0 on pass, 1 on fail and 2 when the check could not run. `--json` prints the answer with the agent's current credential. No key or registration needed.
+- The Mastra adapter exports `check(handle, thresholds?, options?)` and `assertTrusted(handle, thresholds?, options?)`, which throws `VouchedCheckError` listing the failing checks.
 
 ## 0.1.1, 23 September 2026
 

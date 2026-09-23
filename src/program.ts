@@ -7,6 +7,7 @@ import {
 } from './commands/adapter.js';
 import { type AgentDeps, register as registerAgent } from './commands/agent.js';
 import { register as registerCard } from './commands/card.js';
+import { register as registerCheck } from './commands/check.js';
 import { register as registerConfig } from './commands/config.js';
 import { register as registerEmit } from './commands/emit.js';
 import {
@@ -100,6 +101,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerAdapter(program, deps.adapter);
   registerHook(program, deps.hook);
   registerWhatIsShared(program);
+  registerCheck(program);
 
   for (const sub of program.commands) addJsonFlag(sub);
   return program;

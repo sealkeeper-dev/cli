@@ -16,6 +16,15 @@ describe('published mastra types', () => {
     expectTypeOf<typeof published.vouchedSession>().toEqualTypeOf<
       typeof mastra.vouchedSession
     >();
+    expectTypeOf<published.CheckThresholds>().toEqualTypeOf<mastra.CheckThresholds>();
+    expectTypeOf<published.CheckOptions>().toEqualTypeOf<mastra.CheckOptions>();
+    expectTypeOf<published.Check>().toEqualTypeOf<mastra.Check>();
+    expectTypeOf<published.CheckResponse>().toEqualTypeOf<mastra.CheckResponse>();
+    expectTypeOf<typeof published.check>().toEqualTypeOf<typeof mastra.check>();
+    expectTypeOf<typeof published.assertTrusted>().toEqualTypeOf<
+      typeof mastra.assertTrusted
+    >();
+    expectTypeOf<published.VouchedCheckError>().toEqualTypeOf<mastra.VouchedCheckError>();
   });
 
   it('accepts a createTool shaped object and keeps its type', () => {

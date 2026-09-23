@@ -4,9 +4,25 @@
 // syncs, and a failing emit is swallowed so it never throws into the agent.
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
+//
+// Before delegating to another agent, gate on its track record.
+//   await assertTrusted('carelmeyer/claude-code', { minVerified: 5 })
+// throws unless every check passes. check() returns the answer instead.
 import { randomUUID } from 'node:crypto';
-import { EventPayload } from '@vouched-dev/schema';
+import {
+  type Check,
+  type CheckResponse,
+  EventPayload,
+} from '@vouched-dev/schema';
+import {
+  type CheckOptions,
+  type CheckThresholds,
+  describeCheck,
+  fetchCheck,
+} from './check.js';
 import { type EmitInput, emit } from './lib.js';
+
+export type { Check, CheckOptions, CheckResponse, CheckThresholds };
 
 // Limits come from the schema, so this file keeps no copy of them.
 const TOOL_CALL = EventPayload['tool.call'].shape;
@@ -175,4 +191,44 @@ export function vouchedSession(
         payload: { session_id: sessionId, duration_ms: elapsed(start) },
       }),
   };
+}
+
+// GET /v1/check for handle, as in carelmeyer/claude-code. Resolves with the
+// answer whether it passed or not. Rejects when the check could not run, a
+// bad handle or threshold, an unknown agent or the network. The credential
+// in the answer can be verified offline, see https://vouched.run/verify.
+export function check(
+  handle: string,
+  thresholds?: CheckThresholds,
+  options?: CheckOptions,
+): Promise<CheckResponse> {
+  return fetchCheck(handle, thresholds, options);
+}
+
+// Thrown by assertTrusted. failed lists the checks that did not pass.
+export class VouchedCheckError extends Error {
+  override name = 'VouchedCheckError';
+  readonly failed: Check[];
+  constructor(readonly result: CheckResponse) {
+    const failed = result.checks.filter((c) => !c.ok);
+    super(
+      [
+        `${result.handle} did not pass the Vouched check`,
+        ...failed.map(describeCheck),
+      ].join('\n'),
+    );
+    this.failed = failed;
+  }
+}
+
+// Resolves with the answer when every check passed, else throws
+// VouchedCheckError listing the failing checks.
+export async function assertTrusted(
+  handle: string,
+  thresholds?: CheckThresholds,
+  options?: CheckOptions,
+): Promise<CheckResponse> {
+  const result = await check(handle, thresholds, options);
+  if (!result.ok) throw new VouchedCheckError(result);
+  return result;
 }
