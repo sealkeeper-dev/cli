@@ -12,8 +12,11 @@ import { join } from 'node:path';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ConfigError, type Paths, paths, readConfig } from './config.js';
 import { type EmitInput, emit } from './emit.js';
+import { toolNameOf } from './names.js';
 import { stderr } from './output.js';
 import { syncEvents } from './sync.js';
+
+export { toolNameOf } from './names.js';
 
 // The Claude Code hooks adapter. Claude Code runs `vouched hook claude-code`
 // for each hook event with one JSON object on stdin. handleHook maps it to
@@ -77,15 +80,6 @@ export function parseHookInput(text: string): HookInput | null {
 
 function idOf(value: unknown): string | null {
   return typeof value === 'string' && ID.test(value) ? value : null;
-}
-
-// Tool names in the taxonomy allow letters, digits and . _ : / @ -, so MCP
-// names like mcp__server__tool pass as they are. Anything outside the set
-// becomes a dash, and the name is cut to 64 characters.
-export function toolNameOf(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const name = value.replace(/[^A-Za-z0-9._:/@-]/g, '-').slice(0, 64);
-  return name.length > 0 ? name : null;
 }
 
 // Handles one hook event. Without a config it does nothing. Any failure

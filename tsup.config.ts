@@ -7,11 +7,12 @@ import { defineConfig, type Options } from 'tsup';
 // client id comes from GITHUB_CLIENT_ID at build time and defaults to empty,
 // in which case the CLI needs VOUCHED_GITHUB_CLIENT_ID at runtime.
 //
-// Three entries. index is the bin. lib is the importable API ("." in the
-// package exports) and mastra is the Mastra adapter ("./mastra"). Without
-// splitting each is one self-contained file. The banner lands on all three,
-// which is harmless for lib and mastra since Node skips a leading #! line in
-// a module. Their types are in types/lib.d.ts and types/mastra.d.ts.
+// Four entries. index is the bin. lib is the importable API ("." in the
+// package exports), mastra is the Mastra adapter ("./mastra") and openclaw
+// is the OpenClaw plugin entry ("./openclaw"). Without splitting each is one
+// self-contained file. The banner lands on all four, which is harmless for
+// the modules since Node skips a leading #! line in a module. Their types
+// are in types/lib.d.ts, types/mastra.d.ts and types/openclaw.d.ts.
 const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };
@@ -21,6 +22,7 @@ export const options: Options = {
     index: 'src/index.ts',
     lib: 'src/lib.ts',
     mastra: 'src/mastra.ts',
+    openclaw: 'src/openclaw.ts',
   },
   outDir: 'dist',
   format: ['esm'],

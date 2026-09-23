@@ -1,9 +1,9 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // Builds the CLI with the real tsup options into a temp directory and checks
 // what ends up in the bundles, the bin (index.js), the importable API
-// (lib.js) and the Mastra adapter (mastra.js). The lib and the adapter are
-// then imported and used like an agent would, and the bin is run the way a
-// user would run it.
+// (lib.js), the Mastra adapter (mastra.js) and the OpenClaw plugin entry
+// (openclaw.js). The lib and the adapters are then imported and used like
+// an agent would, and the bin is run the way a user would run it.
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -28,6 +28,7 @@ describe('cli bundle', () => {
   let bundle: string;
   let lib: string;
   let mastra: string;
+  let openclaw: string;
 
   beforeAll(async () => {
     // Inside the package so the bundle finds commander and zod in
@@ -41,6 +42,7 @@ describe('cli bundle', () => {
         index: join(packageDir, 'src/index.ts'),
         lib: join(packageDir, 'src/lib.ts'),
         mastra: join(packageDir, 'src/mastra.ts'),
+        openclaw: join(packageDir, 'src/openclaw.ts'),
       },
       tsconfig: join(packageDir, 'tsconfig.json'),
       outDir,
@@ -48,6 +50,7 @@ describe('cli bundle', () => {
     bundle = await readFile(join(outDir, 'index.js'), 'utf8');
     lib = await readFile(join(outDir, 'lib.js'), 'utf8');
     mastra = await readFile(join(outDir, 'mastra.js'), 'utf8');
+    openclaw = await readFile(join(outDir, 'openclaw.js'), 'utf8');
   }, 60_000);
 
   afterAll(async () => {
@@ -67,6 +70,7 @@ describe('cli bundle', () => {
     expect(bundle).not.toContain('drizzle');
     expect(lib).not.toContain('drizzle');
     expect(mastra).not.toContain('drizzle');
+    expect(openclaw).not.toContain('drizzle');
   });
 
   it('builds the entries the package points at', () => {
@@ -74,6 +78,7 @@ describe('cli bundle', () => {
       index: 'src/index.ts',
       lib: 'src/lib.ts',
       mastra: 'src/mastra.ts',
+      openclaw: 'src/openclaw.ts',
     });
     expect(pkg.bin.vouched).toBe('./dist/index.js');
     expect(pkg.exports['.']).toEqual({
@@ -83,6 +88,10 @@ describe('cli bundle', () => {
     expect(pkg.exports['./mastra']).toEqual({
       types: './types/mastra.d.ts',
       import: './dist/mastra.js',
+    });
+    expect(pkg.exports['./openclaw']).toEqual({
+      types: './types/openclaw.d.ts',
+      import: './dist/openclaw.js',
     });
   });
 
@@ -122,6 +131,57 @@ describe('cli bundle', () => {
         'session.start',
         'tool.call',
         'usage',
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the OpenClaw entry free of OpenClaw, the CLI and @vouched/schema imports', () => {
+    expect(openclaw).not.toMatch(/from ['"]openclaw/);
+    expect(openclaw).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(openclaw).not.toMatch(/from ['"]commander['"]/);
+    expect(openclaw).not.toContain('syncEvents');
+    expect(openclaw).toMatch(/export\s*\{[^}]*\bvouchedPlugin\b/);
+    expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
+  });
+
+  it('the built OpenClaw entry records a session, a tool call and usage', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vouched-openclaw-'));
+    vi.stubEnv('VOUCHED_HOME', home);
+    try {
+      const mod = (await import(
+        pathToFileURL(join(outDir, 'openclaw.js')).href
+      )) as typeof import('./openclaw.js');
+      const handlers = new Map<string, (event: unknown) => unknown>();
+      mod.default.register({
+        on: (name: string, handler: (event: never, ctx: never) => unknown) => {
+          handlers.set(name, handler as (event: unknown) => unknown);
+        },
+      });
+      const fire = (name: string, event: unknown) =>
+        handlers.get(name)?.(event);
+      await fire('session_start', { sessionId: 'bundle-session' });
+      await fire('after_tool_call', { toolName: 'exec', durationMs: 5 });
+      await fire('model_call_ended', { runId: 'r1', durationMs: 90 });
+      await fire('llm_output', {
+        runId: 'r1',
+        model: 'gpt-5.4',
+        usage: { input: 10, output: 5 },
+      });
+      await fire('session_end', { sessionId: 'bundle-session' });
+
+      const [file] = await readdir(join(home, 'log'));
+      const types = (await readFile(join(home, 'log', file ?? ''), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => (JSON.parse(line) as { type: string }).type);
+      expect(types).toEqual([
+        'session.start',
+        'tool.call',
+        'usage',
+        'session.end',
       ]);
     } finally {
       vi.unstubAllEnvs();

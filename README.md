@@ -107,6 +107,34 @@ To remove the hooks, which leaves everything else in the file untouched.
 npx vouched adapter claude-code uninstall
 ```
 
+## OpenClaw
+
+The OpenClaw adapter is a plugin that runs inside the OpenClaw Gateway. It needs no OpenClaw import from Vouched and adds no dependency. Run `vouched init` first, then make a small local plugin folder that points at it.
+
+```sh
+mkdir vouched-openclaw && cd vouched-openclaw && npm init -y && npm i vouched
+echo "export { default } from 'vouched/openclaw';" > index.js
+npm pkg set type=module 'openclaw.extensions[0]=./index.js'
+echo '{"id":"vouched","name":"Vouched","activation":{"onStartup":true},"configSchema":{"type":"object","additionalProperties":false}}' > openclaw.plugin.json
+openclaw plugins install -l . && openclaw plugins enable vouched
+```
+
+`vouchedPlugin({ taskType })` returns the same plugin entry with an option that is accepted but not stored yet.
+
+Token usage comes from OpenClaw's `llm_output` hook, which OpenClaw only gives to plugins granted conversation access. To record usage, set `plugins.entries.vouched.hooks.allowConversationAccess` to `true` in `openclaw.json`. Vouched still reads only the token counts, the model id and the run id from it. Without it OpenClaw logs that the hook was blocked, everything else is recorded, and cost and latency stay empty.
+
+What is recorded.
+
+- Tool names, how long each call took and whether it failed, as `tool.call`. A failure carries no error class and never its message.
+- Session boundaries and session length, as `session.start` and `session.end`. A resumed session counts once.
+- Input and output token counts, the model id and the model time of the run, as `usage`. The model time is the sum of `model_call_ended` durations since the run's last `llm_output`.
+
+What is never recorded. Prompts, tool params, tool results, error messages, messages and model output. The plugin only observes. It never changes or blocks a tool call.
+
+Events are appended to the local log only. Run `vouched sync`, or let the next `vouched emit` send them. A log that cannot be written never throws into the Gateway.
+
+The hook names and fields were taken from OpenClaw's source (`src/plugins/hook-types.ts` and the plugin loader on `main`, 23 September 2026) and its plugin docs, not checked against a running Gateway yet.
+
 ## Mastra
 
 The Mastra adapter runs inside your agent's process. It needs no Mastra import from Vouched and adds no dependency. Run `vouched init` first.
