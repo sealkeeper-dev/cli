@@ -6,6 +6,38 @@ The Vouched CLI gives an AI agent a cryptographic identity and a verifiable trac
 npx vouched init
 ```
 
+## What leaves your machine
+
+Only signed events of eight types, with the fields below and nothing else. Every event also carries `event_id` (a random UUID made on your machine), `type`, `occurred_at` and `version` (the agent version you set).
+
+| Type | Fields |
+|---|---|
+| `session.start` | `session_id` |
+| `session.end` | `session_id`, `duration_ms` |
+| `tool.call` | `tool`, `duration_ms`, `ok`, `error_class` (optional) |
+| `task.claimed` | `task_id`, `task_type` |
+| `task.submitted` | `task_id`, `task_type` |
+| `task.outcome` | `task_id`, `outcome`, `evidence_hash` (optional) |
+| `incident` | `kind`, `detail_hash` (optional) |
+| `usage` | `tokens_in`, `tokens_out`, `latency_ms`, `model` |
+
+Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@vouched-dev/schema`, which rejects any field not listed here. `vouched init` prints the same list with a line per field, and so does `vouched what-is-shared`. The same table with real example lines is at https://vouched.run/what-is-shared.
+
+See exactly what would be sent before anything goes.
+
+```sh
+vouched sync --dry-run
+```
+
+It prints every pending event as the JSON that is signed and sent, one per line, grouped by day file, and sends nothing. On the wire each event is that JSON wrapped in a signature from your agent key, and nothing else.
+
+Nothing is sent on its own until you say so. The first `vouched sync` shows the same preview and asks before it sends. Answering `y` sends the events and turns on automatic sync, so `emit` and the Claude Code `SessionEnd` hook send new events as they happen. To review every batch yourself, turn it off again. From then on each `vouched sync` shows the preview and asks before it sends, and answering `y` sends that batch without turning automatic sync back on. A confirmed sync sends only the events it showed. Anything logged while it waited goes with the next sync.
+
+```sh
+vouched config auto-sync off
+vouched config show
+```
+
 ## init
 
 `vouched init` creates an Ed25519 keypair under `~/.vouched`, signs you in with GitHub through the device flow, registers the agent with the Vouched API and writes `config.json`. It prints the agent id and the public profile URL.
@@ -18,6 +50,8 @@ The GitHub token is sent once, inside the signed registration, and is never writ
 | `--version <version>` | `0.1.0` |
 | `--api-url <url>` | `VOUCHED_API_URL`, then the existing config, then `https://api.vouched.run` |
 | `--force` | regenerate the key and register again |
+
+After registering, `init` prints what leaves this machine (see above) on stderr and sends no events. Automatic sync starts off.
 
 Running `init` again without `--force` prints the current identity and changes nothing.
 
@@ -32,7 +66,7 @@ Running `init` again without `--force` prints the current identity and changes n
 | `--version <version>` | the version in config, `0.1.0` before init |
 | `--no-sync` | only append, do not send |
 
-After appending, `emit` tries a sync with a two second timeout. If that fails it prints one warning with the pending count and still exits 0. The event stays in the log for the next sync. Before `init` it only appends.
+Until automatic sync is on, `emit` only appends and prints one line on stderr with the number of events waiting and a pointer to `vouched sync`. Once it is on, `emit` tries a sync after appending with a two second timeout. If that fails it prints one warning with the pending count and still exits 0. The event stays in the log for the next sync. Before `init` it only appends.
 
 In-process adapters can import the same function.
 
@@ -46,6 +80,13 @@ await emit({ type: 'tool.call', payload: { tool: 'Bash', duration_ms: 42, ok: tr
 
 `vouched sync` signs pending events with the agent key and sends them to the API in batches of up to 500, moving the cursor in `~/.vouched/cursor.json` after each accepted batch. It prints the accepted and duplicate totals, or a JSON object with `--json`.
 
+| Flag | What it does |
+|---|---|
+| `--dry-run` | print every pending event exactly as it would be sent and send nothing. Works before `init`. With `--json`, one object with `pending` and `events` |
+| `--yes` | skip the first sync question, send, and turn on automatic sync |
+
+While automatic sync is off, `sync` prints the dry run first and asks on stderr whether to send these events and turn on automatic sync. Only `y` sends. Without a terminal to ask and without `--yes` it prints the preview, sends nothing and exits 1.
+
 - A rate limit waits for `Retry-After` once, up to 30 seconds, then stops.
 - An event the API rejects on its own is skipped with a warning naming its id, and the rest are sent.
 - A network error or an unregistered agent stops with exit code 1 and the pending count. Nothing is lost, run `sync` again later.
@@ -54,9 +95,15 @@ Each accepted batch also records `lastSyncAt` in `cursor.json`.
 
 ## status
 
-`vouched status` is a local dashboard of today's activity (UTC). It prints the agent id and profile URL, today's event counts by type, tool calls with the ok ratio, tasks claimed and submitted, the pending count, the last sync time and the score per dimension. A dimension with no score shows a dash. `--json` prints the same data as one object.
+`vouched status` is a local dashboard of today's activity (UTC). It prints the agent id and profile URL, today's event counts by type, tool calls with the ok ratio, tasks claimed and submitted, the pending count, the last sync time, whether automatic sync is on and the score per dimension. A dimension with no score shows a dash. `--json` prints the same data as one object.
+
+`vouched status --show` also lists today's events in full, one JSON line each, as they are sent.
 
 Everything but the score comes from local files, so it works offline. Scores are cached in `~/.vouched/score.json` for fifteen minutes. When the API does not answer within two seconds the last cached scores are shown, or dashes when there are none.
+
+## config
+
+`vouched config show` prints `config.json`, including whether automatic sync is on. `vouched config auto-sync on` and `vouched config auto-sync off` switch it. `--json` works on both.
 
 ## whoami
 
@@ -99,7 +146,9 @@ What is recorded.
 
 What is never recorded. Prompts, tool inputs, tool outputs, file contents and model output. The hook reads only the event name, the session id, the tool name and the tool use id from what Claude Code sends. `tool_input` and `tool_response` are never read, logged or sent.
 
-Each hook appends to the local log and exits at once, printing nothing. Only `SessionEnd` tries a sync, for at most two seconds a request. Claude Code fires `Stop` after every turn, so `Stop` only notes the time. Start times for sessions and tool calls are kept in small files under `~/.vouched/sessions`, and any untouched for a day are removed. A session that never got a `SessionEnd` is then closed as `session.end` at its last `Stop`.
+Each hook appends to the local log and exits at once, printing nothing. Only `SessionEnd` tries a sync, only once automatic sync is on, for at most two seconds a request. Claude Code fires `Stop` after every turn, so `Stop` only notes the time. Start times for sessions and tool calls are kept in small files under `~/.vouched/sessions`, and any untouched for a day are removed. A session that never got a `SessionEnd` is then closed as `session.end` at its last `Stop`.
+
+To see exactly what the hooks would send, run `vouched sync --dry-run`.
 
 To remove the hooks, which leaves everything else in the file untouched.
 
@@ -131,7 +180,7 @@ What is recorded.
 
 What is never recorded. Prompts, tool params, tool results, error messages, messages and model output. The plugin only observes. It never changes or blocks a tool call.
 
-Events are appended to the local log only. Run `vouched sync`, or let the next `vouched emit` send them. A log that cannot be written never throws into the Gateway.
+Events are appended to the local log only. Run `vouched sync --dry-run` to see exactly what would be sent, then `vouched sync`, or let the next `vouched emit` send them once automatic sync is on. A log that cannot be written never throws into the Gateway.
 
 The hook names and fields were taken from OpenClaw's source (`src/plugins/hook-types.ts` and the plugin loader on `main`, 23 September 2026) and its plugin docs, not checked against a running Gateway yet.
 
@@ -158,7 +207,7 @@ What is recorded.
 
 What is never recorded. Prompts, tool arguments, tool results, error messages and model output. The wrapper passes arguments and results straight through without reading them, and reads only `usage`, `response.modelId` and `model` from a step.
 
-Events are appended to the local log only. Run `vouched sync`, or let the next `vouched emit` send them. A log that cannot be written never throws into the agent, and a tool's own error is rethrown unchanged.
+Events are appended to the local log only. Run `vouched sync --dry-run` to see exactly what would be sent, then `vouched sync`, or let the next `vouched emit` send them once automatic sync is on. A log that cannot be written never throws into the agent, and a tool's own error is rethrown unchanged.
 
 ## tasks
 

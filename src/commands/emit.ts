@@ -69,6 +69,18 @@ export function register(
       }
       if (!options.sync) return;
 
+      // Until the first sync is previewed and confirmed nothing leaves on its
+      // own. One line says what is waiting and how to review it.
+      if (config.autoSync !== true) {
+        const pending = await countPending().catch(() => null);
+        const count =
+          pending === null
+            ? 'events'
+            : `${pending} event${pending === 1 ? '' : 's'}`;
+        stderr(`${count} waiting, run vouched sync to review and send`);
+        return;
+      }
+
       // Best effort. Whatever goes wrong, the event is already in the log and
       // the next sync sends it, so the command still succeeds.
       try {

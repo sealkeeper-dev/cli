@@ -11,7 +11,8 @@ import {
 } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { paths, writeConfig } from '../config.js';
+import type { Input } from '../ask.js';
+import { paths, readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, countPending, readCursor, readDay } from '../log.js';
 import { createProgram } from '../program.js';
@@ -113,6 +114,14 @@ describe('emit and sync', () => {
   let server: Server;
   let sleeps: number[];
   let outputs: string[];
+  // What sync reads when it asks. null answers stand for a closed stdin.
+  // during runs while the question waits, before the answer comes back.
+  let input: {
+    isTTY: boolean;
+    answers: (string | null)[];
+    asked: number;
+    during?: () => Promise<void>;
+  };
 
   async function run(
     fetchFn: typeof fetch,
@@ -124,6 +133,14 @@ describe('emit and sync', () => {
         sleep: async (ms) => {
           sleeps.push(ms);
         },
+        stdin: (): Input => ({
+          isTTY: input.isTTY,
+          readLine: async () => {
+            input.asked++;
+            await input.during?.();
+            return input.answers.shift() ?? null;
+          },
+        }),
       },
     });
     throwOnExit(program);
@@ -154,7 +171,12 @@ describe('emit and sync', () => {
 
   const api = (...args: string[]) => run(fakeFetch(server), ...args);
 
-  async function initialise(version = '1.2.0'): Promise<void> {
+  // 'unset' is a config from init, before any sync was confirmed. false is
+  // one turned off with vouched config auto-sync off.
+  async function initialise(
+    version = '1.2.0',
+    autoSync: boolean | 'unset' = true,
+  ): Promise<void> {
     agentId = (await createKey()).agentId;
     server.agentId = agentId;
     await writeConfig({
@@ -164,6 +186,7 @@ describe('emit and sync', () => {
       version,
       apiUrl: API_URL,
       registeredAt: '2026-09-23T10:00:00Z',
+      ...(autoSync === 'unset' ? {} : { autoSync }),
     });
   }
 
@@ -191,6 +214,7 @@ describe('emit and sync', () => {
     };
     sleeps = [];
     outputs = [];
+    input = { isTTY: false, answers: [], asked: 0 };
   });
 
   // Nothing printed may carry a signature or the private key.
@@ -591,6 +615,287 @@ describe('emit and sync', () => {
       const { code, err } = await api('sync');
       expect(code).toBe(1);
       expect(err).toBe('not initialised, run vouched init\n');
+    });
+  });
+
+  describe('before the first confirmed sync', () => {
+    const today = () => new Date().toISOString().slice(0, 10);
+    const WIRE =
+      'Each event is sent as exactly this JSON wrapped in a signature from your agent key, and nothing else.';
+
+    it('emit does not call fetch and prints one waiting line', async () => {
+      await initialise('1.2.0', 'unset');
+      await seed(1);
+      let calls = 0;
+      const counting = (async (...args: Parameters<typeof fetch>) => {
+        calls++;
+        return fakeFetch(server)(...args);
+      }) as typeof fetch;
+      const { code, out, err } = await run(
+        counting,
+        'emit',
+        '--type',
+        'session.start',
+        '--payload',
+        '{"session_id":"s1"}',
+      );
+      expect(code).toBe(0);
+      expect(out).toMatch(/^[0-9a-f-]{36}\n$/);
+      expect(err).toBe(
+        '2 events waiting, run vouched sync to review and send\n',
+      );
+      expect(calls).toBe(0);
+      expect(await countPending()).toBe(2);
+    });
+
+    it('emit says 1 event for one', async () => {
+      await initialise('1.2.0', 'unset');
+      const { err } = await api(
+        'emit',
+        '--type',
+        'session.start',
+        '--payload',
+        '{"session_id":"s1"}',
+      );
+      expect(err).toBe(
+        '1 event waiting, run vouched sync to review and send\n',
+      );
+    });
+
+    it('sync --dry-run prints every pending event decoded, sends nothing and leaves the cursor', async () => {
+      await initialise('1.2.0', true);
+      const events = await seed(2);
+      const { code, out, err } = await api('sync', '--dry-run');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(out.split('\n')).toEqual([
+        paths().logFile(today()),
+        JSON.stringify(events[0]),
+        JSON.stringify(events[1]),
+        '',
+        '2 events pending, nothing sent yet.',
+        WIRE,
+        '',
+      ]);
+      expect(server.batches).toEqual([]);
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect(await countPending()).toBe(2);
+    });
+
+    it('sync --dry-run prints exactly the payload that sync then signs', async () => {
+      await initialise('1.2.0', true);
+      await seed(2);
+      const { out } = await api('sync', '--dry-run');
+      const shown = out.split('\n').filter((l) => l.startsWith('{'));
+      await api('sync');
+      const signed = server.envelopes.map((e) =>
+        Buffer.from(e.split('.')[1] ?? '', 'base64url').toString(),
+      );
+      expect(signed).toEqual(shown);
+    });
+
+    it('sync --dry-run --json prints the events as one object', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(2);
+      const { code, out } = await api('sync', '--dry-run', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({ pending: 2, events });
+      expect(server.batches).toEqual([]);
+    });
+
+    it('sync --dry-run works before init', async () => {
+      await seed(1);
+      const { code, out } = await api('sync', '--dry-run');
+      expect(code).toBe(0);
+      expect(out).toContain('1 event pending, nothing sent yet.');
+    });
+
+    it('sync --dry-run with nothing pending says so', async () => {
+      await initialise('1.2.0', 'unset');
+      const { code, out } = await api('sync', '--dry-run');
+      expect(code).toBe(0);
+      expect(out).toBe('nothing pending, nothing to send\n');
+    });
+
+    it('first sync answered y previews, sends and turns on auto-sync', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(2);
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(input.asked).toBe(1);
+      expect(out).toContain(JSON.stringify(events[0]));
+      expect(out).toContain(WIRE);
+      expect(out.endsWith('accepted 2, duplicates 0\n')).toBe(true);
+      expect(err).toContain(
+        'send these 2 events now and turn on automatic sync for future events? [y/N] ',
+      );
+      expect(err).toContain('vouched config auto-sync off');
+      expect(server.batches).toEqual([events]);
+      expect((await readConfig())?.autoSync).toBe(true);
+    });
+
+    it('first sync answered n sends nothing and leaves auto-sync off', async () => {
+      await initialise('1.2.0', 'unset');
+      await seed(2);
+      input = { isTTY: true, answers: ['n'], asked: 0 };
+      const { code, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(err).toContain('nothing sent, automatic sync stays off');
+      expect(server.batches).toEqual([]);
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect((await readConfig())?.autoSync).toBeUndefined();
+    });
+
+    it('first sync with an empty answer is a no', async () => {
+      await initialise('1.2.0', 'unset');
+      await seed(1);
+      input = { isTTY: true, answers: [''], asked: 0 };
+      await api('sync');
+      expect(server.batches).toEqual([]);
+      expect((await readConfig())?.autoSync).toBeUndefined();
+    });
+
+    it('first sync without a terminal previews and exits 1, sending nothing', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(2);
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(input.asked).toBe(0);
+      expect(out).toContain(JSON.stringify(events[1]));
+      expect(err).toContain('vouched sync --yes');
+      expect(server.batches).toEqual([]);
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect((await readConfig())?.autoSync).toBeUndefined();
+    });
+
+    it('first sync with --yes sends without asking and turns on auto-sync', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(2);
+      const { code, out, err } = await api('sync', '--yes');
+      expect(code).toBe(0);
+      expect(input.asked).toBe(0);
+      expect(out).toBe('accepted 2, duplicates 0\n');
+      expect(err).toContain('automatic sync is on');
+      expect(server.batches).toEqual([events]);
+      expect((await readConfig())?.autoSync).toBe(true);
+    });
+
+    it('with --json the preview goes to stderr and stdout is only the result', async () => {
+      await initialise('1.2.0', 'unset');
+      await seed(1);
+      input = { isTTY: true, answers: ['yes'], asked: 0 };
+      const { code, out, err } = await api('sync', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({
+        accepted: 1,
+        duplicates: 0,
+        skipped: 0,
+      });
+      expect(err).toContain(WIRE);
+    });
+
+    it('after the first confirmed sync emit syncs on its own', async () => {
+      await initialise('1.2.0', 'unset');
+      await seed(1);
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      await api('sync');
+      const { code, err } = await api(
+        'emit',
+        '--type',
+        'session.start',
+        '--payload',
+        '{"session_id":"s1"}',
+      );
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(server.batches.map((b) => b.length)).toEqual([1, 1]);
+      expect(await countPending()).toBe(0);
+    });
+
+    it('sends only what the preview showed, not an event logged while it asked', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(2);
+      input = {
+        isTTY: true,
+        answers: ['y'],
+        asked: 0,
+        during: async () => {
+          await appendEvent(toolCall(9));
+        },
+      };
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out.endsWith('accepted 2, duplicates 0\n')).toBe(true);
+      expect(server.batches).toEqual([events]);
+      expect(await countPending()).toBe(1);
+    });
+  });
+
+  describe('after auto-sync off', () => {
+    it('sync answered y sends and leaves auto-sync off', async () => {
+      await initialise('1.2.0', 'unset');
+      expect((await api('config', 'auto-sync', 'off')).code).toBe(0);
+      const events = await seed(2);
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(input.asked).toBe(1);
+      expect(out).toContain(JSON.stringify(events[0]));
+      expect(err).toContain('send these 2 events now? [y/N] ');
+      expect(err).not.toContain('turn on automatic sync');
+      expect(err).not.toContain('automatic sync is on');
+      expect(server.batches).toEqual([events]);
+      expect((await readConfig())?.autoSync).toBe(false);
+    });
+
+    it('the next sync asks again', async () => {
+      await initialise('1.2.0', false);
+      await seed(1);
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      await api('sync');
+      await seed(1);
+      input = { isTTY: true, answers: ['n'], asked: 0 };
+      const { err } = await api('sync');
+      expect(input.asked).toBe(1);
+      expect(err).toContain('nothing sent, automatic sync stays off');
+      expect(server.batches.map((b) => b.length)).toEqual([1]);
+    });
+
+    it('without a terminal previews and exits 1, sending nothing', async () => {
+      await initialise('1.2.0', false);
+      await seed(1);
+      const { code, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(err).toContain('Automatic sync stays off');
+      expect(server.batches).toEqual([]);
+    });
+
+    it('--yes sends without asking and leaves auto-sync off', async () => {
+      await initialise('1.2.0', false);
+      const events = await seed(2);
+      const { code, out, err } = await api('sync', '--yes');
+      expect(code).toBe(0);
+      expect(input.asked).toBe(0);
+      expect(out).toBe('accepted 2, duplicates 0\n');
+      expect(err).toBe('');
+      expect(server.batches).toEqual([events]);
+      expect((await readConfig())?.autoSync).toBe(false);
+    });
+
+    it('emit does not sync', async () => {
+      await initialise('1.2.0', false);
+      const { err } = await api(
+        'emit',
+        '--type',
+        'session.start',
+        '--payload',
+        '{"session_id":"s1"}',
+      );
+      expect(err).toBe(
+        '1 event waiting, run vouched sync to review and send\n',
+      );
+      expect(server.batches).toEqual([]);
     });
   });
 });

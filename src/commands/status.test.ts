@@ -87,7 +87,7 @@ function event(type: Event['type'], payload: Event['payload']): Event {
 const TASK = { task_id: randomUUID(), task_type: 'lint' };
 
 // Seven events today. The cursor sits after the third, so four are pending.
-async function seedMixedLog(): Promise<void> {
+async function seedMixedLog(): Promise<Event[]> {
   const events = [
     event('session.start', { session_id: 's1' }),
     event('tool.call', { tool: 'Bash', duration_ms: 10, ok: true }),
@@ -106,6 +106,7 @@ async function seedMixedLog(): Promise<void> {
     },
     lastSyncAt: LAST_SYNC,
   });
+  return events;
 }
 
 describe('status', () => {
@@ -159,6 +160,10 @@ describe('status', () => {
     expect(lines).toContain('tasks             1 claimed, 1 submitted');
     expect(lines).toContain('pending           4');
     expect(lines).toContain(`last sync         ${LAST_SYNC}`);
+    expect(lines).toContain(
+      'auto-sync         off, run vouched sync to review and send',
+    );
+    expect(out).not.toContain('"event_id"');
     expect(lines).toContain('  reliability     0.82');
     expect(lines).toContain('  safety          -');
     expect(lines).toContain('  cost_latency    -');
@@ -203,6 +208,7 @@ describe('status', () => {
       tasks: { claimed: 1, submitted: 1 },
       pending: 4,
       lastSyncAt: LAST_SYNC,
+      autoSync: false,
       scores: {
         reliability: 0.9,
         safety: null,
@@ -230,6 +236,41 @@ describe('status', () => {
       scoresFetchedAt: null,
     });
     expect(Object.values(json.counts)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("--show lists today's events in full after the counts", async () => {
+    const events = await seedMixedLog();
+    const { code, out } = await run(offline, 'status', '--show');
+    expect(code).toBe(0);
+    const lines = out.split('\n');
+    const header = lines.indexOf("today's events, 7, as they are sent");
+    expect(header).toBeGreaterThan(lines.indexOf('  usage           0'));
+    expect(lines.slice(header + 1, header + 8)).toEqual(
+      events.map((e) => JSON.stringify(e)),
+    );
+  });
+
+  it('--show --json adds the events to the object', async () => {
+    const events = await seedMixedLog();
+    const { out } = await run(offline, 'status', '--show', '--json');
+    expect(JSON.parse(out).events).toEqual(events);
+  });
+
+  it('shows auto-sync on once it is on', async () => {
+    await writeConfig(
+      {
+        agentId: AGENT_ID,
+        operatorLogin: 'carelmeyer',
+        name: 'scout',
+        version: '1.0.0',
+        apiUrl: API_URL,
+        registeredAt: '2026-09-23T08:00:00Z',
+        autoSync: true,
+      },
+      paths(home),
+    );
+    const { out } = await run(offline, 'status');
+    expect(out).toContain('auto-sync         on\n');
   });
 
   it('exits 1 with the init hint when there is no config', async () => {

@@ -56,11 +56,26 @@ describe('config', () => {
     expect(await readConfig(paths(join(root, 'missing')))).toBeNull();
   });
 
-  it('round trips and fills the default api url', async () => {
+  it('round trips and fills the default api url, auto-sync unset', async () => {
     const p = paths(join(root, 'home'));
     const written = await writeConfig(VALID, p);
     expect(written.apiUrl).toBe(DEFAULT_API_URL);
+    expect(written.autoSync).toBeUndefined();
     expect(await readConfig(p)).toEqual({ ...VALID, apiUrl: DEFAULT_API_URL });
+  });
+
+  it('reads a config written before autoSync existed as unset', async () => {
+    const p = paths(root);
+    await writeFile(p.config, JSON.stringify(VALID));
+    expect((await readConfig(p))?.autoSync).toBeUndefined();
+  });
+
+  it('round trips autoSync on and off', async () => {
+    const p = paths(root);
+    await writeConfig({ ...VALID, autoSync: true }, p);
+    expect((await readConfig(p))?.autoSync).toBe(true);
+    await writeConfig({ ...VALID, autoSync: false }, p);
+    expect((await readConfig(p))?.autoSync).toBe(false);
   });
 
   it('creates the home directory with mode 700 and leaves no temp file', async () => {

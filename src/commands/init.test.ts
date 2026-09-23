@@ -2,7 +2,12 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { base64urlDecode, decodeHeader, verify } from '@vouched-dev/schema';
+import {
+  base64urlDecode,
+  decodeHeader,
+  EventType,
+  verify,
+} from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, readConfig } from '../config.js';
@@ -14,7 +19,8 @@ import {
 } from '../github-device.js';
 import { loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
-import { ALREADY_INITIALISED } from './init.js';
+import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
+import { ALREADY_INITIALISED, NOTHING_SENT } from './init.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const API_URL = 'http://api.test';
@@ -202,6 +208,30 @@ describe('vouched init', () => {
     });
     expect((await stat(paths(home).key)).mode & 0o777).toBe(0o600);
     await expectNoTokenAnywhere(result);
+  });
+
+  it('ends with what leaves this machine on stderr and sends no events', async () => {
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    expect(result.err).toContain('What leaves this machine');
+    for (const type of EventType.options) {
+      expect(result.err).toMatch(
+        new RegExp(`^${type.replace('.', '\\.')}$`, 'm'),
+      );
+    }
+    expect(result.err).toContain(NEVER_LEAVES);
+    expect(
+      result.err.endsWith(`${describeTaxonomy()}\n\n${NOTHING_SENT}\n`),
+    ).toBe(true);
+    expect(result.out).not.toContain('What leaves');
+    expect(world.fetchUrls.filter((u) => u.endsWith('/v1/events'))).toEqual([]);
+  });
+
+  it('with --json keeps stdout one object and still prints the block on stderr', async () => {
+    const result = await run(world, 'init', '--name', 'scout', '--json');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
+    expect(result.err).toContain(NEVER_LEAVES);
   });
 
   it('defaults the name to the current directory and takes --version', async () => {

@@ -23,10 +23,13 @@ import {
   sleep,
 } from '../github-device.js';
 import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
-import { stdout, wantsJson } from '../output.js';
+import { stderr, stdout, wantsJson } from '../output.js';
+import { describeTaxonomy } from '../taxonomy.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
+export const NOTHING_SENT =
+  'No events have been sent yet. Run vouched sync to review them and send.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
@@ -190,6 +193,13 @@ async function init(
   );
 
   const profileUrl = profileUrlOf(config.agentId);
+  // On stderr, so --json output stays one object.
+  const printShared = () => {
+    stderr('');
+    stderr(describeTaxonomy());
+    stderr('');
+    stderr(NOTHING_SENT);
+  };
   if (json) {
     stdout(
       JSON.stringify({
@@ -201,9 +211,11 @@ async function init(
         profileUrl,
       }),
     );
+    printShared();
     return;
   }
   stdout(`registered agent ${config.agentId}`);
   stdout(`operator ${config.operatorLogin}`);
   stdout(`profile ${profileUrl}`);
+  printShared();
 }

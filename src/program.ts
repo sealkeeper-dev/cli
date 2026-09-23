@@ -6,6 +6,7 @@ import {
   register as registerAdapter,
 } from './commands/adapter.js';
 import { register as registerCard } from './commands/card.js';
+import { register as registerConfig } from './commands/config.js';
 import { register as registerEmit } from './commands/emit.js';
 import {
   type HookCommandDeps,
@@ -17,6 +18,7 @@ import { type RateDeps, register as registerRate } from './commands/rate.js';
 import { register as registerStatus } from './commands/status.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
+import { register as registerWhatIsShared } from './commands/what-is-shared.js';
 import { register as registerWhoami } from './commands/whoami.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
@@ -87,9 +89,11 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerTasks(program, deps.tasks);
   registerRate(program, deps.rate);
   registerWhoami(program);
+  registerConfig(program);
   registerLogout(program);
   registerAdapter(program, deps.adapter);
   registerHook(program, deps.hook);
+  registerWhatIsShared(program);
 
   for (const sub of program.commands) addJsonFlag(sub);
   return program;

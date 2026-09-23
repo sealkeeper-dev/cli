@@ -33,10 +33,14 @@ export type Status = {
   tasks: { claimed: number; submitted: number };
   pending: number;
   lastSyncAt: string | null;
+  // Whether emit sends events on its own. See vouched config auto-sync.
+  autoSync: boolean;
   // Score per dimension for the configured version. null when there is no
   // score for that dimension or the score could not be fetched.
   scores: Record<string, number | null>;
   scoresFetchedAt: string | null;
+  // Today's events in full, only with --show.
+  events?: Event[];
 };
 
 export function register(
@@ -46,13 +50,17 @@ export function register(
   return parent
     .command('status')
     .description("Show today's activity from the local log, works offline")
-    .action(async function (this: Command): Promise<void> {
+    .option('--show', "also list today's events in full, as they are sent")
+    .action(async function (
+      this: Command,
+      options: { show?: boolean },
+    ): Promise<void> {
       const config = await loadConfig(this);
       if (config === null) this.error(NOT_INITIALISED);
 
       let status: Status;
       try {
-        status = await readStatus(config, deps, new Date());
+        status = await readStatus(config, deps, new Date(), options.show);
       } catch (error) {
         if (error instanceof CursorError) this.error(error.message);
         throw error;
@@ -70,6 +78,7 @@ export async function readStatus(
   config: Config,
   deps: StatusDeps,
   now: Date,
+  show = false,
 ): Promise<Status> {
   const p = paths();
   const day = dayOf(now);
@@ -95,8 +104,10 @@ export async function readStatus(
     ...countEvents(events),
     pending,
     lastSyncAt: cursor.lastSyncAt ?? null,
+    autoSync: config.autoSync === true,
     scores: scoresFor(config.version, score),
     scoresFetchedAt: score?.fetchedAt ?? null,
+    ...(show ? { events } : {}),
   };
 }
 
@@ -160,6 +171,10 @@ function printStatus(status: Status): void {
     ],
     ['pending', String(status.pending)],
     ['last sync', status.lastSyncAt ?? 'never'],
+    [
+      'auto-sync',
+      status.autoSync ? 'on' : 'off, run vouched sync to review and send',
+    ],
     ['scores', status.scoresFetchedAt ? `as of ${status.scoresFetchedAt}` : ''],
   ]);
   printRows(
@@ -168,6 +183,12 @@ function printStatus(status: Status): void {
       value === null ? '-' : formatScore(value),
     ]),
   );
+
+  if (status.events) {
+    stdout('');
+    stdout(`today's events, ${status.events.length}, as they are sent`);
+    for (const event of status.events) stdout(JSON.stringify(event));
+  }
 }
 
 function formatScore(value: number): string {

@@ -126,7 +126,7 @@ describe('hook claude-code', () => {
     return readdir(paths(home).sessions).catch(() => []);
   }
 
-  async function initialise(): Promise<void> {
+  async function initialise(autoSync = true): Promise<void> {
     const agentId = (await createKey({}, paths(home))).agentId;
     await writeConfig(
       {
@@ -136,6 +136,7 @@ describe('hook claude-code', () => {
         version: '1.2.0',
         apiUrl: API_URL,
         registeredAt: '2026-09-23T10:00:00Z',
+        autoSync,
       },
       paths(home),
     );
@@ -203,6 +204,20 @@ describe('hook claude-code', () => {
     expect((await readCursor(paths(home))).lastAcked?.eventId).toBe(
       end?.event_id,
     );
+  });
+
+  it('SessionEnd with auto-sync off appends and sends nothing', async () => {
+    await initialise(false);
+    await hook(payloads.sessionStart());
+    const { code, err } = await hook(payloads.sessionEnd());
+    expect(code).toBe(0);
+    expect(err).toBe('');
+    expect((await logged()).map((e) => e.type)).toEqual([
+      'session.start',
+      'session.end',
+    ]);
+    expect(fetches).toEqual([]);
+    expect((await readCursor(paths(home))).lastAcked).toBeNull();
   });
 
   it('Stop emits nothing, and SessionEnd after two Stops covers the whole session', async () => {

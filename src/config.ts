@@ -25,6 +25,12 @@ export const Config = z
     version: z.string().min(1),
     apiUrl: z.url({ protocol: /^https?$/ }).default(DEFAULT_API_URL),
     registeredAt: z.iso.datetime({ offset: true }),
+    // Whether emit and the hook adapters send events on their own. Unset
+    // means no sync has been confirmed yet, and the first confirmed sync turns
+    // it on. false means the operator turned it off with config auto-sync
+    // off, so every sync previews and asks and it stays off. Only true sends
+    // on its own. A config written before this field existed reads as unset.
+    autoSync: z.boolean().optional(),
   })
   .strict();
 export type Config = z.infer<typeof Config>;

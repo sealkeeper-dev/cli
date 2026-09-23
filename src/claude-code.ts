@@ -23,8 +23,8 @@ export { toolNameOf } from './names.js';
 // the event taxonomy and appends to the local log. It prints nothing on
 // stdout, since Claude Code may read that, and it never throws.
 
-// Only the SessionEnd hook tries a sync, and never for longer than this per
-// request. Every other hook only appends.
+// Only the SessionEnd hook tries a sync, only once autoSync is on, and never
+// for longer than this per request. Every other hook only appends.
 export const HOOK_SYNC_TIMEOUT_MS = 2_000;
 
 // Markers older than this belong to sessions or tool calls that never ended.
@@ -140,7 +140,9 @@ export async function handleHook(
         });
         await endSession(p, input.sessionId);
         await removeStaleMarkers(p, now, append);
-        await trySync(config.apiUrl, deps, p);
+        // Nothing leaves on its own until the operator has previewed and
+        // confirmed a first sync, which turns autoSync on.
+        if (config.autoSync) await trySync(config.apiUrl, deps, p);
         return;
       }
       case 'PreToolUse': {

@@ -8,8 +8,9 @@ import { emit as emitTo } from './emit.js';
 export type { EmitInput } from './emit.js';
 
 // Appends one event to the local log under VOUCHED_HOME (default ~/.vouched)
-// and returns it. It does not send anything. Run vouched sync, or let the
-// next vouched emit do it.
+// and returns it. It does not send anything. Run vouched sync, which shows
+// the events and asks before the first send, or let the next vouched emit
+// send it once automatic sync is on.
 export function emit(input: EmitInput) {
   return emitTo(input);
 }
