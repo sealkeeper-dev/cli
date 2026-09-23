@@ -2,7 +2,7 @@
 import { Command, Help } from 'commander';
 import { register as registerCard } from './commands/card.js';
 import { register as registerEmit } from './commands/emit.js';
-import { register as registerInit } from './commands/init.js';
+import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerRate } from './commands/rate.js';
 import { register as registerStatus } from './commands/status.js';
@@ -31,17 +31,38 @@ function subcommandTerm(this: Help, cmd: Command): string {
   return group ? `${group} ${term}` : term;
 }
 
-export function createProgram(): Command {
+const JSON_FLAG = '--json';
+const JSON_HELP = 'print machine readable JSON where a command supports it';
+
+// Adds --json to every leaf command. Root options are positional (see
+// createProgram), so without this `vouched whoami --json` would be rejected.
+function addJsonFlag(cmd: Command): void {
+  if (cmd.commands.length === 0) {
+    cmd.option(JSON_FLAG, JSON_HELP);
+    return;
+  }
+  for (const sub of cmd.commands) addJsonFlag(sub);
+}
+
+export type ProgramDeps = {
+  init?: InitDeps;
+};
+
+export function createProgram(deps: ProgramDeps = {}): Command {
   const program = new Command();
 
+  // Positional options stop the root from reading options that follow a
+  // subcommand. Without it `vouched init --version 1.0.0` would print the
+  // CLI version instead of passing the agent version to init.
   program
     .name('vouched')
     .description('Cryptographic identity and track record for AI agents')
     .version(VERSION)
-    .option('--json', 'print machine readable JSON where a command supports it')
+    .option(JSON_FLAG, JSON_HELP)
+    .enablePositionalOptions()
     .configureHelp({ visibleCommands, subcommandTerm });
 
-  registerInit(program);
+  registerInit(program, deps.init);
   registerEmit(program);
   registerSync(program);
   registerCard(program);
@@ -51,5 +72,6 @@ export function createProgram(): Command {
   registerWhoami(program);
   registerLogout(program);
 
+  for (const sub of program.commands) addJsonFlag(sub);
   return program;
 }

@@ -54,4 +54,8 @@ describe('cli bundle', () => {
     expect(bundle).not.toContain('__VERSION__');
     expect(bundle).not.toContain('devDependencies');
   });
+
+  it('replaces the GitHub client id placeholder at build time', () => {
+    expect(bundle).not.toContain('__GITHUB_CLIENT_ID__');
+  });
 });

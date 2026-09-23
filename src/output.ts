@@ -9,8 +9,9 @@ export function stderr(text: string): void {
   process.stderr.write(`${text}\n`);
 }
 
-// The global --json flag is declared on the root program. Any command reads it
-// through its own options merged with those of its ancestors.
+// --json is declared on the root program and on every leaf command, so it
+// works before or after the command name. Any command reads it through its
+// own options merged with those of its ancestors.
 export function wantsJson(command: Command): boolean {
   return command.optsWithGlobals().json === true;
 }

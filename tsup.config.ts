@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { defineConfig, type Options } from 'tsup';
 
 // The version is read here at build time and injected as __VERSION__, so the
-// bundle never embeds package.json and its devDependencies.
+// bundle never embeds package.json and its devDependencies. The GitHub OAuth
+// client id comes from GITHUB_CLIENT_ID at build time and defaults to empty,
+// in which case the CLI needs VOUCHED_GITHUB_CLIENT_ID at runtime.
 const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };
@@ -18,7 +20,10 @@ export const options: Options = {
   clean: true,
   noExternal: ['@vouched/schema'],
   banner: { js: '#!/usr/bin/env node' },
-  define: { __VERSION__: JSON.stringify(pkg.version) },
+  define: {
+    __VERSION__: JSON.stringify(pkg.version),
+    __GITHUB_CLIENT_ID__: JSON.stringify(process.env.GITHUB_CLIENT_ID ?? ''),
+  },
 };
 
 export default defineConfig(options);

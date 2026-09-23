@@ -87,7 +87,6 @@ describe('vouched cli', () => {
   });
 
   it.each([
-    { label: 'init', args: ['init'] },
     { label: 'emit', args: ['emit'] },
     { label: 'sync', args: ['sync'] },
     { label: 'card show', args: ['card', 'show'] },
@@ -153,6 +152,31 @@ describe('vouched cli', () => {
       version: '1.2.0',
       apiUrl: 'http://localhost:8080',
     });
+  });
+
+  it('--json also works after the command name', async () => {
+    await writeConfig(
+      {
+        agentId: AGENT_ID,
+        operatorLogin: 'carelmeyer',
+        name: 'scout',
+        version: '1.2.0',
+        registeredAt: '2026-09-23T10:00:00Z',
+      },
+      paths(home),
+    );
+    const { code, out } = await run('whoami', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({ agentId: AGENT_ID });
+  });
+
+  it('--version after a command belongs to that command', async () => {
+    const { code, out } = await run('--version');
+    expect(code).toBe(0);
+    expect(out).toBe('0.0.1\n');
+    const init = createProgram().commands.find((c) => c.name() === 'init');
+    init?.parseOptions(['--version', '2.0.0']);
+    expect(init?.opts().version).toBe('2.0.0');
   });
 
   it('whoami with an invalid config exits 1 with the reason', async () => {
