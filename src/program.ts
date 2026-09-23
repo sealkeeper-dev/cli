@@ -1,5 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { Command, Help } from 'commander';
+import type { CardDeps } from './card.js';
 import { register as registerCard } from './commands/card.js';
 import { register as registerEmit } from './commands/emit.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
@@ -48,6 +49,7 @@ export type ProgramDeps = {
   init?: InitDeps;
   // Used by emit and sync.
   sync?: SyncDeps;
+  card?: CardDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -67,7 +69,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerInit(program, deps.init);
   registerEmit(program, deps.sync);
   registerSync(program, deps.sync);
-  registerCard(program);
+  registerCard(program, deps.card);
   registerStatus(program);
   registerTasks(program);
   registerRate(program);

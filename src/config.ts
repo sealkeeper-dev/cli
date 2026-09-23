@@ -34,6 +34,7 @@ export type Paths = {
   key: string;
   log: string;
   cursor: string;
+  credential: string;
   logFile(day: string): string;
 };
 
@@ -55,6 +56,7 @@ export function paths(home: string = vouchedHome()): Paths {
     key: join(home, 'key'),
     log,
     cursor: join(home, 'cursor.json'),
+    credential: join(home, 'credential.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }
@@ -104,16 +106,19 @@ export async function writeConfig(
   return config;
 }
 
-// Writes to a temp file in the same directory with mode 600, syncs it and
-// renames it over the target, so a crash never leaves a half written file.
+// Writes to a temp file in the same directory with mode 600 (or the given
+// mode), syncs it and renames it over the target, so a crash never leaves a
+// half written file.
 export async function writeFileAtomic(
   target: string,
   text: string,
+  mode = 0o600,
 ): Promise<void> {
   const tmp = `${target}.${randomUUID()}.tmp`;
   try {
-    const file = await open(tmp, 'wx', 0o600);
+    const file = await open(tmp, 'wx', mode);
     try {
+      await file.chmod(mode);
       await file.writeFile(text, 'utf8');
       await file.sync();
     } finally {

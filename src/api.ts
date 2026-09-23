@@ -1,9 +1,11 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import {
   AgentResponse,
+  CredentialResponse,
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  WellKnown,
 } from '@vouched/schema';
 import type { z } from 'zod';
 import { DEFAULT_API_URL } from './config.js';
@@ -49,6 +51,8 @@ export type ApiClient = {
   apiUrl: string;
   registerAgent(envelope: string): Promise<AgentResponse>;
   postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
+  getCredential(agentId: string): Promise<CredentialResponse>;
+  getWellKnown(): Promise<WellKnown>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -62,16 +66,19 @@ export function createApiClient(options: {
   const apiUrl = options.apiUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
-  async function postJson(path: string, body: unknown) {
+  async function request(path: string, body?: unknown) {
     let res: Response;
     try {
       res = await fetchFn(`${apiUrl}${path}`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
+        method: body === undefined ? 'GET' : 'POST',
+        headers:
+          body === undefined
+            ? { Accept: 'application/json' }
+            : {
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+              },
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
@@ -112,18 +119,36 @@ export function createApiClient(options: {
   return {
     apiUrl,
     async registerAgent(envelope) {
-      const { status, json } = await postJson('/v1/agents', { envelope });
+      const { status, json } = await request('/v1/agents', { envelope });
       if (status !== 200 && status !== 201) throw toError(status, json);
       const agent = AgentResponse.safeParse(json);
       if (!agent.success) throw toError(status, undefined);
       return agent.data;
     },
     async postEvents(envelopes) {
-      const { status, json, headers } = await postJson('/v1/events', {
+      const { status, json, headers } = await request('/v1/events', {
         envelopes,
       });
       if (status !== 200) throw toError(status, json, headers);
       const result = EventsBatchResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
+    async getCredential(agentId) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}/credential`,
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = CredentialResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
+    async getWellKnown() {
+      const { status, json, headers } = await request(
+        '/.well-known/vouched.json',
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = WellKnown.safeParse(json);
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },

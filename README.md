@@ -50,6 +50,21 @@ await emit({ type: 'tool.call', payload: { tool: 'Bash', duration_ms: 42, ok: tr
 - An event the API rejects on its own is skipped with a warning naming its id, and the rest are sent.
 - A network error or an unregistered agent stops with exit code 1 and the pending count. Nothing is lost, run `sync` again later.
 
+## card
+
+`vouched card show` prints the agent's A2A agent card as JSON. `vouched card write` writes the same card to `agent-card.json` in the current directory, or to `--out <path>`, and prints the path. Both take `--url <https url>` for the address where the agent serves A2A.
+
+The card carries the agent's Vouched credential as an A2A extension. The credential is verified against the keys at `/.well-known/vouched.json` and cached in `~/.vouched/credential.json` until it is two hours from expiry. When the API is unreachable the card uses an unexpired cached credential, or goes out without the extension and a warning. `card write` replaces the file atomically, so it is safe to run on a schedule.
+
+### Serving the card
+
+If the agent has its own HTTP surface, serve the written file at `/.well-known/agent-card.json` so other agents can find it.
+Rerun `card write` before the credential expires, every few hours is enough.
+
+```sh
+vouched card write --out public/.well-known/agent-card.json
+```
+
 ## Environment
 
 | Variable | Purpose |

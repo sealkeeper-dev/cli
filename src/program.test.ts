@@ -87,8 +87,6 @@ describe('vouched cli', () => {
   });
 
   it.each([
-    { label: 'card show', args: ['card', 'show'] },
-    { label: 'card write', args: ['card', 'write'] },
     { label: 'status', args: ['status'] },
     { label: 'tasks pull', args: ['tasks', 'pull'] },
     { label: 'tasks submit', args: ['tasks', 'submit', 'task-1'] },
