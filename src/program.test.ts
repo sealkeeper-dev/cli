@@ -86,16 +86,6 @@ describe('vouched cli', () => {
     expect(LAUNCH_COMMANDS).toHaveLength(12);
   });
 
-  it.each([{ label: 'rate', args: ['rate', AGENT_ID] }])(
-    '$label is a stub that exits 2',
-    async ({ label, args }) => {
-      const { code, out, err } = await run(...args);
-      expect(code).toBe(2);
-      expect(out).toBe('');
-      expect(err).toBe(`${label} is not implemented yet\n`);
-    },
-  );
-
   it('whoami without config exits 1', async () => {
     const { code, out, err } = await run('whoami');
     expect(code).toBe(1);

@@ -13,7 +13,7 @@ import {
 } from './commands/hook.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
-import { register as registerRate } from './commands/rate.js';
+import { type RateDeps, register as registerRate } from './commands/rate.js';
 import { register as registerStatus } from './commands/status.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
@@ -62,6 +62,7 @@ export type ProgramDeps = {
   adapter?: AdapterDeps;
   hook?: HookCommandDeps;
   tasks?: TasksDeps;
+  rate?: RateDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -84,7 +85,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerCard(program, deps.card);
   registerStatus(program, deps.sync);
   registerTasks(program, deps.tasks);
-  registerRate(program);
+  registerRate(program, deps.rate);
   registerWhoami(program);
   registerLogout(program);
   registerAdapter(program, deps.adapter);

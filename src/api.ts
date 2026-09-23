@@ -7,6 +7,7 @@ import {
   EventsBatchResponse,
   ListTasksQuery,
   ListTasksResponse,
+  RatingResponse,
   ScoreResponse,
   TaskResponse,
   WellKnown,
@@ -64,6 +65,7 @@ export type ApiClient = {
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
   submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
+  postRating(envelope: string): Promise<RatingResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -213,6 +215,15 @@ export function createApiClient(options: {
       taskRequest(taskPath(taskId, '/submit'), [200], envelope),
     postOutcome: (taskId, envelope) =>
       taskRequest(taskPath(taskId, '/outcome'), [200], envelope),
+    async postRating(envelope) {
+      const { status, json, headers } = await request('/v1/ratings', {
+        envelope,
+      });
+      if (status !== 200) throw toError(status, json, headers);
+      const result = RatingResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
   };
 }
 

@@ -299,3 +299,52 @@ describe('task routes', () => {
     expect(error.code).toBe('bad_response');
   });
 });
+
+describe('postRating', () => {
+  const RATING = {
+    rateeAgentId: AGENT_ID,
+    dimension: 'reliability',
+    value: 4,
+    raterScoreAtTime: 0.75,
+  };
+
+  it('posts the envelope to /v1/ratings and returns the stored rating', async () => {
+    const fetchFn = respond(Response.json(RATING));
+    const api = createApiClient({ apiUrl: 'http://api.test', fetch: fetchFn });
+    expect(await api.postRating('a.b.c')).toEqual(RATING);
+    expect(fetchFn).toHaveBeenCalledWith(
+      'http://api.test/v1/ratings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ envelope: 'a.b.c' }),
+      }),
+    );
+  });
+
+  it('throws ApiError with the code of a refusal or a bad body', async () => {
+    const closed = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(
+        Response.json(
+          {
+            error: {
+              code: 'ratings_closed',
+              message: 'Ratings are not open yet',
+            },
+          },
+          { status: 403 },
+        ),
+      ),
+    });
+    await expect(closed.postRating('a.b.c')).rejects.toMatchObject({
+      status: 403,
+      code: 'ratings_closed',
+    });
+    const bad = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(Response.json({ ...RATING, value: 9 })),
+    });
+    const error = await bad.postRating('a.b.c').catch((e) => e);
+    expect(error.code).toBe('bad_response');
+  });
+});
