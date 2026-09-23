@@ -1,17 +1,21 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from './config.js';
 import { createProgram } from './program.js';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 
 const PKG_VERSION = (
   JSON.parse(
-    readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+    readFileSync(
+      fileURLToPath(new URL('../package.json', import.meta.url)),
+      'utf8',
+    ),
   ) as { version: string }
 ).version;
 
