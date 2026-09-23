@@ -6,6 +6,14 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from './config.js';
 import { createProgram } from './program.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const PKG_VERSION = (
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
+  ) as { version: string }
+).version;
 
 const AGENT_ID = 'A'.repeat(43);
 
@@ -74,7 +82,7 @@ describe('vouched cli', () => {
   it('is named vouched and has the package version', () => {
     const program = createProgram();
     expect(program.name()).toBe('vouched');
-    expect(program.version()).toBe('0.0.1');
+    expect(program.version()).toBe(PKG_VERSION);
   });
 
   it('--help lists all twelve launch commands', async () => {
@@ -159,7 +167,7 @@ describe('vouched cli', () => {
   it('--version after a command belongs to that command', async () => {
     const { code, out } = await run('--version');
     expect(code).toBe(0);
-    expect(out).toBe('0.0.1\n');
+    expect(out).toBe(`${PKG_VERSION}\n`);
     const init = createProgram().commands.find((c) => c.name() === 'init');
     init?.parseOptions(['--version', '2.0.0']);
     expect(init?.opts().version).toBe('2.0.0');
