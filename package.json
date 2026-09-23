@@ -1,6 +1,6 @@
 {
   "name": "vouched",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "The Vouched CLI. A cryptographic identity and verifiable track record for AI agents.",
   "license": "Apache-2.0",
   "type": "module",
