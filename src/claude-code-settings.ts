@@ -1,6 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { writeFileAtomic } from './config.js';
 
@@ -26,17 +27,26 @@ export class SettingsError extends Error {
 
 type Json = Record<string, unknown>;
 
-// ~/.claude/settings.json for the user, <cwd>/.claude/settings.json for the
-// project.
+// Where Claude Code keeps its user settings. CLAUDE_CONFIG_DIR when set, the
+// way Claude Code reads it, otherwise ~/.claude.
+export function claudeConfigDir(
+  env: NodeJS.ProcessEnv = process.env,
+  home: string = homedir(),
+): string {
+  const dir = env.CLAUDE_CONFIG_DIR;
+  return dir !== undefined && dir.length > 0 ? dir : join(home, '.claude');
+}
+
+// <claude dir>/settings.json for the user, <cwd>/.claude/settings.json for
+// the project. The claude dir defaults to <home>/.claude.
 export function settingsPath(
   scope: Scope,
-  dirs: { home: string; cwd: string },
+  dirs: { home: string; cwd: string; claudeDir?: string },
 ): string {
-  return join(
-    scope === 'user' ? dirs.home : dirs.cwd,
-    '.claude',
-    'settings.json',
-  );
+  if (scope === 'user') {
+    return join(dirs.claudeDir ?? join(dirs.home, '.claude'), 'settings.json');
+  }
+  return join(dirs.cwd, '.claude', 'settings.json');
 }
 
 // The command Claude Code runs. Plain `vouched` when that name on PATH runs
@@ -90,6 +100,22 @@ export async function installHooks(
   return added;
 }
 
+// Whether the file holds at least one of our hooks. A missing or unreadable
+// file, or one that is not valid JSON, counts as none.
+export async function hasHooks(file: string): Promise<boolean> {
+  try {
+    const settings = await readSettings(file);
+    const hooks = hooksOf(settings.data, file);
+    if (hooks === null) return false;
+    return Object.values(hooks).some(
+      (list) =>
+        Array.isArray(list) && list.some((group) => ourHooks(group) > 0),
+    );
+  } catch {
+    return false;
+  }
+}
+
 // Removes every hook whose command contains HOOK_COMMAND. A group left with
 // no hooks goes, then an event left with no groups, then the hooks key when
 // it ends up empty. Returns how many hooks it removed.
@@ -132,7 +158,18 @@ type Settings = {
   exists: boolean;
   // Whether the file ended with a newline, kept on write.
   newline: boolean;
+  // The file's own indent and line ending, kept on write.
+  indent: string;
+  crlf: boolean;
 };
+
+const DEFAULT_INDENT = '  ';
+
+// The whitespace before the first indented line. A file with none, such as
+// {} on one line, gets two spaces like Claude Code writes.
+function indentOf(raw: string): string {
+  return /\n([ \t]+)\S/.exec(raw)?.[1] ?? DEFAULT_INDENT;
+}
 
 async function readSettings(file: string): Promise<Settings> {
   let raw: string;
@@ -140,11 +177,11 @@ async function readSettings(file: string): Promise<Settings> {
     raw = await readFile(file, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { data: {}, exists: false, newline: true };
+      return fresh(false);
     }
     throw error;
   }
-  if (raw.trim().length === 0) return { data: {}, exists: true, newline: true };
+  if (raw.trim().length === 0) return fresh(true);
   let data: unknown;
   try {
     data = JSON.parse(raw);
@@ -154,7 +191,23 @@ async function readSettings(file: string): Promise<Settings> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     throw new SettingsError(`${file} is not a JSON object, left it unchanged`);
   }
-  return { data: data as Json, exists: true, newline: raw.endsWith('\n') };
+  return {
+    data: data as Json,
+    exists: true,
+    newline: raw.endsWith('\n'),
+    indent: indentOf(raw),
+    crlf: raw.includes('\r\n'),
+  };
+}
+
+function fresh(exists: boolean): Settings {
+  return {
+    data: {},
+    exists,
+    newline: true,
+    indent: DEFAULT_INDENT,
+    crlf: false,
+  };
 }
 
 function hooksOf(data: Json, file: string): Record<string, unknown> | null {
@@ -179,7 +232,9 @@ function ourHooks(group: unknown): number {
   return Array.isArray(hooks) ? hooks.filter(isOurs).length : 0;
 }
 
-// Two space indent, like Claude Code writes it. A symlinked settings file is
+// The indent and line endings the file had, two spaces and LF for a new one.
+// Keys keep their order, so everything that was there is written back as it
+// was apart from what we changed. A symlinked settings file is
 // written through the link, and an existing file keeps its mode.
 async function writeSettings(file: string, settings: Settings): Promise<void> {
   const target = await realpath(file).catch(() => file);
@@ -187,6 +242,11 @@ async function writeSettings(file: string, settings: Settings): Promise<void> {
   const mode = await stat(target)
     .then((s) => s.mode & 0o777)
     .catch(() => 0o644);
-  const text = JSON.stringify(settings.data, null, 2);
-  await writeFileAtomic(target, settings.newline ? `${text}\n` : text, mode);
+  const json = JSON.stringify(settings.data, null, settings.indent);
+  const text = settings.newline ? `${json}\n` : json;
+  await writeFileAtomic(
+    target,
+    settings.crlf ? text.replace(/\n/g, '\r\n') : text,
+    mode,
+  );
 }

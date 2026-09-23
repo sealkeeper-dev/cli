@@ -7,6 +7,9 @@
 - `vouched agent rename <new-name>` renames the agent with a request signed by its key and prints the new handle and profile URL. The old handle redirects for 30 days.
 - `init`, `status` and `whoami` print the handle, and the profile URL is the handle URL.
 - `init` prints one line before the GitHub device flow saying that continuing accepts the terms at https://vouched.run/terms and the privacy policy at https://vouched.run/privacy. It goes to stderr, so `--json` output is unchanged.
+- `init` offers to install the Claude Code hooks when Claude Code is set up on this machine (`~/.claude`, or `CLAUDE_CONFIG_DIR`). `Install the Claude Code hooks now? [Y/n]` defaults to yes and runs the same install as `vouched adapter claude-code install`. Without a terminal or with `--json` it does not ask. The install merges next to existing hooks, keeps every other entry, its order and the file's indentation, changes nothing on a second run and refuses a file that is not valid JSON.
+- `init` ends with next steps, `vouched prove`, `vouched what-is-shared` and, when the hooks are not installed, `vouched adapter claude-code install`. `--json` output gains `nextSteps`.
+- `status` warns on stderr when no adapter is installed and nothing was recorded in 7 days.
 
 ## 0.1.1, 23 September 2026
 

@@ -17,6 +17,8 @@ import {
 } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Input } from '../ask.js';
+import { HOOK_COMMAND } from '../claude-code-settings.js';
 import { paths, readConfig } from '../config.js';
 import {
   ACCESS_TOKEN_URL,
@@ -27,7 +29,16 @@ import {
 import { loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
-import { ALREADY_INITIALISED, CONSENT, NOTHING_SENT } from './init.js';
+import {
+  ALREADY_INITIALISED,
+  CONSENT,
+  HOOKS_QUESTION,
+  isYesByDefault,
+  NEXT_HOOKS,
+  NEXT_PROVE,
+  NEXT_WHAT_IS_SHARED,
+  NOTHING_SENT,
+} from './init.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const API_URL = 'http://api.test';
@@ -42,7 +53,26 @@ type World = {
   sleeps: number[];
   registrations: Record<string, unknown>[];
   fetchUrls: string[];
+  // The terminal the hooks question reads from. None means no stdin at all.
+  stdin?: Input;
 };
+
+// A terminal, or a pipe when isTTY is false, that answers with the given
+// line and records how often it was read.
+function answering(
+  line: string | null,
+  isTTY = true,
+): Input & { reads: number } {
+  const input = {
+    isTTY,
+    reads: 0,
+    readLine: async () => {
+      input.reads++;
+      return line;
+    },
+  };
+  return input;
+}
 
 function throwOnExit(cmd: Command): void {
   cmd.exitOverride();
@@ -106,6 +136,8 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       sleep: async (ms) => {
         world.sleeps.push(ms);
       },
+      stdin: world.stdin ? () => world.stdin as Input : undefined,
+      hookCommand: () => HOOK_COMMAND,
     },
   });
   throwOnExit(program);
@@ -169,6 +201,8 @@ describe('vouched init', () => {
     vi.stubEnv('VOUCHED_HOME', home);
     vi.stubEnv('VOUCHED_GITHUB_CLIENT_ID', 'client-abc');
     vi.stubEnv('VOUCHED_API_URL', API_URL);
+    // Never the real ~/.claude. Tests that want Claude Code create it.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     world = newWorld();
   });
 
@@ -191,6 +225,9 @@ describe('vouched init', () => {
         'operator carelmeyer',
         'handle carelmeyer/scout',
         'profile https://vouched.run/agents/carelmeyer/scout',
+        '',
+        NEXT_PROVE,
+        NEXT_WHAT_IS_SHARED,
         '',
       ].join('\n'),
     );
@@ -462,5 +499,165 @@ describe('vouched init', () => {
     expect(result.err).toContain('VOUCHED_GITHUB_CLIENT_ID');
     expect(world.fetchUrls).toEqual([]);
     expect(await readIfExists(paths(home).key)).toBe('');
+  });
+  describe('Claude Code hooks', () => {
+    const claudeDir = () => join(home, 'claude');
+    const settingsFile = () => join(claudeDir(), 'settings.json');
+    const EXISTING = `${JSON.stringify(
+      {
+        model: 'opus',
+        hooks: {
+          Stop: [{ hooks: [{ type: 'command', command: 'other-tool stop' }] }],
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+    async function withClaudeCode(text = EXISTING): Promise<void> {
+      await mkdir(claudeDir(), { recursive: true });
+      await writeFile(settingsFile(), text);
+    }
+
+    function hooksIn(text: string): string[] {
+      const hooks = (JSON.parse(text) as { hooks: Record<string, unknown[]> })
+        .hooks;
+      return Object.entries(hooks)
+        .filter(([, list]) => JSON.stringify(list).includes(HOOK_COMMAND))
+        .map(([event]) => event);
+    }
+
+    it('says nothing about hooks when there is no Claude Code dir', async () => {
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect((world.stdin as Input & { reads: number }).reads).toBe(0);
+      expect(result.out).not.toContain('hook');
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      expect(
+        result.out.endsWith(`${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n`),
+      ).toBe(true);
+    });
+
+    it('honours CLAUDE_CONFIG_DIR when looking for Claude Code', async () => {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'elsewhere'));
+      await mkdir(join(home, 'elsewhere'));
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(NEXT_HOOKS);
+    });
+
+    it('installs on Enter, since yes is the default', async () => {
+      await withClaudeCode();
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(1);
+      expect(result.err).toContain(HOOKS_QUESTION);
+      expect(result.out).toContain(
+        `added vouched hooks for SessionStart, SessionEnd, PreToolUse, PostToolUse, Stop to ${settingsFile()}`,
+      );
+      expect(result.out).not.toContain(NEXT_HOOKS);
+      expect(
+        result.out.endsWith(`\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n`),
+      ).toBe(true);
+      const after = await readFile(settingsFile(), 'utf8');
+      expect(hooksIn(after)).toEqual([
+        'Stop',
+        'SessionStart',
+        'SessionEnd',
+        'PreToolUse',
+        'PostToolUse',
+      ]);
+      expect(after).toContain('other-tool stop');
+    });
+
+    it('prints the command instead on n and leaves the settings alone', async () => {
+      await withClaudeCode();
+      world.stdin = answering('n');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(HOOKS_QUESTION);
+      expect(
+        result.out.endsWith(
+          `\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n${NEXT_HOOKS}\n`,
+        ),
+      ).toBe(true);
+      expect(NEXT_HOOKS).toBe(
+        'Run vouched adapter claude-code install to record your Claude Code sessions',
+      );
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('does not ask without a terminal and prints the command', async () => {
+      await withClaudeCode();
+      const stdin = answering('y', false);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      expect(result.out).toContain(NEXT_HOOKS);
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('with --json never asks and lists the command in nextSteps', async () => {
+      await withClaudeCode();
+      const stdin = answering('y');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      const printed = JSON.parse(result.out) as { nextSteps: string[] };
+      expect(printed.nextSteps).toEqual([
+        NEXT_PROVE,
+        NEXT_WHAT_IS_SHARED,
+        NEXT_HOOKS,
+      ]);
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('with --json and no Claude Code lists two next steps', async () => {
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      const printed = JSON.parse(result.out) as { nextSteps: string[] };
+      expect(printed.nextSteps).toEqual([NEXT_PROVE, NEXT_WHAT_IS_SHARED]);
+    });
+
+    it('does not ask when the hooks are already there', async () => {
+      await withClaudeCode(
+        `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }] } }, null, 2)}\n`,
+      );
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.out).not.toContain(NEXT_HOOKS);
+    });
+
+    it('refuses a settings file that is not JSON, names it and still registers', async () => {
+      await withClaudeCode('{ "hooks": ');
+      world.stdin = answering('y');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(
+        `${settingsFile()} is not valid JSON, left it unchanged`,
+      );
+      expect(result.out).toContain(NEXT_HOOKS);
+      expect(await readFile(settingsFile(), 'utf8')).toBe('{ "hooks": ');
+      expect(await readConfig(paths(home))).not.toBeNull();
+    });
+
+    it('reads Enter and y as yes, and n, anything else or a closed input as no', () => {
+      for (const yes of ['', ' ', 'y', 'Y', 'yes', 'YES']) {
+        expect(isYesByDefault(yes), yes).toBe(true);
+      }
+      for (const no of ['n', 'N', 'no', 'nope', 'x', null]) {
+        expect(isYesByDefault(no), String(no)).toBe(false);
+      }
+    });
   });
 });

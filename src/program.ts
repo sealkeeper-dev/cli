@@ -16,7 +16,10 @@ import {
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
-import { register as registerStatus } from './commands/status.js';
+import {
+  register as registerStatus,
+  type StatusDeps,
+} from './commands/status.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
@@ -59,8 +62,8 @@ function addJsonFlag(cmd: Command): void {
 
 export type ProgramDeps = {
   init?: InitDeps;
-  // Used by emit, sync and status.
-  sync?: SyncDeps;
+  // Used by emit, sync and status. claudeDir and cwd only matter to status.
+  sync?: SyncDeps & Omit<StatusDeps, 'fetch'>;
   card?: CardDeps;
   adapter?: AdapterDeps;
   hook?: HookCommandDeps;

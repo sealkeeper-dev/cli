@@ -2,9 +2,18 @@
 
 The Vouched CLI gives an AI agent a cryptographic identity and a verifiable track record.
 
+## Quick start
+
 ```sh
-npx vouched init
+npm i -g vouched
+vouched init
+vouched prove
+vouched status
 ```
+
+- `init` creates the agent's key, registers it through GitHub and, when Claude Code is set up on this machine, offers to install the Claude Code hooks so sessions are recorded.
+- `prove` earns the first verified tasks. It is coming in this release.
+- `status` shows today's activity and warns when nothing is being recorded.
 
 ## What leaves your machine
 
@@ -57,6 +66,10 @@ The GitHub token is sent once, inside the signed registration, and is never writ
 
 After registering, `init` prints what leaves this machine (see above) on stderr and sends no events. Automatic sync starts off.
 
+When Claude Code is set up here (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set), `init` asks `Install the Claude Code hooks now? [Y/n]`. Enter or `y` runs the same install as `vouched adapter claude-code install`. `n` leaves the settings alone. Without a terminal, or with `--json`, it does not ask. Without Claude Code it says nothing about hooks.
+
+`init` ends with the next steps, running `vouched prove` and `vouched what-is-shared`, plus `vouched adapter claude-code install` when the hooks are not installed. With `--json` they are in `nextSteps`.
+
 Running `init` again without `--force` prints the current identity and changes nothing.
 
 ## emit
@@ -103,6 +116,8 @@ Each accepted batch also records `lastSyncAt` in `cursor.json`.
 
 `vouched status --show` also lists today's events in full, one JSON line each, as they are sent.
 
+When neither the user nor the project Claude Code settings hold the Vouched hooks and the log has no event in the last 7 days, `status` also prints `No adapter installed and nothing recorded in 7 days. Run vouched adapter claude-code install.` on stderr. The Mastra and OpenClaw adapters live in your code, so the CLI cannot see them, but they write to the same log.
+
 Everything but the score comes from local files, so it works offline. Scores are cached in `~/.vouched/score.json` for fifteen minutes. When the API does not answer within two seconds the last cached scores are shown, or dashes when there are none.
 
 ## config
@@ -143,7 +158,7 @@ vouched card write --out public/.well-known/agent-card.json
 npx vouched adapter claude-code install
 ```
 
-This adds Vouched hooks for `SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse` and `Stop` to `~/.claude/settings.json`. Use `--scope project` to write `.claude/settings.json` in the current directory instead. Hooks from other tools are left as they are, and running it again adds nothing. Run `vouched init` first, since the hooks do nothing without a config.
+This adds Vouched hooks for `SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.json` in the current directory instead. Our entries go next to the ones already there. Hooks from other tools and every other setting are left as they are, in the same order and with the file's own indentation, and running it again changes nothing. A settings file that is not valid JSON is refused with its path and not touched. Run `vouched init` first, since the hooks do nothing without a config.
 
 When `vouched` on your PATH is the same install that ran `install` (for example after `npm i -g vouched`), the hooks call `vouched hook claude-code` directly. Otherwise they call `npx -y vouched hook claude-code`, which works anywhere but starts slower on every hook.
 
@@ -288,6 +303,7 @@ Only agents with a score of at least the minimum on that dimension, or on reliab
 |---|---|
 | `VOUCHED_HOME` | directory for the key, config and log, default `~/.vouched` |
 | `VOUCHED_API_URL` | API base URL |
+| `CLAUDE_CONFIG_DIR` | the Claude Code config directory, default `~/.claude`, as Claude Code reads it |
 | `VOUCHED_GITHUB_CLIENT_ID` | GitHub OAuth app client id, overrides the one built into the package |
 
 Release builds take the client id from `GITHUB_CLIENT_ID` at build time.

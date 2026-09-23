@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { rm } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
   AgentName,
@@ -9,6 +9,15 @@ import {
 } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
+import { type Input, streamInput } from '../ask.js';
+import {
+  claudeConfigDir,
+  hasHooks,
+  hookCommand,
+  installHooks,
+  SettingsError,
+  settingsPath,
+} from '../claude-code-settings.js';
 import {
   Config,
   ConfigError,
@@ -30,6 +39,7 @@ import {
 import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
+import { INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
@@ -39,11 +49,31 @@ export const CONSENT =
   'By continuing you accept https://vouched.run/terms and https://vouched.run/privacy.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
+export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
+export const NEXT_PROVE = 'Run vouched prove to earn your first verified tasks';
+export const NEXT_WHAT_IS_SHARED =
+  'Run vouched what-is-shared to see exactly what leaves this machine';
+export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
+
 // fetch and sleep are injectable so tests can drive GitHub and the API
-// without a network or real waits.
+// without a network or real waits. stdin answers the hooks question, which is
+// never asked without it. claudeDir is the Claude Code config dir and
+// hookCommand the command the hooks run, both defaulting to what vouched
+// adapter claude-code install uses.
 export type InitDeps = {
   fetch: typeof fetch;
   sleep: Sleep;
+  stdin?: () => Input;
+  claudeDir?: () => string;
+  hookCommand?: () => string;
+};
+
+const defaultInitDeps: InitDeps = {
+  fetch: (...args) => fetch(...args),
+  sleep,
+  stdin: () => streamInput(process.stdin),
+  claudeDir: () => claudeConfigDir(),
+  hookCommand: () => hookCommand(),
 };
 
 type InitOptions = {
@@ -85,7 +115,7 @@ function apiErrorMessage(error: ApiError): string {
 
 export function register(
   parent: Command,
-  deps: InitDeps = { fetch: (...args) => fetch(...args), sleep },
+  deps: InitDeps = defaultInitDeps,
 ): Command {
   return parent
     .command('init')
@@ -223,6 +253,7 @@ async function init(
     stderr(NOTHING_SENT);
   };
   if (json) {
+    const hooks = await offerHooks(deps, false);
     stdout(
       JSON.stringify({
         agentId: config.agentId,
@@ -232,6 +263,7 @@ async function init(
         version: config.version,
         apiUrl: config.apiUrl,
         profileUrl,
+        nextSteps: nextSteps(hooks),
       }),
     );
     printShared();
@@ -242,4 +274,65 @@ async function init(
   stdout(`handle ${handle}`);
   stdout(`profile ${profileUrl}`);
   printShared();
+  const hooks = await offerHooks(deps, true);
+  stdout('');
+  for (const line of nextSteps(hooks)) stdout(line);
+}
+
+// What init did about the Claude Code hooks. none means there is no Claude
+// Code config dir, so hooks are not mentioned at all.
+type HooksResult = 'none' | 'installed' | 'not-installed';
+
+// Asks whether to install the Claude Code hooks when Claude Code is set up
+// here and a person can answer. Yes, or just Enter, runs the same install as
+// vouched adapter claude-code install. Hooks already there count as
+// installed and nothing is asked.
+async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
+  const dir = (deps.claudeDir ?? claudeConfigDir)();
+  if (!(await isDirectory(dir))) return 'none';
+  const file = settingsPath('user', { home: '', cwd: '', claudeDir: dir });
+  if (await hasHooks(file)) return 'installed';
+
+  const input = deps.stdin?.();
+  if (!ask || input === undefined || !input.isTTY) return 'not-installed';
+  process.stderr.write(`\n${HOOKS_QUESTION}`);
+  if (!isYesByDefault(await input.readLine())) return 'not-installed';
+  try {
+    const added = await installHooks(file, (deps.hookCommand ?? hookCommand)());
+    stdout(
+      added.length === 0
+        ? `vouched hooks already installed in ${file}`
+        : `added vouched hooks for ${added.join(', ')} to ${file}`,
+    );
+    return 'installed';
+  } catch (error) {
+    // Registration already worked, so a settings file we will not touch
+    // only means the hooks wait for a later install.
+    if (error instanceof SettingsError) {
+      stderr(error.message);
+      return 'not-installed';
+    }
+    throw error;
+  }
+}
+
+// Enter or y or yes is yes. n, no or a closed input is no, and so is
+// anything else, so a typo never edits a settings file.
+export function isYesByDefault(answer: string | null): boolean {
+  if (answer === null) return false;
+  return /^(y(es)?)?$/i.test(answer.trim());
+}
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function nextSteps(hooks: HooksResult): string[] {
+  const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED];
+  if (hooks === 'not-installed') steps.push(NEXT_HOOKS);
+  return steps;
 }

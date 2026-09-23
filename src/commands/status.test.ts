@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Event } from '@vouched-dev/schema';
@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
+import { NO_ADAPTER } from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
 const API_URL = 'http://api.test';
@@ -43,7 +44,11 @@ function scoreFetch(scores: { dimension: string; value: number | null }[]) {
 
 async function run(fetchFn: typeof fetch, ...args: string[]) {
   const program = createProgram({
-    sync: { fetch: fetchFn, sleep: async () => {} },
+    sync: {
+      fetch: fetchFn,
+      sleep: async () => {},
+      cwd: () => join(String(process.env.VOUCHED_HOME), 'project'),
+    },
   });
   throwOnExit(program);
   let out = '';
@@ -116,6 +121,8 @@ describe('status', () => {
     home = await mkdtemp(join(tmpdir(), 'vouched-status-'));
     vi.stubEnv('VOUCHED_HOME', home);
     vi.stubEnv('VOUCHED_API_URL', '');
+    // Never the real ~/.claude.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     await writeConfig(
       {
         agentId: AGENT_ID,
@@ -281,5 +288,61 @@ describe('status', () => {
     expect(code).toBe(1);
     expect(out).toBe('');
     expect(err).toBe('not initialised, run vouched init\n');
+  });
+  describe('adapter warning', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const HOOKED = JSON.stringify({
+      hooks: {
+        Stop: [
+          { hooks: [{ type: 'command', command: 'vouched hook claude-code' }] },
+        ],
+      },
+    });
+
+    async function settingsIn(dir: string): Promise<void> {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'settings.json'), HOOKED);
+    }
+
+    async function eventDaysAgo(days: number): Promise<void> {
+      await appendEvent(
+        event('session.start', { session_id: 's1' }),
+        paths(home),
+        new Date(Date.now() - days * DAY_MS),
+      );
+    }
+
+    it('warns once on stderr with no hooks and nothing in 7 days', async () => {
+      expect(NO_ADAPTER).toBe(
+        'No adapter installed and nothing recorded in 7 days. Run vouched adapter claude-code install.',
+      );
+      await eventDaysAgo(8);
+      const { code, out, err } = await run(offline, 'status');
+      expect(code).toBe(0);
+      expect(err).toBe(`${NO_ADAPTER}\n`);
+      expect(out).not.toContain(NO_ADAPTER);
+      expect(out).toContain('pending ');
+    });
+
+    it('keeps --json output one object and still warns on stderr', async () => {
+      const { out, err } = await run(offline, 'status', '--json');
+      expect(JSON.parse(out)).toMatchObject({ pending: 0 });
+      expect(err).toBe(`${NO_ADAPTER}\n`);
+    });
+
+    it('does not warn when the user settings hold the hooks', async () => {
+      await settingsIn(join(home, 'claude'));
+      expect((await run(offline, 'status')).err).toBe('');
+    });
+
+    it('does not warn when the project settings hold the hooks', async () => {
+      await settingsIn(join(home, 'project', '.claude'));
+      expect((await run(offline, 'status')).err).toBe('');
+    });
+
+    it('does not warn when something was recorded in the last 7 days', async () => {
+      await eventDaysAgo(6);
+      expect((await run(offline, 'status')).err).toBe('');
+    });
   });
 });

@@ -1,8 +1,21 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+
+import { stat } from 'node:fs/promises';
 import { BaseDimension, type Event, EventType } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { resolveApiUrl } from '../api.js';
-import { type Config, handleOf, paths, profileUrl } from '../config.js';
+import {
+  claudeConfigDir,
+  hasHooks,
+  settingsPath,
+} from '../claude-code-settings.js';
+import {
+  type Config,
+  handleOf,
+  type Paths,
+  paths,
+  profileUrl,
+} from '../config.js';
 import {
   CursorError,
   countPending,
@@ -10,8 +23,9 @@ import {
   readCursor,
   readDay,
 } from '../log.js';
-import { stdout, wantsJson } from '../output.js';
+import { stderr, stdout, wantsJson } from '../output.js';
 import { getScore, type ScoreCache } from '../score.js';
+import { INSTALL_COMMAND } from './adapter.js';
 import { defaultSyncDeps, loadConfig } from './sync.js';
 import { NOT_INITIALISED } from './whoami.js';
 
@@ -19,9 +33,17 @@ import { NOT_INITIALISED } from './whoami.js';
 // files under the Vouched home, so it works offline. The score comes from the
 // score cache, which gives up on the network after two seconds.
 
+// claudeDir and cwd say where to look for the Claude Code settings, and
+// default to CLAUDE_CONFIG_DIR or ~/.claude and the working directory.
 export type StatusDeps = {
   fetch: typeof fetch;
+  claudeDir?: () => string;
+  cwd?: () => string;
 };
+
+export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
+const QUIET_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type Status = {
   agentId: string;
@@ -68,11 +90,10 @@ export function register(
         throw error;
       }
 
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(status));
-        return;
-      }
-      printStatus(status);
+      if (wantsJson(this)) stdout(JSON.stringify(status));
+      else printStatus(status);
+      // On stderr, so --json output stays one object.
+      if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
     });
 }
 
@@ -112,6 +133,36 @@ export async function readStatus(
     scoresFetchedAt: score?.fetchedAt ?? null,
     ...(show ? { events } : {}),
   };
+}
+
+// True when neither Claude Code settings file holds our hooks and the log
+// has no event in the last seven UTC days, today included. The CLI cannot see
+// the Mastra or OpenClaw adapters, which live in other code, but they write
+// to the same log, so an agent using them is never quiet for long.
+export async function noAdapterAndQuiet(
+  deps: StatusDeps,
+  now: Date,
+  p: Paths = paths(),
+): Promise<boolean> {
+  const dirs = {
+    home: '',
+    cwd: (deps.cwd ?? (() => process.cwd()))(),
+    claudeDir: (deps.claudeDir ?? claudeConfigDir)(),
+  };
+  const installed = await Promise.all([
+    hasHooks(settingsPath('user', dirs)),
+    hasHooks(settingsPath('project', dirs)),
+  ]);
+  if (installed.some(Boolean)) return false;
+  for (let i = 0; i < QUIET_DAYS; i++) {
+    const day = dayOf(new Date(now.getTime() - i * DAY_MS));
+    const size = await stat(p.logFile(day)).then(
+      (s) => s.size,
+      () => 0,
+    );
+    if (size > 0) return false;
+  }
+  return true;
 }
 
 function countEvents(

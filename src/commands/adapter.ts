@@ -2,6 +2,7 @@
 import { homedir } from 'node:os';
 import { type Command, Option } from 'commander';
 import {
+  claudeConfigDir,
   hookCommand,
   installHooks,
   type Scope,
@@ -13,18 +14,25 @@ import { stdout, wantsJson } from '../output.js';
 
 // Installs and removes framework hooks that call vouched. The home and
 // working directories are injectable so tests never touch the real
-// ~/.claude.
+// ~/.claude. claudeDir, when given, is the Claude Code config dir and wins
+// over <home>/.claude.
 export type AdapterDeps = {
   home: () => string;
   cwd: () => string;
   hookCommand: () => string;
+  claudeDir?: () => string;
 };
 
 export const defaultAdapterDeps: AdapterDeps = {
   home: homedir,
   cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),
+  claudeDir: () => claudeConfigDir(),
 };
+
+// The command that installs the Claude Code hooks, printed wherever vouched
+// suggests it.
+export const INSTALL_COMMAND = 'vouched adapter claude-code install';
 
 type ScopeOptions = { scope: Scope };
 
@@ -85,7 +93,11 @@ export function register(
 }
 
 function pathFor(scope: Scope, deps: AdapterDeps): string {
-  return settingsPath(scope, { home: deps.home(), cwd: deps.cwd() });
+  return settingsPath(scope, {
+    home: deps.home(),
+    cwd: deps.cwd(),
+    claudeDir: deps.claudeDir?.(),
+  });
 }
 
 async function orExit<T>(cmd: Command, work: () => Promise<T>): Promise<T> {
