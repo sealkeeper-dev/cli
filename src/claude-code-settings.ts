@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { writeFileAtomic } from './config.js';
 
 // Adds and removes the Vouched hooks in a Claude Code settings file. Hooks
@@ -10,7 +10,13 @@ import { writeFileAtomic } from './config.js';
 // array of {matcher?, hooks: [{type: 'command', command}]}. Entries that are
 // not ours are never changed.
 
-export const HOOK_COMMAND = 'vouched hook claude-code';
+// What follows the CLI invocation in every hook command we write.
+export const HOOK_ARGS = 'hook claude-code';
+// The forms 0.2.1 and earlier wrote. Still ours, and rewritten on install.
+export const LEGACY_HOOK_COMMANDS = [
+  `vouched ${HOOK_ARGS}`,
+  `npx -y vouched ${HOOK_ARGS}`,
+] as const;
 export const HOOK_EVENTS = [
   'SessionStart',
   'SessionEnd',
@@ -49,21 +55,96 @@ export function settingsPath(
   return join(dirs.cwd, '.claude', 'settings.json');
 }
 
-// The command Claude Code runs. Plain `vouched` when that name on PATH runs
-// this very script (a global install), otherwise through npx.
-export function hookCommand(
+// How to run this CLI from any shell, whatever its PATH. The absolute node
+// binary and the real path of the running script, each double quoted, for
+// example "/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js".
+// Under npx the script sits in the npx cache, which works until the cache is
+// cleared. Without a script path, which only happens when this is not run as
+// the CLI, it falls back to plain vouched.
+export function cliInvocation(
+  execPath: string = process.execPath,
   argv1: string | undefined = process.argv[1],
-  pathEnv: string = process.env.PATH ?? '',
 ): string {
-  const self = argv1 ? realOrNull(argv1) : null;
-  const global =
-    self !== null &&
-    pathEnv
-      .split(delimiter)
-      .some(
-        (dir) => dir.length > 0 && realOrNull(join(dir, 'vouched')) === self,
-      );
-  return global ? HOOK_COMMAND : `npx -y ${HOOK_COMMAND}`;
+  if (argv1 === undefined || argv1.length === 0) return 'vouched';
+  const script = realOrNull(argv1) ?? argv1;
+  return `${shellQuote(stableNode(execPath))} ${shellQuote(script)}`;
+}
+
+// Homebrew node reports its versioned Cellar path, such as
+// /opt/homebrew/Cellar/node@24/24.20.0/bin/node, which brew cleanup deletes
+// after an upgrade. When the stable opt link for the same formula exists
+// and leads to the same binary, that link is used instead. Any other path
+// is kept as it is.
+const CELLAR_NODE = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/node$/;
+
+export function stableNode(execPath: string): string {
+  const match = CELLAR_NODE.exec(execPath);
+  if (match === null) return execPath;
+  const opt = `${match[1]}/opt/${match[2]}/bin/node`;
+  const target = realOrNull(opt);
+  return target !== null && target === (realOrNull(execPath) ?? execPath)
+    ? opt
+    : execPath;
+}
+
+// The command the hooks run.
+export function hookCommand(
+  execPath: string = process.execPath,
+  argv1: string | undefined = process.argv[1],
+): string {
+  return `${cliInvocation(execPath, argv1)} ${HOOK_ARGS}`;
+}
+
+// The invocation a hook command starts with, the command minus HOOK_ARGS.
+export function invocationOf(command: string): string {
+  const suffix = ` ${HOOK_ARGS}`;
+  return command.endsWith(suffix) ? command.slice(0, -suffix.length) : command;
+}
+
+// Whether the running script came through npx, whose cache lives under a
+// directory named _npx.
+export function isNpxCopy(
+  argv1: string | undefined = process.argv[1],
+): boolean {
+  if (argv1 === undefined || argv1.length === 0) return false;
+  const script = realOrNull(argv1) ?? argv1;
+  return /[\\/]_npx[\\/]/.test(script);
+}
+
+// Double quoted for sh. Inside double quotes only these four characters
+// are special, so each gets a backslash.
+function shellQuote(value: string): string {
+  return `"${value.replace(/["\\$`]/g, '\\$&')}"`;
+}
+
+// "<node>" "<script>" hook claude-code, as hookCommand writes it.
+const ABSOLUTE = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)" hook claude-code$/;
+const OUR_SCRIPT = /[\\/]vouched[\\/]dist[\\/]index\.js$/;
+
+function unquote(value: string): string {
+  return value.replace(/\\(.)/g, '$1');
+}
+
+// The node binary and script of a hook command in the absolute form, or
+// null for any other command.
+export function parseHookCommand(
+  command: string,
+): { node: string; script: string } | null {
+  const match = ABSOLUTE.exec(command);
+  if (match === null) return null;
+  return { node: unquote(match[1] ?? ''), script: unquote(match[2] ?? '') };
+}
+
+// Whether a command is one of ours. The absolute form whose script is a
+// vouched package, either legacy form, or exactly the command being
+// installed now, which covers running from a checkout.
+export function isOurCommand(command: string, current?: string): boolean {
+  if (command === current) return true;
+  if ((LEGACY_HOOK_COMMANDS as readonly string[]).includes(command.trim())) {
+    return true;
+  }
+  const parsed = parseHookCommand(command);
+  return parsed !== null && OUR_SCRIPT.test(parsed.script);
 }
 
 function realOrNull(path: string): string | null {
@@ -74,52 +155,90 @@ function realOrNull(path: string): string | null {
   }
 }
 
-// Adds one hook entry per event that has none of ours yet. Returns the
-// events it added, and writes only when there are some.
+export type InstallResult = { added: string[]; updated: string[] };
+
+// Adds one hook entry per event that has none of ours yet, and rewrites
+// any of ours whose command differs from command, in place. Entries that
+// are not ours are never touched. Returns the events it added to and the
+// events where it rewrote a command, and writes only when there are some.
 export async function installHooks(
   file: string,
   command: string,
-): Promise<string[]> {
+): Promise<InstallResult> {
   const settings = await readSettings(file);
   const hooks = hooksOf(settings.data, file) ?? {};
   const added: string[] = [];
+  const updated: string[] = [];
   for (const event of HOOK_EVENTS) {
     const list = hooks[event] ?? [];
     if (!Array.isArray(list)) {
       throw new SettingsError(`hooks.${event} in ${file} is not an array`);
     }
-    if (list.some((group) => ourHooks(group) > 0)) continue;
+    let found = false;
+    let rewrote = false;
+    for (const group of list) {
+      for (const hook of ourHooks(group, command)) {
+        found = true;
+        if (hook.command !== command) {
+          hook.command = command;
+          rewrote = true;
+        }
+      }
+    }
+    if (rewrote) updated.push(event);
+    if (found) continue;
     list.push({ hooks: [{ type: 'command', command }] });
     hooks[event] = list;
     added.push(event);
   }
-  if (added.length > 0) {
+  if (added.length > 0 || updated.length > 0) {
     settings.data.hooks = hooks;
     await writeSettings(file, settings);
   }
-  return added;
+  return { added, updated };
 }
 
 // Whether the file holds at least one of our hooks. A missing or unreadable
 // file, or one that is not valid JSON, counts as none.
-export async function hasHooks(file: string): Promise<boolean> {
+// With current given, only a hook that runs exactly that command counts, so
+// a legacy form or a stale path reads as not installed and gets rewritten.
+export async function hasHooks(
+  file: string,
+  current?: string,
+): Promise<boolean> {
+  const commands = await ourCommands(file);
+  if (current === undefined) return commands.length > 0;
+  return commands.includes(current);
+}
+
+// The commands of our hooks in the file, each once. A missing or unreadable
+// file, or one that is not valid JSON, has none.
+export async function ourCommands(file: string): Promise<string[]> {
   try {
     const settings = await readSettings(file);
     const hooks = hooksOf(settings.data, file);
-    if (hooks === null) return false;
-    return Object.values(hooks).some(
-      (list) =>
-        Array.isArray(list) && list.some((group) => ourHooks(group) > 0),
-    );
+    if (hooks === null) return [];
+    const commands = new Set<string>();
+    for (const list of Object.values(hooks)) {
+      if (!Array.isArray(list)) continue;
+      for (const group of list) {
+        for (const hook of ourHooks(group)) commands.add(hook.command);
+      }
+    }
+    return [...commands];
   } catch {
-    return false;
+    return [];
   }
 }
 
-// Removes every hook whose command contains HOOK_COMMAND. A group left with
-// no hooks goes, then an event left with no groups, then the hooks key when
-// it ends up empty. Returns how many hooks it removed.
-export async function uninstallHooks(file: string): Promise<number> {
+// Removes every hook of ours, see isOurCommand, with current as the command
+// install would write now. A group left with no hooks goes, then an event
+// left with no groups, then the hooks key when it ends up empty. Returns how
+// many hooks it removed.
+export async function uninstallHooks(
+  file: string,
+  current?: string,
+): Promise<number> {
   const settings = await readSettings(file);
   if (!settings.exists) return 0;
   const hooks = hooksOf(settings.data, file);
@@ -131,14 +250,14 @@ export async function uninstallHooks(file: string): Promise<number> {
     let removedHere = 0;
     const kept: unknown[] = [];
     for (const group of list) {
-      const count = ourHooks(group);
+      const count = ourHooks(group, current).length;
       if (count === 0) {
         kept.push(group);
         continue;
       }
       removedHere += count;
       const rest = (group as { hooks: unknown[] }).hooks.filter(
-        (hook) => !isOurs(hook),
+        (hook) => !isOurs(hook, current),
       );
       if (rest.length > 0) kept.push({ ...(group as Json), hooks: rest });
     }
@@ -219,17 +338,22 @@ function hooksOf(data: Json, file: string): Record<string, unknown> | null {
   return hooks as Record<string, unknown>;
 }
 
-function isOurs(hook: unknown): boolean {
+type Hook = Json & { command: string };
+
+function isOurs(hook: unknown, current?: string): hook is Hook {
   if (typeof hook !== 'object' || hook === null) return false;
   const { command } = hook as Json;
-  return typeof command === 'string' && command.includes(HOOK_COMMAND);
+  return typeof command === 'string' && isOurCommand(command, current);
 }
 
-// How many of our hooks one group holds.
-function ourHooks(group: unknown): number {
-  if (typeof group !== 'object' || group === null) return 0;
+// Our hooks in one group, as the objects in the file, so install can
+// rewrite them in place.
+function ourHooks(group: unknown, current?: string): Hook[] {
+  if (typeof group !== 'object' || group === null) return [];
   const { hooks } = group as Json;
-  return Array.isArray(hooks) ? hooks.filter(isOurs).length : 0;
+  return Array.isArray(hooks)
+    ? hooks.filter((hook): hook is Hook => isOurs(hook, current))
+    : [];
 }
 
 // The indent and line endings the file had, two spaces and LF for a new one.

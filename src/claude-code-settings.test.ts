@@ -1,17 +1,41 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   claudeConfigDir,
-  HOOK_COMMAND,
+  cliInvocation,
   HOOK_EVENTS,
   hasHooks,
+  hookCommand,
   installHooks,
+  invocationOf,
+  isNpxCopy,
+  isOurCommand,
+  LEGACY_HOOK_COMMANDS,
+  ourCommands,
+  parseHookCommand,
   SettingsError,
   settingsPath,
+  stableNode,
+  uninstallHooks,
 } from './claude-code-settings.js';
+
+// A hook command in the absolute form hookCommand writes, for a global
+// install and for an npx copy.
+const HOOK_COMMAND =
+  '"/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js" hook claude-code';
+const NPX_COMMAND =
+  '"/usr/local/bin/node" "/home/carl/.npm/_npx/abc123/node_modules/vouched/dist/index.js" hook claude-code';
 
 // Shaped like a real settings file with another tool's hooks under every
 // event name, most without a matcher. Written with no trailing newline, as
@@ -75,8 +99,9 @@ describe('Claude Code settings', () => {
 
   it('merges next to every existing entry and keeps them byte for byte', async () => {
     await writeFile(file(), CROWDED_TEXT);
-    const added = await installHooks(file(), HOOK_COMMAND);
+    const { added, updated } = await installHooks(file(), HOOK_COMMAND);
     expect(added).toEqual([...HOOK_EVENTS]);
+    expect(updated).toEqual([]);
 
     const after = await readFile(file(), 'utf8');
     // The data is the old data with ours appended to each of the five events.
@@ -105,7 +130,10 @@ describe('Claude Code settings', () => {
     await installHooks(file(), HOOK_COMMAND);
     const once = await readFile(file(), 'utf8');
     const mtime = (await stat(file())).mtimeMs;
-    expect(await installHooks(file(), HOOK_COMMAND)).toEqual([]);
+    expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
+      added: [],
+      updated: [],
+    });
     expect(await readFile(file(), 'utf8')).toBe(once);
     expect((await stat(file())).mtimeMs).toBe(mtime);
   });
@@ -159,8 +187,9 @@ describe('Claude Code settings', () => {
     expect(await hasHooks(file())).toBe(false);
     await writeFile(file(), CROWDED_TEXT);
     expect(await hasHooks(file())).toBe(false);
-    await installHooks(file(), `npx -y ${HOOK_COMMAND}`);
+    await installHooks(file(), NPX_COMMAND);
     expect(await hasHooks(file())).toBe(true);
+    expect(await ourCommands(file())).toEqual([NPX_COMMAND]);
     await writeFile(file(), 'not json');
     expect(await hasHooks(file())).toBe(false);
   });
@@ -182,5 +211,218 @@ describe('Claude Code settings', () => {
     expect(
       settingsPath('project', { home: '/h', cwd: '/c', claudeDir: '/x' }),
     ).toBe('/c/.claude/settings.json');
+  });
+
+  it('rewrites only our entries when the path changed, foreign ones byte for byte', async () => {
+    await writeFile(file(), CROWDED_TEXT);
+    await installHooks(file(), NPX_COMMAND);
+    const before = await readFile(file(), 'utf8');
+    const result = await installHooks(file(), HOOK_COMMAND);
+    expect(result).toEqual({ added: [], updated: [...HOOK_EVENTS] });
+    const after = await readFile(file(), 'utf8');
+    // The text is the old text with our command swapped, nothing else.
+    expect(after).toBe(
+      before.replaceAll(
+        JSON.stringify(NPX_COMMAND),
+        JSON.stringify(HOOK_COMMAND),
+      ),
+    );
+    expect(addedLines(CROWDED_TEXT, after)).toHaveLength(
+      HOOK_EVENTS.length * 8,
+    );
+    expect(await ourCommands(file())).toEqual([HOOK_COMMAND]);
+  });
+
+  it('recognises the legacy bare and npx forms and rewrites them in place', async () => {
+    for (const legacy of LEGACY_HOOK_COMMANDS) {
+      const before = {
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                { type: 'command', command: NOTIFY },
+                { type: 'command', command: legacy, timeout: 5 },
+              ],
+            },
+          ],
+        },
+      };
+      await writeFile(file(), JSON.stringify(before, null, 2));
+      const result = await installHooks(file(), HOOK_COMMAND);
+      expect(result.updated).toEqual(['Stop']);
+      expect(result.added).toEqual(HOOK_EVENTS.filter((e) => e !== 'Stop'));
+      const after = JSON.parse(await readFile(file(), 'utf8'));
+      expect(after.hooks.Stop).toEqual([
+        {
+          hooks: [
+            { type: 'command', command: NOTIFY },
+            { type: 'command', command: HOOK_COMMAND, timeout: 5 },
+          ],
+        },
+      ]);
+    }
+  });
+
+  it('uninstall removes the absolute, legacy and current forms and nothing else', async () => {
+    const dev =
+      '"/usr/bin/node" "/src/vouched/packages/cli/dist/index.js" hook claude-code';
+    const before = {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              { type: 'command', command: NOTIFY },
+              { type: 'command', command: HOOK_COMMAND },
+              { type: 'command', command: LEGACY_HOOK_COMMANDS[0] },
+              { type: 'command', command: LEGACY_HOOK_COMMANDS[1] },
+              { type: 'command', command: dev },
+            ],
+          },
+        ],
+      },
+    };
+    await writeFile(file(), JSON.stringify(before, null, 2));
+    expect(await uninstallHooks(file())).toBe(3);
+    expect(await uninstallHooks(file(), dev)).toBe(1);
+    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: NOTIFY }] }] },
+    });
+  });
+});
+
+describe('hookCommand', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'vouched-bin-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function script(...parts: string[]): Promise<string> {
+    const path = join(root, ...parts, 'vouched', 'dist', 'index.js');
+    await mkdir(join(root, ...parts, 'vouched', 'dist'), { recursive: true });
+    await writeFile(path, '');
+    return path;
+  }
+
+  it('quotes the node binary and the real script path for a global install', async () => {
+    const real = await script('lib', 'node_modules');
+    // npm links bin/vouched to the script. argv[1] is the link.
+    await mkdir(join(root, 'bin'));
+    await symlink(real, join(root, 'bin', 'vouched'));
+    const command = hookCommand(
+      '/usr/local/bin/node',
+      join(root, 'bin', 'vouched'),
+    );
+    const realRoot = parseHookCommand(command)?.script;
+    expect(realRoot?.endsWith('/lib/node_modules/vouched/dist/index.js')).toBe(
+      true,
+    );
+    expect(command).toBe(
+      `"/usr/local/bin/node" "${realRoot}" hook claude-code`,
+    );
+    expect(isOurCommand(command)).toBe(true);
+    expect(isNpxCopy(join(root, 'bin', 'vouched'))).toBe(false);
+  });
+
+  it('points at the npx cache copy under npx', async () => {
+    const npx = await script('.npm', '_npx', 'abc123', 'node_modules');
+    const command = hookCommand('/opt/node/bin/node', npx);
+    expect(command).toMatch(
+      /^"\/opt\/node\/bin\/node" "[^"]*\/\.npm\/_npx\/abc123\/node_modules\/vouched\/dist\/index\.js" hook claude-code$/,
+    );
+    expect(isOurCommand(command)).toBe(true);
+    expect(isNpxCopy(npx)).toBe(true);
+  });
+
+  it('writes the Homebrew opt link in place of a versioned Cellar node', async () => {
+    const cellar = join(root, 'Cellar', 'node@24', '24.20.0', 'bin');
+    await mkdir(cellar, { recursive: true });
+    const node = join(cellar, 'node');
+    await writeFile(node, '');
+    await mkdir(join(root, 'opt'));
+    await symlink(
+      join(root, 'Cellar', 'node@24', '24.20.0'),
+      join(root, 'opt', 'node@24'),
+    );
+    const opt = join(root, 'opt', 'node@24', 'bin', 'node');
+    expect(stableNode(node)).toBe(opt);
+    const npx = await script('_npx', 'c', 'node_modules');
+    expect(hookCommand(node, npx).startsWith(`"${opt}" "`)).toBe(true);
+  });
+
+  it('keeps a Cellar node when the opt link is missing or leads elsewhere', async () => {
+    const node = join(root, 'Cellar', 'node@24', '24.20.0', 'bin', 'node');
+    await mkdir(join(root, 'Cellar', 'node@24', '24.20.0', 'bin'), {
+      recursive: true,
+    });
+    await writeFile(node, '');
+    expect(stableNode(node)).toBe(node);
+
+    const other = join(root, 'Cellar', 'node@24', '24.21.0');
+    await mkdir(join(other, 'bin'), { recursive: true });
+    await writeFile(join(other, 'bin', 'node'), '');
+    await mkdir(join(root, 'opt'));
+    await symlink(other, join(root, 'opt', 'node@24'));
+    expect(stableNode(node)).toBe(node);
+    expect(stableNode('/usr/local/bin/node')).toBe('/usr/local/bin/node');
+  });
+
+  it('never looks at PATH', async () => {
+    const npx = await script('_npx', 'x', 'node_modules');
+    // A vouched on PATH that runs this very script, the case 0.2.1 got wrong.
+    await mkdir(join(root, 'bin'));
+    await symlink(npx, join(root, 'bin', 'vouched'));
+    const saved = process.env.PATH;
+    try {
+      process.env.PATH = join(root, 'bin');
+      const withPath = hookCommand('/n', npx);
+      process.env.PATH = '';
+      expect(hookCommand('/n', npx)).toBe(withPath);
+      expect(withPath.startsWith('"/n" "')).toBe(true);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  it('escapes what is special inside double quotes', () => {
+    const command = hookCommand(
+      '/Program Files/node',
+      '/no/such/dir with "quotes" $HOME `x`/vouched/dist/index.js',
+    );
+    expect(command).toBe(
+      '"/Program Files/node" "/no/such/dir with \\"quotes\\" \\$HOME \\`x\\`/vouched/dist/index.js" hook claude-code',
+    );
+    expect(parseHookCommand(command)).toEqual({
+      node: '/Program Files/node',
+      script: '/no/such/dir with "quotes" $HOME `x`/vouched/dist/index.js',
+    });
+    expect(isOurCommand(command)).toBe(true);
+  });
+
+  it('gives the invocation without the hook arguments', () => {
+    expect(invocationOf(HOOK_COMMAND)).toBe(
+      '"/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js"',
+    );
+    expect(invocationOf(HOOK_COMMAND)).toBe(
+      cliInvocation(
+        '/usr/local/bin/node',
+        '/usr/local/lib/node_modules/vouched/dist/index.js',
+      ),
+    );
+    expect(cliInvocation('/n', '')).toBe('vouched');
+  });
+
+  it('does not claim a command that only looks similar', () => {
+    expect(isOurCommand('other-tool hook claude-code')).toBe(false);
+    expect(isOurCommand('"/n" "/x/other/dist/index.js" hook claude-code')).toBe(
+      false,
+    );
+    expect(isOurCommand(NOTIFY)).toBe(false);
+    expect(isOurCommand('vouched hook claude-code')).toBe(true);
+    expect(isOurCommand('npx -y vouched hook claude-code')).toBe(true);
   });
 });

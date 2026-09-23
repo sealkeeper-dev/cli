@@ -99,7 +99,7 @@ After registering, `init` prints what leaves this machine (see above) on stderr 
 
 When Claude Code is set up here (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set), `init` asks `Install the Claude Code hooks now? [Y/n]`. Enter or `y` runs the same install as `vouched adapter claude-code install`. `n` leaves the settings alone. Without a terminal, or with `--json`, it does not ask. Without Claude Code it says nothing about hooks.
 
-`init` ends with the next steps, running `vouched prove` and `vouched what-is-shared`, plus `vouched adapter claude-code install` when the hooks are not installed. With `--json` they are in `nextSteps`.
+`init` ends with the next steps, running `vouched prove` and `vouched what-is-shared`, plus `vouched adapter claude-code install` when the hooks are not installed. When `init` ran through `npx` and installed the hooks, it adds that they point at the npx copy and that `npm i -g vouched` followed by `vouched adapter claude-code install` gives a stable path. With `--json` they are in `nextSteps`.
 
 Running `init` again without `--force` prints the current identity and changes nothing.
 
@@ -188,12 +188,14 @@ vouched card write --out public/.well-known/agent-card.json
 ## Claude Code
 
 ```sh
-npx vouched adapter claude-code install
+vouched adapter claude-code install
 ```
 
 This adds Vouched hooks for `SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.json` in the current directory instead. Our entries go next to the ones already there. Hooks from other tools and every other setting are left as they are, in the same order and with the file's own indentation, and running it again changes nothing. A settings file that is not valid JSON is refused with its path and not touched. Run `vouched init` first, since the hooks do nothing without a config.
 
-When `vouched` on your PATH is the same install that ran `install` (for example after `npm i -g vouched`), the hooks call `vouched hook claude-code` directly. Otherwise they call `npx -y vouched hook claude-code`, which works anywhere but starts slower on every hook.
+The hooks call the absolute path of the node binary and of the vouched script that ran `install`, for example `"/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js" hook claude-code`, so they work from any shell whatever its PATH. Run from `npx`, that script sits in the npx cache and the hooks stop working when the cache is cleared, so install with `npm i -g vouched` for a stable path, and `vouched status` warns when the path is gone.
+
+Running `install` again rewrites our entries when the path changed, including the `vouched hook claude-code` and `npx -y vouched hook claude-code` forms older versions wrote, and prints `updated vouched hooks`. Entries of other tools are never touched.
 
 What is recorded.
 
@@ -206,12 +208,12 @@ Each hook appends to the local log and exits at once, printing nothing. Only `Se
 
 To see exactly what the hooks would send, run `vouched sync --dry-run`.
 
-`install` also writes the `/vouched-prove` slash command to `commands/vouched-prove.md` next to the settings file. Its first line marks it as written by vouched. A file of that name without the marker is yours and is never changed or removed. Running `install` again brings our copy up to date and changes nothing when it already is.
+`install` also writes the `/vouched-prove` slash command to `commands/vouched-prove.md` next to the settings file. Its frontmatter carries `managed-by: vouched`, which marks it as written by vouched, and its body gives Claude the same absolute invocation the hooks use. A file of that name without the marker is yours and is never changed or removed. Running `install` again brings our copy up to date and changes nothing when it already is.
 
 To remove the hooks and the slash command, which leaves everything else in the file untouched.
 
 ```sh
-npx vouched adapter claude-code uninstall
+vouched adapter claude-code uninstall
 ```
 
 ## OpenClaw

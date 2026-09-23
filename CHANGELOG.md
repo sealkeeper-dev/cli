@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2, 23 September 2026
+
+- The Claude Code hooks work when vouched came through `npx`. 0.2.1 wrote a bare `vouched hook claude-code` whenever a `vouched` on PATH ran the same script, and under `npx` that was npx's own temporary bin dir, so every hook failed later with `vouched: not found`. The hooks now call the absolute node binary and the real path of the vouched script, each double quoted, with no PATH lookup at all. A Homebrew node is written as its stable `opt` link, for example `/opt/homebrew/opt/node@24/bin/node`, rather than the versioned Cellar path that `brew cleanup` deletes after an upgrade.
+- `vouched adapter claude-code install` rewrites our existing entries in place when the path changed, including the bare and `npx -y` forms older versions wrote, prints `updated vouched hooks`, and still never touches entries of other tools. With `--json` the output gains `updated`.
+- `status` warns on stderr when the node binary or vouched script the hooks point at is gone, for example after the npx cache was cleared.
+- The `/vouched-prove` command file starts with YAML frontmatter, a description and `managed-by: vouched` as the marker, so Claude Code no longer shows the old HTML comment as arguments. Its body gives the exact invocation for every vouched command. Files with the old marker are rewritten.
+- `init` run through `npx` adds a next step saying the hooks point at the npx copy and how to get a stable path.
+- `init` offers the hooks again when the ones in place use the old bare or npx form or point at a path that moved, and `status` warns about the old forms too. Both rewrite only our entries.
+
 ## 0.2.1, 23 September 2026
 
 - Runs on Node 20 or newer. 0.2.0 declared Node 24, which npm warned about on Node 22 although the CLI ran fine. The test suite passes on Node 20.

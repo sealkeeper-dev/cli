@@ -18,8 +18,8 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
-import { PROVE_COMMAND_TEXT } from '../claude-code-command.js';
-import { HOOK_COMMAND } from '../claude-code-settings.js';
+import { proveCommandText } from '../claude-code-command.js';
+import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import { paths, readConfig } from '../config.js';
 import {
   ACCESS_TOKEN_URL,
@@ -36,12 +36,18 @@ import {
   HOOKS_QUESTION,
   isYesByDefault,
   NEXT_HOOKS,
+  NEXT_NPX,
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
   NOTHING_SENT,
 } from './init.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
+const HOOK_COMMAND = hookCommand(
+  '/usr/local/bin/node',
+  '/usr/local/lib/node_modules/vouched/dist/index.js',
+);
+const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
 const API_URL = 'http://api.test';
 
 type RunResult = { code: number; out: string; err: string };
@@ -56,6 +62,8 @@ type World = {
   fetchUrls: string[];
   // The terminal the hooks question reads from. None means no stdin at all.
   stdin?: Input;
+  // Whether the CLI runs from the npx cache. False when not set.
+  npx?: boolean;
 };
 
 // A terminal, or a pipe when isTTY is false, that answers with the given
@@ -139,6 +147,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       },
       stdin: world.stdin ? () => world.stdin as Input : undefined,
       hookCommand: () => HOOK_COMMAND,
+      isNpx: () => world.npx === true,
     },
   });
   throwOnExit(program);
@@ -524,7 +533,9 @@ describe('vouched init', () => {
       const hooks = (JSON.parse(text) as { hooks: Record<string, unknown[]> })
         .hooks;
       return Object.entries(hooks)
-        .filter(([, list]) => JSON.stringify(list).includes(HOOK_COMMAND))
+        .filter(([, list]) =>
+          JSON.stringify(list).includes(JSON.stringify(HOOK_COMMAND)),
+        )
         .map(([event]) => event);
     }
 
@@ -577,6 +588,32 @@ describe('vouched init', () => {
         `added the /vouched-prove command at ${command}`,
       );
       expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
+    });
+
+    it('says the hooks point at the npx copy when run through npx', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      world.npx = true;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(NEXT_NPX).toBe(
+        'Hooks point at this npx copy. For a stable path run npm i -g vouched and then vouched adapter claude-code install.',
+      );
+      expect(
+        result.out.endsWith(
+          `\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n${NEXT_NPX}\n`,
+        ),
+      ).toBe(true);
+    });
+
+    it('says nothing about npx when the hooks were already there', async () => {
+      await withClaudeCode(
+        `${JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }] } }, null, 2)}\n`,
+      );
+      world.stdin = answering('');
+      world.npx = true;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.out).not.toContain(NEXT_NPX);
     });
 
     it('prints the command instead on n and leaves the settings alone', async () => {

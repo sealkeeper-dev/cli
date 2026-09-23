@@ -10,7 +10,9 @@ import {
 import {
   claudeConfigDir,
   hookCommand,
+  type InstallResult,
   installHooks,
+  invocationOf,
   type Scope,
   SettingsError,
   settingsPath,
@@ -65,28 +67,24 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
-      const added = await orExit(this, () =>
-        installHooks(file, deps.hookCommand()),
-      );
+      const hook = deps.hookCommand();
+      const result = await orExit(this, () => installHooks(file, hook));
       const commandPath = proveCommandPath(file);
       const command = await orExit(this, () =>
-        installProveCommand(commandPath),
+        installProveCommand(commandPath, invocationOf(hook)),
       );
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
             path: file,
-            added,
+            added: result.added,
+            updated: result.updated,
             command: { path: commandPath, result: command },
           }),
         );
         return;
       }
-      if (added.length === 0) {
-        stdout(`vouched hooks already installed in ${file}`);
-      } else {
-        stdout(`added vouched hooks for ${added.join(', ')} to ${file}`);
-      }
+      for (const line of hooksLines(result, file)) stdout(line);
       stdout(commandLine(command, commandPath));
     });
 
@@ -96,7 +94,9 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
-      const removed = await orExit(this, () => uninstallHooks(file));
+      const removed = await orExit(this, () =>
+        uninstallHooks(file, deps.hookCommand()),
+      );
       const commandPath = proveCommandPath(file);
       const commandRemoved = await orExit(this, () =>
         uninstallProveCommand(commandPath),
@@ -125,6 +125,23 @@ export function register(
 }
 
 const PROVE_SLASH = 'the /vouched-prove command';
+
+// What install did with the hooks, one line for what it added and one for
+// what it rewrote, or one saying nothing changed.
+export function hooksLines(result: InstallResult, file: string): string[] {
+  const lines: string[] = [];
+  if (result.added.length > 0) {
+    lines.push(`added vouched hooks for ${result.added.join(', ')} to ${file}`);
+  }
+  if (result.updated.length > 0) {
+    lines.push(
+      `updated vouched hooks for ${result.updated.join(', ')} in ${file}`,
+    );
+  }
+  if (lines.length === 0)
+    lines.push(`vouched hooks already installed in ${file}`);
+  return lines;
+}
 
 // One line on what install did with the slash command.
 export function commandLine(result: CommandResult, path: string): string {

@@ -14,10 +14,17 @@ import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  isOurs,
+  LEGACY_PROVE_COMMAND_MARKER,
   PROVE_COMMAND_MARKER,
-  PROVE_COMMAND_TEXT,
+  proveCommandText,
+  shellFunction,
 } from '../claude-code-command.js';
-import { HOOK_COMMAND, hookCommand } from '../claude-code-settings.js';
+import {
+  hookCommand,
+  invocationOf,
+  LEGACY_HOOK_COMMANDS,
+} from '../claude-code-settings.js';
 import { createProgram } from '../program.js';
 
 type RunResult = { code: number; out: string; err: string };
@@ -44,6 +51,17 @@ const OTHER = {
 };
 const OTHER_TEXT = `${JSON.stringify(OTHER, null, 2)}\n`;
 
+// What the hooks run in these tests, the absolute form of a global install,
+// and the same for an npx copy.
+const NODE = '/usr/local/bin/node';
+const SCRIPT = '/usr/local/lib/node_modules/vouched/dist/index.js';
+const NPX_SCRIPT =
+  '/home/carl/.npm/_npx/abc123/node_modules/vouched/dist/index.js';
+const HOOK_COMMAND = hookCommand(NODE, SCRIPT);
+const NPX_COMMAND = hookCommand(NODE, NPX_SCRIPT);
+const INVOCATION = invocationOf(HOOK_COMMAND);
+const PROVE_COMMAND_TEXT = proveCommandText(INVOCATION);
+
 const OUR_ENTRY = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
 const EVENTS = [
   'SessionStart',
@@ -63,12 +81,15 @@ describe('adapter claude-code', () => {
   const userCommand = () =>
     join(home, '.claude', 'commands', 'vouched-prove.md');
 
+  // The command install writes, changed by tests that move the script.
+  let command = HOOK_COMMAND;
+
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
       adapter: {
         home: () => home,
         cwd: () => project,
-        hookCommand: () => HOOK_COMMAND,
+        hookCommand: () => command,
       },
     });
     throwOnExit(program);
@@ -102,6 +123,7 @@ describe('adapter claude-code', () => {
   }
 
   beforeEach(async () => {
+    command = HOOK_COMMAND;
     root = await mkdtemp(join(tmpdir(), 'vouched-adapter-'));
     home = join(root, 'home');
     project = join(root, 'project');
@@ -174,19 +196,62 @@ describe('adapter claude-code', () => {
     expect(await readFile(userFile(), 'utf8')).toBe(first);
   });
 
-  it('treats the npx form of the command as already installed', async () => {
+  it('writes the absolute node and script pair', async () => {
+    await run('install');
+    const hooks = (await readJson(userFile())).hooks as Record<
+      string,
+      { hooks: { command: string }[] }[]
+    >;
+    for (const event of EVENTS) {
+      expect(hooks[event]?.[0]?.hooks[0]?.command).toBe(
+        `"${NODE}" "${SCRIPT}" hook claude-code`,
+      );
+    }
+  });
+
+  it('rewrites ours when the path changed and keeps foreign entries byte for byte', async () => {
     await mkdir(join(home, '.claude'));
-    const npx = {
-      hooks: Object.fromEntries(
-        EVENTS.map((e) => [
-          e,
-          [{ hooks: [{ type: 'command', command: `npx -y ${HOOK_COMMAND}` }] }],
-        ]),
-      ),
-    };
-    await writeFile(userFile(), JSON.stringify(npx, null, 2));
+    await writeFile(userFile(), OTHER_TEXT);
+    command = NPX_COMMAND;
+    await run('install');
+    const npxText = await readFile(userFile(), 'utf8');
+
+    command = HOOK_COMMAND;
     const { out } = await run('install');
-    expect(out).toContain('already installed');
+    expect(out).toBe(
+      `updated vouched hooks for ${EVENTS.join(', ')} in ${userFile()}\nadded the /vouched-prove command at ${userCommand()}\n`,
+    );
+    // The old text with our command swapped, nothing else.
+    expect(await readFile(userFile(), 'utf8')).toBe(
+      npxText.replaceAll(
+        JSON.stringify(NPX_COMMAND),
+        JSON.stringify(HOOK_COMMAND),
+      ),
+    );
+    await run('uninstall');
+    expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
+  });
+
+  it('rewrites the legacy bare and npx forms', async () => {
+    await mkdir(join(home, '.claude'));
+    for (const legacy of LEGACY_HOOK_COMMANDS) {
+      const old = {
+        hooks: Object.fromEntries(
+          EVENTS.map((e) => [
+            e,
+            [{ hooks: [{ type: 'command', command: legacy }] }],
+          ]),
+        ),
+      };
+      await writeFile(userFile(), JSON.stringify(old, null, 2));
+      const { out } = await run('install', '--json');
+      const printed = JSON.parse(out);
+      expect(printed.added).toEqual([]);
+      expect(printed.updated).toEqual(EVENTS);
+      expect(await readJson(userFile())).toEqual({
+        hooks: Object.fromEntries(EVENTS.map((e) => [e, [OUR_ENTRY]])),
+      });
+    }
   });
 
   it('uninstall removes only ours and cleans up empty containers', async () => {
@@ -199,7 +264,7 @@ describe('adapter claude-code', () => {
           {
             hooks: [
               { type: 'command', command: 'other-tool stop' },
-              { type: 'command', command: `npx -y ${HOOK_COMMAND}` },
+              { type: 'command', command: LEGACY_HOOK_COMMANDS[1] },
             ],
           },
         ],
@@ -258,7 +323,7 @@ describe('adapter claude-code', () => {
   });
 
   describe('the /vouched-prove command', () => {
-    it('install writes it next to the settings with the marker first', async () => {
+    it('install writes it next to the settings with frontmatter first', async () => {
       const { out } = await run('install', '--json');
       expect(JSON.parse(out).command).toEqual({
         path: userCommand(),
@@ -266,7 +331,18 @@ describe('adapter claude-code', () => {
       });
       const text = await readFile(userCommand(), 'utf8');
       expect(text).toBe(PROVE_COMMAND_TEXT);
-      expect(text.split('\n')[0]).toBe(PROVE_COMMAND_MARKER);
+      expect(text.split('\n').slice(0, 4)).toEqual([
+        '---',
+        'description: Earn verified tasks on Vouched',
+        'managed-by: vouched',
+        '---',
+      ]);
+      expect(PROVE_COMMAND_MARKER).toBe('managed-by: vouched');
+      expect(text).not.toContain('<!--');
+      // The exact invocation, and a line that makes vouched mean it.
+      expect(text).toContain(`\n${INVOCATION}\n`);
+      expect(text).toContain(`\nvouched() { ${INVOCATION} "$@"; }\n`);
+      expect(text).toContain('plain `vouched` works too');
       expect(text).toContain('`vouched prove`');
       expect(text).toContain('.vouched-answers/');
       expect(text).toContain('`vouched status`');
@@ -288,10 +364,49 @@ describe('adapter claude-code', () => {
       const again = await run('install', '--json');
       expect(JSON.parse(again.out).command.result).toBe('unchanged');
 
-      await writeFile(userCommand(), `${PROVE_COMMAND_MARKER}\nold text\n`);
+      await writeFile(
+        userCommand(),
+        `---\n${PROVE_COMMAND_MARKER}\n---\nold text\n`,
+      );
       const updated = await run('install', '--json');
       expect(JSON.parse(updated.out).command.result).toBe('written');
       expect(await readFile(userCommand(), 'utf8')).toBe(PROVE_COMMAND_TEXT);
+
+      // A new script path rewrites the body.
+      command = NPX_COMMAND;
+      const moved = await run('install', '--json');
+      expect(JSON.parse(moved.out).command.result).toBe('written');
+      expect(await readFile(userCommand(), 'utf8')).toContain(
+        `"${NPX_SCRIPT}"`,
+      );
+    });
+
+    it('rewrites a file with the 0.2.1 HTML comment marker', async () => {
+      await mkdir(join(home, '.claude', 'commands'), { recursive: true });
+      await writeFile(
+        userCommand(),
+        `${LEGACY_PROVE_COMMAND_MARKER}\nEarn verified tasks for this agent on Vouched.\n`,
+      );
+      const { out } = await run('install', '--json');
+      expect(JSON.parse(out).command.result).toBe('written');
+      expect(await readFile(userCommand(), 'utf8')).toBe(PROVE_COMMAND_TEXT);
+    });
+
+    it('isOurs knows the new and old markers and nothing else', () => {
+      expect(isOurs(PROVE_COMMAND_TEXT)).toBe(true);
+      expect(isOurs(`${LEGACY_PROVE_COMMAND_MARKER}\nbody\n`)).toBe(true);
+      expect(isOurs('---\r\nmanaged-by: vouched\r\n---\r\nbody')).toBe(true);
+      expect(isOurs('my own prove command\n')).toBe(false);
+      expect(isOurs('---\ndescription: mine\n---\nmanaged-by: vouched\n')).toBe(
+        false,
+      );
+      expect(isOurs('body\n---\nmanaged-by: vouched\n---\n')).toBe(false);
+    });
+
+    it('the shell function never calls itself for plain vouched', () => {
+      expect(shellFunction('vouched')).toBe(
+        'vouched() { command vouched "$@"; }',
+      );
     });
 
     it('never touches a file of the same name it did not write', async () => {
@@ -331,50 +446,5 @@ describe('adapter claude-code', () => {
     await run('install');
     const hooks = (await readJson(real)).hooks as Record<string, unknown>;
     expect(hooks.SessionStart).toEqual([OUR_ENTRY]);
-  });
-});
-
-describe('hookCommand', () => {
-  let root: string;
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'vouched-bin-'));
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('uses plain vouched when that name on PATH runs this script', async () => {
-    const script = join(root, 'lib', 'node_modules', 'vouched', 'index.js');
-    await mkdir(join(root, 'lib', 'node_modules', 'vouched'), {
-      recursive: true,
-    });
-    await writeFile(script, '');
-    await mkdir(join(root, 'bin'));
-    await symlink(script, join(root, 'bin', 'vouched'));
-    expect(hookCommand(join(root, 'bin', 'vouched'), join(root, 'bin'))).toBe(
-      HOOK_COMMAND,
-    );
-  });
-
-  it('uses npx otherwise', async () => {
-    const script = join(
-      root,
-      '_npx',
-      'abc',
-      'node_modules',
-      'vouched',
-      'index.js',
-    );
-    await mkdir(join(root, '_npx', 'abc', 'node_modules', 'vouched'), {
-      recursive: true,
-    });
-    await writeFile(script, '');
-    await mkdir(join(root, 'bin'));
-    expect(hookCommand(script, join(root, 'bin'))).toBe(
-      `npx -y ${HOOK_COMMAND}`,
-    );
-    expect(hookCommand(undefined, '')).toBe(`npx -y ${HOOK_COMMAND}`);
   });
 });

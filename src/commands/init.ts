@@ -19,6 +19,8 @@ import {
   hasHooks,
   hookCommand,
   installHooks,
+  invocationOf,
+  isNpxCopy,
   SettingsError,
   settingsPath,
 } from '../claude-code-settings.js';
@@ -43,7 +45,7 @@ import {
 import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
-import { commandLine, INSTALL_COMMAND } from './adapter.js';
+import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
@@ -58,18 +60,21 @@ export const NEXT_PROVE = 'Run vouched prove to earn your first verified tasks';
 export const NEXT_WHAT_IS_SHARED =
   'Run vouched what-is-shared to see exactly what leaves this machine';
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
+export const NEXT_NPX = `Hooks point at this npx copy. For a stable path run npm i -g vouched and then ${INSTALL_COMMAND}.`;
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
 // without a network or real waits. stdin answers the hooks question, which is
 // never asked without it. claudeDir is the Claude Code config dir and
 // hookCommand the command the hooks run, both defaulting to what vouched
-// adapter claude-code install uses.
+// adapter claude-code install uses. isNpx says whether this CLI runs from
+// the npx cache.
 export type InitDeps = {
   fetch: typeof fetch;
   sleep: Sleep;
   stdin?: () => Input;
   claudeDir?: () => string;
   hookCommand?: () => string;
+  isNpx?: () => boolean;
 };
 
 const defaultInitDeps: InitDeps = {
@@ -78,6 +83,7 @@ const defaultInitDeps: InitDeps = {
   stdin: () => streamInput(process.stdin),
   claudeDir: () => claudeConfigDir(),
   hookCommand: () => hookCommand(),
+  isNpx: () => isNpxCopy(),
 };
 
 type InitOptions = {
@@ -267,7 +273,7 @@ async function init(
         version: config.version,
         apiUrl: config.apiUrl,
         profileUrl,
-        nextSteps: nextSteps(hooks),
+        nextSteps: nextSteps(hooks, deps),
       }),
     );
     printShared();
@@ -280,12 +286,13 @@ async function init(
   printShared();
   const hooks = await offerHooks(deps, true);
   stdout('');
-  for (const line of nextSteps(hooks)) stdout(line);
+  for (const line of nextSteps(hooks, deps)) stdout(line);
 }
 
 // What init did about the Claude Code hooks. none means there is no Claude
-// Code config dir, so hooks are not mentioned at all.
-type HooksResult = 'none' | 'installed' | 'not-installed';
+// Code config dir, so hooks are not mentioned at all. present means ours
+// were there already, installed that this run wrote them.
+type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
@@ -295,19 +302,19 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
   const file = settingsPath('user', { home: '', cwd: '', claudeDir: dir });
-  if (await hasHooks(file)) return 'installed';
+  const hook = (deps.hookCommand ?? hookCommand)();
+  // Only hooks that run this very command count. An older form, bare or
+  // through npx, or a path that moved, is offered the install again, which
+  // rewrites our entries in place.
+  if (await hasHooks(file, hook)) return 'present';
 
   const input = deps.stdin?.();
   if (!ask || input === undefined || !input.isTTY) return 'not-installed';
   process.stderr.write(`\n${HOOKS_QUESTION}`);
   if (!isYesByDefault(await input.readLine())) return 'not-installed';
   try {
-    const added = await installHooks(file, (deps.hookCommand ?? hookCommand)());
-    stdout(
-      added.length === 0
-        ? `vouched hooks already installed in ${file}`
-        : `added vouched hooks for ${added.join(', ')} to ${file}`,
-    );
+    const result = await installHooks(file, hook);
+    for (const line of hooksLines(result, file)) stdout(line);
   } catch (error) {
     // Registration already worked, so a settings file we will not touch
     // only means the hooks wait for a later install.
@@ -319,7 +326,12 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   }
   const commandPath = proveCommandPath(file);
   try {
-    stdout(commandLine(await installProveCommand(commandPath), commandPath));
+    stdout(
+      commandLine(
+        await installProveCommand(commandPath, invocationOf(hook)),
+        commandPath,
+      ),
+    );
   } catch (error) {
     // The hooks are in, so this is only a warning.
     if (!(error instanceof SettingsError)) throw error;
@@ -343,8 +355,13 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-function nextSteps(hooks: HooksResult): string[] {
+// The hooks this run wrote point at the running script, which under npx
+// lives in a cache that can be cleared, so that gets a line of its own.
+function nextSteps(hooks: HooksResult, deps: InitDeps): string[] {
   const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED];
   if (hooks === 'not-installed') steps.push(NEXT_HOOKS);
+  if (hooks === 'installed' && (deps.isNpx ?? isNpxCopy)()) {
+    steps.push(NEXT_NPX);
+  }
   return steps;
 }

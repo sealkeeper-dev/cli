@@ -6,10 +6,16 @@ import { join } from 'node:path';
 import type { Event } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
-import { minutesToNextScoring, NO_ADAPTER, nextScoringLine } from './status.js';
+import {
+  HOOKS_MISSING,
+  minutesToNextScoring,
+  NO_ADAPTER,
+  nextScoringLine,
+} from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
 const API_URL = 'http://api.test';
@@ -398,17 +404,31 @@ describe('status', () => {
   });
   describe('adapter warning', () => {
     const DAY_MS = 24 * 60 * 60 * 1000;
-    const HOOKED = JSON.stringify({
-      hooks: {
-        Stop: [
-          { hooks: [{ type: 'command', command: 'vouched hook claude-code' }] },
-        ],
-      },
-    });
-
+    // The current form, node and a script by absolute path, shaped like a
+    // global install and present on disk, so the hook is ours and not gone.
     async function settingsIn(dir: string): Promise<void> {
+      const scriptDir = join(home, 'lib', 'node_modules', 'vouched', 'dist');
+      await mkdir(scriptDir, { recursive: true });
+      const script = join(scriptDir, 'index.js');
+      await writeFile(script, '');
       await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, 'settings.json'), HOOKED);
+      await writeFile(
+        join(dir, 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            Stop: [
+              {
+                hooks: [
+                  {
+                    type: 'command',
+                    command: hookCommand(process.execPath, script),
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
     }
 
     async function eventDaysAgo(days: number): Promise<void> {
@@ -450,6 +470,74 @@ describe('status', () => {
     it('does not warn when something was recorded in the last 7 days', async () => {
       await eventDaysAgo(6);
       expect((await run(offline, 'status')).err).toBe('');
+    });
+  });
+
+  describe('hooks that point at a vouched that is gone', () => {
+    function settings(command: string): string {
+      return JSON.stringify({
+        hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
+      });
+    }
+
+    async function writeSettings(dir: string, command: string): Promise<void> {
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'settings.json'), settings(command));
+    }
+
+    // A script shaped like an npx copy, which exists until removed.
+    async function npxScript(): Promise<string> {
+      const dir = join(
+        home,
+        '.npm',
+        '_npx',
+        'abc123',
+        'node_modules',
+        'vouched',
+        'dist',
+      );
+      await mkdir(dir, { recursive: true });
+      const script = join(dir, 'index.js');
+      await writeFile(script, '');
+      return script;
+    }
+
+    it('warns on stderr when the user settings script is gone', async () => {
+      const script = await npxScript();
+      await writeSettings(
+        join(home, 'claude'),
+        hookCommand(process.execPath, script),
+      );
+      expect((await run(offline, 'status')).err).toBe('');
+
+      await rm(join(home, '.npm'), { recursive: true });
+      const { code, out, err } = await run(offline, 'status');
+      expect(code).toBe(0);
+      expect(HOOKS_MISSING).toBe(
+        'The Claude Code hooks point at a vouched that is no longer there. Run vouched adapter claude-code install again, or npm i -g vouched for a stable path.',
+      );
+      expect(err).toBe(`${HOOKS_MISSING}\n`);
+      expect(out).not.toContain(HOOKS_MISSING);
+    });
+
+    it('warns for the project settings too, and with --json', async () => {
+      await writeSettings(
+        join(home, 'project', '.claude'),
+        hookCommand(process.execPath, '/no/such/vouched/dist/index.js'),
+      );
+      const { out, err } = await run(offline, 'status', '--json');
+      expect(JSON.parse(out)).toMatchObject({ pending: 0 });
+      expect(err).toBe(`${HOOKS_MISSING}\n`);
+    });
+
+    it('warns for the legacy forms, which only work with vouched on PATH', async () => {
+      await writeSettings(
+        join(home, 'claude'),
+        'npx -y vouched hook claude-code',
+      );
+      expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
+      await writeSettings(join(home, 'claude'), 'vouched hook claude-code');
+      expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
     });
   });
 });

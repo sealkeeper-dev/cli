@@ -7,6 +7,8 @@ import { createApiClient, resolveApiUrl } from '../api.js';
 import {
   claudeConfigDir,
   hasHooks,
+  ourCommands,
+  parseHookCommand,
   settingsPath,
 } from '../claude-code-settings.js';
 import {
@@ -43,6 +45,8 @@ export type StatusDeps = {
 };
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
+export const HOOKS_MISSING =
+  'The Claude Code hooks point at a vouched that is no longer there. Run vouched adapter claude-code install again, or npm i -g vouched for a stable path.';
 const QUIET_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
@@ -104,6 +108,7 @@ export function register(
       else printStatus(status);
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
+      if (await hooksGone(deps)) stderr(HOOKS_MISSING);
     });
 }
 
@@ -176,6 +181,46 @@ export function minutesToNextScoring(now: Date): number {
   return Math.ceil(left / 60_000);
 }
 
+function claudeDirs(deps: StatusDeps) {
+  return {
+    home: '',
+    cwd: (deps.cwd ?? (() => process.cwd()))(),
+    claudeDir: (deps.claudeDir ?? claudeConfigDir)(),
+  };
+}
+
+// True when a hook of ours in the user or project settings runs a node
+// binary or a vouched script that is not there any more, as happens once
+// the npx cache is cleared. The legacy bare and npx forms name no path, so
+// there is nothing to check for them.
+export async function hooksGone(deps: StatusDeps): Promise<boolean> {
+  const dirs = claudeDirs(deps);
+  const commands = (
+    await Promise.all([
+      ourCommands(settingsPath('user', dirs)),
+      ourCommands(settingsPath('project', dirs)),
+    ])
+  ).flat();
+  for (const command of commands) {
+    const parsed = parseHookCommand(command);
+    // A legacy form, bare or through npx, names no path and only works when
+    // vouched is on the hook shell's PATH. 0.2.0 wrote it under npx where it
+    // never is, so it counts as gone and gets the reinstall pointer.
+    if (parsed === null) return true;
+    for (const path of [parsed.node, parsed.script]) {
+      if (!(await exists(path))) return true;
+    }
+  }
+  return false;
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    () => false,
+  );
+}
+
 // True when neither Claude Code settings file holds our hooks and the log
 // has no event in the last seven UTC days, today included. The CLI cannot see
 // the Mastra or OpenClaw adapters, which live in other code, but they write
@@ -185,11 +230,7 @@ export async function noAdapterAndQuiet(
   now: Date,
   p: Paths = paths(),
 ): Promise<boolean> {
-  const dirs = {
-    home: '',
-    cwd: (deps.cwd ?? (() => process.cwd()))(),
-    claudeDir: (deps.claudeDir ?? claudeConfigDir)(),
-  };
+  const dirs = claudeDirs(deps);
   const installed = await Promise.all([
     hasHooks(settingsPath('user', dirs)),
     hasHooks(settingsPath('project', dirs)),
