@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { base64urlDecode, decodeHeader, verify } from '@vouched/schema';
+import { base64urlDecode, decodeHeader, verify } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, readConfig } from '../config.js';

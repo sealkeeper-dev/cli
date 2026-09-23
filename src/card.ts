@@ -3,7 +3,7 @@ import {
   A2A_PROTOCOL_VERSION,
   AgentCard,
   credentialExtension,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import { loadConfig } from './commands/sync.js';

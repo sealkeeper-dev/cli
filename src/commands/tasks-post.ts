@@ -5,7 +5,7 @@ import {
   TASK_MAX_TTL_DAYS,
   type TaskResponse,
   type VerificationSpec,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { stdout, wantsJson } from '../output.js';

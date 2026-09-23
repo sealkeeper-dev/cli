@@ -61,7 +61,7 @@ describe('cli bundle', () => {
     expect(bundle.startsWith('#!/usr/bin/env node\n')).toBe(true);
   });
 
-  it('inlines @vouched/schema', () => {
+  it('inlines @vouched-dev/schema', () => {
     expect(bundle).toContain('EdDSA');
     expect(bundle).not.toMatch(/from ['"]@vouched\/schema/);
   });
@@ -95,7 +95,7 @@ describe('cli bundle', () => {
     });
   });
 
-  it('keeps the adapter free of Mastra, the CLI and @vouched/schema imports', () => {
+  it('keeps the adapter free of Mastra, the CLI and @vouched-dev/schema imports', () => {
     expect(mastra).not.toMatch(/from ['"]@mastra\//);
     expect(mastra).not.toMatch(/from ['"]@vouched\/schema/);
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
@@ -138,7 +138,7 @@ describe('cli bundle', () => {
     }
   });
 
-  it('keeps the OpenClaw entry free of OpenClaw, the CLI and @vouched/schema imports', () => {
+  it('keeps the OpenClaw entry free of OpenClaw, the CLI and @vouched-dev/schema imports', () => {
     expect(openclaw).not.toMatch(/from ['"]openclaw/);
     expect(openclaw).not.toMatch(/from ['"]@vouched\/schema/);
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
@@ -189,7 +189,7 @@ describe('cli bundle', () => {
     }
   });
 
-  it('keeps the lib free of the CLI and of @vouched/schema imports', () => {
+  it('keeps the lib free of the CLI and of @vouched-dev/schema imports', () => {
     expect(lib).not.toMatch(/from ['"]@vouched\/schema/);
     expect(lib).not.toMatch(/from ['"]commander['"]/);
     expect(lib).toMatch(/export\s*\{[^}]*\bemit\b/);

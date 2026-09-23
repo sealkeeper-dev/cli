@@ -11,12 +11,12 @@ import {
   ScoreResponse,
   TaskResponse,
   WellKnown,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import type { z } from 'zod';
 import { DEFAULT_API_URL } from './config.js';
 
 // A small client for the Vouched API. Every response is parsed with the
-// schemas from @vouched/schema before anything reads it.
+// schemas from @vouched-dev/schema before anything reads it.
 
 export const API_URL_ENV = 'VOUCHED_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;

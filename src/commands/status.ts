@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { BaseDimension, type Event, EventType } from '@vouched/schema';
+import { BaseDimension, type Event, EventType } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { resolveApiUrl } from '../api.js';
 import { type Config, paths, profileUrl } from '../config.js';

@@ -16,7 +16,7 @@ import {
   type CredentialPayload,
   generateKeypair,
   sign,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_CREDENTIAL } from '../card.js';

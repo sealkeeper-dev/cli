@@ -16,7 +16,7 @@ import {
   base64urlEncode,
   decodeHeader,
   verify,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import {
   afterEach,
   beforeEach,

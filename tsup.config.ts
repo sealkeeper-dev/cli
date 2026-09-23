@@ -30,7 +30,7 @@ export const options: Options = {
   target: 'node24',
   splitting: false,
   clean: true,
-  noExternal: ['@vouched/schema'],
+  noExternal: ['@vouched-dev/schema'],
   banner: { js: '#!/usr/bin/env node' },
   define: {
     __VERSION__: JSON.stringify(pkg.version),

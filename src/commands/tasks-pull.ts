@@ -1,5 +1,9 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { ClaimTaskRequest, type TaskResponse, TaskType } from '@vouched/schema';
+import {
+  ClaimTaskRequest,
+  type TaskResponse,
+  TaskType,
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';

@@ -4,7 +4,7 @@ import {
   SubmitTaskRequest,
   TaskOutcomeRequest,
   type TaskResponse,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';

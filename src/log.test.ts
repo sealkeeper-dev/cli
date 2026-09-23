@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Event } from '@vouched/schema';
+import type { Event } from '@vouched-dev/schema';
 import {
   afterEach,
   beforeEach,

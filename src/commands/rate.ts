@@ -5,7 +5,7 @@ import {
   RatingRequest,
   type RatingResponse,
   RatingValue,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';

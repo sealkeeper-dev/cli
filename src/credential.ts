@@ -6,7 +6,7 @@ import {
   decodeHeader,
   Jws,
   verify,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from './api.js';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';

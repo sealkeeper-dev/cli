@@ -1,7 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { type RegisterAgentRequest, Version } from '@vouched/schema';
+import { type RegisterAgentRequest, Version } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';

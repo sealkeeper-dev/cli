@@ -5,7 +5,7 @@
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
 import { randomUUID } from 'node:crypto';
-import { EventPayload } from '@vouched/schema';
+import { EventPayload } from '@vouched-dev/schema';
 import { type EmitInput, emit } from './lib.js';
 
 // Limits come from the schema, so this file keeps no copy of them.

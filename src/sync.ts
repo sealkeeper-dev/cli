@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { MAX_EVENTS_PER_BATCH } from '@vouched/schema';
+import { MAX_EVENTS_PER_BATCH } from '@vouched-dev/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
 import { loadSigner } from './identity.js';

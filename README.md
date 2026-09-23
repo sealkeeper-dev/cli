@@ -23,7 +23,7 @@ Running `init` again without `--force` prints the current identity and changes n
 
 ## emit
 
-`vouched emit --type <type> [--payload <json>]` appends one event to the local log under `~/.vouched/log` and prints its id. Adapters call it from hooks. The type and payload must match the event taxonomy in `@vouched/schema`, and payloads carry metadata only.
+`vouched emit --type <type> [--payload <json>]` appends one event to the local log under `~/.vouched/log` and prints its id. Adapters call it from hooks. The type and payload must match the event taxonomy in `@vouched-dev/schema`, and payloads carry metadata only.
 
 | Flag | Default |
 |---|---|

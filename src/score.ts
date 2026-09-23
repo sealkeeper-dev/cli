@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
-import { ScoreResponse } from '@vouched/schema';
+import { ScoreResponse } from '@vouched-dev/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';

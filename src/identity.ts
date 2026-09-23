@@ -9,7 +9,7 @@ import {
   base64urlEncode,
   generateKeypair,
   sign,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import { ensureHome, type Paths, paths } from './config.js';
 import { stderr } from './output.js';
 

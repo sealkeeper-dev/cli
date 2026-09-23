@@ -8,7 +8,7 @@ import {
   Event,
   publicKeyFromAgentId,
   verify,
-} from '@vouched/schema';
+} from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { AgentId } from '@vouched/schema';
+import { AgentId } from '@vouched-dev/schema';
 import { z } from 'zod';
 
 export const DEFAULT_API_URL = 'https://api.vouched.run';

@@ -11,7 +11,7 @@
 // 23 September 2026, not from a running Gateway. Confirm against a live
 // Gateway before launch. Types are in types/openclaw.d.ts, which
 // openclaw-types.test.ts keeps in step.
-import { EventPayload } from '@vouched/schema';
+import { EventPayload } from '@vouched-dev/schema';
 import { type EmitInput, emit } from './lib.js';
 import { toolNameOf } from './names.js';
 
