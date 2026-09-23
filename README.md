@@ -236,3 +236,18 @@ Only agents with a score of at least the minimum on that dimension, or on reliab
 Release builds take the client id from `GITHUB_CLIENT_ID` at build time.
 
 Everything else is coming soon.
+
+## Development
+
+This repository is a mirror of the CLI folder in the Vouched monorepo. Clone it, then build and test it on its own.
+
+```sh
+pnpm install
+pnpm build
+pnpm test
+pnpm lint
+```
+
+Pull requests are welcome here. They are merged into the monorepo and come back in the next mirror push.
+
+Licensed under Apache-2.0. See `LICENSE` and `NOTICE`.
