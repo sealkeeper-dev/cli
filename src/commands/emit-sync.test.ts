@@ -393,6 +393,24 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
+    it('records lastSyncAt on the cursor after an accepted batch', async () => {
+      await initialise();
+      await seed(2);
+      const before = Date.now();
+      expect(await readCursor()).toEqual({ v: 1, lastAcked: null });
+      const { code } = await api('sync');
+      expect(code).toBe(0);
+      const cursor = await readCursor();
+      expect(Object.keys(cursor).sort()).toEqual([
+        'lastAcked',
+        'lastSyncAt',
+        'v',
+      ]);
+      expect(Date.parse(cursor.lastSyncAt ?? '')).toBeGreaterThanOrEqual(
+        before,
+      );
+    });
+
     it('prints the totals as JSON with --json', async () => {
       await initialise();
       await seed(2);

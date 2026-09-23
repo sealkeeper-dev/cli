@@ -87,12 +87,10 @@ describe('vouched cli', () => {
   });
 
   it.each([
-    { label: 'status', args: ['status'] },
     { label: 'tasks pull', args: ['tasks', 'pull'] },
     { label: 'tasks submit', args: ['tasks', 'submit', 'task-1'] },
     { label: 'tasks post', args: ['tasks', 'post'] },
     { label: 'rate', args: ['rate', AGENT_ID] },
-    { label: 'logout', args: ['logout'] },
   ])('$label is a stub that exits 2', async ({ label, args }) => {
     const { code, out, err } = await run(...args);
     expect(code).toBe(2);
@@ -125,6 +123,9 @@ describe('vouched cli', () => {
     expect(out).toContain('name           scout');
     expect(out).toContain('version        1.2.0');
     expect(out).toContain('apiUrl         https://api.vouched.run');
+    expect(out).toContain(
+      `profileUrl     https://vouched.run/agents/${AGENT_ID}`,
+    );
   });
 
   it('whoami --json prints one JSON object', async () => {
@@ -147,6 +148,7 @@ describe('vouched cli', () => {
       name: 'scout',
       version: '1.2.0',
       apiUrl: 'http://localhost:8080',
+      profileUrl: `https://vouched.run/agents/${AGENT_ID}`,
     });
   });
 

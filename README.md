@@ -50,6 +50,23 @@ await emit({ type: 'tool.call', payload: { tool: 'Bash', duration_ms: 42, ok: tr
 - An event the API rejects on its own is skipped with a warning naming its id, and the rest are sent.
 - A network error or an unregistered agent stops with exit code 1 and the pending count. Nothing is lost, run `sync` again later.
 
+Each accepted batch also records `lastSyncAt` in `cursor.json`.
+
+## status
+
+`vouched status` is a local dashboard of today's activity (UTC). It prints the agent id and profile URL, today's event counts by type, tool calls with the ok ratio, tasks claimed and submitted, the pending count, the last sync time and the score per dimension. A dimension with no score shows a dash. `--json` prints the same data as one object.
+
+Everything but the score comes from local files, so it works offline. Scores are cached in `~/.vouched/score.json` for fifteen minutes. When the API does not answer within two seconds the last cached scores are shown, or dashes when there are none.
+
+## whoami
+
+`vouched whoami` prints the agent id, operator, name, version, API URL and profile URL from `config.json`. `--json` prints them as one object.
+
+## logout
+
+`vouched logout` removes `config.json`, `cursor.json`, `credential.json` and `score.json`. The key and the log stay, so `vouched init` brings the same identity back.
+
+`vouched logout --delete-key --yes` also deletes the private key. The identity is gone for good. With `--delete-key` and no `--yes` it only says what would happen and exits 1.
 ## card
 
 `vouched card show` prints the agent's A2A agent card as JSON. `vouched card write` writes the same card to `agent-card.json` in the current directory, or to `--out <path>`, and prints the path. Both take `--url <https url>` for the address where the agent serves A2A.

@@ -5,6 +5,7 @@ import {
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  ScoreResponse,
   WellKnown,
 } from '@vouched/schema';
 import type { z } from 'zod';
@@ -53,6 +54,7 @@ export type ApiClient = {
   postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
+  getScore(agentId: string): Promise<ScoreResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -149,6 +151,15 @@ export function createApiClient(options: {
       );
       if (status !== 200) throw toError(status, json, headers);
       const result = WellKnown.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
+    async getScore(agentId) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}/score`,
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = ScoreResponse.safeParse(json);
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },

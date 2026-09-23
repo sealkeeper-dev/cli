@@ -7,6 +7,7 @@ import {
   CURSOR_VERSION,
   countPending,
   type LogPosition,
+  readCursor,
   readPending,
   writeCursor,
 } from './log.js';
@@ -78,7 +79,7 @@ export async function syncEvents(options: SyncOptions): Promise<SyncResult> {
         const sent = await options.api.postEvents(envelopes);
         result.accepted += sent.accepted;
         result.duplicates += sent.duplicates;
-        await ack(pending.positions[envelopes.length - 1], p);
+        await ack(pending.positions[envelopes.length - 1], p, new Date());
         break;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
@@ -117,9 +118,24 @@ export async function syncEvents(options: SyncOptions): Promise<SyncResult> {
   }
 }
 
-async function ack(position: LogPosition | undefined, p: Paths): Promise<void> {
+// Moves the cursor past position. syncedAt is set when the API accepted a
+// batch and becomes lastSyncAt. A skipped event keeps the previous one.
+async function ack(
+  position: LogPosition | undefined,
+  p: Paths,
+  syncedAt?: Date,
+): Promise<void> {
   if (!position) throw new Error('No log position for a sent event');
-  await writeCursor({ v: CURSOR_VERSION, lastAcked: position }, p);
+  const lastSyncAt =
+    syncedAt?.toISOString() ?? (await readCursor(p)).lastSyncAt;
+  await writeCursor(
+    {
+      v: CURSOR_VERSION,
+      lastAcked: position,
+      ...(lastSyncAt ? { lastSyncAt } : {}),
+    },
+    p,
+  );
 }
 
 // The longest prefix whose request body stays within MAX_BATCH_BYTES, and at

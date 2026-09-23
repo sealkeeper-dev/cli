@@ -10,6 +10,12 @@ export const DEFAULT_API_URL = 'https://api.vouched.run';
 // The agent version init registers when --version is not given. emit also
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
+export const PROFILE_BASE_URL = 'https://vouched.run/agents';
+
+// The public profile page of an agent.
+export function profileUrl(agentId: string): string {
+  return `${PROFILE_BASE_URL}/${agentId}`;
+}
 
 export const Config = z
   .object({
@@ -35,6 +41,7 @@ export type Paths = {
   log: string;
   cursor: string;
   credential: string;
+  score: string;
   logFile(day: string): string;
 };
 
@@ -57,6 +64,7 @@ export function paths(home: string = vouchedHome()): Paths {
     log,
     cursor: join(home, 'cursor.json'),
     credential: join(home, 'credential.json'),
+    score: join(home, 'score.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

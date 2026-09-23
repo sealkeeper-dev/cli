@@ -47,7 +47,7 @@ function addJsonFlag(cmd: Command): void {
 
 export type ProgramDeps = {
   init?: InitDeps;
-  // Used by emit and sync.
+  // Used by emit, sync and status.
   sync?: SyncDeps;
   card?: CardDeps;
 };
@@ -70,7 +70,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerEmit(program, deps.sync);
   registerSync(program, deps.sync);
   registerCard(program, deps.card);
-  registerStatus(program);
+  registerStatus(program, deps.sync);
   registerTasks(program);
   registerRate(program);
   registerWhoami(program);

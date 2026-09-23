@@ -6,10 +6,10 @@ import {
 } from '@vouched/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
-import { PROFILE_BASE_URL } from './commands/init.js';
 import { loadConfig } from './commands/sync.js';
 import { NOT_INITIALISED } from './commands/whoami.js';
 import type { Config } from './config.js';
+import { PROFILE_BASE_URL } from './config.js';
 import {
   type Credential,
   CredentialError,

@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
-import { type Config, ConfigError, readConfig } from '../config.js';
+import { type Config, ConfigError, profileUrl, readConfig } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 
 export const NOT_INITIALISED = 'not initialised, run vouched init';
@@ -32,6 +32,7 @@ export function printIdentity(config: Config, json: boolean): void {
     name: config.name,
     version: config.version,
     apiUrl: config.apiUrl,
+    profileUrl: profileUrl(config.agentId),
   };
 
   if (json) {

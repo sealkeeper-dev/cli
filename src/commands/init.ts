@@ -10,6 +10,7 @@ import {
   ConfigError,
   DEFAULT_AGENT_VERSION,
   paths,
+  profileUrl as profileUrlOf,
   readConfig,
   writeConfig,
 } from '../config.js';
@@ -25,7 +26,6 @@ import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
 import { stdout, wantsJson } from '../output.js';
 import { printIdentity } from './whoami.js';
 
-export const PROFILE_BASE_URL = 'https://vouched.run/agents';
 export const ALREADY_INITIALISED = 'already initialised';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
@@ -189,7 +189,7 @@ async function init(
     p,
   );
 
-  const profileUrl = `${PROFILE_BASE_URL}/${config.agentId}`;
+  const profileUrl = profileUrlOf(config.agentId);
   if (json) {
     stdout(
       JSON.stringify({

@@ -167,3 +167,37 @@ describe('postEvents', () => {
     });
   });
 });
+
+describe('getScore', () => {
+  it('gets /v1/agents/<id>/score and parses the scores', async () => {
+    const body = { agentId: AGENT_ID, scores: [] };
+    const fetchFn = respond(Response.json(body));
+    const api = createApiClient({ apiUrl: 'http://api.test', fetch: fetchFn });
+    expect(await api.getScore(AGENT_ID)).toEqual(body);
+    expect(fetchFn).toHaveBeenCalledWith(
+      `http://api.test/v1/agents/${AGENT_ID}/score`,
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('throws ApiError on a 404 or a bad body', async () => {
+    const missing = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(
+        Response.json(
+          { error: { code: 'not_found', message: 'no agent' } },
+          { status: 404 },
+        ),
+      ),
+    });
+    await expect(missing.getScore(AGENT_ID)).rejects.toMatchObject({
+      status: 404,
+      code: 'not_found',
+    });
+    const bad = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(Response.json({ scores: 'x' })),
+    });
+    await expect(bad.getScore(AGENT_ID)).rejects.toBeInstanceOf(ApiError);
+  });
+});

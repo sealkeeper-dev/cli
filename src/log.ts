@@ -27,9 +27,12 @@ export const LogPosition = z.strictObject({
 });
 export type LogPosition = z.infer<typeof LogPosition>;
 
+// lastSyncAt is when sync last had a batch accepted. It is optional so a
+// cursor written before it existed still parses.
 export const Cursor = z.strictObject({
   v: z.literal(CURSOR_VERSION),
   lastAcked: LogPosition.nullable(),
+  lastSyncAt: z.iso.datetime({ offset: true }).optional(),
 });
 export type Cursor = z.infer<typeof Cursor>;
 
