@@ -30,6 +30,8 @@ import { printIdentity } from './whoami.js';
 export const ALREADY_INITIALISED = 'already initialised';
 export const NOTHING_SENT =
   'No events have been sent yet. Run vouched sync to review them and send.';
+export const CONSENT =
+  'By continuing you accept https://vouched.run/terms and https://vouched.run/privacy.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
@@ -157,6 +159,8 @@ async function init(
     agentId = ((await loadKey(p)) ?? (await createKey({}, p))).agentId;
   }
 
+  // On stderr with the device flow prompts, so --json output stays one object.
+  stderr(CONSENT);
   const githubToken = await deviceFlow({
     clientId,
     fetch: deps.fetch,

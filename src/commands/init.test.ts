@@ -20,7 +20,7 @@ import {
 import { loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
-import { ALREADY_INITIALISED, NOTHING_SENT } from './init.js';
+import { ALREADY_INITIALISED, CONSENT, NOTHING_SENT } from './init.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const API_URL = 'http://api.test';
@@ -210,6 +210,29 @@ describe('vouched init', () => {
     await expectNoTokenAnywhere(result);
   });
 
+  it('names the terms and the privacy policy on stderr before the device flow', async () => {
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    expect(CONSENT).toBe(
+      'By continuing you accept https://vouched.run/terms and https://vouched.run/privacy.',
+    );
+    const lines = result.err.split('\n');
+    const consent = lines.indexOf(CONSENT);
+    const device = lines.findIndex((l) =>
+      l.includes('Open https://github.com/login/device'),
+    );
+    expect(consent).toBeGreaterThanOrEqual(0);
+    expect(device).toBeGreaterThan(consent);
+    expect(result.out).not.toContain(CONSENT);
+  });
+
+  it('with --json keeps the consent line off stdout', async () => {
+    const result = await run(world, 'init', '--name', 'scout', '--json');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
+    expect(result.err).toContain(CONSENT);
+  });
+
   it('ends with what leaves this machine on stderr and sends no events', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
@@ -353,6 +376,7 @@ describe('vouched init', () => {
     const result = await run(world, 'init');
     expect(result.code).toBe(0);
     expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
+    expect(result.err).not.toContain(CONSENT);
     expect(result.out).toContain('operatorLogin  carelmeyer');
     expect(result.out).toContain('name           scout');
     expect(world.fetchUrls).toEqual([]);

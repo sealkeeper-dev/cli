@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `init` prints one line before the GitHub device flow saying that continuing accepts the terms at https://vouched.run/terms and the privacy policy at https://vouched.run/privacy. It goes to stderr, so `--json` output is unchanged.
+
 ## 0.1.1, 23 September 2026
 
 - Nothing is sent until you have seen it. The first `vouched sync` prints every pending event exactly as it would be sent, asks, and only then sends and turns automatic sync on. `vouched sync --dry-run` shows the pending events any time. `vouched config auto-sync off` keeps every batch manual.
