@@ -2,7 +2,7 @@
 import { BaseDimension, type Event, EventType } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { resolveApiUrl } from '../api.js';
-import { type Config, paths, profileUrl } from '../config.js';
+import { type Config, handleOf, paths, profileUrl } from '../config.js';
 import {
   CursorError,
   countPending,
@@ -25,6 +25,8 @@ export type StatusDeps = {
 
 export type Status = {
   agentId: string;
+  // login/name, from config.
+  handle: string;
   profileUrl: string;
   // Today's UTC day, YYYY-MM-DD.
   day: string;
@@ -99,7 +101,8 @@ export async function readStatus(
 
   return {
     agentId: config.agentId,
-    profileUrl: profileUrl(config.agentId),
+    handle: handleOf(config),
+    profileUrl: profileUrl(config),
     day,
     ...countEvents(events),
     pending,
@@ -152,6 +155,7 @@ function scoresFor(
 function printStatus(status: Status): void {
   const rows: [string, string][] = [
     ['agent', status.agentId],
+    ['handle', status.handle],
     ['profile', status.profileUrl],
     ['today', `${status.day} UTC`],
   ];

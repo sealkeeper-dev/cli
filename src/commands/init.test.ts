@@ -1,5 +1,12 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -182,7 +189,8 @@ describe('vouched init', () => {
       [
         `registered agent ${agentId}`,
         'operator carelmeyer',
-        `profile https://vouched.run/agents/${agentId}`,
+        'handle carelmeyer/scout',
+        'profile https://vouched.run/agents/carelmeyer/scout',
         '',
       ].join('\n'),
     );
@@ -279,8 +287,9 @@ describe('vouched init', () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     const printed = JSON.parse(result.out) as Record<string, string>;
+    expect(printed.handle).toBe('carelmeyer/scout');
     expect(printed.profileUrl).toBe(
-      `https://vouched.run/agents/${printed.agentId}`,
+      'https://vouched.run/agents/carelmeyer/scout',
     );
     await expectNoTokenAnywhere(result);
   });
@@ -323,6 +332,10 @@ describe('vouched init', () => {
       'registration refused, your GitHub account has reached its agent limit (An operator can register at most 100 agents)',
     ],
     [
+      apiError(409, 'name_taken', 'carelmeyer/cli is taken, try cli-2'),
+      'carelmeyer/cli is taken, try cli-2',
+    ],
+    [
       apiError(409, 'conflict', 'This key is registered to another operator'),
       'this key is already registered by another operator, run vouched init --force to create a new key',
     ],
@@ -346,6 +359,26 @@ describe('vouched init', () => {
     expect(result.err.endsWith(`\n${message}\n`)).toBe(true);
     expect(await readConfig(paths(home))).toBeNull();
     await expectNoTokenAnywhere(result);
+  });
+
+  it('refuses a --name that is not a valid name before any request', async () => {
+    for (const name of ['Scout', 'my agent', 'x', 'admin']) {
+      const result = await run(world, 'init', '--name', name);
+      expect(result.code, name).toBe(1);
+      expect(result.err).toContain(`invalid agent name ${name}`);
+    }
+    expect(world.fetchUrls).toEqual([]);
+    expect(await readConfig(paths(home))).toBeNull();
+  });
+
+  it('makes a valid name from the directory name when --name is not given', async () => {
+    const dir = join(home, 'My Project_v2');
+    await mkdir(dir);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(dir);
+    const result = await run(world, 'init').finally(() => cwd.mockRestore());
+    expect(result.code).toBe(0);
+    expect(world.registrations[0]?.name).toBe('my-project-v2');
+    expect(result.out).toContain('handle carelmeyer/my-project-v2');
   });
 
   it('reports a network error on one line', async () => {

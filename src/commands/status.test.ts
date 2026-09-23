@@ -146,8 +146,9 @@ describe('status', () => {
     expect(err).toBe('');
     const lines = out.split('\n');
     expect(lines).toContain(`agent             ${AGENT_ID}`);
+    expect(lines).toContain('handle            carelmeyer/scout');
     expect(lines).toContain(
-      `profile           https://vouched.run/agents/${AGENT_ID}`,
+      'profile           https://vouched.run/agents/carelmeyer/scout',
     );
     expect(lines).toContain(`today             ${dayOf(new Date())} UTC`);
     expect(lines).toContain('  session.start   1');
@@ -192,7 +193,8 @@ describe('status', () => {
     const status = JSON.parse(out);
     expect(status).toEqual({
       agentId: AGENT_ID,
-      profileUrl: `https://vouched.run/agents/${AGENT_ID}`,
+      handle: 'carelmeyer/scout',
+      profileUrl: 'https://vouched.run/agents/carelmeyer/scout',
       day: dayOf(new Date()),
       counts: {
         'session.start': 1,

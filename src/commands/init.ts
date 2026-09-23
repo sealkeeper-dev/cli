@@ -1,14 +1,19 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { type RegisterAgentRequest, Version } from '@vouched-dev/schema';
+import {
+  AgentName,
+  type RegisterAgentRequest,
+  toAgentName,
+  Version,
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
-import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
 import {
   Config,
   ConfigError,
   DEFAULT_AGENT_VERSION,
+  handleOf,
   paths,
   profileUrl as profileUrlOf,
   readConfig,
@@ -48,7 +53,8 @@ type InitOptions = {
   force?: boolean;
 };
 
-const AgentName = z.string().min(1).max(64);
+export const NAME_RULES =
+  'lowercase letters, digits and single hyphens, 2 to 39 characters, starting and ending with a letter or digit';
 
 // One line per API error code the operator can act on. Anything else falls
 // back to the code and the message the API sent.
@@ -59,6 +65,9 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
     `registration refused, your GitHub account has reached its agent limit (${m})`,
   conflict: () =>
     'this key is already registered by another operator, run vouched init --force to create a new key',
+  // The API's message names the handle and a free name, as in
+  // carelmeyer/claude-code is taken, try claude-code-2.
+  name_taken: (m) => m,
   invalid_signature: () =>
     'the API rejected the registration signature, check the key file or run vouched init --force',
   github_token_rejected: () =>
@@ -133,9 +142,17 @@ async function init(
   const clientId = githubClientId();
   if (clientId === null) cmd.error(MISSING_CLIENT_ID);
 
-  const name = options.name ?? basename(process.cwd());
+  // An explicit --name must already be a valid name. The directory name is
+  // only a default, so it is made into one.
+  const name =
+    options.name ?? toAgentName(basename(process.cwd())) ?? undefined;
+  if (name === undefined) {
+    cmd.error(
+      `the directory name does not make an agent name, pass --name with ${NAME_RULES}`,
+    );
+  }
   if (!AgentName.safeParse(name).success) {
-    cmd.error('agent name must be 1 to 64 characters, pass --name');
+    cmd.error(`invalid agent name ${name}, use ${NAME_RULES}`);
   }
   if (!Version.safeParse(options.version).success) {
     cmd.error('agent version must be 1 to 32 characters');
@@ -196,7 +213,8 @@ async function init(
     p,
   );
 
-  const profileUrl = profileUrlOf(config.agentId);
+  const handle = handleOf(config);
+  const profileUrl = profileUrlOf(config);
   // On stderr, so --json output stays one object.
   const printShared = () => {
     stderr('');
@@ -208,6 +226,7 @@ async function init(
     stdout(
       JSON.stringify({
         agentId: config.agentId,
+        handle,
         operatorLogin: config.operatorLogin,
         name: config.name,
         version: config.version,
@@ -220,6 +239,7 @@ async function init(
   }
   stdout(`registered agent ${config.agentId}`);
   stdout(`operator ${config.operatorLogin}`);
+  stdout(`handle ${handle}`);
   stdout(`profile ${profileUrl}`);
   printShared();
 }

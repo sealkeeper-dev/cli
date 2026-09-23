@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { AgentId } from '@vouched-dev/schema';
+import { AgentId, agentHandle } from '@vouched-dev/schema';
 import { z } from 'zod';
 
 export const DEFAULT_API_URL = 'https://api.vouched.run';
@@ -12,8 +12,23 @@ export const DEFAULT_API_URL = 'https://api.vouched.run';
 export const DEFAULT_AGENT_VERSION = '0.1.0';
 export const PROFILE_BASE_URL = 'https://vouched.run/agents';
 
-// The public profile page of an agent.
-export function profileUrl(agentId: string): string {
+type Named = { operatorLogin: string; name: string };
+
+// The agent's handle, login/name. The API sends it with every answer. The
+// CLI builds its own only from config, for status and whoami, which work
+// offline.
+export function handleOf(config: Named): string {
+  return agentHandle(config.operatorLogin, config.name);
+}
+
+// The public profile page, at the handle.
+export function profileUrl(config: Named): string {
+  return `${PROFILE_BASE_URL}/${handleOf(config)}`;
+}
+
+// The profile by agent id. It redirects to the handle and never changes, so
+// the signed agent card links it.
+export function idProfileUrl(agentId: string): string {
   return `${PROFILE_BASE_URL}/${agentId}`;
 }
 

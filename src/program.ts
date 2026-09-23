@@ -5,6 +5,7 @@ import {
   type AdapterDeps,
   register as registerAdapter,
 } from './commands/adapter.js';
+import { type AgentDeps, register as registerAgent } from './commands/agent.js';
 import { register as registerCard } from './commands/card.js';
 import { register as registerConfig } from './commands/config.js';
 import { register as registerEmit } from './commands/emit.js';
@@ -65,6 +66,7 @@ export type ProgramDeps = {
   hook?: HookCommandDeps;
   tasks?: TasksDeps;
   rate?: RateDeps;
+  agent?: AgentDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -88,6 +90,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerStatus(program, deps.sync);
   registerTasks(program, deps.tasks);
   registerRate(program, deps.rate);
+  registerAgent(program, deps.agent);
   registerWhoami(program);
   registerConfig(program);
   registerLogout(program);

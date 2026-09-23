@@ -119,12 +119,13 @@ describe('vouched cli', () => {
     const { code, out } = await run('whoami');
     expect(code).toBe(0);
     expect(out).toContain(`agentId        ${AGENT_ID}`);
+    expect(out).toContain('handle         carelmeyer/scout');
     expect(out).toContain('operatorLogin  carelmeyer');
     expect(out).toContain('name           scout');
     expect(out).toContain('version        1.2.0');
     expect(out).toContain('apiUrl         https://api.vouched.run');
     expect(out).toContain(
-      `profileUrl     https://vouched.run/agents/${AGENT_ID}`,
+      'profileUrl     https://vouched.run/agents/carelmeyer/scout',
     );
   });
 
@@ -144,11 +145,12 @@ describe('vouched cli', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       agentId: AGENT_ID,
+      handle: 'carelmeyer/scout',
       operatorLogin: 'carelmeyer',
       name: 'scout',
       version: '1.2.0',
       apiUrl: 'http://localhost:8080',
-      profileUrl: `https://vouched.run/agents/${AGENT_ID}`,
+      profileUrl: 'https://vouched.run/agents/carelmeyer/scout',
     });
   });
 

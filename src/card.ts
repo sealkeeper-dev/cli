@@ -9,7 +9,7 @@ import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import { loadConfig } from './commands/sync.js';
 import { NOT_INITIALISED } from './commands/whoami.js';
 import type { Config } from './config.js';
-import { PROFILE_BASE_URL } from './config.js';
+import { idProfileUrl } from './config.js';
 import {
   type Credential,
   CredentialError,
@@ -40,7 +40,7 @@ export function buildCard(
   credential: Credential | null,
   url?: string,
 ): AgentCard {
-  const profile = `${PROFILE_BASE_URL}/${config.agentId}`;
+  const profile = idProfileUrl(config.agentId);
   return AgentCard.parse({
     protocolVersion: A2A_PROTOCOL_VERSION,
     name: config.name,

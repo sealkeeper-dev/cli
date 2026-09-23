@@ -66,6 +66,7 @@ export type ApiClient = {
   submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
+  renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -79,11 +80,11 @@ export function createApiClient(options: {
   const apiUrl = options.apiUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
-  async function request(path: string, body?: unknown) {
+  async function request(path: string, body?: unknown, method?: string) {
     let res: Response;
     try {
       res = await fetchFn(`${apiUrl}${path}`, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: method ?? (body === undefined ? 'GET' : 'POST'),
         headers:
           body === undefined
             ? { Accept: 'application/json' }
@@ -221,6 +222,17 @@ export function createApiClient(options: {
       });
       if (status !== 200) throw toError(status, json, headers);
       const result = RatingResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
+    async renameAgent(agentId, envelope) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}`,
+        { envelope },
+        'PATCH',
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = AgentResponse.safeParse(json);
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },
