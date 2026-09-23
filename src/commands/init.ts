@@ -11,6 +11,10 @@ import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
 import {
+  installProveCommand,
+  proveCommandPath,
+} from '../claude-code-command.js';
+import {
   claudeConfigDir,
   hasHooks,
   hookCommand,
@@ -39,7 +43,7 @@ import {
 import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
-import { INSTALL_COMMAND } from './adapter.js';
+import { commandLine, INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
@@ -285,8 +289,8 @@ type HooksResult = 'none' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
-// vouched adapter claude-code install. Hooks already there count as
-// installed and nothing is asked.
+// vouched adapter claude-code install, the /vouched-prove command included.
+// Hooks already there count as installed and nothing is asked.
 async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
@@ -304,7 +308,6 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
         ? `vouched hooks already installed in ${file}`
         : `added vouched hooks for ${added.join(', ')} to ${file}`,
     );
-    return 'installed';
   } catch (error) {
     // Registration already worked, so a settings file we will not touch
     // only means the hooks wait for a later install.
@@ -314,6 +317,15 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
     }
     throw error;
   }
+  const commandPath = proveCommandPath(file);
+  try {
+    stdout(commandLine(await installProveCommand(commandPath), commandPath));
+  } catch (error) {
+    // The hooks are in, so this is only a warning.
+    if (!(error instanceof SettingsError)) throw error;
+    stderr(error.message);
+  }
+  return 'installed';
 }
 
 // Enter or y or yes is yes. n, no or a closed input is no, and so is

@@ -11,9 +11,10 @@ import {
 } from './api.js';
 import { loadConfig } from './commands/sync.js';
 import { NOT_INITIALISED } from './commands/whoami.js';
-import type { Config } from './config.js';
+import { type Config, type Paths, paths } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
+import { dayOf, readDay } from './log.js';
 import { stderr, stdout } from './output.js';
 
 // What tasks pull, submit and post share. fetch is injectable so tests can
@@ -123,4 +124,29 @@ export function taskSummary(task: TaskResponse) {
     expiresAt: task.expiresAt,
     spec: task.spec,
   };
+}
+
+// A task lives at most seven days, so a claim older than that is expired
+// whatever happened to it. One more day covers the UTC day boundary.
+const CLAIM_LOOKBACK_DAYS = 8;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Task ids this agent claimed in the local log with no task.submitted after,
+// oldest first. The log only knows what this machine did, so a task may
+// have expired since. Callers that need to know ask the API.
+export async function unsubmittedClaims(
+  now: Date = new Date(),
+  p: Paths = paths(),
+): Promise<string[]> {
+  const claimed = new Set<string>();
+  for (let i = CLAIM_LOOKBACK_DAYS - 1; i >= 0; i--) {
+    const day = dayOf(new Date(now.getTime() - i * DAY_MS));
+    for (const event of await readDay(day, p)) {
+      if (event.type === 'task.claimed') claimed.add(event.payload.task_id);
+      if (event.type === 'task.submitted') {
+        claimed.delete(event.payload.task_id);
+      }
+    }
+  }
+  return [...claimed];
 }

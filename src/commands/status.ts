@@ -3,7 +3,7 @@
 import { stat } from 'node:fs/promises';
 import { BaseDimension, type Event, EventType } from '@vouched-dev/schema';
 import type { Command } from 'commander';
-import { resolveApiUrl } from '../api.js';
+import { createApiClient, resolveApiUrl } from '../api.js';
 import {
   claudeConfigDir,
   hasHooks,
@@ -24,7 +24,8 @@ import {
   readDay,
 } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import { getScore, type ScoreCache } from '../score.js';
+import { getScore, SCORE_TIMEOUT_MS, type ScoreCache } from '../score.js';
+import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import { defaultSyncDeps, loadConfig } from './sync.js';
 import { NOT_INITIALISED } from './whoami.js';
@@ -44,6 +45,8 @@ export type StatusDeps = {
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 const QUIET_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+// The scoring job runs every 15 minutes, on the quarter hours.
+const SCORING_EVERY_MS = 15 * 60 * 1000;
 
 export type Status = {
   agentId: string;
@@ -55,6 +58,13 @@ export type Status = {
   counts: Record<EventType, number>;
   toolCalls: { total: number; ok: number; okRatio: number | null };
   tasks: { claimed: number; submitted: number };
+  // Live from the API, the count on the public profile. null when the API
+  // did not answer.
+  verifiedTasks: number | null;
+  // Claimed in the local log and not submitted, over the last week.
+  unsubmittedClaims: number;
+  // Whole minutes until the next quarter hour, when scoring runs.
+  nextScoringRunMinutes: number;
   pending: number;
   lastSyncAt: string | null;
   // Whether emit sends events on its own. See vouched config auto-sync.
@@ -113,12 +123,15 @@ export async function readStatus(
     now,
     paths: p,
   });
-  const [events, pending, cursor, score] = await Promise.all([
-    readDay(day, p),
-    countPending(p),
-    readCursor(p),
-    scorePromise,
-  ]);
+  const [events, pending, cursor, score, verifiedTasks, unsubmitted] =
+    await Promise.all([
+      readDay(day, p),
+      countPending(p),
+      readCursor(p),
+      scorePromise,
+      liveVerifiedTasks(config, deps),
+      unsubmittedClaims(now, p),
+    ]);
 
   return {
     agentId: config.agentId,
@@ -126,6 +139,9 @@ export async function readStatus(
     profileUrl: profileUrl(config),
     day,
     ...countEvents(events),
+    verifiedTasks,
+    unsubmittedClaims: unsubmitted.length,
+    nextScoringRunMinutes: minutesToNextScoring(now),
     pending,
     lastSyncAt: cursor.lastSyncAt ?? null,
     autoSync: config.autoSync === true,
@@ -133,6 +149,31 @@ export async function readStatus(
     scoresFetchedAt: score?.fetchedAt ?? null,
     ...(show ? { events } : {}),
   };
+}
+
+// The verified task count from GET /v1/agents/<id>, with the same two
+// second limit as the score. null when the API does not answer.
+async function liveVerifiedTasks(
+  config: Config,
+  deps: StatusDeps,
+): Promise<number | null> {
+  try {
+    const api = createApiClient({
+      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      fetch: deps.fetch,
+      timeoutMs: SCORE_TIMEOUT_MS,
+    });
+    const agent = await api.getAgent(config.agentId);
+    return agent.counts?.verifiedTasks ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Minutes until the next wall clock quarter hour, rounded up, so 1 to 15.
+export function minutesToNextScoring(now: Date): number {
+  const left = SCORING_EVERY_MS - (now.getTime() % SCORING_EVERY_MS);
+  return Math.ceil(left / 60_000);
 }
 
 // True when neither Claude Code settings file holds our hooks and the log
@@ -224,6 +265,10 @@ function printStatus(status: Status): void {
       'tasks',
       `${status.tasks.claimed} claimed, ${status.tasks.submitted} submitted`,
     ],
+    [
+      'verified tasks',
+      status.verifiedTasks === null ? '-' : String(status.verifiedTasks),
+    ],
     ['pending', String(status.pending)],
     ['last sync', status.lastSyncAt ?? 'never'],
     [
@@ -238,12 +283,28 @@ function printStatus(status: Status): void {
       value === null ? '-' : formatScore(value),
     ]),
   );
+  stdout('');
+  stdout(nextScoringLine(status.nextScoringRunMinutes));
+  const hint = unsubmittedHint(status);
+  if (hint) stdout(hint);
 
   if (status.events) {
     stdout('');
     stdout(`today's events, ${status.events.length}, as they are sent`);
     for (const event of status.events) stdout(JSON.stringify(event));
   }
+}
+
+export function nextScoringLine(minutes: number): string {
+  return `Next scoring run in about ${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+// Only while nothing is verified yet, so it points at the one thing left to
+// do. The count comes from the local log, so some may have expired.
+export function unsubmittedHint(status: Status): string | null {
+  if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
+  const n = status.unsubmittedClaims;
+  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run vouched prove to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
 }
 
 function formatScore(value: number): string {

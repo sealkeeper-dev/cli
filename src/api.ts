@@ -55,6 +55,7 @@ export function resolveApiUrl(
 export type ApiClient = {
   apiUrl: string;
   registerAgent(envelope: string): Promise<AgentResponse>;
+  getAgent(agentId: string): Promise<AgentResponse>;
   postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
@@ -155,6 +156,16 @@ export function createApiClient(options: {
     async registerAgent(envelope) {
       const { status, json } = await request('/v1/agents', { envelope });
       if (status !== 200 && status !== 201) throw toError(status, json);
+      const agent = AgentResponse.safeParse(json);
+      if (!agent.success) throw toError(status, undefined);
+      return agent.data;
+    },
+    // The public agent answer, with live counts and operatedByVouched.
+    async getAgent(agentId) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}`,
+      );
+      if (status !== 200) throw toError(status, json, headers);
       const agent = AgentResponse.safeParse(json);
       if (!agent.success) throw toError(status, undefined);
       return agent.data;

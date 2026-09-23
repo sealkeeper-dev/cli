@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
-import { NO_ADAPTER } from './status.js';
+import { minutesToNextScoring, NO_ADAPTER, nextScoringLine } from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
 const API_URL = 'http://api.test';
@@ -26,9 +26,39 @@ const offline = (async () => {
   throw new TypeError('fetch failed');
 }) as typeof fetch;
 
-function scoreFetch(scores: { dimension: string; value: number | null }[]) {
+function agentAnswer(verifiedTasks: number) {
+  return {
+    id: AGENT_ID,
+    name: 'scout',
+    version: '1.0.0',
+    operator: { login: 'carelmeyer' },
+    createdAt: '2026-09-23T08:00:00.000Z',
+    operatedByVouched: false,
+    handle: 'carelmeyer/scout',
+    previousName: null,
+    counts: {
+      events: 7,
+      verifiedTasks,
+      incidents: 1,
+      sessions: 1,
+      toolCalls: 3,
+    },
+    lastSeenAt: null,
+  };
+}
+
+// The score and agent routes. verifiedTasks is the live count the agent
+// route answers with.
+function scoreFetch(
+  scores: { dimension: string; value: number | null }[],
+  verifiedTasks = 2,
+) {
   return (async (input: string | URL | Request) => {
-    expect(String(input)).toBe(`${API_URL}/v1/agents/${AGENT_ID}/score`);
+    const url = String(input);
+    if (url === `${API_URL}/v1/agents/${AGENT_ID}`) {
+      return Response.json(agentAnswer(verifiedTasks));
+    }
+    expect(url).toBe(`${API_URL}/v1/agents/${AGENT_ID}/score`);
     return Response.json({
       agentId: AGENT_ID,
       scores: scores.map((s) => ({
@@ -166,6 +196,11 @@ describe('status', () => {
     expect(lines).toContain('  usage           0');
     expect(lines).toContain('tool calls        3, 2 ok (67%)');
     expect(lines).toContain('tasks             1 claimed, 1 submitted');
+    expect(lines).toContain('verified tasks    2');
+    expect(out).toMatch(
+      /\nNext scoring run in about ([1-9]|1[0-5]) minutes?\n/,
+    );
+    expect(out).not.toContain('not submitted yet');
     expect(lines).toContain('pending           4');
     expect(lines).toContain(`last sync         ${LAST_SYNC}`);
     expect(lines).toContain(
@@ -187,6 +222,75 @@ describe('status', () => {
     expect(out).toContain('pending           4\n');
     expect(out).toContain('  reliability     -\n');
     expect(out).toContain('  provenance      -\n');
+    expect(out).toContain('verified tasks    -\n');
+  });
+
+  describe('verified tasks and scoring', () => {
+    async function claimOnly(): Promise<string> {
+      const id = randomUUID();
+      await appendEvent(
+        event('task.claimed', { task_id: id, task_type: 'json_extract' }),
+      );
+      return id;
+    }
+
+    it('puts the next scoring run on the wall clock quarter hours', () => {
+      const at = (iso: string) => minutesToNextScoring(new Date(iso));
+      expect(at('2026-09-23T10:00:00.000Z')).toBe(15);
+      expect(at('2026-09-23T10:00:01.000Z')).toBe(15);
+      expect(at('2026-09-23T10:01:00.000Z')).toBe(14);
+      expect(at('2026-09-23T10:14:30.000Z')).toBe(1);
+      expect(at('2026-09-23T10:44:59.999Z')).toBe(1);
+      expect(at('2026-09-23T10:46:00.000Z')).toBe(14);
+      expect(nextScoringLine(1)).toBe('Next scoring run in about 1 minute');
+      expect(nextScoringLine(9)).toBe('Next scoring run in about 9 minutes');
+    });
+
+    it('hints at unsubmitted claims while nothing is verified', async () => {
+      await claimOnly();
+      await claimOnly();
+      const { code, out } = await run(scoreFetch([], 0), 'status');
+      expect(code).toBe(0);
+      expect(out).toContain('verified tasks    0\n');
+      expect(out).toContain(
+        '2 claimed tasks are not submitted yet. Run vouched prove to print them again with the submit lines.\n',
+      );
+      const json = JSON.parse(
+        (await run(scoreFetch([], 0), 'status', '--json')).out,
+      );
+      expect(json).toMatchObject({ verifiedTasks: 0, unsubmittedClaims: 2 });
+    });
+
+    it('counts a claim as done once it is submitted, even days later', async () => {
+      const id = randomUUID();
+      await appendEvent(
+        event('task.claimed', { task_id: id, task_type: 'json_extract' }),
+        paths(home),
+        new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      );
+      await appendEvent(
+        event('task.submitted', { task_id: id, task_type: 'json_extract' }),
+      );
+      const { out } = await run(scoreFetch([], 0), 'status');
+      expect(out).not.toContain('not submitted yet');
+    });
+
+    it('drops the hint once a task is verified, or when the count is unknown', async () => {
+      await claimOnly();
+      expect((await run(scoreFetch([], 1), 'status')).out).not.toContain(
+        'not submitted yet',
+      );
+      expect((await run(offline, 'status')).out).not.toContain(
+        'not submitted yet',
+      );
+    });
+
+    it('uses one line for a single unsubmitted claim', async () => {
+      await claimOnly();
+      expect((await run(scoreFetch([], 0), 'status')).out).toContain(
+        '1 claimed task is not submitted yet. Run vouched prove to print it again with the submit lines.\n',
+      );
+    });
   });
 
   it('prints one JSON object with --json', async () => {
@@ -215,6 +319,9 @@ describe('status', () => {
       },
       toolCalls: { total: 3, ok: 2, okRatio: 2 / 3 },
       tasks: { claimed: 1, submitted: 1 },
+      verifiedTasks: 2,
+      unsubmittedClaims: 0,
+      nextScoringRunMinutes: expect.any(Number),
       pending: 4,
       lastSyncAt: LAST_SYNC,
       autoSync: false,

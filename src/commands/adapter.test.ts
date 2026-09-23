@@ -13,6 +13,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  PROVE_COMMAND_MARKER,
+  PROVE_COMMAND_TEXT,
+} from '../claude-code-command.js';
 import { HOOK_COMMAND, hookCommand } from '../claude-code-settings.js';
 import { createProgram } from '../program.js';
 
@@ -56,6 +60,8 @@ describe('adapter claude-code', () => {
 
   const userFile = () => join(home, '.claude', 'settings.json');
   const projectFile = () => join(project, '.claude', 'settings.json');
+  const userCommand = () =>
+    join(home, '.claude', 'commands', 'vouched-prove.md');
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
@@ -111,7 +117,7 @@ describe('adapter claude-code', () => {
     const { code, out } = await run('install');
     expect(code).toBe(0);
     expect(out).toBe(
-      `added vouched hooks for ${EVENTS.join(', ')} to ${userFile()}\n`,
+      `added vouched hooks for ${EVENTS.join(', ')} to ${userFile()}\nadded the /vouched-prove command at ${userCommand()}\n`,
     );
     const text = await readFile(userFile(), 'utf8');
     expect(text).toBe(
@@ -162,7 +168,9 @@ describe('adapter claude-code', () => {
     await run('install');
     const first = await readFile(userFile(), 'utf8');
     const { out } = await run('install');
-    expect(out).toBe(`vouched hooks already installed in ${userFile()}\n`);
+    expect(out).toBe(
+      `vouched hooks already installed in ${userFile()}\nthe /vouched-prove command is up to date at ${userCommand()}\n`,
+    );
     expect(await readFile(userFile(), 'utf8')).toBe(first);
   });
 
@@ -201,7 +209,11 @@ describe('adapter claude-code', () => {
     await run('install');
     const { code, out } = await run('uninstall', '--json');
     expect(code).toBe(0);
-    expect(JSON.parse(out)).toEqual({ path: userFile(), removed: 5 });
+    expect(JSON.parse(out)).toEqual({
+      path: userFile(),
+      removed: 5,
+      command: { path: userCommand(), removed: true },
+    });
 
     const after = await readJson(userFile());
     expect(after).toEqual({
@@ -218,7 +230,9 @@ describe('adapter claude-code', () => {
     await writeFile(userFile(), '{\n  "model": "opus"\n}\n');
     await run('install');
     const { out } = await run('uninstall');
-    expect(out).toBe(`removed 5 vouched hooks from ${userFile()}\n`);
+    expect(out).toBe(
+      `removed 5 vouched hooks from ${userFile()}\nremoved the /vouched-prove command from ${userCommand()}\n`,
+    );
     expect(await readFile(userFile(), 'utf8')).toBe(
       '{\n  "model": "opus"\n}\n',
     );
@@ -241,6 +255,72 @@ describe('adapter claude-code', () => {
     expect(code).toBe(1);
     expect(err).toContain('is not valid JSON');
     expect(await readFile(userFile(), 'utf8')).toBe('{ nope');
+  });
+
+  describe('the /vouched-prove command', () => {
+    it('install writes it next to the settings with the marker first', async () => {
+      const { out } = await run('install', '--json');
+      expect(JSON.parse(out).command).toEqual({
+        path: userCommand(),
+        result: 'written',
+      });
+      const text = await readFile(userCommand(), 'utf8');
+      expect(text).toBe(PROVE_COMMAND_TEXT);
+      expect(text.split('\n')[0]).toBe(PROVE_COMMAND_MARKER);
+      expect(text).toContain('`vouched prove`');
+      expect(text).toContain('.vouched-answers/');
+      expect(text).toContain('`vouched status`');
+      expect(text).toContain('No extra keys, no commentary');
+    });
+
+    it('--scope project writes it under the working directory', async () => {
+      await run('install', '--scope', 'project');
+      expect(
+        await readFile(
+          join(project, '.claude', 'commands', 'vouched-prove.md'),
+          'utf8',
+        ),
+      ).toBe(PROVE_COMMAND_TEXT);
+    });
+
+    it('is idempotent, and brings an old copy of ours up to date', async () => {
+      await run('install');
+      const again = await run('install', '--json');
+      expect(JSON.parse(again.out).command.result).toBe('unchanged');
+
+      await writeFile(userCommand(), `${PROVE_COMMAND_MARKER}\nold text\n`);
+      const updated = await run('install', '--json');
+      expect(JSON.parse(updated.out).command.result).toBe('written');
+      expect(await readFile(userCommand(), 'utf8')).toBe(PROVE_COMMAND_TEXT);
+    });
+
+    it('never touches a file of the same name it did not write', async () => {
+      await mkdir(join(home, '.claude', 'commands'), { recursive: true });
+      await writeFile(userCommand(), 'my own prove command\n');
+      const { code, out } = await run('install');
+      expect(code).toBe(0);
+      expect(out).toContain(
+        `left ${userCommand()} alone, vouched did not write it`,
+      );
+      expect(await readFile(userCommand(), 'utf8')).toBe(
+        'my own prove command\n',
+      );
+
+      const removed = await run('uninstall', '--json');
+      expect(JSON.parse(removed.out).command.removed).toBe(false);
+      expect(await readFile(userCommand(), 'utf8')).toBe(
+        'my own prove command\n',
+      );
+    });
+
+    it('uninstall removes ours', async () => {
+      await run('install');
+      await run('uninstall');
+      await expect(stat(userCommand())).rejects.toThrow('ENOENT');
+      expect((await run('uninstall')).out).toBe(
+        `no vouched hooks in ${userFile()}\n`,
+      );
+    });
   });
 
   it('writes through a symlinked settings file', async () => {

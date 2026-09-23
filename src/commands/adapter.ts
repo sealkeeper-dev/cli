@@ -2,6 +2,12 @@
 import { homedir } from 'node:os';
 import { type Command, Option } from 'commander';
 import {
+  type CommandResult,
+  installProveCommand,
+  proveCommandPath,
+  uninstallProveCommand,
+} from '../claude-code-command.js';
+import {
   claudeConfigDir,
   hookCommand,
   installHooks,
@@ -62,13 +68,26 @@ export function register(
       const added = await orExit(this, () =>
         installHooks(file, deps.hookCommand()),
       );
+      const commandPath = proveCommandPath(file);
+      const command = await orExit(this, () =>
+        installProveCommand(commandPath),
+      );
       if (wantsJson(this)) {
-        stdout(JSON.stringify({ path: file, added }));
-      } else if (added.length === 0) {
+        stdout(
+          JSON.stringify({
+            path: file,
+            added,
+            command: { path: commandPath, result: command },
+          }),
+        );
+        return;
+      }
+      if (added.length === 0) {
         stdout(`vouched hooks already installed in ${file}`);
       } else {
         stdout(`added vouched hooks for ${added.join(', ')} to ${file}`);
       }
+      stdout(commandLine(command, commandPath));
     });
 
   claude
@@ -78,18 +97,40 @@ export function register(
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
       const removed = await orExit(this, () => uninstallHooks(file));
+      const commandPath = proveCommandPath(file);
+      const commandRemoved = await orExit(this, () =>
+        uninstallProveCommand(commandPath),
+      );
       if (wantsJson(this)) {
-        stdout(JSON.stringify({ path: file, removed }));
-      } else if (removed === 0) {
+        stdout(
+          JSON.stringify({
+            path: file,
+            removed,
+            command: { path: commandPath, removed: commandRemoved },
+          }),
+        );
+        return;
+      }
+      if (removed === 0) {
         stdout(`no vouched hooks in ${file}`);
       } else {
         stdout(
           `removed ${removed} vouched hook${removed === 1 ? '' : 's'} from ${file}`,
         );
       }
+      if (commandRemoved) stdout(`removed ${PROVE_SLASH} from ${commandPath}`);
     });
 
   return adapter;
+}
+
+const PROVE_SLASH = 'the /vouched-prove command';
+
+// One line on what install did with the slash command.
+export function commandLine(result: CommandResult, path: string): string {
+  if (result === 'written') return `added ${PROVE_SLASH} at ${path}`;
+  if (result === 'unchanged') return `${PROVE_SLASH} is up to date at ${path}`;
+  return `left ${path} alone, vouched did not write it`;
 }
 
 function pathFor(scope: Scope, deps: AdapterDeps): string {

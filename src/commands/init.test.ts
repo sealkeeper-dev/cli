@@ -18,6 +18,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
+import { PROVE_COMMAND_TEXT } from '../claude-code-command.js';
 import { HOOK_COMMAND } from '../claude-code-settings.js';
 import { paths, readConfig } from '../config.js';
 import {
@@ -571,6 +572,11 @@ describe('vouched init', () => {
         'PostToolUse',
       ]);
       expect(after).toContain('other-tool stop');
+      const command = join(claudeDir(), 'commands', 'vouched-prove.md');
+      expect(result.out).toContain(
+        `added the /vouched-prove command at ${command}`,
+      );
+      expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
     });
 
     it('prints the command instead on n and leaves the settings alone', async () => {
@@ -588,6 +594,9 @@ describe('vouched init', () => {
         'Run vouched adapter claude-code install to record your Claude Code sessions',
       );
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+      expect(
+        await readIfExists(join(claudeDir(), 'commands', 'vouched-prove.md')),
+      ).toBe('');
     });
 
     it('does not ask without a terminal and prints the command', async () => {

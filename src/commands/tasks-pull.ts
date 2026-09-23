@@ -120,7 +120,7 @@ export function register(
 
 // Another agent got there first, the task expired, or the server says it is
 // our own. Worth trying the next task.
-function isGone(error: ApiError): boolean {
+export function isGone(error: ApiError): boolean {
   return (
     error.status === 409 ||
     error.status === 410 ||
