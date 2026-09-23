@@ -100,15 +100,28 @@ export async function loadKey(p: Paths = paths()): Promise<LoadedKey | null> {
   return { privateKey, publicKey, agentId: agentIdFromPublicKey(publicKey) };
 }
 
-// The only place the CLI signs. It loads the local key and hands everything to
-// the schema helper, with kid set to the agent id.
+export type Signer = {
+  agentId: AgentId;
+  sign(payload: unknown): Promise<string>;
+};
+
+// The only place the CLI signs. It loads the local key once and hands every
+// payload to the schema helper, with kid set to the agent id. sync uses one
+// signer per run so a batch of 500 reads the key file once.
+export async function loadSigner(p: Paths = paths()): Promise<Signer> {
+  const key = await loadKey(p);
+  if (key === null) throw new KeyError(NO_KEY);
+  return {
+    agentId: key.agentId,
+    sign: (payload) => sign(payload, key.privateKey, key.agentId),
+  };
+}
+
 export async function signEnvelope(
   payload: unknown,
   p: Paths = paths(),
 ): Promise<string> {
-  const key = await loadKey(p);
-  if (key === null) throw new KeyError(NO_KEY);
-  return sign(payload, key.privateKey, key.agentId);
+  return (await loadSigner(p)).sign(payload);
 }
 
 // Accepts exactly 43 base64url characters with at most one trailing newline.

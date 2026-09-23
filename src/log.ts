@@ -8,8 +8,10 @@ import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 import { stderr } from './output.js';
 
 // The local event log. Append-only JSONL, one file per UTC day under
-// paths().log, named YYYY-MM-DD.jsonl after the event's occurred_at. Each line
-// is {v: 1, ...event}. Nothing here signs, sends or deletes anything.
+// paths().log, named YYYY-MM-DD.jsonl after the day the line was appended, not
+// the event's occurred_at. So file name order is append order, and an event
+// that arrives late still lands after the cursor. Each line is
+// {v: 1, ...event}. Nothing here signs, sends or deletes anything.
 
 export const LOG_LINE_VERSION = 1;
 export const CURSOR_VERSION = 1;
@@ -37,31 +39,33 @@ export class CursorError extends Error {
 
 export type Pending = {
   events: Event[];
+  // The position of each event in events, so a caller can ack part of them.
+  positions: LogPosition[];
   // Position of the last event returned, or null when nothing is pending.
   last: LogPosition | null;
 };
 
 type Entry = { file: string; event: Event };
 
-// occurred_at is an ISO datetime in UTC with a Z suffix, so its first ten
-// characters are the UTC day.
-export function dayOf(event: Event): string {
-  return event.occurred_at.slice(0, 10);
+// The UTC day of a moment, as YYYY-MM-DD.
+export function dayOf(at: Date): string {
+  return at.toISOString().slice(0, 10);
 }
 
-// Validates the event, then appends one line to its day file with a single
-// write. No fsync, so emit stays fast. The file is opened read and write so
+// Validates the event, then appends one line to the file for the day it is
+// appended (now, which tests can set) with a single write. No fsync, so emit stays fast. The file is opened read and write so
 // the last byte can be checked. If an earlier crash left a partial line with
 // no trailing newline, the new line starts on a fresh line and is not lost.
 export async function appendEvent(
   input: unknown,
   p: Paths = paths(),
+  now: Date = new Date(),
 ): Promise<Event> {
   const event = Event.parse(input);
   await mkdir(p.log, { recursive: true, mode: 0o700 });
 
   const file = await open(
-    p.logFile(dayOf(event)),
+    p.logFile(dayOf(now)),
     constants.O_RDWR | constants.O_APPEND | constants.O_CREAT,
     0o600,
   );
@@ -125,15 +129,15 @@ export async function readPending(
   p: Paths = paths(),
 ): Promise<Pending> {
   const events: Event[] = [];
-  let last: LogPosition | null = null;
-  if (limit <= 0) return { events, last };
+  const positions: LogPosition[] = [];
+  if (limit <= 0) return { events, positions, last: null };
 
   for await (const entry of pendingEntries(p)) {
     events.push(entry.event);
-    last = { file: entry.file, eventId: entry.event.event_id };
+    positions.push({ file: entry.file, eventId: entry.event.event_id });
     if (events.length >= limit) break;
   }
-  return { events, last };
+  return { events, positions, last: positions.at(-1) ?? null };
 }
 
 export async function countPending(p: Paths = paths()): Promise<number> {
@@ -142,8 +146,8 @@ export async function countPending(p: Paths = paths()): Promise<number> {
   return count;
 }
 
-// The events of one UTC day, in line order. An empty list when the day has no
-// file.
+// The events appended on one UTC day, in line order. An empty list when the
+// day has no file.
 export async function readDay(
   date: string,
   p: Paths = paths(),
@@ -176,7 +180,7 @@ async function* pendingEntries(p: Paths): AsyncGenerator<Entry> {
   }
 }
 
-// Day files in name order, which is date order. Other files are ignored.
+// Day files in name order, which is append order. Other files are ignored.
 async function listDayFiles(p: Paths): Promise<string[]> {
   let names: string[];
   try {

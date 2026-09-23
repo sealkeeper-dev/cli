@@ -46,6 +46,12 @@ function event(day: string, n: number): Event {
   };
 }
 
+// Appends as if on the given UTC day, which names the file. It defaults to
+// the event's own day so most tests read naturally.
+function append(e: unknown, day = (e as Event).occurred_at.slice(0, 10)) {
+  return appendEvent(e, paths(), new Date(`${day}T12:00:00.000Z`));
+}
+
 function ids(events: Event[]): string[] {
   return events.map((e) => e.event_id);
 }
@@ -76,17 +82,14 @@ describe('log', () => {
   async function seedTwoDays(): Promise<{ day1: Event[]; day2: Event[] }> {
     const day1 = [event(DAY1, 1), event(DAY1, 2), event(DAY1, 3)];
     const day2 = [event(DAY2, 4), event(DAY2, 5)];
-    // Appended out of day order to show that file order wins.
-    for (const e of [day2[0], day1[0], day1[1], day2[1], day1[2]]) {
-      await appendEvent(e);
-    }
+    for (const e of [...day1, ...day2]) await append(e);
     return { day1, day2 };
   }
 
   it('writes one line to the day file with mode 600 in a 700 directory', async () => {
     const p = paths();
     const e = event(DAY2, 1);
-    await appendEvent(e);
+    await append(e);
 
     expect((await stat(p.log)).mode & 0o777).toBe(0o700);
     expect((await stat(p.logFile(DAY2))).mode & 0o777).toBe(0o600);
@@ -98,14 +101,35 @@ describe('log', () => {
 
   it('rejects an invalid event and writes nothing', async () => {
     await expect(
-      appendEvent({ ...event(DAY2, 1), payload: { prompt: 'secret' } }),
+      append({ ...event(DAY2, 1), payload: { prompt: 'secret' } }),
     ).rejects.toThrow();
     expect(await countPending()).toBe(0);
   });
 
-  it('puts events on different days in different files', async () => {
-    await appendEvent(event(DAY1, 1));
-    await appendEvent(event(DAY2, 2));
+  it('names the file after the append day, not occurred_at', async () => {
+    const e = event(DAY1, 1);
+    await appendEvent(e);
+    const today = new Date().toISOString().slice(0, 10);
+    expect(await readdir(paths().log)).toEqual([`${today}.jsonl`]);
+    expect(ids(await readDay(today))).toEqual([e.event_id]);
+  });
+
+  it('returns a late event appended after the cursor moved on', async () => {
+    const onTime = event(DAY2, 1);
+    await append(onTime, DAY2);
+    await writeCursor({
+      v: 1,
+      lastAcked: { file: `${DAY2}.jsonl`, eventId: onTime.event_id },
+    });
+    // Happened on day one, reported on day three.
+    const late = event(DAY1, 2);
+    await append(late, '2026-09-24');
+    expect(ids((await readPending(10)).events)).toEqual([late.event_id]);
+  });
+
+  it('puts appends on different days in different files', async () => {
+    await append(event(DAY1, 1));
+    await append(event(DAY2, 2));
     expect((await readdir(paths().log)).sort()).toEqual([
       `${DAY1}.jsonl`,
       `${DAY2}.jsonl`,
@@ -158,13 +182,17 @@ describe('log', () => {
       v: 1,
       lastAcked: { file: `${DAY2}.jsonl`, eventId: day2[1]?.event_id ?? '' },
     });
-    expect(await readPending(10)).toEqual({ events: [], last: null });
+    expect(await readPending(10)).toEqual({
+      events: [],
+      positions: [],
+      last: null,
+    });
     expect(await countPending()).toBe(0);
   });
 
   it('skips a partial trailing line with one warning', async () => {
     const good = [event(DAY2, 1), event(DAY2, 2)];
-    for (const e of good) await appendEvent(e);
+    for (const e of good) await append(e);
     const file = paths().logFile(DAY2);
     await appendFile(file, '{"v":1,"event_id":"0199');
 
@@ -177,10 +205,10 @@ describe('log', () => {
 
   it('starts a fresh line when appending after a partial line', async () => {
     const first = event(DAY2, 1);
-    await appendEvent(first);
+    await append(first);
     await appendFile(paths().logFile(DAY2), '{"v":1,"eve');
     const next = event(DAY2, 2);
-    await appendEvent(next);
+    await append(next);
 
     expect(ids(await readDay(DAY2))).toEqual(ids([first, next]));
     expect(warnings().filter((w) => w.includes('1 invalid line'))).toHaveLength(
@@ -191,13 +219,13 @@ describe('log', () => {
   it('skips an invalid line with a warning', async () => {
     const a = event(DAY2, 1);
     const b = event(DAY2, 2);
-    await appendEvent(a);
+    await append(a);
     const file = paths().logFile(DAY2);
     await appendFile(
       file,
       `${JSON.stringify({ v: 1, ...event(DAY2, 9), type: 'nope' })}\n`,
     );
-    await appendEvent(b);
+    await append(b);
 
     expect(ids((await readPending(10)).events)).toEqual(ids([a, b]));
     const invalid = warnings().filter((w) => w.includes('invalid'));
@@ -241,7 +269,7 @@ describe('log', () => {
 
   it('returns a thousand appends in order', async () => {
     const all = Array.from({ length: 1000 }, (_, n) => event(DAY2, n));
-    for (const e of all) await appendEvent(e);
+    for (const e of all) await append(e);
     const pending = await readPending(1000);
     expect(ids(pending.events)).toEqual(ids(all));
     expect(pending.last?.eventId).toBe(all[999]?.event_id);

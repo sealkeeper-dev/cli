@@ -1,5 +1,11 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { AgentResponse, ErrorResponse } from '@vouched/schema';
+import {
+  AgentResponse,
+  type ErrorIssue,
+  ErrorResponse,
+  EventsBatchResponse,
+} from '@vouched/schema';
+import type { z } from 'zod';
 import { DEFAULT_API_URL } from './config.js';
 
 // A small client for the Vouched API. Every response is parsed with the
@@ -8,14 +14,20 @@ import { DEFAULT_API_URL } from './config.js';
 export const API_URL_ENV = 'VOUCHED_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
 
+export type ApiIssue = z.infer<typeof ErrorIssue>;
+
 // status is 0 for a network failure. code is the API error code, or
-// network_error or bad_response when the API never gave one.
+// network_error or bad_response when the API never gave one. issues are the
+// per field issues the API sent, if any. retryAfterSec is the Retry-After
+// header of a 429, in seconds, when it was a plain number.
 export class ApiError extends Error {
   override name = 'ApiError';
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly issues: ApiIssue[] = [],
+    readonly retryAfterSec: number | null = null,
   ) {
     super(message);
   }
@@ -36,14 +48,19 @@ export function resolveApiUrl(
 export type ApiClient = {
   apiUrl: string;
   registerAgent(envelope: string): Promise<AgentResponse>;
+  postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
 };
 
+// timeoutMs bounds each request. emit passes a short one so a slow network
+// never holds up the hook that called it.
 export function createApiClient(options: {
   apiUrl: string;
   fetch?: typeof fetch;
+  timeoutMs?: number;
 }): ApiClient {
   const fetchFn = options.fetch ?? fetch;
   const apiUrl = options.apiUrl.replace(/\/+$/, '');
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
   async function postJson(path: string, body: unknown) {
     let res: Response;
@@ -55,7 +72,7 @@ export function createApiClient(options: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       throw new ApiError(
@@ -70,14 +87,20 @@ export function createApiClient(options: {
     } catch {
       json = undefined;
     }
-    return { status: res.status, json };
+    return { status: res.status, json, headers: res.headers };
   }
 
-  function toError(status: number, json: unknown): ApiError {
+  function toError(status: number, json: unknown, headers?: Headers): ApiError {
     const parsed = ErrorResponse.safeParse(json);
     if (parsed.success) {
-      const { code, message } = parsed.data.error;
-      return new ApiError(status, code, message);
+      const { code, message, issues } = parsed.data.error;
+      return new ApiError(
+        status,
+        code,
+        message,
+        issues,
+        retryAfter(headers?.get('Retry-After')),
+      );
     }
     return new ApiError(
       status,
@@ -95,5 +118,20 @@ export function createApiClient(options: {
       if (!agent.success) throw toError(status, undefined);
       return agent.data;
     },
+    async postEvents(envelopes) {
+      const { status, json, headers } = await postJson('/v1/events', {
+        envelopes,
+      });
+      if (status !== 200) throw toError(status, json, headers);
+      const result = EventsBatchResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
   };
+}
+
+// Only the delay-seconds form. The API never sends an HTTP date.
+function retryAfter(value: string | null | undefined): number | null {
+  if (!value || !/^\d+$/.test(value.trim())) return null;
+  return Number(value.trim());
 }

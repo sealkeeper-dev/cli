@@ -21,6 +21,35 @@ The GitHub token is sent once, inside the signed registration, and is never writ
 
 Running `init` again without `--force` prints the current identity and changes nothing.
 
+## emit
+
+`vouched emit --type <type> [--payload <json>]` appends one event to the local log under `~/.vouched/log` and prints its id. Adapters call it from hooks. The type and payload must match the event taxonomy in `@vouched/schema`, and payloads carry metadata only.
+
+| Flag | Default |
+|---|---|
+| `--type <type>` | required, for example `tool.call` |
+| `--payload <json>` | `{}` |
+| `--version <version>` | the version in config, `0.1.0` before init |
+| `--no-sync` | only append, do not send |
+
+After appending, `emit` tries a sync with a two second timeout. If that fails it prints one warning with the pending count and still exits 0. The event stays in the log for the next sync. Before `init` it only appends.
+
+In-process adapters can import the same function.
+
+```ts
+import { emit } from 'vouched';
+
+await emit({ type: 'tool.call', payload: { tool: 'Bash', duration_ms: 42, ok: true } });
+```
+
+## sync
+
+`vouched sync` signs pending events with the agent key and sends them to the API in batches of up to 500, moving the cursor in `~/.vouched/cursor.json` after each accepted batch. It prints the accepted and duplicate totals, or a JSON object with `--json`.
+
+- A rate limit waits for `Retry-After` once, up to 30 seconds, then stops.
+- An event the API rejects on its own is skipped with a warning naming its id, and the rest are sent.
+- A network error or an unregistered agent stops with exit code 1 and the pending count. Nothing is lost, run `sync` again later.
+
 ## Environment
 
 | Variable | Purpose |

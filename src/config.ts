@@ -7,6 +7,9 @@ import { AgentId } from '@vouched/schema';
 import { z } from 'zod';
 
 export const DEFAULT_API_URL = 'https://api.vouched.run';
+// The agent version init registers when --version is not given. emit also
+// uses it when there is no config yet.
+export const DEFAULT_AGENT_VERSION = '0.1.0';
 
 export const Config = z
   .object({

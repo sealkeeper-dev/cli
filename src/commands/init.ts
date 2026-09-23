@@ -8,6 +8,7 @@ import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
 import {
   Config,
   ConfigError,
+  DEFAULT_AGENT_VERSION,
   paths,
   readConfig,
   writeConfig,
@@ -26,7 +27,7 @@ import { printIdentity } from './whoami.js';
 
 export const PROFILE_BASE_URL = 'https://vouched.run/agents';
 export const ALREADY_INITIALISED = 'already initialised';
-export const DEFAULT_AGENT_VERSION = '0.1.0';
+export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
 // without a network or real waits.

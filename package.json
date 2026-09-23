@@ -7,8 +7,17 @@
   "bin": {
     "vouched": "./dist/index.js"
   },
+  "exports": {
+    ".": {
+      "types": "./types/lib.d.ts",
+      "import": "./dist/lib.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./types/lib.d.ts",
   "files": [
     "dist",
+    "types",
     "README.md",
     "LICENSE",
     "NOTICE"

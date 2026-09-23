@@ -1,10 +1,93 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import type { Event } from '@vouched/schema';
 import type { Command } from 'commander';
-import { notImplemented } from './not-implemented.js';
+import { z } from 'zod';
+import { createApiClient, resolveApiUrl } from '../api.js';
+import { DEFAULT_AGENT_VERSION } from '../config.js';
+import { type EmitInput, emit } from '../emit.js';
+import { countPending } from '../log.js';
+import { stderr, stdout, wantsJson } from '../output.js';
+import { pendingText, SyncError, syncEvents } from '../sync.js';
+import { defaultSyncDeps, loadConfig, type SyncDeps } from './sync.js';
 
-export function register(parent: Command): Command {
+// emit never waits long on the network. The hook that called it is waiting.
+export const EMIT_SYNC_TIMEOUT_MS = 2_000;
+
+type EmitOptions = {
+  type: string;
+  payload?: string;
+  version?: string;
+  sync: boolean;
+};
+
+export function register(
+  parent: Command,
+  deps: SyncDeps = defaultSyncDeps,
+): Command {
   return parent
     .command('emit')
     .description('Append one event to the local log. Adapters call this')
-    .action(notImplemented('emit'));
+    .requiredOption('--type <type>', 'event type, for example tool.call')
+    .option('--payload <json>', 'event payload as a JSON object (default: {})')
+    .option('--version <version>', 'agent version (default: from config)')
+    .option('--no-sync', 'only append to the log, do not send')
+    .action(async function (this: Command, options: EmitOptions) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(options.payload ?? '{}');
+      } catch {
+        this.error('--payload is not valid JSON');
+      }
+
+      const config = await loadConfig(this);
+      let event: Event;
+      try {
+        // The shape is checked by Event.parse inside emit, not by the cast.
+        event = await emit({
+          type: options.type,
+          payload,
+          version: options.version ?? config?.version ?? DEFAULT_AGENT_VERSION,
+        } as EmitInput);
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          this.error(`invalid event\n${z.prettifyError(error)}`);
+        }
+        throw error;
+      }
+
+      stdout(
+        wantsJson(this)
+          ? JSON.stringify({ eventId: event.event_id })
+          : event.event_id,
+      );
+
+      if (config === null) {
+        stderr(
+          'not initialised, the event is kept in the local log, run vouched init to send it',
+        );
+        return;
+      }
+      if (!options.sync) return;
+
+      // Best effort. Whatever goes wrong, the event is already in the log and
+      // the next sync sends it, so the command still succeeds.
+      try {
+        await syncEvents({
+          api: createApiClient({
+            apiUrl: resolveApiUrl({ config: config.apiUrl }),
+            fetch: deps.fetch,
+            timeoutMs: EMIT_SYNC_TIMEOUT_MS,
+          }),
+          sleep: deps.sleep,
+          maxRateLimitWaitSec: 0,
+        });
+      } catch (error) {
+        const pending =
+          error instanceof SyncError
+            ? error.pending
+            : await countPending().catch(() => null);
+        const count = pending === null ? 'events' : pendingText(pending);
+        stderr(`warning: sync did not finish, ${count}, run vouched sync`);
+      }
+    });
 }

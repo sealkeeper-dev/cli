@@ -106,3 +106,64 @@ describe('registerAgent', () => {
     });
   });
 });
+
+describe('postEvents', () => {
+  it('posts the envelopes to /v1/events and returns the totals', async () => {
+    const fetchFn = respond(Response.json({ accepted: 2, duplicates: 1 }));
+    const api = createApiClient({ apiUrl: 'http://api.test', fetch: fetchFn });
+    expect(await api.postEvents(['a.b.c', 'd.e.f'])).toEqual({
+      accepted: 2,
+      duplicates: 1,
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      'http://api.test/v1/events',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ envelopes: ['a.b.c', 'd.e.f'] }),
+      }),
+    );
+  });
+
+  it('carries the issues and Retry-After of an error', async () => {
+    const issues = [
+      { path: ['envelopes', 3], code: 'invalid_signature', message: 'no' },
+    ];
+    const rejected = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(
+        Response.json(
+          { error: { code: 'invalid_signature', message: 'no', issues } },
+          { status: 401 },
+        ),
+      ),
+    });
+    const error = await rejected.postEvents(['a.b.c']).catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 401, issues, retryAfterSec: null });
+
+    const limited = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(
+        Response.json(
+          { error: { code: 'rate_limited', message: 'slow down' } },
+          { status: 429, headers: { 'Retry-After': '7' } },
+        ),
+      ),
+    });
+    await expect(limited.postEvents(['a.b.c'])).rejects.toMatchObject({
+      status: 429,
+      code: 'rate_limited',
+      retryAfterSec: 7,
+    });
+  });
+
+  it('rejects a 200 whose body is not the batch response', async () => {
+    const api = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(Response.json({ ok: true })),
+    });
+    await expect(api.postEvents(['a.b.c'])).rejects.toMatchObject({
+      code: 'bad_response',
+    });
+  });
+});

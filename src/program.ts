@@ -6,7 +6,7 @@ import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerRate } from './commands/rate.js';
 import { register as registerStatus } from './commands/status.js';
-import { register as registerSync } from './commands/sync.js';
+import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhoami } from './commands/whoami.js';
 import { VERSION } from './version.js';
@@ -46,6 +46,8 @@ function addJsonFlag(cmd: Command): void {
 
 export type ProgramDeps = {
   init?: InitDeps;
+  // Used by emit and sync.
+  sync?: SyncDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -63,8 +65,8 @@ export function createProgram(deps: ProgramDeps = {}): Command {
     .configureHelp({ visibleCommands, subcommandTerm });
 
   registerInit(program, deps.init);
-  registerEmit(program);
-  registerSync(program);
+  registerEmit(program, deps.sync);
+  registerSync(program, deps.sync);
   registerCard(program);
   registerStatus(program);
   registerTasks(program);
