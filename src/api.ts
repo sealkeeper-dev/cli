@@ -5,7 +5,10 @@ import {
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  ListTasksQuery,
+  ListTasksResponse,
   ScoreResponse,
+  TaskResponse,
   WellKnown,
 } from '@vouched/schema';
 import type { z } from 'zod';
@@ -55,6 +58,12 @@ export type ApiClient = {
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
   getScore(agentId: string): Promise<ScoreResponse>;
+  listTasks(query?: z.input<typeof ListTasksQuery>): Promise<TaskResponse[]>;
+  getTask(taskId: string): Promise<TaskResponse>;
+  postTask(envelope: string): Promise<TaskResponse>;
+  claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
+  submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
+  postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -98,6 +107,26 @@ export function createApiClient(options: {
     }
     return { status: res.status, json, headers: res.headers };
   }
+
+  // A task route. ok lists the statuses that carry a task, anything else is
+  // an error. Signed writes send the envelope as the whole body.
+  async function taskRequest(
+    path: string,
+    ok: number[],
+    envelope?: string,
+  ): Promise<TaskResponse> {
+    const { status, json, headers } = await request(
+      path,
+      envelope === undefined ? undefined : { envelope },
+    );
+    if (!ok.includes(status)) throw toError(status, json, headers);
+    const result = TaskResponse.safeParse(json);
+    if (!result.success) throw toError(status, undefined);
+    return result.data;
+  }
+
+  const taskPath = (taskId: string, action = '') =>
+    `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
 
   function toError(status: number, json: unknown, headers?: Headers): ApiError {
     const parsed = ErrorResponse.safeParse(json);
@@ -163,6 +192,27 @@ export function createApiClient(options: {
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },
+    async listTasks(query = {}) {
+      const { state, taskType, limit } = ListTasksQuery.parse(query);
+      const search = new URLSearchParams({ state, limit: String(limit) });
+      if (taskType !== undefined) search.set('taskType', taskType);
+      const { status, json, headers } = await request(
+        `/v1/tasks?${search.toString()}`,
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = ListTasksResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data.tasks;
+    },
+    getTask: (taskId) => taskRequest(taskPath(taskId), [200]),
+    // 201 for a new task, 200 when a retried post returns the existing one.
+    postTask: (envelope) => taskRequest('/v1/tasks', [200, 201], envelope),
+    claimTask: (taskId, envelope) =>
+      taskRequest(taskPath(taskId, '/claim'), [200], envelope),
+    submitTask: (taskId, envelope) =>
+      taskRequest(taskPath(taskId, '/submit'), [200], envelope),
+    postOutcome: (taskId, envelope) =>
+      taskRequest(taskPath(taskId, '/outcome'), [200], envelope),
   };
 }
 

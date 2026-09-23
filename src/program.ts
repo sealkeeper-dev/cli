@@ -10,6 +10,7 @@ import { register as registerStatus } from './commands/status.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhoami } from './commands/whoami.js';
+import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
 // Root help lists leaf commands with their full path ("card show", not "card")
@@ -50,6 +51,7 @@ export type ProgramDeps = {
   // Used by emit, sync and status.
   sync?: SyncDeps;
   card?: CardDeps;
+  tasks?: TasksDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -71,7 +73,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerSync(program, deps.sync);
   registerCard(program, deps.card);
   registerStatus(program, deps.sync);
-  registerTasks(program);
+  registerTasks(program, deps.tasks);
   registerRate(program);
   registerWhoami(program);
   registerLogout(program);

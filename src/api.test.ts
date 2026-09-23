@@ -201,3 +201,101 @@ describe('getScore', () => {
     await expect(bad.getScore(AGENT_ID)).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe('task routes', () => {
+  const TASK_ID = '0b9c3a52-5d1e-4a8e-9b1f-2f4c6d8e0a11';
+  const TASK = {
+    id: TASK_ID,
+    posterAgentId: AGENT_ID,
+    claimantAgentId: null,
+    taskType: 'summarise',
+    spec: { words: 100 },
+    verification: { kind: 'counterparty' },
+    state: 'open',
+    postedAt: '2026-09-23T10:00:00.000Z',
+    claimedAt: null,
+    submittedAt: null,
+    verifiedAt: null,
+    expiresAt: '2026-09-24T10:00:00.000Z',
+  };
+
+  it('lists tasks with the query in the URL', async () => {
+    const fetchFn = respond(Response.json({ tasks: [TASK] }));
+    const api = createApiClient({ apiUrl: 'http://api.test', fetch: fetchFn });
+    expect(await api.listTasks({ taskType: 'summarise' })).toEqual([TASK]);
+    expect(fetchFn).toHaveBeenCalledWith(
+      'http://api.test/v1/tasks?state=open&limit=50&taskType=summarise',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
+  it('posts a task and accepts 201 and 200', async () => {
+    for (const status of [201, 200]) {
+      const fetchFn = respond(Response.json(TASK, { status }));
+      const api = createApiClient({
+        apiUrl: 'http://api.test',
+        fetch: fetchFn,
+      });
+      expect((await api.postTask('a.b.c')).id).toBe(TASK_ID);
+      expect(fetchFn).toHaveBeenCalledWith(
+        'http://api.test/v1/tasks',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ envelope: 'a.b.c' }),
+        }),
+      );
+    }
+  });
+
+  it.each([
+    ['claimTask', '/claim'],
+    ['submitTask', '/submit'],
+    ['postOutcome', '/outcome'],
+  ] as const)('%s posts to the task path', async (method, suffix) => {
+    const fetchFn = respond(Response.json(TASK));
+    const api = createApiClient({ apiUrl: 'http://api.test', fetch: fetchFn });
+    expect((await api[method](TASK_ID, 'a.b.c')).id).toBe(TASK_ID);
+    expect(fetchFn).toHaveBeenCalledWith(
+      `http://api.test/v1/tasks/${TASK_ID}${suffix}`,
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('throws ApiError with the issues of a failed submit', async () => {
+    const api = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(
+        Response.json(
+          {
+            error: {
+              code: 'verification_failed',
+              message: 'Submission does not match the schema',
+              issues: [
+                {
+                  path: ['submission'],
+                  code: 'schema_mismatch',
+                  message: 'Submission does not match the schema',
+                },
+              ],
+            },
+          },
+          { status: 422 },
+        ),
+      ),
+    });
+    const error = await api.submitTask(TASK_ID, 'a.b.c').catch((e) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(422);
+    expect(error.code).toBe('verification_failed');
+    expect(error.issues[0].code).toBe('schema_mismatch');
+  });
+
+  it('rejects a task body that does not match the schema', async () => {
+    const api = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: respond(Response.json({ id: 'nope' })),
+    });
+    const error = await api.getTask(TASK_ID).catch((e) => e);
+    expect(error.code).toBe('bad_response');
+  });
+});
