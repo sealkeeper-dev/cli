@@ -90,28 +90,35 @@ export async function readConfig(p: Paths = paths()): Promise<Config | null> {
   return result.data;
 }
 
-// Validates, then writes to a temp file in the same directory and renames it
-// over config.json, so a crash never leaves a half written config behind.
+// Validates, then writes config.json atomically.
 export async function writeConfig(
   input: ConfigInput,
   p: Paths = paths(),
 ): Promise<Config> {
   const config = Config.parse(input);
   await ensureHome(p);
+  await writeFileAtomic(p.config, `${JSON.stringify(config, null, 2)}\n`);
+  return config;
+}
 
-  const tmp = `${p.config}.${randomUUID()}.tmp`;
+// Writes to a temp file in the same directory with mode 600, syncs it and
+// renames it over the target, so a crash never leaves a half written file.
+export async function writeFileAtomic(
+  target: string,
+  text: string,
+): Promise<void> {
+  const tmp = `${target}.${randomUUID()}.tmp`;
   try {
     const file = await open(tmp, 'wx', 0o600);
     try {
-      await file.writeFile(`${JSON.stringify(config, null, 2)}\n`, 'utf8');
+      await file.writeFile(text, 'utf8');
       await file.sync();
     } finally {
       await file.close();
     }
-    await rename(tmp, p.config);
+    await rename(tmp, target);
   } catch (error) {
     await rm(tmp, { force: true });
     throw error;
   }
-  return config;
 }
