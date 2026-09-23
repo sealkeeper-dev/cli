@@ -559,6 +559,48 @@ describe('vouched init', () => {
       expect(result.out).toContain(NEXT_HOOKS);
     });
 
+    it('offers the hooks again on a repeat init when the old bare form is in place', async () => {
+      await withClaudeCode(
+        JSON.stringify({
+          hooks: {
+            Stop: [
+              {
+                hooks: [
+                  { type: 'command', command: 'vouched hook claude-code' },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+      world.stdin = answering('n');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
+      expect(stdin.reads).toBe(1);
+      expect(result.err).toContain(HOOKS_QUESTION);
+      expect(result.out).toContain('updated vouched hooks for Stop');
+      expect(result.out).toContain(NEXT_PROVE);
+      const after = await readFile(settingsFile(), 'utf8');
+      expect(after).not.toContain('"vouched hook claude-code"');
+      expect(after).toContain('hook claude-code');
+    });
+
+    it('asks nothing on a repeat init when the hooks are current', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+    });
+
     it('installs on Enter, since yes is the default', async () => {
       await withClaudeCode();
       const stdin = answering('');

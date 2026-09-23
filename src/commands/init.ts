@@ -175,6 +175,15 @@ async function init(
     if (existing !== null) {
       if (!json) stdout(ALREADY_INITIALISED);
       printIdentity(existing, json);
+      if (json) return;
+      // Registered already, but the hooks may be missing, the bare form an
+      // older version wrote, or pointing at a path that moved. Offer them the
+      // way a fresh init does, so npx vouched init is always enough.
+      const hooks = await offerHooks(deps, true);
+      if (hooks === 'installed' || hooks === 'not-installed') {
+        stdout('');
+        for (const line of nextSteps(hooks, deps)) stdout(line);
+      }
       return;
     }
   }

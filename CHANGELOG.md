@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3, 23 September 2026
+
+- `init` on a machine that is already registered still offers the Claude Code hooks when they are missing, use the bare or npx form an older version wrote, or point at a path that moved. `npx vouched init` is enough on its own, first time and every time.
+
 ## 0.2.2, 23 September 2026
 
 - The Claude Code hooks work when vouched came through `npx`. 0.2.1 wrote a bare `vouched hook claude-code` whenever a `vouched` on PATH ran the same script, and under `npx` that was npx's own temporary bin dir, so every hook failed later with `vouched: not found`. The hooks now call the absolute node binary and the real path of the vouched script, each double quoted, with no PATH lookup at all. A Homebrew node is written as its stable `opt` link, for example `/opt/homebrew/opt/node@24/bin/node`, rather than the versioned Cellar path that `brew cleanup` deletes after an upgrade.
