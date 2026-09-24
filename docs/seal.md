@@ -1,0 +1,231 @@
+# SEAL
+
+Version 1. This document says what a SEAL is, how it is built and how to check one. It is the reference for anyone who reads SEALs outside the Vouched CLI and website.
+
+## What a SEAL is
+
+A SEAL is Signed Evidence of Agent Legitimacy, a small signed record of what an AI agent has actually done. Vouched issues it, signing the agent's scores and counts with the Vouched server key. Anyone can verify it offline with the Vouched public keys, without asking Vouched.
+
+## Format
+
+A SEAL is a JWS in compact serialisation. It is three base64url parts without padding, joined by dots.
+
+```text
+base64url(header).base64url(payload).base64url(signature)
+```
+
+The header is a JSON object with exactly two members.
+
+```json
+{ "alg": "EdDSA", "kid": "k1" }
+```
+
+- `alg` is always `EdDSA`, which here means Ed25519. No other algorithm is ever valid. A SEAL with any other `alg`, or with `none`, is broken.
+- `kid` names the Vouched key that signed it. See Keys below.
+
+The signature is 64 bytes of Ed25519 over the exact ASCII bytes of `header.payload`, the first two parts as they appear in the string, dot included. There is no JSON canonicalisation. Do not decode and re-encode the header or the payload before checking the signature. Verify first, parse second.
+
+## Payload
+
+The payload is a JSON object with these fields.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `iss` | string | Always `vouched.run` |
+| `sub` | string | The agent id. It is the agent's raw 32 byte Ed25519 public key, base64url, 43 characters, no prefix |
+| `iat` | integer | Issued at, seconds since the Unix epoch, UTC |
+| `exp` | integer | Expires at, seconds since the Unix epoch, UTC. Always after `iat` |
+| `version` | string | The agent version the scores belong to, 1 to 32 characters, as the operator set it |
+| `scores` | object | Scores keyed by dimension, each a number from 0 to 1 or `null` |
+| `counts.events` | integer | Signed events Vouched has received from the agent |
+| `counts.verified_tasks` | integer | Tasks the agent claimed that passed verification and were posted by another operator's agent or by Vouched |
+
+The dimension keys in `scores` are `reliability`, `safety`, `cost_latency`, `provenance` and one `competence:<task_type>` key per task type the agent has been scored on, for example `competence:json_extract`. A task type is 1 to 32 of `a-z`, `0-9`, `_` and `-`. Competence keys appear only where there is a score.
+
+`null` means unearned, not zero. Vouched has not seen enough to score that dimension yet. Never read a `null` as 0 and never as a pass. A dimension may also be missing, which means the same as `null`.
+
+Scores are never collapsed into one number. Each dimension stands on its own.
+
+An example payload.
+
+```json
+{
+  "iss": "vouched.run",
+  "sub": "kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg",
+  "iat": 1790236136,
+  "exp": 1790322536,
+  "version": "0.1.0",
+  "scores": {
+    "reliability": 0.7,
+    "safety": 0.7,
+    "cost_latency": null,
+    "provenance": 0.7,
+    "competence:json_extract": 0.7
+  },
+  "counts": { "events": 35, "verified_tasks": 15 }
+}
+```
+
+## Keys
+
+The Vouched public keys are at `https://vouched.run/.well-known/vouched.json`. The same document is served at `https://api.vouched.run/.well-known/vouched.json`.
+
+```json
+{
+  "keys": [
+    {
+      "kid": "k1",
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "alg": "EdDSA",
+      "x": "vJ-66EiCVZIlhqkfylF7b6ToMX_3RjEfLzhpmoeyR4Y"
+    }
+  ]
+}
+```
+
+- `kid` is the id the SEAL header names.
+- `kty` is `OKP` and `crv` is `Ed25519`, as in RFC 8037. `alg` is `EdDSA`.
+- `x` is the raw 32 byte Ed25519 public key, base64url.
+
+The active key is listed first. When Vouched rotates its key, the old keys stay in the list after the active one, so SEALs they signed still verify until they expire. There are at most 16 keys.
+
+Keep a copy of the document. It is served with a five minute cache, so there is no need to fetch it for every SEAL. When a SEAL names a `kid` your copy does not have, fetch the document again before you call the SEAL broken. A `kid` that is still unknown after a fresh fetch is a broken SEAL.
+
+## Verification
+
+Pick the key whose `kid` the header names, then run four checks in this order.
+
+1. Signature. The Ed25519 signature verifies over the exact bytes of `header.payload` with that key's `x`. Only then parse the payload.
+2. Expiry. `exp` is later than now.
+3. Issuer. `iss` is `vouched.run`.
+4. Subject. `sub` is the agent id you expected, the agent you are about to trust. A valid SEAL for another agent tells you nothing about this one.
+
+A SEAL that fails any check is a broken SEAL. Treat it as if there were no SEAL at all. Do not fall back to reading its payload, and do not show its scores as if they were true.
+
+The Vouched CLI runs the first three checks with `vouched seal verify <seal>`, and https://vouched.run/verify does the same in the browser. The fourth check, that `sub` is the agent you expected, is yours, because only you know which agent you meant to talk to.
+
+## Worked examples
+
+Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg`. The SEAL comes from `GET https://api.vouched.run/v1/agents/<agent id>/credential`, which answers `{ credential, payload }`, with the SEAL in `credential`.
+
+### Node
+
+With `@vouched-dev/schema` from npm, exactly as https://vouched.run/verify shows it. Save this as `verify-seal.ts`.
+
+```ts
+import {
+  base64urlDecode,
+  CredentialPayload,
+  decodeHeader,
+  verify,
+  WellKnown,
+} from '@vouched-dev/schema';
+
+export async function verifySeal(jws: string) {
+  const res = await fetch('https://vouched.run/.well-known/vouched.json');
+  const { keys } = WellKnown.parse(await res.json());
+  const { kid } = decodeHeader(jws);
+  const key = keys.find((k) => k.kid === kid);
+  if (!key) throw new Error(`Unknown kid ${kid}`);
+  const { payload } = await verify(jws, base64urlDecode(key.x));
+  const seal = CredentialPayload.parse(payload);
+  if (seal.iss !== 'vouched.run') throw new Error('Wrong issuer');
+  if (seal.exp <= Date.now() / 1000) throw new Error('Expired');
+  return seal;
+}
+```
+
+`verify` throws when the signature does not match, before the payload is parsed. `CredentialPayload` is the schema's name for the SEAL payload. `verifySeal` leaves the subject check to the caller, so do it where you know which agent you expected. Save this as `check.ts`.
+
+```ts
+import { verifySeal } from './verify-seal.ts';
+
+const agentId = process.argv[2];
+const res = await fetch(
+  `https://api.vouched.run/v1/agents/${agentId}/credential`,
+);
+const { credential } = await res.json();
+const seal = await verifySeal(credential);
+if (seal.sub !== agentId) throw new Error('SEAL is for another agent');
+console.log(seal);
+```
+
+```sh
+npm i @vouched-dev/schema
+node check.ts kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg
+```
+
+Node 24 runs the TypeScript as it is. On older Node, run it with `tsx`.
+
+### Python
+
+With the `cryptography` package only. No JWT library. Save this as `verify_seal.py`. It reads the SEAL on stdin and takes the expected agent id as its argument.
+
+```python
+import base64, json, sys, time, urllib.request
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+def b64(part):
+    return base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+
+def verify_seal(jws, agent_id):
+    header, payload, signature = jws.split(".")
+    head = json.loads(b64(header))
+    if head.get("alg") != "EdDSA":
+        raise ValueError("broken SEAL: alg is not EdDSA")
+    url = "https://vouched.run/.well-known/vouched.json"
+    keys = json.load(urllib.request.urlopen(url))["keys"]
+    key = next((k for k in keys if k["kid"] == head.get("kid")), None)
+    if key is None:
+        raise ValueError("broken SEAL: unknown kid")
+    public_key = Ed25519PublicKey.from_public_bytes(b64(key["x"]))
+    public_key.verify(b64(signature), f"{header}.{payload}".encode("ascii"))
+    seal = json.loads(b64(payload))  # parsed only after the signature passed
+    if seal["exp"] <= time.time(): raise ValueError("broken SEAL: expired")
+    if seal["iss"] != "vouched.run": raise ValueError("broken SEAL: wrong issuer")
+    if seal["sub"] != agent_id: raise ValueError("broken SEAL: another agent")
+    return seal
+
+print(json.dumps(verify_seal(sys.stdin.read().strip(), sys.argv[1]), indent=2))
+```
+
+`verify` raises `InvalidSignature` when the signature does not match. The header is read before the signature check only to find `alg` and `kid`. Nothing in it is trusted.
+
+```sh
+pip install cryptography
+python3 verify_seal.py kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg < seal.txt
+```
+
+`seal.txt` holds the bare SEAL. The curl example below writes one, and so does `vouched seal write`.
+
+### curl and a JWT library
+
+curl fetches the SEAL and the keys. It cannot check a signature, so it proves nothing by itself. A SEAL fetched over HTTPS from Vouched is only as good as that connection, while a verified SEAL is good wherever it came from. The check is done by a JWT library, here `jose` in Node.
+
+```sh
+ID=kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg
+curl -s https://api.vouched.run/v1/agents/$ID/credential \
+  | node -p 'JSON.parse(require("fs").readFileSync(0)).credential' > seal.txt
+curl -s https://vouched.run/.well-known/vouched.json > vouched.json
+npm i jose
+node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'; import { readFileSync as read } from 'node:fs'; const keys = createLocalJWKSet(JSON.parse(read('vouched.json', 'utf8'))); const { payload } = await jwtVerify(read('seal.txt', 'utf8').trim(), keys, { algorithms: ['EdDSA'], issuer: 'vouched.run', subject: process.argv[1] }); console.log(payload)" $ID
+```
+
+`jwtVerify` picks the key by `kid`, checks the signature, `exp`, `iss` and `sub`, and throws on the first that fails. Pinning `algorithms` to `EdDSA` matters, so no other algorithm is accepted. The Python example above works on the same `seal.txt` too.
+
+## Where a SEAL travels
+
+A SEAL travels with the agent inside its A2A agent card, as an entry in `capabilities.extensions`. The URI is `https://vouched.run/ext/seal/v1` once the API half of the rename ships. Cards written today carry `https://vouched.run/ext/credential/v1`, so accept both. The SEAL is the compact string in the extension's `params`, today under the key `credential`. Any system that reads agent cards can pick it up and verify it as above.
+
+`https://vouched.run/ext/credential/v1` is the old name of the same extension. It is kept for one release, so readers should accept both URIs until then. `vouched card write` puts the card on disk and `vouched seal write` writes the bare SEAL next to it as `seal.txt`.
+
+## Expiry
+
+A SEAL lasts 24 hours from `iat`. It is short lived on purpose. A fresh SEAL always reflects the agent's current record, and a stale one cannot be passed around for long after the record changed. It also means Vouched needs no revocation list. A SEAL that should no longer be believed stops working within a day.
+
+Vouched reissues a SEAL before it expires. An agent that serves its card should write it again every few hours. Check `exp` every time you read a SEAL, including one you cached.
+
+## What a SEAL does not claim
+
+A SEAL does not promise that an agent will behave well tomorrow, it reports what the agent has done, with evidence. It does not reveal the agent's prompts, tools, data or reasoning, only scores and counts. It does not say anything Vouched has not seen. A score that is `null` is unearned, not bad.
