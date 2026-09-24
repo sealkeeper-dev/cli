@@ -9,7 +9,7 @@ import {
 } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
-import { type Input, streamInput } from '../ask.js';
+import { type Input, isYes, streamInput } from '../ask.js';
 import {
   installProveCommand,
   proveCommandPath,
@@ -42,9 +42,21 @@ import {
   type Sleep,
   sleep,
 } from '../github-device.js';
-import { createKey, KeyError, loadKey, signEnvelope } from '../identity.js';
+import {
+  createKey,
+  KeyError,
+  loadKey,
+  loadSigner,
+  signEnvelope,
+} from '../identity.js';
 import { stderr, stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
 import { describeTaxonomy } from '../taxonomy.js';
+import {
+  changeVersion,
+  inheritLine,
+  type VersionChange,
+} from '../version-change.js';
 import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
@@ -56,6 +68,10 @@ export const CONSENT =
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
+// Asked on a repeat init when the version on this machine is not the one
+// Vouched has. No is the default, since a new version starts a new record.
+export const versionQuestion = (server: string, local: string): string =>
+  `Vouched has this agent on version ${server} and this machine on ${local}. Move Vouched to ${local}? [y/N] `;
 export const NEXT_PROVE = 'Run vouched prove to earn your first verified tasks';
 export const NEXT_WHAT_IS_SHARED =
   'Run vouched what-is-shared to see exactly what leaves this machine';
@@ -95,6 +111,8 @@ type InitOptions = {
   apiUrl?: string;
   force?: boolean;
 };
+
+export const VERSION_RULES = 'use 1 to 32 characters';
 
 export const NAME_RULES =
   'lowercase letters, digits and single hyphens, 2 to 39 characters, starting and ending with a letter or digit';
@@ -179,6 +197,7 @@ async function init(
       if (!json) stdout(ALREADY_INITIALISED);
       printIdentity(existing, json);
       if (json) return;
+      await offerVersionMove(existing, deps);
       // Registered already, but the hooks may be missing, the bare form an
       // older version wrote, or pointing at a path that moved. Offer them the
       // way a fresh init does, so npx vouched init is always enough.
@@ -299,6 +318,63 @@ async function init(
   const hooks = await offerHooks(deps, true);
   stdout('');
   for (const line of nextSteps(hooks, deps)) stdout(line);
+}
+
+// Short, so a repeat init never hangs on a slow network for a question it
+// can skip.
+const VERSION_CHECK_TIMEOUT_MS = 10_000;
+
+// On a repeat init where a person can answer, compares the version in
+// config.json, which the card and every event carry, with the one Vouched
+// has, and offers to move Vouched to it. Nothing is asked without a
+// terminal, and an API that cannot be reached skips the question quietly,
+// since registration is already done.
+async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
+  const input = deps.stdin?.();
+  if (input === undefined || !input.isTTY) return;
+  const api = createApiClient({
+    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    fetch: deps.fetch,
+    timeoutMs: VERSION_CHECK_TIMEOUT_MS,
+  });
+  let server: string;
+  try {
+    server = (await api.getAgent(config.agentId)).version;
+  } catch (error) {
+    if (error instanceof ApiError) return;
+    throw error;
+  }
+  if (server === config.version) return;
+  process.stderr.write(`\n${versionQuestion(server, config.version)}`);
+  if (!isYes(await input.readLine())) {
+    stdout(
+      `Vouched stays on ${server}. Run vouched agent version ${config.version} to move it later.`,
+    );
+    return;
+  }
+  // Registration is done and the move is optional, so a refusal or a
+  // missing key ends only the move. init goes on to the hooks offer.
+  let change: VersionChange;
+  try {
+    change = await changeVersion({
+      api,
+      signer: await loadSigner(),
+      config,
+      previous: server,
+      version: config.version,
+    });
+  } catch (error) {
+    if (!(error instanceof ApiError) && !(error instanceof KeyError)) {
+      throw error;
+    }
+    const reason = error instanceof ApiError ? refusal(error) : error.message;
+    stderr(
+      `version not moved, ${reason}. Run vouched agent version ${config.version} to try again.`,
+    );
+    return;
+  }
+  stdout(`moved Vouched from version ${change.previous} to ${change.next}`);
+  stdout(inheritLine(change.previous, change.next));
 }
 
 // What init did about the Claude Code hooks. none means there is no Claude

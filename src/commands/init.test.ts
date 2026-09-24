@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
-import { paths, readConfig } from '../config.js';
+import { paths, readConfig, writeConfig } from '../config.js';
 import {
   ACCESS_TOKEN_URL,
   CODE_EXPIRED,
@@ -40,6 +40,7 @@ import {
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
   NOTHING_SENT,
+  versionQuestion,
 } from './init.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
@@ -66,6 +67,12 @@ type World = {
   npx?: boolean;
   // The project directory init looks in for .claude/settings.json.
   cwd?: string;
+  // The version GET /v1/agents/:id answers. Unset means that route fails
+  // like an unreachable API. A signed PATCH moves it.
+  serverVersion?: string;
+  versionChanges: Record<string, unknown>[];
+  // When set, a PATCH gets this refusal and nothing moves.
+  versionRefusal?: { status: number; code: string; retryAfter?: string };
 };
 
 // A terminal, or a pipe when isTTY is false, that answers with the given
@@ -136,6 +143,38 @@ function fakeFetch(world: World): typeof fetch {
       const reply = world.api(registration);
       return Response.json(reply.body, { status: reply.status });
     }
+    const agentRoute =
+      /^http:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
+    if (agentRoute && world.serverVersion !== undefined) {
+      if (init.method === 'PATCH' && world.versionRefusal !== undefined) {
+        const { status, code, retryAfter } = world.versionRefusal;
+        return Response.json(
+          { error: { code, message: 'refused' } },
+          {
+            status,
+            headers:
+              retryAfter === undefined ? {} : { 'Retry-After': retryAfter },
+          },
+        );
+      }
+      if (init.method === 'PATCH') {
+        const { envelope } = JSON.parse(String(init.body)) as {
+          envelope: string;
+        };
+        const { kid } = decodeHeader(envelope);
+        const { payload } = await verify(envelope, base64urlDecode(kid));
+        const change = payload as { version: string };
+        world.versionChanges.push(change);
+        world.serverVersion = change.version;
+      }
+      return Response.json({
+        id: agentRoute[1],
+        name: 'scout',
+        version: world.serverVersion,
+        operator: { login: 'carelmeyer' },
+        createdAt: '2026-09-23T10:00:00.000Z',
+      });
+    }
     throw new TypeError('fetch failed');
   }) as typeof fetch;
 }
@@ -199,6 +238,7 @@ describe('vouched init', () => {
       sleeps: [],
       registrations: [],
       fetchUrls: [],
+      versionChanges: [],
     };
   }
 
@@ -513,6 +553,106 @@ describe('vouched init', () => {
     expect(world.fetchUrls).toEqual([]);
     expect(await readIfExists(paths(home).key)).toBe('');
   });
+  describe('version on a repeat init', () => {
+    // Registered on 0.1.0, then the version on this machine moved to 2.0.0.
+    async function registeredThenMoved(): Promise<void> {
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const config = await readConfig(paths(home));
+      if (config === null) throw new Error('no config');
+      await writeConfig({ ...config, version: '2.0.0' }, paths(home));
+      world = newWorld();
+      world.serverVersion = '0.1.0';
+    }
+
+    it('offers to move Vouched to the version on this machine and does on y', async () => {
+      await registeredThenMoved();
+      const stdin = answering('y');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(1);
+      expect(result.err).toContain(versionQuestion('0.1.0', '2.0.0'));
+      expect(versionQuestion('0.1.0', '2.0.0')).toBe(
+        'Vouched has this agent on version 0.1.0 and this machine on 2.0.0. Move Vouched to 2.0.0? [y/N] ',
+      );
+      expect(world.versionChanges).toEqual([
+        { version: '2.0.0', issuedAt: expect.any(String) },
+      ]);
+      expect(result.out).toContain('moved Vouched from version 0.1.0 to 2.0.0');
+      expect(result.out).toContain(
+        "2.0.0 starts from half of 0.1.0's counts, with its level capped one below 0.1.0's",
+      );
+      expect((await readConfig(paths(home)))?.version).toBe('2.0.0');
+    });
+
+    it('leaves Vouched alone on Enter, since no is the default', async () => {
+      await registeredThenMoved();
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(world.versionChanges).toEqual([]);
+      expect(result.out).toContain(
+        'Vouched stays on 0.1.0. Run vouched agent version 2.0.0 to move it later.',
+      );
+    });
+
+    it('asks nothing when the versions match', async () => {
+      await registeredThenMoved();
+      world.serverVersion = '2.0.0';
+      const stdin = answering('y');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain('[y/N]');
+      expect(world.versionChanges).toEqual([]);
+    });
+
+    it('asks nothing and reads nothing without a terminal', async () => {
+      await registeredThenMoved();
+      const stdin = answering('y', false);
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(world.fetchUrls).toEqual([]);
+    });
+
+    it('goes on to the hooks offer when Vouched refuses the move', async () => {
+      await registeredThenMoved();
+      await mkdir(join(home, 'claude'), { recursive: true });
+      world.versionRefusal = {
+        status: 429,
+        code: 'rate_limited',
+        retryAfter: '3600',
+      };
+      const stdin = answering('y');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(versionQuestion('0.1.0', '2.0.0'));
+      expect(result.err).toContain(
+        'version not moved, too many requests, try again in 3600 seconds. Run vouched agent version 2.0.0 to try again.',
+      );
+      expect(result.out).not.toContain('registration failed');
+      expect(result.out).not.toContain('moved Vouched');
+      expect(result.err).toContain(HOOKS_QUESTION);
+      expect(stdin.reads).toBe(2);
+      expect((await readConfig(paths(home)))?.version).toBe('2.0.0');
+    });
+
+    it('skips the question quietly when the API cannot be reached', async () => {
+      await registeredThenMoved();
+      world.serverVersion = undefined;
+      const stdin = answering('y');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
+    });
+  });
+
   describe('Claude Code hooks', () => {
     const claudeDir = () => join(home, 'claude');
     const settingsFile = () => join(claudeDir(), 'settings.json');

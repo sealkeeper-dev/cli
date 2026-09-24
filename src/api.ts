@@ -69,6 +69,8 @@ export type ApiClient = {
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
   renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
+  // PATCH /v1/agents/:id with a signed { version, issuedAt }.
+  changeAgentVersion(agentId: string, envelope: string): Promise<AgentResponse>;
   // DELETE /v1/agents/:id, signed. deleted on 204, gone on 404. Anything
   // else throws.
   deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
@@ -129,6 +131,23 @@ export function createApiClient(options: {
     );
     if (!ok.includes(status)) throw toError(status, json, headers);
     const result = TaskResponse.safeParse(json);
+    if (!result.success) throw toError(status, undefined);
+    return result.data;
+  }
+
+  // PATCH /v1/agents/:id, which renames the agent or moves its version,
+  // whichever the signed payload asks for.
+  async function patchAgent(
+    agentId: string,
+    envelope: string,
+  ): Promise<AgentResponse> {
+    const { status, json, headers } = await request(
+      `/v1/agents/${encodeURIComponent(agentId)}`,
+      { envelope },
+      'PATCH',
+    );
+    if (status !== 200) throw toError(status, json, headers);
+    const result = AgentResponse.safeParse(json);
     if (!result.success) throw toError(status, undefined);
     return result.data;
   }
@@ -242,17 +261,8 @@ export function createApiClient(options: {
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },
-    async renameAgent(agentId, envelope) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}`,
-        { envelope },
-        'PATCH',
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = AgentResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
+    renameAgent: (agentId, envelope) => patchAgent(agentId, envelope),
+    changeAgentVersion: (agentId, envelope) => patchAgent(agentId, envelope),
     async deleteAgent(agentId, envelope) {
       const { status, json, headers } = await request(
         `/v1/agents/${encodeURIComponent(agentId)}`,

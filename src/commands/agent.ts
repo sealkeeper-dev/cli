@@ -5,6 +5,7 @@ import {
   type AgentResponse,
   DeleteAgentRequest,
   RenameAgentRequest,
+  Version,
 } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
@@ -17,13 +18,15 @@ import {
   writeConfig,
 } from '../config.js';
 import { stderr, stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
 import {
   defaultTasksDeps,
   openTaskSession,
   printFields,
   type TasksDeps,
 } from '../tasks.js';
-import { NAME_RULES } from './init.js';
+import { changeVersion, inheritLine } from '../version-change.js';
+import { NAME_RULES, VERSION_RULES } from './init.js';
 
 // agent talks to the API the same way the task commands do, so it takes the
 // same injectable fetch. delete asks on stdin, which tests replace.
@@ -40,7 +43,7 @@ export const DELETE_ON_SERVER =
 export const DELETE_ON_MACHINE =
   'the key, config.json, the log, the SEAL cache and the well-known cache';
 
-// The agent's own identity on Vouched. Today that is its name.
+// The agent's own identity on Vouched. Its name and its version.
 export function register(
   parent: Command,
   deps: AgentDeps = defaultAgentDeps,
@@ -92,6 +95,65 @@ export function register(
         ['handle', handle],
         ['profile', url],
       ]);
+    });
+
+  agent
+    .command('version <version>')
+    .description(
+      'Move this agent to a new version on Vouched, which starts its record on that version',
+    )
+    .action(async function (this: Command, version: string): Promise<void> {
+      // Checked before the key is loaded or anything is signed, the same
+      // rule registration uses.
+      if (!Version.safeParse(version).success) {
+        this.error(`invalid agent version, ${VERSION_RULES}`);
+      }
+      const { config, signer, api } = await openTaskSession(this, deps);
+
+      let change: Awaited<ReturnType<typeof changeVersion>>;
+      try {
+        // The version Vouched has now, which is what moves. The local
+        // config can differ from it.
+        const { version: previous } = await api.getAgent(config.agentId);
+        change = await changeVersion({
+          api,
+          signer,
+          config,
+          previous,
+          version,
+        });
+      } catch (error) {
+        if (error instanceof ApiError) this.error(refusal(error));
+        throw error;
+      }
+
+      const { previous, next } = change;
+      if (wantsJson(this)) {
+        stdout(
+          JSON.stringify({
+            agentId: config.agentId,
+            previousVersion: previous,
+            version: next,
+            changed: previous !== next,
+          }),
+        );
+        return;
+      }
+      if (previous === next) {
+        // Vouched was already there. config.json may still have named
+        // another version, and changeVersion has set it, so say so.
+        stdout(
+          config.version === next
+            ? `already on version ${next}, nothing changed`
+            : `Vouched is already on version ${next}, set config.json from ${config.version} to ${next}`,
+        );
+        return;
+      }
+      printFields([
+        ['old version', previous],
+        ['new version', next],
+      ]);
+      stdout(inheritLine(previous, next));
     });
 
   agent
@@ -216,30 +278,5 @@ async function removeLocal(p: Paths): Promise<void> {
     p.config,
   ]) {
     await rm(target, { recursive: true, force: true });
-  }
-}
-
-// One line per refusal. The API message is the fallback for codes this
-// version does not know.
-function refusal(error: ApiError): string {
-  switch (error.code) {
-    // The API's message names the handle and a free name, as in
-    // carelmeyer/claude-code is taken, try claude-code-2.
-    case 'name_taken':
-      return error.message;
-    case 'stale_rename':
-      return 'a newer rename of this agent is already stored';
-    case 'issued_at_out_of_window':
-      return 'the API refused the request time, check this machine clock';
-    case 'rate_limited':
-      return error.retryAfterSec === null
-        ? 'too many requests, try again later'
-        : `too many requests, try again in ${error.retryAfterSec} seconds`;
-    case 'unknown_agent':
-      return 'this agent is not registered, run vouched init';
-    case 'forbidden':
-      return 'the API refused, the key on this machine is not this agent';
-    default:
-      return error.message;
   }
 }
