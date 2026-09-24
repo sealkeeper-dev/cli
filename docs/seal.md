@@ -1,5 +1,7 @@
 # SEAL
 
+The [SEAL Standard](https://vouched.run/seal/standard) says what a SEAL means, from standing levels to refusal. This page describes the format Vouched issues today, and the two will be aligned when the issuer moves to the standard's version 1 payload.
+
 Version 1. This document says what a SEAL is, how it is built and how to check one. It is the reference for anyone who reads SEALs outside the Vouched CLI and website.
 
 ## What a SEAL is
