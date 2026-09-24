@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { type Event, MAX_EVENTS_PER_BATCH } from '@vouched-dev/schema';
+import { type Event, MAX_EVENTS_PER_BATCH } from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
 import { loadSigner } from './identity.js';
@@ -26,7 +26,7 @@ export const MAX_RATE_LIMIT_WAIT_SEC = 30;
 
 // How old an event's occurred_at may be for the API to accept it. The API
 // reads this from EVENT_MAX_AGE_DAYS in apps/api/src/config.ts, and
-// @vouched-dev/schema does not export it, so this is the one copy the CLI
+// @sealkeeper/schema does not export it, so this is the one copy the CLI
 // keeps. Keep the two in step.
 export const EVENT_MAX_AGE_DAYS = 7;
 // Events are dropped before signing only when they are this much older than

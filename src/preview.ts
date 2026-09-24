@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import type { Event } from '@vouched-dev/schema';
+import type { Event } from '@sealkeeper/schema';
 import { type Paths, paths } from './config.js';
 import { type LogPosition, readPending } from './log.js';
 import { pendingText } from './sync.js';

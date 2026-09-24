@@ -12,7 +12,7 @@ const srcDir = dirname(fileURLToPath(import.meta.url));
 const packageDir = resolve(srcDir, '..');
 
 const ALLOWED_BARE = new Set([
-  '@vouched-dev/schema',
+  '@sealkeeper/schema',
   'commander',
   'zod',
   '@noble/ed25519',
@@ -20,7 +20,7 @@ const ALLOWED_BARE = new Set([
 const TEST_ONLY_BARE = new Set([
   'vitest',
   'tsup',
-  '@vouched-dev/schema/conformance',
+  '@sealkeeper/schema/conformance',
 ]);
 
 const HEADER =
@@ -99,7 +99,7 @@ describe('cli isolation', () => {
   it('rejects escaping and unlisted imports', () => {
     const file = join(srcDir, 'x.ts');
     expect(violation(file, '../../schema/src/index.js')).not.toBeNull();
-    expect(violation(file, '@vouched-dev/schema/db')).not.toBeNull();
+    expect(violation(file, '@sealkeeper/schema/db')).not.toBeNull();
     expect(violation(file, 'left-pad')).not.toBeNull();
     expect(violation(file, 'fs')).not.toBeNull();
     expect(violation(file, '../package.json')).toBeNull();

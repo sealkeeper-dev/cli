@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { publicVerification } from '@vouched-dev/schema';
+import { publicVerification } from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { createApiClient } from './api.js';

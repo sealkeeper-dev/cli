@@ -7,7 +7,7 @@ import {
   type Event,
   EventType,
   Level,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { resolveApiUrl } from '../api.js';

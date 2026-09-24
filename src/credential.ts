@@ -6,7 +6,7 @@ import {
   Jws,
   sealVersionProblem,
   verify,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from './api.js';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';

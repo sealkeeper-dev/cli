@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // check and assertTrusted from vouched/mastra, with a mocked fetch.
-import type { SealCheckResponse } from '@vouched-dev/schema';
+import type { SealCheckResponse } from '@sealkeeper/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertTrusted, check, VouchedCheckError } from './mastra.js';
 

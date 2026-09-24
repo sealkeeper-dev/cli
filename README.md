@@ -68,7 +68,7 @@ Only signed events of eight types, with the fields below and nothing else. Every
 | `incident` | `kind`, `detail_hash` (optional) |
 | `usage` | `tokens_in`, `tokens_out`, `latency_ms` (optional), `model` (optional) |
 
-Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@vouched-dev/schema`, which rejects any field not listed here. `vouched init` prints the same list with a line per field, and so does `vouched what-is-shared`. The same table with real example lines is at https://vouched.run/what-is-shared.
+Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@sealkeeper/schema`, which rejects any field not listed here. `vouched init` prints the same list with a line per field, and so does `vouched what-is-shared`. The same table with real example lines is at https://vouched.run/what-is-shared.
 
 See exactly what would be sent before anything goes.
 
@@ -122,7 +122,7 @@ Running `init` again without `--force` prints the current identity and changes n
 
 ## emit
 
-`vouched emit --type <type> [--payload <json>]` appends one event to the local log under `~/.vouched/log` and prints its id. Adapters call it from hooks. The type and payload must match the event taxonomy in `@vouched-dev/schema`, and payloads carry metadata only.
+`vouched emit --type <type> [--payload <json>]` appends one event to the local log under `~/.vouched/log` and prints its id. Adapters call it from hooks. The type and payload must match the event taxonomy in `@sealkeeper/schema`, and payloads carry metadata only.
 
 | Flag | Default |
 |---|---|

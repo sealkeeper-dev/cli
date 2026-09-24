@@ -11,15 +11,15 @@ import {
   TaskState,
   TaskType,
   Version,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 
-// The schemas the CLI reads API answers with. @vouched-dev/schema defines
+// The schemas the CLI reads API answers with. @sealkeeper/schema defines
 // the same answers strictly, which is right for the API that sends them but
 // wrong for a CLI already on people's machines. A strict CLI refuses an
 // answer the moment the API adds a field, so every object here is z.object,
 // which drops keys it does not know. Requests the CLI sends keep the strict
-// schemas from @vouched-dev/schema. Values keep their exact checks, only
+// schemas from @sealkeeper/schema. Values keep their exact checks, only
 // unknown keys are let through.
 
 const Timestamp = z.iso.datetime();
@@ -132,7 +132,7 @@ export type IdentityClaim = z.infer<typeof IdentityClaim>;
 // text, so a dimension or level added later does not break an older CLI.
 // Every field version 1 added is optional, since a legacy SEAL has none of
 // them. Whether the ver is one this CLI understands is checked before
-// these, with sealVersionProblem from @vouched-dev/schema.
+// these, with sealVersionProblem from @sealkeeper/schema.
 const sealClaims = {
   sub: AgentId,
   ver: z.int().optional(),

@@ -3,7 +3,7 @@ import {
   ClaimTaskRequest,
   type TaskResponse,
   TaskType,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';

@@ -22,7 +22,7 @@
 - A repeat `init` also looks for the hooks in the project settings, `.claude/settings.json` in the current directory. Hooks there count as installed, and older ones there are rewritten in place, so no second set is added to the user settings.
 - Needs Node 22.12 or newer, which commander 15 requires. `engines` said Node 20.
 - `emit` with automatic sync off counts the waiting events from the cursor on without parsing the log, so it stays fast on a log that grows while nothing is sent.
-- The bundle test's import guards match the real module names, `@vouched-dev/schema`, `@vouched-dev/schema/db`, `drizzle-orm` and `pg`, in every import form, so they can fail.
+- The bundle test's import guards match the real module names, `@sealkeeper/schema`, `@sealkeeper/schema/db`, `drizzle-orm` and `pg`, in every import form, so they can fail.
 
 ## 0.3.0, 24 September 2026
 

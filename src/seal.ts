@@ -9,7 +9,7 @@ import {
   sealVersionProblem,
   utf8Decode,
   verify,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
 import { ensureHome, type Paths, writeFileAtomic } from './config.js';
@@ -52,10 +52,10 @@ export function sealKid(jws: string): string | null {
 // version, then the shape, then expiry, then iat. Verify first, parse
 // second. A version other than 1 is unsupported, and so is a SEAL without
 // ver once LEGACY_UNTIL has passed, as sealVersionProblem in
-// @vouched-dev/schema says. A version 1 payload must then match the strict
+// @sealkeeper/schema says. A version 1 payload must then match the strict
 // shape, parseSealPayload. The API's POST /v1/seal/verify and the web's
 // checkSeal use the same rules, and the SEAL conformance cases in
-// @vouched-dev/schema hold all three to the same answers.
+// @sealkeeper/schema hold all three to the same answers.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,

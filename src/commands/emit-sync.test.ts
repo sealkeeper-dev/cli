@@ -8,7 +8,7 @@ import {
   Event,
   publicKeyFromAgentId,
   verify,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';

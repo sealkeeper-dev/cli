@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { ListTasksQuery } from '@vouched-dev/schema';
+import { ListTasksQuery } from '@sealkeeper/schema';
 import type { z } from 'zod';
 import { DEFAULT_API_URL } from './config.js';
 import {

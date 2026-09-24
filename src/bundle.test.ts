@@ -33,11 +33,11 @@ function importOf(module: string): RegExp {
   );
 }
 
-// Modules no bundle may import at runtime. @vouched-dev/schema is inlined,
+// Modules no bundle may import at runtime. @sealkeeper/schema is inlined,
 // and its /db entry, Drizzle and the Postgres driver belong to the API.
 const FORBIDDEN = [
-  '@vouched-dev/schema',
-  '@vouched-dev/schema/db',
+  '@sealkeeper/schema',
+  '@sealkeeper/schema/db',
   'drizzle-orm',
   'drizzle-kit',
   'pg',
@@ -53,11 +53,11 @@ describe('import guards', () => {
   const REQUIRE = 're' + 'quire';
 
   it('match the real module names in every form', () => {
-    expect(`${IMPORT} { x } ${FROM} ${q('@vouched-dev/schema/db')};`).toMatch(
-      importOf('@vouched-dev/schema/db'),
+    expect(`${IMPORT} { x } ${FROM} ${q('@sealkeeper/schema/db')};`).toMatch(
+      importOf('@sealkeeper/schema/db'),
     );
-    expect(`${IMPORT}{x}${FROM}${q('@vouched-dev/schema', "'")}`).toMatch(
-      importOf('@vouched-dev/schema'),
+    expect(`${IMPORT}{x}${FROM}${q('@sealkeeper/schema', "'")}`).toMatch(
+      importOf('@sealkeeper/schema'),
     );
     expect(`await ${IMPORT}(${q('drizzle-orm/pg-core')})`).toMatch(
       importOf('drizzle-orm'),
@@ -70,8 +70,8 @@ describe('import guards', () => {
     expect(`${IMPORT} { Pool } ${FROM} ${q('pg-pool')};`).not.toMatch(
       importOf('pg'),
     );
-    expect(`${FROM} ${q('@vouched/schema')}`).not.toMatch(
-      importOf('@vouched-dev/schema'),
+    expect(`${FROM} ${q('@sealkeeper/schemas')}`).not.toMatch(
+      importOf('@sealkeeper/schema'),
     );
   });
 });
@@ -114,9 +114,9 @@ describe('cli bundle', () => {
     expect(bundle.startsWith('#!/usr/bin/env node\n')).toBe(true);
   });
 
-  it('inlines @vouched-dev/schema', () => {
+  it('inlines @sealkeeper/schema', () => {
     expect(bundle).toContain('EdDSA');
-    expect(bundle).not.toMatch(importOf('@vouched-dev/schema'));
+    expect(bundle).not.toMatch(importOf('@sealkeeper/schema'));
   });
 
   it('does not pull in the database layer', () => {
@@ -150,9 +150,9 @@ describe('cli bundle', () => {
     });
   });
 
-  it('keeps the adapter free of Mastra, the CLI and @vouched-dev/schema imports', () => {
+  it('keeps the adapter free of Mastra, the CLI and @sealkeeper/schema imports', () => {
     expect(mastra).not.toMatch(/from ['"]@mastra\//);
-    expect(mastra).not.toMatch(importOf('@vouched-dev/schema'));
+    expect(mastra).not.toMatch(importOf('@sealkeeper/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
     expect(mastra).toContain('kickBackgroundSync');
     expect(mastra).toMatch(/export\s*\{[^}]*\bwithVouched\b/);
@@ -194,9 +194,9 @@ describe('cli bundle', () => {
     }
   });
 
-  it('keeps the OpenClaw entry free of OpenClaw, the CLI and @vouched-dev/schema imports', () => {
+  it('keeps the OpenClaw entry free of OpenClaw, the CLI and @sealkeeper/schema imports', () => {
     expect(openclaw).not.toMatch(/from ['"]openclaw/);
-    expect(openclaw).not.toMatch(importOf('@vouched-dev/schema'));
+    expect(openclaw).not.toMatch(importOf('@sealkeeper/schema'));
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
     // It syncs only through the throttled background sync.
     expect(openclaw).toContain('kickBackgroundSync');
@@ -246,8 +246,8 @@ describe('cli bundle', () => {
     }
   });
 
-  it('keeps the lib free of the CLI and of @vouched-dev/schema imports', () => {
-    expect(lib).not.toMatch(importOf('@vouched-dev/schema'));
+  it('keeps the lib free of the CLI and of @sealkeeper/schema imports', () => {
+    expect(lib).not.toMatch(importOf('@sealkeeper/schema'));
     expect(lib).not.toMatch(/from ['"]commander['"]/);
     expect(lib).toMatch(/export\s*\{[^}]*\bemit\b/);
   });

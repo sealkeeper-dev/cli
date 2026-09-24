@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // Parity between `vouched seal verify` and the strict parser the API and the
-// web use, parseSealPayload from @vouched-dev/schema, for version 1 SEALs.
+// web use, parseSealPayload from @sealkeeper/schema, for version 1 SEALs.
 // Each fixture is signed with a test key and checked both ways. Where the
 // strict parser says ok the CLI must say valid, and where it says malformed
 // the CLI must say malformed too. Below that, the SEAL conformance cases
@@ -12,11 +12,11 @@ import {
   parseSealPayload,
   type SealBrokenReason,
   sign,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import {
   type SealConformance,
   sealConformanceCases,
-} from '@vouched-dev/schema/conformance';
+} from '@sealkeeper/schema/conformance';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { checkSeal } from './seal.js';
 
@@ -194,7 +194,7 @@ describe('seal verify parity with the strict parser for version 1', () => {
   });
 });
 
-// The SEAL conformance cases from @vouched-dev/schema. The API's verifySeal
+// The SEAL conformance cases from @sealkeeper/schema. The API's verifySeal
 // (apps/api/src/routes/seal-conformance.test.ts) and the web's checkSeal
 // (apps/web/lib/seal-conformance.test.ts) run the same cases and must give
 // the same answers. The CLI spells each reason with spaces and adds how

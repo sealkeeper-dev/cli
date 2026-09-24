@@ -17,7 +17,7 @@ import {
   generateKeypair,
   SEAL_EXTENSION_URI,
   sign,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_CREDENTIAL } from '../card.js';

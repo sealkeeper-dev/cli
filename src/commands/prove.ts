@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { ClaimTaskRequest } from '@vouched-dev/schema';
+import { ClaimTaskRequest } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
 import { profileUrl } from '../config.js';

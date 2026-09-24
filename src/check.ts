@@ -7,7 +7,7 @@ import {
   CheckQuery,
   GithubLogin,
   type Level,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import { ApiError, resolveApiUrl } from './api.js';
 import {
   AgentRenamedResponse,

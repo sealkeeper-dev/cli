@@ -11,7 +11,7 @@
 //   await assertTrusted('carelmeyer/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
 import { randomUUID } from 'node:crypto';
-import { EventPayload } from '@vouched-dev/schema';
+import { EventPayload } from '@sealkeeper/schema';
 import { kickBackgroundSync } from './background-sync.js';
 import {
   type CheckOptions,

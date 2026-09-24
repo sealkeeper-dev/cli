@@ -3,7 +3,7 @@ import {
   A2A_PROTOCOL_VERSION,
   AgentCard,
   sealExtensions,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import { loadConfig } from './commands/sync.js';

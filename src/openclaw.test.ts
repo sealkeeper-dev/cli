@@ -9,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Event } from '@vouched-dev/schema';
+import type { Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetBackgroundSyncThrottle } from './background-sync.js';
 import { writeConfig } from './config.js';

@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
-import { ChangeVersionRequest } from '@vouched-dev/schema';
+import { ChangeVersionRequest } from '@sealkeeper/schema';
 import type { ApiClient } from './api.js';
 import { type Config, type Paths, paths, writeConfig } from './config.js';
 import type { Signer } from './identity.js';

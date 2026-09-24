@@ -1,7 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { TaskResponse } from '@vouched-dev/schema';
+import type { TaskResponse } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import {
   type ApiClient,

@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { readFileSync } from 'node:fs';
-import { EventPayload, EventType } from '@vouched-dev/schema';
+import { EventPayload, EventType } from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import {
   commonFields,

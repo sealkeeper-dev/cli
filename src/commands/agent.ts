@@ -6,7 +6,7 @@ import {
   DeleteAgentRequest,
   RenameAgentRequest,
   Version,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, streamInput } from '../ask.js';

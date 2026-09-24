@@ -147,7 +147,7 @@ Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0
 
 ### Node
 
-With `@vouched-dev/schema` from npm, exactly as https://vouched.run/verify shows it. Save this as `verify-seal.ts`.
+With `@sealkeeper/schema` from npm, exactly as https://vouched.run/verify shows it. Save this as `verify-seal.ts`.
 
 ```ts
 import {
@@ -156,7 +156,7 @@ import {
   decodeHeader,
   verify,
   WellKnown,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 
 export async function verifySeal(jws: string) {
   const res = await fetch('https://vouched.run/.well-known/vouched.json');
@@ -188,7 +188,7 @@ console.log(payload);
 ```
 
 ```sh
-npm i @vouched-dev/schema
+npm i @sealkeeper/schema
 node check.ts kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg
 ```
 

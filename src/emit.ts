@@ -1,6 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { Event, type EventPayload, type EventType } from '@vouched-dev/schema';
+import { Event, type EventPayload, type EventType } from '@sealkeeper/schema';
 import {
   DEFAULT_AGENT_VERSION,
   type Paths,
@@ -10,7 +10,7 @@ import {
 import { appendEvent } from './log.js';
 
 // What a caller of emit supplies. type and payload are required, the rest is
-// filled in. The payload shape follows the type, as in @vouched-dev/schema.
+// filled in. The payload shape follows the type, as in @sealkeeper/schema.
 export type EmitInput = {
   [T in EventType]: {
     type: T;

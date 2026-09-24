@@ -2,7 +2,7 @@
 import { constants } from 'node:fs';
 import { mkdir, open, readdir, readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
-import { Event } from '@vouched-dev/schema';
+import { Event } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 import { stderr } from './output.js';

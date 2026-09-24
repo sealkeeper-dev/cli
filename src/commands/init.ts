@@ -6,7 +6,7 @@ import {
   type RegisterAgentRequest,
   toAgentName,
   Version,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';

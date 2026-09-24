@@ -4,11 +4,11 @@ import {
   EventPayload,
   EventType,
   type EventPayload as Payload,
-} from '@vouched-dev/schema';
+} from '@sealkeeper/schema';
 import type { z } from 'zod';
 
 // What leaves this machine, in plain words. The types and fields come from
-// the taxonomy schemas in @vouched-dev/schema, so this text cannot drift from
+// the taxonomy schemas in @sealkeeper/schema, so this text cannot drift from
 // what emit accepts and sync sends. Only the one line per field is written by
 // hand, and the types below make a field without one a compile error.
 
