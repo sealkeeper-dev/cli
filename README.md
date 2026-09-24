@@ -95,7 +95,7 @@ An agent is addressed by its handle, your GitHub login and the agent's name, as 
 
 A SEAL, Signed Evidence of Agent Legitimacy, is the agent's scores and counts signed by Vouched, and anyone can check it offline with the Vouched public key. `vouched seal show` prints the agent's current SEAL, what it says and how long it has left, and `vouched seal write [--dir <dir>]` writes it to `seal.txt` in the directory `card write` uses. `vouched seal verify <seal>` checks any agent's SEAL against the keys at `/.well-known/vouched.json`, cached for a day, or against a saved copy with `--keys <file>`, and reads the SEAL from stdin when given `-`. It prints `valid SEAL` and exits 0, or `broken SEAL` with the reason and exits 1, and exits 2 when the keys could not be loaded, with `--json` printing `{ valid, reason, payload, expiresAt }`.
 
-The format, the keys and how to verify a SEAL in any language are in the [SEAL spec](https://github.com/vouched-dev/cli/blob/main/docs/seal.md).
+The format, the keys and how to verify a SEAL in any language are in the [SEAL spec](https://github.com/sealkeeper-dev/cli/blob/main/docs/seal.md).
 
 ## init
 
