@@ -235,30 +235,38 @@ export const Check: z.ZodType<Check> = z.object({
 
 // GET /v1/check/:login/:name. The agent's SEAL comes as seal and, for one
 // release, as credential too (VOU-77). Either is enough, and the answer
-// hands the one string on under both names, like CredentialResponse.
+// hands the one string on under both names, like CredentialResponse. After
+// 90 dormant days the API withholds the SEAL. Both are then null and a
+// failing check named seal, actual withheld, says why, so ok is false.
 export type CheckResponse = {
   ok: boolean;
   id: string;
   handle: string;
   checks: Check[];
-  seal: string;
-  credential: string;
+  seal: string | null;
+  credential: string | null;
 };
+const withheld = (checks: Check[]) =>
+  checks.some((c) => c.name === 'seal' && c.actual === 'withheld' && !c.ok);
 export const CheckResponse: z.ZodType<CheckResponse, unknown> = z
   .object({
     ok: z.boolean(),
     id: AgentId,
     handle: AgentHandle,
     checks: z.array(Check).min(1),
-    seal: Jws.optional(),
-    credential: Jws.optional(),
+    seal: Jws.nullable().optional(),
+    credential: Jws.nullable().optional(),
   })
   .refine(
-    (r) => r.seal !== undefined || r.credential !== undefined,
+    (r) => (r.seal ?? r.credential ?? null) !== null || withheld(r.checks),
     'expected seal or credential',
   )
+  .refine(
+    (r) => (r.seal ?? r.credential ?? null) !== null || !r.ok,
+    'an answer without a SEAL never passes',
+  )
   .transform(({ seal, credential, ...rest }) => {
-    const jws = (seal ?? credential) as string;
+    const jws = seal ?? credential ?? null;
     return { ...rest, seal: jws, credential: jws };
   });
 

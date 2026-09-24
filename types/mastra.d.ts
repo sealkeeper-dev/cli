@@ -40,6 +40,7 @@ export type CheckThresholds = {
   maxIncidents?: number | undefined;
   minReliability?: number | undefined;
   minSafety?: number | undefined;
+  // Bronze when left out. none asks for no level.
   minLevel?: 'none' | 'bronze' | 'silver' | 'gold' | undefined;
 };
 
@@ -53,8 +54,10 @@ export type CheckOptions = {
 // One check. min checks pass when actual >= required, max checks when
 // actual <= required. actual is null when the agent has no value yet, and a
 // null never passes. minLevel compares levels, none below bronze, silver
-// and gold, with the level in the SEAL as actual. The names today are
-// minVerified, maxIncidents, minReliability, minSafety and minLevel. name
+// and gold, with the level in the SEAL as actual. seal is sent only when
+// the SEAL is withheld after 90 dormant days, required present and actual
+// withheld, and fails. The names today are seal, minVerified,
+// maxIncidents, minReliability, minSafety and minLevel. name
 // and the levels are typed as text so a check or level the API adds later
 // still reads.
 export type Check = {
@@ -66,14 +69,15 @@ export type Check = {
 
 // ok is true only when every check passed. seal is the agent's current
 // SEAL, to verify offline with the Vouched public key. credential is the
-// same string under its old name, kept for one release.
+// same string under its old name, kept for one release. Both are null when
+// the SEAL is withheld, and ok is then false.
 export type CheckResponse = {
   ok: boolean;
   id: string;
   handle: string;
   checks: Check[];
-  seal: string;
-  credential: string;
+  seal: string | null;
+  credential: string | null;
 };
 
 // Checks the agent at handle, as in carelmeyer/claude-code, against the

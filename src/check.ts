@@ -18,8 +18,9 @@ import {
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
-// Every value optional. The API defaults minVerified to 1 and maxIncidents
-// to 0. minReliability, minSafety and minLevel are checked only when given.
+// Every value optional. The API defaults minVerified to 1, maxIncidents
+// to 0 and minLevel to bronze. minLevel none asks for no level.
+// minReliability and minSafety are checked only when given.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
@@ -165,6 +166,10 @@ export function describeCheck(check: Check): string {
       return `${status} safety ${actual}, need at least ${check.required}`;
     case 'minLevel':
       return `${status} level ${actual}, need at least ${check.required}`;
+    case 'seal':
+      return check.actual === 'withheld'
+        ? `${status} no SEAL, withheld while the agent is dormant, need a current SEAL`
+        : `${status} SEAL ${actual}, need ${check.required}`;
     default:
       // A check added to the API after this version.
       return `${status} ${check.name} ${actual}, required ${check.required}`;

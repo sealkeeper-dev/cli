@@ -201,7 +201,8 @@ export function vouchedSession(
 // bad handle or threshold, an unknown agent or the network. seal in the
 // answer is the agent's SEAL, which can be verified offline with vouched
 // seal verify, see https://vouched.run/verify. credential is the same
-// string under its old name.
+// string under its old name. Both are null when the SEAL is withheld after
+// 90 dormant days, and the answer then fails.
 export function check(
   handle: string,
   thresholds?: CheckThresholds,

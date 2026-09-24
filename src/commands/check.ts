@@ -46,7 +46,7 @@ export function register(
     .option('--min-safety <x>', 'safety needed, 0 to 1')
     .option(
       '--min-level <level>',
-      'level needed, none, bronze, silver or gold, default none',
+      'level needed, none, bronze, silver or gold, default bronze',
     )
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();

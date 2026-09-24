@@ -16,6 +16,7 @@ import {
   minutesToNextScoring,
   NO_ADAPTER,
   nextScoringLine,
+  sealWithheld,
 } from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
@@ -328,6 +329,7 @@ describe('status', () => {
       expect(lines).toContain(
         'Quiet for 16 days. At 30 days the level drops one step.',
       );
+      expect(out).not.toContain('no SEAL');
     });
 
     it('prints no dormant row or line when active today', async () => {
@@ -382,12 +384,31 @@ describe('status', () => {
         'Quiet for 30 days, the level is one step down. At 60 days it drops one more.',
       );
       expect(dormancyLine(60)).toBe(
-        'Quiet for 60 days, the level is two steps down. At 90 days the level is none.',
+        'Quiet for 60 days, the level is two steps down. At 90 days the level is none and no SEAL is issued.',
       );
       expect(dormancyLine(89)).toContain('At 90 days');
       expect(dormancyLine(90)).toBe(
-        'Quiet for 90 days. The level is none until the next scoring run after a new event.',
+        'Quiet for 90 days. No SEAL is issued and the level is none until the next scoring run after a new event.',
       );
+    });
+
+    it('says no SEAL at 90 dormant days, when the API withholds it', async () => {
+      const { code, out } = await run(
+        scoreFetch([], 30, { level: 'none', dormantDays: 95 }),
+        'status',
+      );
+      expect(code).toBe(0);
+      const lines = out.split('\n');
+      expect(lines).toContain('dormant           95 days');
+      expect(lines).toContain(
+        'SEAL              no SEAL, withheld while dormant',
+      );
+      expect(lines).toContain(
+        'Quiet for 95 days. No SEAL is issued and the level is none until the next scoring run after a new event.',
+      );
+      expect(sealWithheld(89)).toBe(false);
+      expect(sealWithheld(90)).toBe(true);
+      expect(sealWithheld(null)).toBe(false);
     });
   });
 

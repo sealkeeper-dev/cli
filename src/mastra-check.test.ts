@@ -82,6 +82,34 @@ describe('mastra check', () => {
     expect(e.result).toEqual(answer(false));
   });
 
+  it('assertTrusted throws when the SEAL is withheld, with no SEAL on the answer', async () => {
+    const withheld: SealCheckResponse = {
+      ...answer(true),
+      ok: false,
+      checks: [
+        { name: 'seal', required: 'present', actual: 'withheld', ok: false },
+        ...answer(true).checks,
+      ],
+      credential: null,
+      seal: null,
+    };
+    const { fn } = fakeFetch(() => Response.json(withheld));
+    const error = await assertTrusted(
+      'carelmeyer/claude-code',
+      { minLevel: 'none' },
+      { apiUrl: 'http://api.test', fetch: fn },
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(VouchedCheckError);
+    const e = error as VouchedCheckError;
+    expect(e.message).toBe(
+      [
+        'carelmeyer/claude-code did not pass the Vouched check',
+        'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
+      ].join('\n'),
+    );
+    expect(e.result.seal).toBeNull();
+  });
+
   it('rejects for an unknown agent, a bad handle and a bad threshold', async () => {
     const { fn, urls } = fakeFetch(() =>
       Response.json(

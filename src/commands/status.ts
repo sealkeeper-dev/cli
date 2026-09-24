@@ -351,6 +351,9 @@ function printStatus(status: Status): void {
     ...(status.dormantDays !== null && status.dormantDays > 0
       ? ([['dormant', days(status.dormantDays)]] as [string, string][])
       : []),
+    ...(sealWithheld(status.dormantDays)
+      ? ([['SEAL', 'no SEAL, withheld while dormant']] as [string, string][])
+      : []),
     ['pending', String(status.pending)],
     ['last sync', status.lastSyncAt ?? 'never'],
     [
@@ -385,6 +388,11 @@ export function nextScoringLine(minutes: number): string {
 
 const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
 
+// At the 90 day rung the API withholds the SEAL until the next scoring run
+// after a new event.
+export const sealWithheld = (dormantDays: number | null): boolean =>
+  dormantDays !== null && dormantDays >= DORMANCY.noneDays;
+
 // Where the agent is on the dormancy ladder of the SEAL standard and the
 // next rung, in plain words. Nothing when it is active today or unknown.
 export function dormancyLine(dormantDays: number | null): string | null {
@@ -401,9 +409,9 @@ export function dormancyLine(dormantDays: number | null): string | null {
     return `Quiet for ${n}, the level is one step down. At ${d.dropTwoDays} days it drops one more.`;
   }
   if (dormantDays < d.noneDays) {
-    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none.`;
+    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none and no SEAL is issued.`;
   }
-  return `Quiet for ${n}. The level is none until the next scoring run after a new event.`;
+  return `Quiet for ${n}. No SEAL is issued and the level is none until the next scoring run after a new event.`;
 }
 
 // Only while nothing is verified yet, so it points at the one thing left to

@@ -147,6 +147,63 @@ describe('vouched check', () => {
     ]);
   });
 
+  it('prints the no SEAL line and exits 1 when the API withholds the SEAL', async () => {
+    const withheld: SealCheckResponse = {
+      ok: false,
+      id: ID,
+      handle: 'carelmeyer/claude-code',
+      checks: [
+        { name: 'seal', required: 'present', actual: 'withheld', ok: false },
+        { name: 'minVerified', required: 1, actual: 30, ok: true },
+        { name: 'maxIncidents', required: 0, actual: 0, ok: true },
+        { name: 'minLevel', required: 'bronze', actual: 'none', ok: false },
+      ],
+      credential: null,
+      seal: null,
+    };
+    reply = () => Response.json(withheld);
+    const r = await run('check', 'carelmeyer/claude-code');
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('');
+    expect(r.out).toBe(
+      [
+        'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
+        'ok   verified tasks 30, need at least 1',
+        'ok   incidents 0, allow at most 0',
+        'FAIL level none, need at least bronze',
+        'FAIL carelmeyer/claude-code',
+        '',
+      ].join('\n'),
+    );
+    const json = await run('check', 'carelmeyer/claude-code', '--json');
+    expect(json.code).toBe(1);
+    expect(JSON.parse(json.out)).toMatchObject({
+      ok: false,
+      seal: null,
+      credential: null,
+    });
+  });
+
+  it('refuses an answer with no SEAL and no withheld check', async () => {
+    reply = () => Response.json({ ...passing, seal: null, credential: null });
+    const r = await run('check', 'carelmeyer/claude-code');
+    expect(r.code).toBe(2);
+    expect(r.err).toContain('unexpected response');
+  });
+
+  it('leaves the bronze default to the API, and --min-level none asks for no level', async () => {
+    await run('check', 'carelmeyer/claude-code');
+    await run('check', 'carelmeyer/claude-code', '--min-level', 'none');
+    expect(urls).toEqual([
+      'http://api.test/v1/check/carelmeyer/claude-code',
+      'http://api.test/v1/check/carelmeyer/claude-code?minLevel=none',
+    ]);
+    const help = createProgram()
+      .commands.find((c) => c.name() === 'check')
+      ?.helpInformation();
+    expect(help?.replace(/\s+/g, ' ')).toContain('default bronze');
+  });
+
   it('--min-level sends minLevel and prints the level line', async () => {
     reply = () =>
       Response.json({
