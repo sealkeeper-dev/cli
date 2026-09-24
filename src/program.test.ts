@@ -98,6 +98,15 @@ describe('vouched cli', () => {
     expect(LAUNCH_COMMANDS).toHaveLength(12);
   });
 
+  it('--help lists the seal commands and says SEAL', async () => {
+    const { code, out } = await run('--help');
+    expect(code).toBe(0);
+    for (const name of ['seal show', 'seal verify', 'seal write']) {
+      expect(out).toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+    }
+    expect(out).not.toMatch(/credential/i);
+  });
+
   it('whoami without config exits 1', async () => {
     const { code, out, err } = await run('whoami');
     expect(code).toBe(1);

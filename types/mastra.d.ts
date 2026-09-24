@@ -59,7 +59,7 @@ export type Check = {
 };
 
 // ok is true only when every check passed. credential is the agent's
-// current Vouched credential, to verify offline with the public key.
+// current SEAL, to verify offline with the Vouched public key.
 export type CheckResponse = {
   ok: boolean;
   id: string;

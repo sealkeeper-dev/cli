@@ -2,16 +2,14 @@
 // GET /v1/check/:login/:name, shared by `vouched check` and the Mastra
 // adapter's check and assertTrusted. A plain public GET. No key, no config
 // and no registration needed.
+import { AgentName, CheckQuery, GithubLogin } from '@vouched-dev/schema';
+import { ApiError, resolveApiUrl } from './api.js';
 import {
-  AgentName,
   AgentRenamedResponse,
   type Check,
-  CheckQuery,
   CheckResponse,
   ErrorResponse,
-  GithubLogin,
-} from '@vouched-dev/schema';
-import { ApiError, resolveApiUrl } from './api.js';
+} from './responses.js';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 

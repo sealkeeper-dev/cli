@@ -1,10 +1,10 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import type { CheckResponse } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError, resolveApiUrl } from '../api.js';
 import { describeCheck, fetchCheck } from '../check.js';
 import { readConfig } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
+import type { CheckResponse } from '../responses.js';
 
 export type CheckCommandDeps = { fetch?: typeof fetch };
 
@@ -22,7 +22,7 @@ type Flags = {
 
 // The API URL of a local config when there is one, so a dev setup checks
 // against its own API. A missing or unreadable config is not an error here.
-async function configApiUrl(): Promise<string | null> {
+export async function configApiUrl(): Promise<string | null> {
   try {
     return (await readConfig())?.apiUrl ?? null;
   } catch {

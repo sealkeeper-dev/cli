@@ -17,8 +17,8 @@ import {
 } from './credential.js';
 import { stderr } from './output.js';
 
-// card show and card write build the same card. fetch is injectable so tests
-// can stand in for the API.
+// card show and card write build the same card, and the seal commands read
+// the same SEAL. fetch is injectable so tests can stand in for the API.
 export type CardDeps = {
   fetch: typeof fetch;
 };
@@ -31,7 +31,7 @@ export const defaultCardDeps: CardDeps = {
 const CARD_TIMEOUT_MS = 10_000;
 
 export const NO_CREDENTIAL =
-  'warning: could not get a Vouched credential, the card carries no credential extension';
+  "warning: could not get the agent's SEAL, the card carries no SEAL extension";
 
 const CardUrl = AgentCard.shape.url.unwrap();
 
@@ -67,6 +67,18 @@ export async function loadCard(
   if (url !== undefined && !CardUrl.safeParse(url).success) {
     cmd.error(`--url must be an https URL, got ${url}`);
   }
+  const { config, credential } = await loadSeal(cmd, deps);
+  if (credential === null) stderr(NO_CREDENTIAL);
+  return buildCard(config, credential, url);
+}
+
+// The agent's config and current SEAL, from the cache or the API, the same
+// for the card and the seal commands. credential is null when the API cannot
+// be reached and nothing usable is cached.
+export async function loadSeal(
+  cmd: Command,
+  deps: CardDeps,
+): Promise<{ config: Config; credential: Credential | null }> {
   const config = await loadConfig(cmd);
   if (config === null) cmd.error(NOT_INITIALISED);
 
@@ -84,6 +96,5 @@ export async function loadCard(
     }
     throw error;
   }
-  if (credential === null) stderr(NO_CREDENTIAL);
-  return buildCard(config, credential, url);
+  return { config, credential };
 }

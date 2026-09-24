@@ -82,6 +82,10 @@ vouched config show
 
 An agent is addressed by its handle, your GitHub login and the agent's name, as in `carelmeyer/claude-code`, and its public profile is at `https://vouched.run/agents/carelmeyer/claude-code`. Names are lowercase letters, digits and single hyphens, 2 to 39 characters, unique among your agents, and `vouched agent rename <new-name>` changes one with a request signed by the agent's key. The agent id never changes, the old handle redirects to the new one for 30 days, and the badge and the agent card link the id URL so they survive a rename.
 
+## Your SEAL
+
+A SEAL, Signed Evidence of Agent Legitimacy, is the agent's scores and counts signed by Vouched, and anyone can check it offline with the Vouched public key. `vouched seal show` prints the agent's current SEAL, what it says and how long it has left, and `vouched seal write [--dir <dir>]` writes it to `seal.txt` in the directory `card write` uses. `vouched seal verify <seal>` checks any agent's SEAL against the keys at `/.well-known/vouched.json`, cached for a day, or against a saved copy with `--keys <file>`, and reads the SEAL from stdin when given `-`. It prints `valid SEAL` and exits 0, or `broken SEAL` with the reason and exits 1, and exits 2 when the keys could not be loaded, with `--json` printing `{ valid, reason, payload, expiresAt }`.
+
 ## init
 
 `vouched init` creates an Ed25519 keypair under `~/.vouched`, signs you in with GitHub through the device flow, registers the agent with the Vouched API and writes `config.json`. It prints the agent id, the handle and the public profile URL. A name already in use by another of your agents prints `carelmeyer/claude-code is taken, try claude-code-2` and exits 1.
@@ -174,12 +178,12 @@ Everything but the score comes from local files, so it works offline. Scores are
 
 `vouched card show` prints the agent's A2A agent card as JSON. `vouched card write` writes the same card to `agent-card.json` in the current directory, or to `--out <path>`, and prints the path. Both take `--url <https url>` for the address where the agent serves A2A.
 
-The card carries the agent's Vouched credential as an A2A extension. The credential is verified against the keys at `/.well-known/vouched.json` and cached in `~/.vouched/credential.json` until it is two hours from expiry. When the API is unreachable the card uses an unexpired cached credential, or goes out without the extension and a warning. `card write` replaces the file atomically, so it is safe to run on a schedule.
+The card carries the agent's SEAL as an A2A extension. The SEAL is verified against the keys at `/.well-known/vouched.json` and cached in `~/.vouched/credential.json` until it is two hours from expiry. When the API is unreachable the card uses an unexpired cached SEAL, or goes out without the extension and a warning. `card write` replaces the file atomically, so it is safe to run on a schedule.
 
 ### Serving the card
 
 If the agent has its own HTTP surface, serve the written file at `/.well-known/agent-card.json` so other agents can find it.
-Rerun `card write` before the credential expires, every few hours is enough.
+Rerun `card write` before the SEAL expires, every few hours is enough. `vouched seal write` puts the bare SEAL next to it as `seal.txt`.
 
 ```sh
 vouched card write --out public/.well-known/agent-card.json
@@ -352,7 +356,7 @@ It prints one line per check, `ok` or `FAIL` first, then `PASS carelmeyer/claude
 | `--min-safety <x>` | safety score needed, 0 to 1. Checked only when given |
 | `--json` | print the API answer, `{ ok, id, handle, checks, credential }` |
 
-A score the agent does not have yet fails its check. It is never read as 0 or as a pass. Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run (bad handle or flag, unknown agent, network). A renamed agent exits 2 and names its new handle. `credential` is the agent's current Vouched credential, which you can verify offline as described at https://vouched.run/verify.
+A score the agent does not have yet fails its check. It is never read as 0 or as a pass. Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run (bad handle or flag, unknown agent, network). A renamed agent exits 2 and names its new handle. `credential` is the agent's current SEAL, which you can verify offline with `vouched seal verify` or as described at https://vouched.run/verify.
 
 In code, the Mastra adapter has the same check.
 

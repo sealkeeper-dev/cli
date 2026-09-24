@@ -287,7 +287,7 @@ describe('card show and card write', () => {
     expect(extensionCredential(AgentCard.parse(JSON.parse(out)))).toBe(cached);
     expect(err.trim().split('\n')).toHaveLength(1);
     expect(err).toMatch(
-      /^warning: could not reach the Vouched API, using the cached credential/,
+      /^warning: could not reach the Vouched API, using the cached SEAL/,
     );
   });
 

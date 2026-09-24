@@ -10,7 +10,7 @@ export function register(
 ): Command {
   return parent
     .command('show')
-    .description('Print the A2A agent card with the Vouched credential')
+    .description("Print the A2A agent card with the agent's SEAL")
     .option('--url <url>', 'https URL where the agent serves A2A requests')
     .action(async function (
       this: Command,

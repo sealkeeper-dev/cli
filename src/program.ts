@@ -18,6 +18,7 @@ import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerProve } from './commands/prove.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
+import { register as registerSeal, type SealDeps } from './commands/seal.js';
 import {
   register as registerStatus,
   type StatusDeps,
@@ -72,6 +73,7 @@ export type ProgramDeps = {
   tasks?: TasksDeps;
   rate?: RateDeps;
   agent?: AgentDeps;
+  seal?: Partial<SealDeps>;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -92,6 +94,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerEmit(program, deps.sync);
   registerSync(program, deps.sync);
   registerCard(program, deps.card);
+  registerSeal(program, deps.seal);
   registerStatus(program, deps.sync);
   registerTasks(program, deps.tasks);
   registerProve(program, deps.tasks);

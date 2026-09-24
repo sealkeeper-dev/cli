@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0, 24 September 2026
+
+- The Vouched credential is now called a SEAL, Signed Evidence of Agent Legitimacy, in help, messages and the README. The format, the cache file and the card extension are unchanged.
+- `vouched seal show [--json]` prints the agent's current SEAL, its payload and how long it has left. It uses the same cache as `card show`. `--json` prints `{ seal, payload, expiresAt }`.
+- `vouched seal verify <seal> [--keys <file>] [--json]` checks a SEAL offline. It verifies the signature over the exact `header.payload` bytes with the key the `kid` names, then that the issuer is `vouched.run`, then expiry, and prints `valid SEAL` or `broken SEAL` with the reason (bad signature, unknown kid, wrong issuer, expired N minutes ago, malformed). Keys come from the API's `/.well-known/vouched.json`, cached in `well-known.json` under `VOUCHED_HOME` for a day and fetched again for a kid the cache does not know, or from a saved copy with `--keys`, which never touches the network. `-` reads the SEAL from stdin. Exits 0 valid, 1 broken or expired, 2 when the keys could not be loaded. `--json` prints `{ valid, reason, payload, expiresAt }`. No key or registration needed.
+- `vouched seal write [--dir <dir>]` writes the SEAL and a newline to `seal.txt`, in the current directory like `card write`, and prints the path.
+- Every API answer is read loosely. Keys the CLI does not know are ignored instead of refused, so the API can add fields without breaking this version. What the CLI sends stays strict. The credential answer may carry `seal`, which the CLI uses when present.
+
 ## 0.2.3, 23 September 2026
 
 - `init` on a machine that is already registered still offers the Claude Code hooks when they are missing, use the bare or npx form an older version wrote, or point at a path that moved. `npx vouched init` is enough on its own, first time and every time.

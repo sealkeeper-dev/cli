@@ -195,8 +195,9 @@ export function vouchedSession(
 
 // GET /v1/check for handle, as in carelmeyer/claude-code. Resolves with the
 // answer whether it passed or not. Rejects when the check could not run, a
-// bad handle or threshold, an unknown agent or the network. The credential
-// in the answer can be verified offline, see https://vouched.run/verify.
+// bad handle or threshold, an unknown agent or the network. credential in
+// the answer is the agent's SEAL, which can be verified offline with
+// vouched seal verify, see https://vouched.run/verify.
 export function check(
   handle: string,
   thresholds?: CheckThresholds,

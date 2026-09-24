@@ -18,7 +18,7 @@ export function register(
 ): Command {
   return parent
     .command('write')
-    .description('Write agent-card.json with the Vouched credential')
+    .description("Write agent-card.json with the agent's SEAL")
     .option('--out <path>', 'where to write the card', DEFAULT_CARD_FILE)
     .option('--url <url>', 'https URL where the agent serves A2A requests')
     .action(async function (

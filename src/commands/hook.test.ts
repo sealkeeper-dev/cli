@@ -266,10 +266,13 @@ describe('hook claude-code', () => {
 
   it('a session with Stop but no SessionEnd is closed at its last Stop once stale', async () => {
     await initialise();
+    // Early today, so every event lands in the day file logged() reads once
+    // the clock is real again.
+    const today = new Date().toISOString().slice(0, 10);
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
+    vi.setSystemTime(new Date(`${today}T00:00:00.000Z`));
     await hook(payloads.sessionStart());
-    vi.setSystemTime(new Date('2026-09-23T10:00:45.000Z'));
+    vi.setSystemTime(new Date(`${today}T00:00:45.000Z`));
     await hook(payloads.stop());
     vi.useRealTimers();
 

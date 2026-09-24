@@ -1,27 +1,28 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import { ListTasksQuery } from '@vouched-dev/schema';
+import type { z } from 'zod';
+import { DEFAULT_API_URL } from './config.js';
 import {
   AgentResponse,
   CredentialResponse,
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
-  ListTasksQuery,
   ListTasksResponse,
   RatingResponse,
   ScoreResponse,
   TaskResponse,
   WellKnown,
-} from '@vouched-dev/schema';
-import type { z } from 'zod';
-import { DEFAULT_API_URL } from './config.js';
+} from './responses.js';
 
-// A small client for the Vouched API. Every response is parsed with the
-// schemas from @vouched-dev/schema before anything reads it.
+// A small client for the Vouched API. Every response is parsed before
+// anything reads it, with the loose schemas in responses.ts, so a field the
+// API adds later never breaks this CLI.
 
 export const API_URL_ENV = 'VOUCHED_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export type ApiIssue = z.infer<typeof ErrorIssue>;
+export type ApiIssue = ErrorIssue;
 
 // status is 0 for a network failure. code is the API error code, or
 // network_error or bad_response when the API never gave one. issues are the

@@ -62,6 +62,8 @@ export type Paths = {
   log: string;
   cursor: string;
   credential: string;
+  // The Vouched public keys seal verify last fetched, with the fetch time.
+  wellKnown: string;
   score: string;
   // Start time markers for hook adapters, one small file per session or tool
   // call, so a later hook can compute a duration.
@@ -88,6 +90,7 @@ export function paths(home: string = vouchedHome()): Paths {
     log,
     cursor: join(home, 'cursor.json'),
     credential: join(home, 'credential.json'),
+    wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),
     sessions: join(home, 'sessions'),
     logFile: (day) => join(log, `${day}.jsonl`),
