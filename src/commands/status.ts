@@ -392,7 +392,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
   const d = DORMANCY;
   const n = days(dormantDays);
   if (dormantDays < d.quietDays) {
-    return `No accepted event for ${n}. At ${d.quietDays} days the profile shows quiet.`;
+    return `No accepted event for ${n}. At ${d.quietDays} days the agent counts as quiet, with no level change.`;
   }
   if (dormantDays < d.dropOneDays) {
     return `Quiet for ${n}. At ${d.dropOneDays} days the level drops one step.`;
@@ -401,9 +401,9 @@ export function dormancyLine(dormantDays: number | null): string | null {
     return `Quiet for ${n}, the level is one step down. At ${d.dropTwoDays} days it drops one more.`;
   }
   if (dormantDays < d.noneDays) {
-    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none and there is no SEAL.`;
+    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none.`;
   }
-  return `Quiet for ${n}. The level is none and there is no SEAL until the next scoring run after a new event.`;
+  return `Quiet for ${n}. The level is none until the next scoring run after a new event.`;
 }
 
 // Only while nothing is verified yet, so it points at the one thing left to

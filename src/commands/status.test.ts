@@ -370,10 +370,10 @@ describe('status', () => {
       expect(dormancyLine(null)).toBeNull();
       expect(dormancyLine(0)).toBeNull();
       expect(dormancyLine(1)).toBe(
-        'No accepted event for 1 day. At 14 days the profile shows quiet.',
+        'No accepted event for 1 day. At 14 days the agent counts as quiet, with no level change.',
       );
       expect(dormancyLine(13)).toBe(
-        'No accepted event for 13 days. At 14 days the profile shows quiet.',
+        'No accepted event for 13 days. At 14 days the agent counts as quiet, with no level change.',
       );
       expect(dormancyLine(14)).toBe(
         'Quiet for 14 days. At 30 days the level drops one step.',
@@ -382,11 +382,11 @@ describe('status', () => {
         'Quiet for 30 days, the level is one step down. At 60 days it drops one more.',
       );
       expect(dormancyLine(60)).toBe(
-        'Quiet for 60 days, the level is two steps down. At 90 days the level is none and there is no SEAL.',
+        'Quiet for 60 days, the level is two steps down. At 90 days the level is none.',
       );
       expect(dormancyLine(89)).toContain('At 90 days');
       expect(dormancyLine(90)).toBe(
-        'Quiet for 90 days. The level is none and there is no SEAL until the next scoring run after a new event.',
+        'Quiet for 90 days. The level is none until the next scoring run after a new event.',
       );
     });
   });
