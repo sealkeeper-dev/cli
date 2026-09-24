@@ -149,7 +149,8 @@ export async function fetchCheck(
   );
 }
 
-// One line per check, in plain words. "ok" or "FAIL" first.
+// One line per check, in plain words. "ok" or "FAIL" first. A check this
+// version does not know is named as the API sent it.
 export function describeCheck(check: Check): string {
   const status = check.ok ? 'ok  ' : 'FAIL';
   const actual = check.actual === null ? 'none yet' : String(check.actual);
@@ -164,5 +165,8 @@ export function describeCheck(check: Check): string {
       return `${status} safety ${actual}, need at least ${check.required}`;
     case 'minLevel':
       return `${status} level ${actual}, need at least ${check.required}`;
+    default:
+      // A check added to the API after this version.
+      return `${status} ${check.name} ${actual}, required ${check.required}`;
   }
 }

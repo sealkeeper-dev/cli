@@ -22,11 +22,16 @@ import { CredentialPayload } from './responses.js';
 // A cached SEAL is reused while it has more than this left.
 export const REFRESH_MARGIN_SEC = 2 * 3600;
 
-const CachedCredential = z.object({
-  v: z.literal(1),
-  credential: Jws,
-  payload: CredentialPayload,
-});
+// The cache keeps the SEAL as seal and as credential, the same string, so
+// an older CLI that reads only credential still finds it. It reads either.
+const CachedCredential = z
+  .object({
+    v: z.literal(1),
+    seal: Jws.optional(),
+    credential: Jws.optional(),
+    payload: CredentialPayload,
+  })
+  .refine((c) => c.seal !== undefined || c.credential !== undefined);
 
 export type Credential = { credential: string; payload: CredentialPayload };
 
@@ -83,7 +88,7 @@ export async function getCredential(
   await ensureHome(p);
   await writeFileAtomic(
     p.credential,
-    `${JSON.stringify({ v: 1, ...fresh })}\n`,
+    `${JSON.stringify({ v: 1, seal: fresh.credential, ...fresh })}\n`,
   );
   return fresh;
 }
@@ -181,5 +186,6 @@ async function readCache(
   const cached = CachedCredential.safeParse(json);
   if (!cached.success || cached.data.payload.sub !== agentId) return null;
   if (sealVersionProblem(cached.data.payload, nowSec) !== null) return null;
-  return { credential: cached.data.credential, payload: cached.data.payload };
+  const jws = (cached.data.seal ?? cached.data.credential) as string;
+  return { credential: jws, payload: cached.data.payload };
 }

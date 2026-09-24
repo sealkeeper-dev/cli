@@ -53,26 +53,26 @@ export type CheckOptions = {
 // One check. min checks pass when actual >= required, max checks when
 // actual <= required. actual is null when the agent has no value yet, and a
 // null never passes. minLevel compares levels, none below bronze, silver
-// and gold, with the level in the SEAL as actual.
+// and gold, with the level in the SEAL as actual. The names today are
+// minVerified, maxIncidents, minReliability, minSafety and minLevel. name
+// and the levels are typed as text so a check or level the API adds later
+// still reads.
 export type Check = {
-  name:
-    | 'minVerified'
-    | 'maxIncidents'
-    | 'minReliability'
-    | 'minSafety'
-    | 'minLevel';
-  required: number | 'none' | 'bronze' | 'silver' | 'gold';
-  actual: number | 'none' | 'bronze' | 'silver' | 'gold' | null;
+  name: string;
+  required: number | string;
+  actual: number | string | null;
   ok: boolean;
 };
 
-// ok is true only when every check passed. credential is the agent's
-// current SEAL, to verify offline with the Vouched public key.
+// ok is true only when every check passed. seal is the agent's current
+// SEAL, to verify offline with the Vouched public key. credential is the
+// same string under its old name, kept for one release.
 export type CheckResponse = {
   ok: boolean;
   id: string;
   handle: string;
   checks: Check[];
+  seal: string;
   credential: string;
 };
 

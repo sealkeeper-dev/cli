@@ -31,7 +31,7 @@ const HOUR = 3600;
 
 type RunResult = { code: number; out: string; err: string };
 
-// Stands in for GET /v1/agents/:id/credential and GET
+// Stands in for GET /v1/agents/:id/seal and GET
 // /.well-known/vouched.json. credential decides what the API hands out.
 type Server = {
   requests: string[];
@@ -49,7 +49,7 @@ function fakeFetch(
     if (url === `${API_URL}/.well-known/vouched.json`) {
       return Response.json(wellKnown());
     }
-    if (url === `${API_URL}/v1/agents/${agentId}/credential`) {
+    if (url === `${API_URL}/v1/agents/${agentId}/seal`) {
       const credential = await server.credential();
       const body = credential.split('.')[1] ?? '';
       const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
@@ -211,6 +211,7 @@ describe('card show and card write', () => {
 
     const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
     expect(extensionCredential(card)).toBe(cache.credential);
+    expect(cache.seal).toBe(cache.credential);
     expect(cache).toMatchObject({ v: 1, payload: { sub: agentId } });
     expect((await stat(paths().credential)).mode & 0o777).toBe(0o600);
   });
@@ -239,6 +240,20 @@ describe('card show and card write', () => {
     expect(second.out).toBe(first.out);
   });
 
+  it('reads a cache that has only seal, or only credential as older versions wrote', async () => {
+    const first = await run(fetchFn, 'card', 'show');
+    const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
+    for (const drop of ['seal', 'credential']) {
+      const { [drop]: _gone, ...rest } = cache;
+      await writeFile(paths().credential, JSON.stringify(rest));
+      server.requests = [];
+      const again = await run(fetchFn, 'card', 'show');
+      expect(again.code).toBe(0);
+      expect(server.requests).toEqual([]);
+      expect(again.out).toBe(first.out);
+    }
+  });
+
   it('refetches a credential within two hours of expiry', async () => {
     server.credential = () => credentialFor(HOUR);
     const first = await run(fetchFn, 'card', 'show');
@@ -247,9 +262,7 @@ describe('card show and card write', () => {
     server.requests = [];
     server.credential = () => credentialFor(24 * HOUR);
     const second = await run(fetchFn, 'card', 'show');
-    expect(server.requests).toContain(
-      `${API_URL}/v1/agents/${agentId}/credential`,
-    );
+    expect(server.requests).toContain(`${API_URL}/v1/agents/${agentId}/seal`);
     const fresh = extensionCredential(AgentCard.parse(JSON.parse(second.out)));
     expect(fresh).not.toBe(stale);
     const cache = JSON.parse(await readFile(paths().credential, 'utf8'));

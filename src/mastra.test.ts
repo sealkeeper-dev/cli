@@ -11,6 +11,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Event } from '@vouched-dev/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBackgroundSyncThrottle } from './background-sync.js';
+import { writeConfig } from './config.js';
+import { createKey } from './identity.js';
+import { countPending } from './log.js';
 import { vouchedSession, withVouched } from './mastra.js';
 
 class RateLimitError extends Error {}
@@ -409,6 +413,64 @@ describe('mastra adapter', () => {
       await expect(tools[0]?.execute()).resolves.toBe(1);
       const session = vouchedSession();
       await expect(session.end()).resolves.toBeUndefined();
+    });
+  });
+  describe('background sync', () => {
+    // Turns automatic sync on for a real key and counts what reaches the
+    // API. The in-process throttle is reset so earlier tests do not hold it.
+    async function autoSyncOn(): Promise<{ requests: () => number }> {
+      const { agentId } = await createKey();
+      await writeConfig({
+        agentId,
+        operatorLogin: 'carelmeyer',
+        name: 'bot',
+        version: '1.0.0',
+        apiUrl: 'http://api.test',
+        registeredAt: '2026-09-23T08:00:00Z',
+        autoSync: true,
+      });
+      resetBackgroundSyncThrottle();
+      vi.stubEnv('VOUCHED_API_URL', '');
+      let requests = 0;
+      vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
+        requests++;
+        const { envelopes } = JSON.parse(String(init.body)) as {
+          envelopes: string[];
+        };
+        return Response.json({ accepted: envelopes.length, duplicates: 0 });
+      });
+      return { requests: () => requests };
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      resetBackgroundSyncThrottle();
+    });
+
+    it('sends in the background once automatic sync is on, at most once per interval', async () => {
+      const api = await autoSyncOn();
+      const [tool] = withVouched([{ id: 'a', execute: async () => 'a' }]);
+      expect(await tool?.execute()).toBe('a');
+      await vi.waitFor(async () => {
+        expect(await countPending()).toBe(0);
+      });
+      expect(api.requests()).toBe(1);
+      // The next call inside five minutes only appends.
+      await tool?.execute();
+      await new Promise((done) => setTimeout(done, 50));
+      expect(api.requests()).toBe(1);
+      expect(await countPending()).toBe(1);
+    });
+
+    it('never throws into the agent when the API is down', async () => {
+      await autoSyncOn();
+      vi.stubGlobal('fetch', async () => {
+        throw new TypeError('fetch failed');
+      });
+      const [tool] = withVouched([{ id: 'a', execute: async () => 'a' }]);
+      expect(await tool?.execute()).toBe('a');
+      await new Promise((done) => setTimeout(done, 50));
+      expect(await countPending()).toBe(1);
     });
   });
 });

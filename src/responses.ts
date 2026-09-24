@@ -2,12 +2,10 @@
 import {
   AgentHandle,
   AgentId,
-  CheckName,
   CREDENTIAL_ISSUER,
   Dimension,
   Ed25519PublicKey,
   Jws,
-  Level,
   Sha256Hex,
   TaskState,
   TaskType,
@@ -84,6 +82,9 @@ export const TaskResponse = z.object({
   verifiedAt: Timestamp.nullable(),
   expiresAt: Timestamp,
   submission: z.string().optional(),
+  // The poster's operator, when the API sends it. prove skips tasks posted
+  // by the operator's own agents, which never count.
+  posterOperator: Operator.optional(),
 });
 export type TaskResponse = z.infer<typeof TaskResponse>;
 
@@ -175,9 +176,11 @@ export const CredentialPayload = z
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type CredentialPayload = z.infer<typeof CredentialPayload>;
 
-// GET /v1/agents/:id/credential. The API adds seal next to credential, both
-// the same compact JWS. The CLI takes seal when it is there, else
-// credential, and hands on one string as credential.
+// GET /v1/agents/:id/seal, and /credential, its old path. Both answers
+// carry the same compact JWS as seal and as credential for one release,
+// then credential goes (VOU-77). The CLI takes seal when it is there, else
+// credential, and hands on the one string under both names, so code that
+// reads either keeps working through the change.
 export const CredentialResponse = z
   .object({
     credential: Jws.optional(),
@@ -188,10 +191,10 @@ export const CredentialResponse = z
     (r) => r.seal !== undefined || r.credential !== undefined,
     'expected seal or credential',
   )
-  .transform((r) => ({
-    credential: (r.seal ?? r.credential) as string,
-    payload: r.payload,
-  }));
+  .transform((r) => {
+    const jws = (r.seal ?? r.credential) as string;
+    return { seal: jws, credential: jws, payload: r.payload };
+  });
 export type CredentialResponse = z.infer<typeof CredentialResponse>;
 
 export const WellKnownKey = z.object({
@@ -208,24 +211,52 @@ export const WellKnown = z.object({
 });
 export type WellKnown = z.infer<typeof WellKnown>;
 
-// minLevel is the one check whose required and actual are levels.
-export const Check = z.object({
-  name: CheckName,
-  required: z.union([z.number().min(0), Level]),
-  actual: z.union([z.number().min(0), Level]).nullable(),
+// One check of GET /v1/check, read loosely like every other answer. name,
+// required and actual take any text, so a check or a level the API adds
+// later does not break this version. The names today are minVerified,
+// maxIncidents, minReliability, minSafety and minLevel, and minLevel is the
+// one whose required and actual are levels (none, bronze, silver, gold).
+export type Check = {
+  name: string;
+  required: number | string;
+  actual: number | string | null;
+  ok: boolean;
+};
+export const Check: z.ZodType<Check> = z.object({
+  name: z.string().min(1),
+  required: z.union([z.number().min(0), z.string()]),
+  actual: z.union([z.number().min(0), z.string()]).nullable(),
   ok: z.boolean(),
 });
-export type Check = z.infer<typeof Check>;
 
-// GET /v1/check/:login/:name. credential is the agent's SEAL.
-export const CheckResponse = z.object({
-  ok: z.boolean(),
-  id: AgentId,
-  handle: AgentHandle,
-  checks: z.array(Check).min(1),
-  credential: Jws,
-});
-export type CheckResponse = z.infer<typeof CheckResponse>;
+// GET /v1/check/:login/:name. The agent's SEAL comes as seal and, for one
+// release, as credential too (VOU-77). Either is enough, and the answer
+// hands the one string on under both names, like CredentialResponse.
+export type CheckResponse = {
+  ok: boolean;
+  id: string;
+  handle: string;
+  checks: Check[];
+  seal: string;
+  credential: string;
+};
+export const CheckResponse: z.ZodType<CheckResponse, unknown> = z
+  .object({
+    ok: z.boolean(),
+    id: AgentId,
+    handle: AgentHandle,
+    checks: z.array(Check).min(1),
+    seal: Jws.optional(),
+    credential: Jws.optional(),
+  })
+  .refine(
+    (r) => r.seal !== undefined || r.credential !== undefined,
+    'expected seal or credential',
+  )
+  .transform(({ seal, credential, ...rest }) => {
+    const jws = (seal ?? credential) as string;
+    return { ...rest, seal: jws, credential: jws };
+  });
 
 export const AgentRenamedResponse = z.object({
   error: z.object({ code: z.literal('renamed'), message: z.string() }),

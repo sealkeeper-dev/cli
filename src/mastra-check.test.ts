@@ -1,10 +1,10 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // check and assertTrusted from vouched/mastra, with a mocked fetch.
-import type { CheckResponse } from '@vouched-dev/schema';
+import type { SealCheckResponse } from '@vouched-dev/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertTrusted, check, VouchedCheckError } from './mastra.js';
 
-const answer = (ok: boolean): CheckResponse => ({
+const answer = (ok: boolean): SealCheckResponse => ({
   ok,
   id: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo',
   handle: 'carelmeyer/claude-code',
@@ -13,6 +13,7 @@ const answer = (ok: boolean): CheckResponse => ({
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
   ],
   credential: 'eyJh.eyJi.c2ln',
+  seal: 'eyJh.eyJi.c2ln',
 });
 
 function fakeFetch(res: () => Response) {

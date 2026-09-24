@@ -183,7 +183,7 @@ describe('vouched seal', () => {
       const url = String(input);
       requests.push(url);
       if (url === WELL_KNOWN) return Response.json(published());
-      if (url === `${API_URL}/v1/agents/${agentId}/credential`) {
+      if (url === `${API_URL}/v1/agents/${agentId}/seal`) {
         const seal = await currentSeal();
         const body = seal.split('.')[1] ?? '';
         return Response.json({

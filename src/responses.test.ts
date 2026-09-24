@@ -258,6 +258,7 @@ describe('response schemas parse loosely', () => {
     ).toBe(seal);
     expect(CredentialResponse.parse({ seal, payload }).credential).toBe(seal);
     expect(CredentialResponse.parse({ credential: JWS, payload })).toEqual({
+      seal: JWS,
       credential: JWS,
       payload,
     });
@@ -277,6 +278,7 @@ describe('response schemas parse loosely', () => {
         payload: { ...payload, counts },
       });
       expect(got).toEqual({
+        seal,
         credential: seal,
         payload: { ...payload, counts },
       });
@@ -292,6 +294,47 @@ describe('response schemas parse loosely', () => {
         seal: JWS,
       });
       expect(got.credential).toBe(JWS);
+      expect(got.seal).toBe(JWS);
+    });
+
+    it('the check answer with seal only, once credential is dropped', () => {
+      const got = CheckResponse.parse({
+        ok: true,
+        id: ID,
+        handle: 'carelmeyer/scout',
+        checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
+        seal: JWS,
+      });
+      expect(got.credential).toBe(JWS);
+      expect(got.seal).toBe(JWS);
+      expect(
+        CheckResponse.safeParse({
+          ok: true,
+          id: ID,
+          handle: 'carelmeyer/scout',
+          checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
+        }).success,
+      ).toBe(false);
+    });
+
+    it('the check answer with a check name and level added later', () => {
+      const got = CheckResponse.parse({
+        ok: false,
+        id: ID,
+        handle: 'carelmeyer/scout',
+        checks: [
+          { name: 'minTenure', required: 30, actual: null, ok: false },
+          {
+            name: 'minLevel',
+            required: 'platinum',
+            actual: 'gold',
+            ok: false,
+          },
+        ],
+        seal: JWS,
+      });
+      expect(got.checks.map((c) => c.name)).toEqual(['minTenure', 'minLevel']);
+      expect(got.checks[1]?.required).toBe('platinum');
     });
 
     it('GET by id with counts.seedTasks', () => {
@@ -369,5 +412,20 @@ describe('response schemas parse loosely', () => {
         })) as unknown as typeof fetch,
     });
     expect((await api.getCredential(ID)).credential).toBe('eyJz.eyJz.c2Vh');
+  });
+
+  it('the API client asks for the SEAL at /seal', async () => {
+    const urls: string[] = [];
+    const api = createApiClient({
+      apiUrl: 'http://api.test',
+      fetch: (async (url: string) => {
+        urls.push(url);
+        return Response.json({ seal: JWS, payload });
+      }) as unknown as typeof fetch,
+    });
+    const got = await api.getCredential(ID);
+    expect(urls).toEqual([`http://api.test/v1/agents/${ID}/seal`]);
+    expect(got.seal).toBe(JWS);
+    expect(got.credential).toBe(JWS);
   });
 });

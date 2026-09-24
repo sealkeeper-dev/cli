@@ -2,7 +2,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { CheckResponse } from '@vouched-dev/schema';
+import type { SealCheckResponse } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProgram } from '../program.js';
@@ -10,7 +10,8 @@ import { createProgram } from '../program.js';
 const ID = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
 const JWS = 'eyJh.eyJi.c2ln';
 
-const failing: CheckResponse = {
+// What the API sends today, the SEAL as seal and as credential.
+const failing: SealCheckResponse = {
   ok: false,
   id: ID,
   handle: 'carelmeyer/claude-code',
@@ -20,9 +21,10 @@ const failing: CheckResponse = {
     { name: 'minReliability', required: 0.8, actual: null, ok: false },
   ],
   credential: JWS,
+  seal: JWS,
 };
 
-const passing: CheckResponse = {
+const passing: SealCheckResponse = {
   ok: true,
   id: ID,
   handle: 'carelmeyer/claude-code',
@@ -31,6 +33,7 @@ const passing: CheckResponse = {
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
   ],
   credential: JWS,
+  seal: JWS,
 };
 
 type RunResult = { code: number; out: string; err: string };
@@ -189,6 +192,36 @@ describe('vouched check', () => {
     const ok = await run('--json', 'check', 'carelmeyer/claude-code');
     expect(ok.code).toBe(0);
     expect(JSON.parse(ok.out)).toEqual(passing);
+  });
+
+  it('reads an answer with only seal or only credential and prints both', async () => {
+    const { credential: _c, ...sealOnly } = passing;
+    reply = () => Response.json(sealOnly);
+    const a = await run('--json', 'check', 'carelmeyer/claude-code');
+    expect(a.code).toBe(0);
+    expect(JSON.parse(a.out)).toEqual(passing);
+    const { seal: _s, ...credentialOnly } = passing;
+    reply = () => Response.json(credentialOnly);
+    const b = await run('--json', 'check', 'carelmeyer/claude-code');
+    expect(b.code).toBe(0);
+    expect(JSON.parse(b.out)).toEqual(passing);
+  });
+
+  it('prints a check and a level this version does not know', async () => {
+    reply = () =>
+      Response.json({
+        ...passing,
+        ok: false,
+        checks: [
+          ...passing.checks,
+          { name: 'minTenure', required: 30, actual: 12, ok: false },
+          { name: 'minLevel', required: 'platinum', actual: 'gold', ok: false },
+        ],
+      });
+    const r = await run('check', 'carelmeyer/claude-code');
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('FAIL minTenure 12, required 30');
+    expect(r.out).toContain('FAIL level gold, need at least platinum');
   });
 
   it('exits 2 with the message for an unknown agent', async () => {

@@ -4,6 +4,7 @@ import {
   base64urlDecode,
   CREDENTIAL_ISSUER,
   decodeHeader,
+  parseSealPayload,
   sealVersionProblem,
   utf8Decode,
   verify,
@@ -48,8 +49,9 @@ export function sealKid(jws: string): string | null {
 // header.payload with the key the kid names, then the issuer, then the
 // version, then expiry. Verify first, parse second. A version other than
 // 1 is unsupported, and so is a SEAL without ver once LEGACY_UNTIL has
-// passed, as sealVersionProblem in @vouched-dev/schema says. The API's
-// POST /v1/seal/verify and the web's checkSeal use the same rule.
+// passed, as sealVersionProblem in @vouched-dev/schema says. A version 1
+// payload must then match the strict shape, parseSealPayload. The API's
+// POST /v1/seal/verify and the web's checkSeal use the same rules.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
@@ -90,6 +92,17 @@ export async function checkSeal(
   ) {
     return broken('unsupported version', payload);
   }
+  // A version 1 SEAL from vouched.run has one exact shape, and the API and
+  // the web check it with the strict parser. So does this, so the three
+  // never disagree about one. The loose read below is kept for what it
+  // prints and for the legacy shape.
+  if (
+    iss === CREDENTIAL_ISSUER &&
+    hasVer(payload) &&
+    !parseSealPayload(payload, nowMs / 1000).ok
+  ) {
+    return broken('malformed', payload);
+  }
 
   const claims = SealClaims.safeParse(payload);
   if (!claims.success) return broken('malformed', payload);
@@ -107,6 +120,10 @@ export async function checkSeal(
     );
   }
   return { valid: true, reason: null, payload, expiresAt };
+}
+
+function hasVer(payload: unknown): boolean {
+  return typeof payload === 'object' && payload !== null && 'ver' in payload;
 }
 
 // What a verified SEAL says, one line each, for seal show and seal verify.

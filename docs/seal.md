@@ -143,7 +143,7 @@ The Vouched CLI runs the first four checks with `vouched seal verify <seal>` and
 
 ## Worked examples
 
-Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg`. The SEAL comes from `GET https://api.vouched.run/v1/agents/<agent id>/seal`, which answers `{ credential, seal, payload }` with the same SEAL in `seal` and `credential`. The examples use `/credential`, the old path of the same answer, which is kept for one release.
+Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg`. The SEAL comes from `GET https://api.vouched.run/v1/agents/<agent id>/seal`, which answers `{ credential, seal, payload }` with the same SEAL in `seal` and `credential`. `/credential` is the old path of the same answer, kept for one release. The examples use `/seal` and read `seal`.
 
 ### Node
 
@@ -179,12 +179,12 @@ import { verifySeal } from './verify-seal.ts';
 
 const agentId = process.argv[2];
 const res = await fetch(
-  `https://api.vouched.run/v1/agents/${agentId}/credential`,
+  `https://api.vouched.run/v1/agents/${agentId}/seal`,
 );
-const { credential } = await res.json();
-const seal = await verifySeal(credential);
-if (seal.sub !== agentId) throw new Error('SEAL is for another agent');
-console.log(seal);
+const { seal } = await res.json();
+const payload = await verifySeal(seal);
+if (payload.sub !== agentId) throw new Error('SEAL is for another agent');
+console.log(payload);
 ```
 
 ```sh
@@ -242,8 +242,8 @@ curl fetches the SEAL and the keys. It cannot check a signature, so it proves no
 
 ```sh
 ID=kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg
-curl -s https://api.vouched.run/v1/agents/$ID/credential \
-  | node -p 'JSON.parse(require("fs").readFileSync(0)).credential' > seal.txt
+curl -s https://api.vouched.run/v1/agents/$ID/seal \
+  | node -p 'JSON.parse(require("fs").readFileSync(0)).seal' > seal.txt
 curl -s https://vouched.run/.well-known/vouched.json > vouched.json
 npm i jose
 node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'; import { readFileSync as read } from 'node:fs'; const keys = createLocalJWKSet(JSON.parse(read('vouched.json', 'utf8'))); const { payload } = await jwtVerify(read('seal.txt', 'utf8').trim(), keys, { algorithms: ['EdDSA'], issuer: 'vouched.run', subject: process.argv[1] }); console.log(payload)" $ID

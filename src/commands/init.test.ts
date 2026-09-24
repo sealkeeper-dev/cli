@@ -64,6 +64,8 @@ type World = {
   stdin?: Input;
   // Whether the CLI runs from the npx cache. False when not set.
   npx?: boolean;
+  // The project directory init looks in for .claude/settings.json.
+  cwd?: string;
 };
 
 // A terminal, or a pipe when isTTY is false, that answers with the given
@@ -148,6 +150,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       stdin: world.stdin ? () => world.stdin as Input : undefined,
       hookCommand: () => HOOK_COMMAND,
       isNpx: () => world.npx === true,
+      cwd: world.cwd === undefined ? undefined : () => world.cwd as string,
     },
   });
   throwOnExit(program);
@@ -587,6 +590,61 @@ describe('vouched init', () => {
       const after = await readFile(settingsFile(), 'utf8');
       expect(after).not.toContain('"vouched hook claude-code"');
       expect(after).toContain('hook claude-code');
+    });
+
+    it('asks nothing when the project settings already hold the hooks', async () => {
+      await withClaudeCode();
+      const project = join(home, 'project');
+      world.cwd = project;
+      await mkdir(join(project, '.claude'), { recursive: true });
+      const projectFile = join(project, '.claude', 'settings.json');
+      await writeFile(
+        projectFile,
+        JSON.stringify({
+          hooks: {
+            Stop: [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }],
+          },
+        }),
+      );
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      expect(result.out).not.toContain(NEXT_HOOKS);
+      // No second set in the user settings.
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('rewrites old hooks in the project settings in place, not in the user settings', async () => {
+      await withClaudeCode();
+      const project = join(home, 'project');
+      world.cwd = project;
+      await mkdir(join(project, '.claude'), { recursive: true });
+      const projectFile = join(project, '.claude', 'settings.json');
+      await writeFile(
+        projectFile,
+        JSON.stringify({
+          hooks: {
+            Stop: [
+              {
+                hooks: [
+                  { type: 'command', command: 'vouched hook claude-code' },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('updated vouched hooks for Stop');
+      const after = await readFile(projectFile, 'utf8');
+      expect(after).not.toContain('"vouched hook claude-code"');
+      expect(after).toContain(JSON.stringify(HOOK_COMMAND).slice(1, -1));
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
     it('asks nothing on a repeat init when the hooks are current', async () => {

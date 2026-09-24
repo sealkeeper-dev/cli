@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from '../api.js';
 import { DEFAULT_AGENT_VERSION } from '../config.js';
 import { type EmitInput, emit } from '../emit.js';
-import { countPending } from '../log.js';
+import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { pendingText, SyncError, syncEvents } from '../sync.js';
 import { defaultSyncDeps, loadConfig, type SyncDeps } from './sync.js';
@@ -70,9 +70,11 @@ export function register(
       if (!options.sync) return;
 
       // Until the first sync is previewed and confirmed nothing leaves on its
-      // own. One line says what is waiting and how to review it.
+      // own. One line says what is waiting and how to review it. The count
+      // only counts lines from the cursor on, it does not parse the log,
+      // which keeps growing while nothing is sent.
       if (config.autoSync !== true) {
-        const pending = await countPending().catch(() => null);
+        const pending = await countPendingLines().catch(() => null);
         const count =
           pending === null
             ? 'events'

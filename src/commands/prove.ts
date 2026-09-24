@@ -1,9 +1,10 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { ClaimTaskRequest, type TaskResponse } from '@vouched-dev/schema';
+import { ClaimTaskRequest } from '@vouched-dev/schema';
 import { type Command, InvalidArgumentError } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
 import { profileUrl } from '../config.js';
 import { stderr, stdout, wantsJson } from '../output.js';
+import type { AgentResponse, TaskResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   failOnApiError,
@@ -66,13 +67,17 @@ export function register(
         } catch (error) {
           failOnApiError(this, error);
         }
+        const posters = new PosterLookup(api);
         const candidates = await ranked(
-          api,
+          posters,
           open.filter((task) => task.posterAgentId !== signer.agentId),
         );
         let failures = 0;
         for (const task of candidates) {
           if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+          // A task posted by another agent of the same operator never
+          // counts toward the record, so it is not worth a claim.
+          if (await posters.sameOperator(task, config.operatorLogin)) continue;
           try {
             const envelope = await signer.sign(
               ClaimTaskRequest.parse({ taskId: task.id }),
@@ -202,21 +207,49 @@ async function addServerHeld(
   }
 }
 
+// What prove knows about the agents that posted open tasks. Each poster is
+// asked about at most once. A lookup that fails is remembered as unknown.
+class PosterLookup {
+  private readonly agents = new Map<string, AgentResponse | null>();
+  constructor(private readonly api: ApiClient) {}
+
+  async get(agentId: string): Promise<AgentResponse | null> {
+    if (!this.agents.has(agentId)) {
+      let agent: AgentResponse | null = null;
+      try {
+        agent = await this.api.getAgent(agentId);
+      } catch {
+        // Unknown, never an error.
+      }
+      this.agents.set(agentId, agent);
+    }
+    return this.agents.get(agentId) ?? null;
+  }
+
+  // True when the task was posted by an agent of the operator named. The
+  // operator on the task is used when the API sends one, else the poster is
+  // looked up. When neither says, the task is kept, since the server has
+  // the last word anyway.
+  async sameOperator(task: TaskResponse, login: string): Promise<boolean> {
+    const own = login.toLowerCase();
+    const onTask = task.posterOperator?.login;
+    if (onTask !== undefined) return onTask.toLowerCase() === own;
+    const poster = await this.get(task.posterAgentId);
+    return poster?.operator.login.toLowerCase() === own;
+  }
+}
+
 // Seed tasks first, then other tasks the server checks on submit, then
 // counterparty tasks. Oldest first within each. The seed agent is found by
 // asking the API about the posters, since only it knows operatedByVouched.
 async function ranked(
-  api: ApiClient,
+  posters: PosterLookup,
   open: TaskResponse[],
 ): Promise<TaskResponse[]> {
   const seed = new Set<string>();
-  const posters = [...new Set(open.map((task) => task.posterAgentId))];
-  for (const poster of posters.slice(0, MAX_POSTER_LOOKUPS)) {
-    try {
-      if ((await api.getAgent(poster)).operatedByVouched) seed.add(poster);
-    } catch {
-      // Unknown means not preferred, never an error.
-    }
+  const ids = [...new Set(open.map((task) => task.posterAgentId))];
+  for (const poster of ids.slice(0, MAX_POSTER_LOOKUPS)) {
+    if ((await posters.get(poster))?.operatedByVouched) seed.add(poster);
   }
   const rank = (task: TaskResponse) => {
     if (seed.has(task.posterAgentId)) return 0;

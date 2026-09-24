@@ -11,6 +11,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Event } from '@vouched-dev/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBackgroundSyncThrottle } from './background-sync.js';
+import { writeConfig } from './config.js';
+import { createKey } from './identity.js';
+import { countPending } from './log.js';
 import plugin, {
   type OpenClawPluginApiLike,
   vouchedPlugin,
@@ -398,6 +402,53 @@ describe('openclaw adapter', () => {
       await expect(
         fire('session_start', { sessionId: 's' }),
       ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('background sync', () => {
+    // Turns automatic sync on for a real key and counts what reaches the
+    // API. The in-process throttle is reset so earlier tests do not hold it.
+    async function autoSyncOn(): Promise<{ requests: () => number }> {
+      const { agentId } = await createKey();
+      await writeConfig({
+        agentId,
+        operatorLogin: 'carelmeyer',
+        name: 'bot',
+        version: '1.0.0',
+        apiUrl: 'http://api.test',
+        registeredAt: '2026-09-23T08:00:00Z',
+        autoSync: true,
+      });
+      resetBackgroundSyncThrottle();
+      vi.stubEnv('VOUCHED_API_URL', '');
+      let requests = 0;
+      vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
+        requests++;
+        const { envelopes } = JSON.parse(String(init.body)) as {
+          envelopes: string[];
+        };
+        return Response.json({ accepted: envelopes.length, duplicates: 0 });
+      });
+      return { requests: () => requests };
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      resetBackgroundSyncThrottle();
+    });
+
+    it('sends in the background once automatic sync is on', async () => {
+      const api = await autoSyncOn();
+      const { fire } = registered();
+      await fire('session_start', { sessionId: 's1' });
+      await vi.waitFor(async () => {
+        expect(await countPending()).toBe(0);
+      });
+      expect(api.requests()).toBe(1);
+      await fire('session_end', { sessionId: 's1' });
+      await new Promise((done) => setTimeout(done, 50));
+      expect(api.requests()).toBe(1);
+      expect(await countPending()).toBe(1);
     });
   });
 });

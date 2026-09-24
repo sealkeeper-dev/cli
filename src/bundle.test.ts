@@ -23,6 +23,59 @@ const pkg = JSON.parse(
   exports: Record<string, { types: string; import: string }>;
 };
 
+// An import or require of the module, or of any path under it, in any of
+// the forms esbuild writes, a from clause, a dynamic import, a require call
+// and a bare side effect import.
+function importOf(module: string): RegExp {
+  const name = module.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  return new RegExp(
+    `(?:\\bfrom\\s*|\\bimport\\s*\\(\\s*|\\brequire\\s*\\(\\s*|\\bimport\\s*)['"]${name}(?:/[^'"]*)?['"]`,
+  );
+}
+
+// Modules no bundle may import at runtime. @vouched-dev/schema is inlined,
+// and its /db entry, Drizzle and the Postgres driver belong to the API.
+const FORBIDDEN = [
+  '@vouched-dev/schema',
+  '@vouched-dev/schema/db',
+  'drizzle-orm',
+  'drizzle-kit',
+  'pg',
+  'postgres',
+];
+
+describe('import guards', () => {
+  // Built from parts so the isolation test, which reads this file's own
+  // imports, does not take the samples for real ones.
+  const q = (m: string, quote = '"') => `${quote}${m}${quote}`;
+  const FROM = 'from';
+  const IMPORT = 'im' + 'port';
+  const REQUIRE = 're' + 'quire';
+
+  it('match the real module names in every form', () => {
+    expect(`${IMPORT} { x } ${FROM} ${q('@vouched-dev/schema/db')};`).toMatch(
+      importOf('@vouched-dev/schema/db'),
+    );
+    expect(`${IMPORT}{x}${FROM}${q('@vouched-dev/schema', "'")}`).toMatch(
+      importOf('@vouched-dev/schema'),
+    );
+    expect(`await ${IMPORT}(${q('drizzle-orm/pg-core')})`).toMatch(
+      importOf('drizzle-orm'),
+    );
+    expect(`var pg = ${REQUIRE}(${q('pg')});`).toMatch(importOf('pg'));
+    expect(`${IMPORT} ${q('pg')};`).toMatch(importOf('pg'));
+  });
+
+  it('do not match other names', () => {
+    expect(`${IMPORT} { Pool } ${FROM} ${q('pg-pool')};`).not.toMatch(
+      importOf('pg'),
+    );
+    expect(`${FROM} ${q('@vouched/schema')}`).not.toMatch(
+      importOf('@vouched-dev/schema'),
+    );
+  });
+});
+
 describe('cli bundle', () => {
   let outDir: string;
   let bundle: string;
@@ -63,14 +116,16 @@ describe('cli bundle', () => {
 
   it('inlines @vouched-dev/schema', () => {
     expect(bundle).toContain('EdDSA');
-    expect(bundle).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(bundle).not.toMatch(importOf('@vouched-dev/schema'));
   });
 
   it('does not pull in the database layer', () => {
-    expect(bundle).not.toContain('drizzle');
-    expect(lib).not.toContain('drizzle');
-    expect(mastra).not.toContain('drizzle');
-    expect(openclaw).not.toContain('drizzle');
+    for (const code of [bundle, lib, mastra, openclaw]) {
+      expect(code).not.toContain('drizzle');
+      for (const module of FORBIDDEN) {
+        expect(code).not.toMatch(importOf(module));
+      }
+    }
   });
 
   it('builds the entries the package points at', () => {
@@ -97,8 +152,9 @@ describe('cli bundle', () => {
 
   it('keeps the adapter free of Mastra, the CLI and @vouched-dev/schema imports', () => {
     expect(mastra).not.toMatch(/from ['"]@mastra\//);
-    expect(mastra).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(mastra).not.toMatch(importOf('@vouched-dev/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
+    expect(mastra).toContain('kickBackgroundSync');
     expect(mastra).toMatch(/export\s*\{[^}]*\bwithVouched\b/);
     expect(mastra).toMatch(/export\s*\{[^}]*\bvouchedSession\b/);
   });
@@ -140,9 +196,10 @@ describe('cli bundle', () => {
 
   it('keeps the OpenClaw entry free of OpenClaw, the CLI and @vouched-dev/schema imports', () => {
     expect(openclaw).not.toMatch(/from ['"]openclaw/);
-    expect(openclaw).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(openclaw).not.toMatch(importOf('@vouched-dev/schema'));
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
-    expect(openclaw).not.toContain('syncEvents');
+    // It syncs only through the throttled background sync.
+    expect(openclaw).toContain('kickBackgroundSync');
     expect(openclaw).toMatch(/export\s*\{[^}]*\bvouchedPlugin\b/);
     expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
   });
@@ -190,7 +247,7 @@ describe('cli bundle', () => {
   });
 
   it('keeps the lib free of the CLI and of @vouched-dev/schema imports', () => {
-    expect(lib).not.toMatch(/from ['"]@vouched\/schema/);
+    expect(lib).not.toMatch(importOf('@vouched-dev/schema'));
     expect(lib).not.toMatch(/from ['"]commander['"]/);
     expect(lib).toMatch(/export\s*\{[^}]*\bemit\b/);
   });

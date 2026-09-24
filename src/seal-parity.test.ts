@@ -1,0 +1,176 @@
+// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Parity between `vouched seal verify` and the strict parser the API and the
+// web use, parseSealPayload from @vouched-dev/schema, for version 1 SEALs.
+// Each fixture is signed with a test key and checked both ways. Where the
+// strict parser says ok the CLI must say valid, and where it says malformed
+// the CLI must say malformed too.
+import {
+  base64urlEncode,
+  type CredentialPayload,
+  generateKeypair,
+  parseSealPayload,
+  sign,
+} from '@vouched-dev/schema';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { checkSeal } from './seal.js';
+
+const KID = 'vouched-parity-1';
+const NOW = Date.parse('2026-09-24T12:00:00.000Z');
+const NOW_SEC = NOW / 1000;
+const HOUR = 3600;
+const SUB = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
+
+const base: CredentialPayload = {
+  iss: 'vouched.run',
+  sub: SUB,
+  ver: 1,
+  iat: NOW_SEC - HOUR,
+  exp: NOW_SEC + 23 * HOUR,
+  agent_version: '1.0.0',
+  version: '1.0.0',
+  level: 'bronze',
+  scores: { reliability: 0.9, safety: null },
+  counts: {
+    events: 12,
+    history_days: 3,
+    verified_tasks: 26,
+    seed_tasks: 25,
+    server_checked_tasks: 1,
+    confirmed_tasks: 0,
+    distinct_operators: 1,
+    safety_incidents_90d: 0,
+  },
+  operator: { verified: true },
+  identity: [
+    {
+      provider: 'https://id.example.com',
+      kind: 'oidc',
+      ref: 'att-1',
+      subject_hash: 'a'.repeat(43),
+      attested_at: NOW_SEC - 10 * HOUR,
+      scope: 'operator',
+    },
+  ],
+  last_active: NOW_SEC - 2 * 86_400,
+  dormant_days: 2,
+};
+
+const without = (key: string) => {
+  const copy: Record<string, unknown> = { ...base };
+  delete copy[key];
+  return copy;
+};
+
+const FIXTURES: [string, unknown][] = [
+  ['the full version 1 payload', base],
+  ['no identity references', { ...base, identity: [] }],
+  ['never active', { ...base, last_active: null, dormant_days: null }],
+  ['an extra top level key', { ...base, badge: 'gold' }],
+  ['a level that is not in the standard', { ...base, level: 'platinum' }],
+  [
+    'a score for a dimension that does not exist',
+    {
+      ...base,
+      scores: { ...base.scores, charisma: 1 },
+    },
+  ],
+  [
+    'a count missing',
+    {
+      ...base,
+      counts: { ...base.counts, history_days: undefined },
+    },
+  ],
+  ['an extra count', { ...base, counts: { ...base.counts, stars: 3 } }],
+  ['version and agent_version differ', { ...base, version: '0.9.0' }],
+  ['no version beside agent_version', without('version')],
+  ['no agent_version', without('agent_version')],
+  ['no level', without('level')],
+  ['no operator', without('operator')],
+  [
+    'an extra key in operator',
+    {
+      ...base,
+      operator: { verified: true, org: 'x' },
+    },
+  ],
+  ['no identity', without('identity')],
+  ['no last_active', without('last_active')],
+  ['no dormant_days', without('dormant_days')],
+  [
+    'an identity kind that is neither a name nor a URL',
+    {
+      ...base,
+      identity: [{ ...base.identity[0], kind: 'passkey' }],
+    },
+  ],
+  [
+    'an identity scope that is not operator or agent',
+    {
+      ...base,
+      identity: [{ ...base.identity[0], scope: 'team' }],
+    },
+  ],
+  [
+    'an identity subject hash of the wrong length',
+    {
+      ...base,
+      identity: [{ ...base.identity[0], subject_hash: 'abc' }],
+    },
+  ],
+  [
+    'an extra key in an identity reference',
+    {
+      ...base,
+      identity: [{ ...base.identity[0], name: 'Carl' }],
+    },
+  ],
+  ['exp before iat', { ...base, exp: base.iat - 1 }],
+  ['a negative dormant_days', { ...base, dormant_days: -1 }],
+  ['a sub that is not an agent id', { ...base, sub: 'nope' }],
+];
+
+describe('seal verify parity with the strict parser for version 1', () => {
+  let keys: { keys: [Record<string, string>] };
+  let privateKey: Uint8Array;
+
+  beforeAll(async () => {
+    const pair = await generateKeypair();
+    privateKey = pair.privateKey;
+    keys = {
+      keys: [
+        {
+          kid: KID,
+          kty: 'OKP',
+          crv: 'Ed25519',
+          alg: 'EdDSA',
+          x: base64urlEncode(pair.publicKey),
+        },
+      ],
+    };
+  });
+
+  it.each(FIXTURES)('%s', async (_, payload) => {
+    const strict = parseSealPayload(
+      JSON.parse(JSON.stringify(payload)),
+      NOW_SEC,
+    );
+    const jws = await sign(payload as object, privateKey, KID);
+    const cli = await checkSeal(jws, keys as never, NOW);
+    if (strict.ok) {
+      expect(cli).toMatchObject({ valid: true, reason: null });
+    } else {
+      expect(strict.reason).toBe('malformed');
+      expect(cli).toMatchObject({ valid: false, reason: 'malformed' });
+    }
+  });
+
+  it('covers both answers', () => {
+    const verdicts = FIXTURES.map(
+      ([, payload]) =>
+        parseSealPayload(JSON.parse(JSON.stringify(payload)), NOW_SEC).ok,
+    );
+    expect(verdicts).toContain(true);
+    expect(verdicts).toContain(false);
+  });
+});

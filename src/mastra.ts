@@ -1,7 +1,9 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // The Mastra adapter, imported as vouched/mastra. It runs in the agent's own
-// process and appends to the local log through emit from lib.ts. It never
-// syncs, and a failing emit is swallowed so it never throws into the agent.
+// process and appends to the local log through emit from lib.ts. Once
+// automatic sync is on it also starts a background sync, at most once every
+// five minutes, see background-sync.ts. A failing emit or sync is swallowed
+// so it never throws into the agent, and the agent never waits on a sync.
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
 //
@@ -9,11 +11,8 @@
 //   await assertTrusted('carelmeyer/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
 import { randomUUID } from 'node:crypto';
-import {
-  type Check,
-  type CheckResponse,
-  EventPayload,
-} from '@vouched-dev/schema';
+import { EventPayload } from '@vouched-dev/schema';
+import { kickBackgroundSync } from './background-sync.js';
 import {
   type CheckOptions,
   type CheckThresholds,
@@ -21,6 +20,7 @@ import {
   fetchCheck,
 } from './check.js';
 import { type EmitInput, emit } from './lib.js';
+import type { Check, CheckResponse } from './responses.js';
 
 export type { Check, CheckOptions, CheckResponse, CheckThresholds };
 
@@ -47,13 +47,16 @@ export type VouchedSession = {
   end: () => Promise<void>;
 };
 
-// Appends one event and never throws.
+// Appends one event, then starts a background sync without waiting for
+// it. Never throws.
 async function safeEmit(input: EmitInput): Promise<void> {
   try {
     await emit(input);
   } catch {
     // Telemetry must never break the agent.
+    return;
   }
+  kickBackgroundSync();
 }
 
 function elapsed(start: number): number {
@@ -195,9 +198,10 @@ export function vouchedSession(
 
 // GET /v1/check for handle, as in carelmeyer/claude-code. Resolves with the
 // answer whether it passed or not. Rejects when the check could not run, a
-// bad handle or threshold, an unknown agent or the network. credential in
-// the answer is the agent's SEAL, which can be verified offline with
-// vouched seal verify, see https://vouched.run/verify.
+// bad handle or threshold, an unknown agent or the network. seal in the
+// answer is the agent's SEAL, which can be verified offline with vouched
+// seal verify, see https://vouched.run/verify. credential is the same
+// string under its old name.
 export function check(
   handle: string,
   thresholds?: CheckThresholds,

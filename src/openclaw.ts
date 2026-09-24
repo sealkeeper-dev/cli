@@ -2,8 +2,10 @@
 // The OpenClaw adapter, imported as vouched/openclaw. OpenClaw loads plugins
 // into the Gateway process and calls register(api) once, where the plugin
 // subscribes to typed hooks with api.on(name, handler). This file is such a
-// plugin entry. It appends to the local log through emit from lib.ts, never
-// syncs, and swallows every failure so it never throws into the agent.
+// plugin entry. It appends to the local log through emit from lib.ts and,
+// once automatic sync is on, starts a background sync at most once every
+// five minutes (background-sync.ts). It swallows every failure so it never
+// throws into the agent, and the agent never waits on a sync.
 //
 // OpenClaw is typed by shape only, so this file imports nothing from it. The
 // hook names and fields were read from OpenClaw's source (src/plugins/
@@ -12,6 +14,7 @@
 // Gateway before launch. Types are in types/openclaw.d.ts, which
 // openclaw-types.test.ts keeps in step.
 import { EventPayload } from '@vouched-dev/schema';
+import { kickBackgroundSync } from './background-sync.js';
 import { type EmitInput, emit } from './lib.js';
 import { toolNameOf } from './names.js';
 
@@ -48,13 +51,16 @@ export type VouchedOpenClawPlugin = {
   register: (api: OpenClawPluginApiLike) => void;
 };
 
-// Appends one event and never throws.
+// Appends one event, then starts a background sync without waiting for
+// it. Never throws.
 async function safeEmit(input: EmitInput): Promise<void> {
   try {
     await emit(input);
   } catch {
     // Telemetry must never break the agent.
+    return;
   }
+  kickBackgroundSync();
 }
 
 function clampMs(ms: number): number {

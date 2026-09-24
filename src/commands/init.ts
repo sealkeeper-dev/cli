@@ -73,6 +73,8 @@ export type InitDeps = {
   sleep: Sleep;
   stdin?: () => Input;
   claudeDir?: () => string;
+  // The directory whose .claude/settings.json holds project scope hooks.
+  cwd?: () => string;
   hookCommand?: () => string;
   isNpx?: () => boolean;
 };
@@ -82,6 +84,7 @@ const defaultInitDeps: InitDeps = {
   sleep,
   stdin: () => streamInput(process.stdin),
   claudeDir: () => claudeConfigDir(),
+  cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),
   isNpx: () => isNpxCopy(),
 };
@@ -306,16 +309,24 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
 // vouched adapter claude-code install, the /vouched-prove command included.
-// Hooks already there count as installed and nothing is asked.
+// Hooks already there, in the user or the project settings, count as
+// installed and nothing is asked.
 async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
-  const file = settingsPath('user', { home: '', cwd: '', claudeDir: dir });
+  const dirs = { home: '', cwd: (deps.cwd ?? process.cwd)(), claudeDir: dir };
+  const user = settingsPath('user', dirs);
+  const project = settingsPath('project', dirs);
   const hook = (deps.hookCommand ?? hookCommand)();
   // Only hooks that run this very command count. An older form, bare or
   // through npx, or a path that moved, is offered the install again, which
   // rewrites our entries in place.
-  if (await hasHooks(file, hook)) return 'present';
+  if ((await hasHooks(user, hook)) || (await hasHooks(project, hook))) {
+    return 'present';
+  }
+  // Hooks of ours in the project settings, in an older form, are rewritten
+  // there, so a second set never lands in the user settings beside them.
+  const file = (await hasHooks(project)) ? project : user;
 
   const input = deps.stdin?.();
   if (!ask || input === undefined || !input.isTTY) return 'not-installed';

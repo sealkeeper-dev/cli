@@ -26,6 +26,7 @@ import {
   appendEvent,
   CursorError,
   countPending,
+  countPendingLines,
   readCursor,
   readDay,
   readPending,
@@ -238,6 +239,43 @@ describe('log', () => {
     expect(await countPending()).toBe(0);
     await seedTwoDays();
     expect(await countPending()).toBe(5);
+  });
+
+  it('counts pending lines from the cursor without parsing them', async () => {
+    expect(await countPendingLines()).toBe(0);
+    const { day1 } = await seedTwoDays();
+    expect(await countPendingLines()).toBe(5);
+    await writeCursor({
+      v: 1,
+      lastAcked: { file: `${DAY1}.jsonl`, eventId: day1[1]?.event_id ?? '' },
+    });
+    expect(await countPendingLines()).toBe(3);
+    expect(await countPendingLines()).toBe(await countPending());
+    // A file before the cursor's day is never opened, even when it is not
+    // a log at all.
+    await writeCursor({
+      v: 1,
+      lastAcked: { file: `${DAY2}.jsonl`, eventId: randomUUID() },
+    });
+    await writeFile(paths().logFile(DAY1), 'not json\n');
+    expect(await countPendingLines()).toBe(2);
+  });
+
+  it('counts pending lines without a JSON parse', async () => {
+    await seedTwoDays();
+    const parse = vi.spyOn(JSON, 'parse');
+    try {
+      expect(await countPendingLines()).toBe(5);
+      expect(parse).not.toHaveBeenCalled();
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it('does not count a partial trailing line', async () => {
+    await seedTwoDays();
+    await writeFile(paths().logFile(DAY2), '{"v":1', { flag: 'a' });
+    expect(await countPendingLines()).toBe(5);
   });
 
   it('reads one day', async () => {

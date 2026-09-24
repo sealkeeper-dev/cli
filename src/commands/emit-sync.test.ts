@@ -16,7 +16,7 @@ import { paths, readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, countPending, readCursor, readDay } from '../log.js';
 import { createProgram } from '../program.js';
-import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
+import { EVENT_MAX_AGE_DAYS, MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
 const API_URL = 'http://api.test';
 
@@ -448,6 +448,7 @@ describe('emit and sync', () => {
         accepted: 1,
         duplicates: 1,
         skipped: 0,
+        dropped: 0,
       });
     });
 
@@ -566,6 +567,83 @@ describe('emit and sync', () => {
         events.filter((e) => e.event_id !== bad).map((e) => e.event_id),
       );
       expect(await countPending()).toBe(0);
+    });
+
+    it('drops 50 stale events before signing and sends 5 fresh ones in one request', async () => {
+      await initialise();
+      const old = new Date(
+        Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
+      ).toISOString();
+      const stale = Array.from({ length: 50 }, (_, n) => ({
+        ...toolCall(n),
+        occurred_at: old,
+      }));
+      for (const e of stale) await appendEvent(e);
+      const fresh = await seed(5);
+      const { code, out, err } = await api('sync', '--json');
+      expect(code).toBe(0);
+      expect(server.batches).toHaveLength(1);
+      expect(server.batches[0]?.map((e) => e.event_id)).toEqual(
+        fresh.map((e) => e.event_id),
+      );
+      expect(JSON.parse(out)).toEqual({
+        accepted: 5,
+        duplicates: 0,
+        skipped: 0,
+        dropped: 50,
+      });
+      expect(err).toBe(
+        `warning: dropped 50 events older than ${EVENT_MAX_AGE_DAYS} days, the API no longer accepts them\n`,
+      );
+      expect(await countPending()).toBe(0);
+    });
+
+    it('drops stale events mixed in with fresh ones and moves the cursor past all of them', async () => {
+      await initialise();
+      const old = new Date(
+        Date.now() - (EVENT_MAX_AGE_DAYS + 2) * 24 * 3600 * 1000,
+      ).toISOString();
+      const a = await seed(2);
+      await appendEvent({ ...toolCall(9), occurred_at: old });
+      const b = await seed(1);
+      await appendEvent({ ...toolCall(9), occurred_at: old });
+      const { code, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(server.batches).toHaveLength(1);
+      expect(server.batches[0]?.map((e) => e.event_id)).toEqual(
+        [...a, ...b].map((e) => e.event_id),
+      );
+      expect(err).toContain('dropped 2 events');
+      expect(await countPending()).toBe(0);
+    });
+
+    it('with only stale events pending sends nothing and empties the log', async () => {
+      await initialise();
+      const old = new Date(
+        Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
+      ).toISOString();
+      for (let n = 0; n < 3; n++) {
+        await appendEvent({ ...toolCall(n), occurred_at: old });
+      }
+      const { code, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(server.batches).toHaveLength(0);
+      expect(err).toContain('dropped 3 events');
+      expect(await countPending()).toBe(0);
+    });
+
+    it('keeps an event just inside the safety margin and lets the API decide', async () => {
+      await initialise();
+      const edge = new Date(
+        Date.now() - EVENT_MAX_AGE_DAYS * 24 * 3600 * 1000 - 60_000,
+      ).toISOString();
+      const kept = { ...toolCall(1), occurred_at: edge };
+      await appendEvent(kept);
+      const { code } = await api('sync');
+      expect(code).toBe(0);
+      expect(server.batches.flat().map((e) => e.event_id)).toEqual([
+        kept.event_id,
+      ]);
     });
 
     it('skips an event with a bad signature at an index', async () => {
@@ -791,6 +869,7 @@ describe('emit and sync', () => {
         accepted: 1,
         duplicates: 0,
         skipped: 0,
+        dropped: 0,
       });
       expect(err).toContain(WIRE);
     });

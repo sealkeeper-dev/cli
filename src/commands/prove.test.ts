@@ -20,6 +20,15 @@ import { closing, MAX_COUNT, relative, SUBMIT_HINT } from './prove.js';
 const API_URL = 'http://api.test';
 const SEED_AGENT = `${'S'.repeat(42)}A`;
 const OTHER_AGENT = `${'O'.repeat(42)}A`;
+// Another agent of the same operator as the one running prove.
+const SIBLING_AGENT = `${'M'.repeat(42)}A`;
+
+const loginOf = (id: string) =>
+  id === SEED_AGENT
+    ? 'vouched-dev'
+    : id === SIBLING_AGENT
+      ? 'CarelMeyer'
+      : 'someone';
 const PROFILE = 'https://vouched.run/agents/carelmeyer/scout';
 const HOUR = 3_600_000;
 
@@ -82,7 +91,7 @@ class FakeApi {
         id,
         name: id === SEED_AGENT ? 'vouched-seed' : 'other',
         version: '1.0.0',
-        operator: { login: id === SEED_AGENT ? 'vouched-dev' : 'someone' },
+        operator: { login: loginOf(id) },
         createdAt: '2026-09-22T00:00:00.000Z',
         operatedByVouched: id === SEED_AGENT,
       });
@@ -263,6 +272,33 @@ describe('prove', () => {
       otherHash.id,
       counterparty.id,
     ]);
+  });
+
+  it('skips tasks posted by other agents of the same operator', async () => {
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(9) });
+    api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
+    const other = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(7) });
+
+    const { code } = await run('prove', '--count', '3');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([other.id]);
+    // The sibling is looked up once, not once per task.
+    expect(
+      api.requests.filter((r) => r === `GET /v1/agents/${SIBLING_AGENT}`),
+    ).toHaveLength(1);
+  });
+
+  it('uses the operator on the task when the API sends it', async () => {
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    const own = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(9) });
+    Object.assign(own, { posterOperator: { login: 'carelmeyer' } });
+    const theirs = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
+    Object.assign(theirs, { posterOperator: { login: 'someone-else' } });
+
+    const { code } = await run('prove', '--count', '2');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([theirs.id]);
   });
 
   it('moves past a lost race and stops at the claim cap with what it has', async () => {

@@ -149,6 +149,50 @@ export async function countPending(p: Paths = paths()): Promise<number> {
   return count;
 }
 
+// A quick count of the lines after the cursor, for a hint like emit's
+// "N events waiting". It reads only the cursor's day file and the ones after
+// it and never parses a line, so it stays cheap on a log that has grown for
+// weeks while automatic sync was off. A line that countPending would skip
+// as invalid is counted here, which is fine for a hint.
+export async function countPendingLines(p: Paths = paths()): Promise<number> {
+  const { lastAcked } = await readCursor(p);
+  let count = 0;
+  for (const name of await listDayFiles(p)) {
+    if (lastAcked && name < lastAcked.file) continue;
+    let text: string;
+    try {
+      text = await readFile(p.logFile(name.slice(0, 10)), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    if (lastAcked && name === lastAcked.file) {
+      // The acked line, found by its event id. The whole file counts when
+      // it is missing, as countPending resends that day.
+      const at = text.indexOf(`"event_id":"${lastAcked.eventId}"`);
+      if (at >= 0) {
+        const end = text.indexOf('\n', at);
+        text = end === -1 ? '' : text.slice(end + 1);
+      }
+    }
+    count += completeLines(text);
+  }
+  return count;
+}
+
+// Non empty lines that end in a newline. A partial trailing line from a
+// crash mid write is not an event yet.
+function completeLines(text: string): number {
+  let count = 0;
+  let start = 0;
+  for (;;) {
+    const end = text.indexOf('\n', start);
+    if (end === -1) return count;
+    if (end > start) count++;
+    start = end + 1;
+  }
+}
+
 // The events appended on one UTC day, in line order. An empty list when the
 // day has no file.
 export async function readDay(

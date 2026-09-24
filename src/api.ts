@@ -183,9 +183,11 @@ export function createApiClient(options: {
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },
+    // GET /v1/agents/:id/seal. /credential is the old path of the same
+    // answer, kept by the API for one release.
     async getCredential(agentId) {
       const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}/credential`,
+        `/v1/agents/${encodeURIComponent(agentId)}/seal`,
       );
       if (status !== 200) throw toError(status, json, headers);
       const result = CredentialResponse.safeParse(json);
