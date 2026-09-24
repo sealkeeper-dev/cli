@@ -83,11 +83,27 @@ describe('card show and card write', () => {
     const payload: CredentialPayload = {
       iss: 'vouched.run',
       sub: agentId,
+      ver: 1,
       iat: now - HOUR,
       exp: now + expSec,
+      agent_version: '1.0.0',
       version: '1.0.0',
+      level: 'none',
       scores: { reliability: 0.9, safety: null },
-      counts: { events: 12, verified_tasks: 1 },
+      counts: {
+        events: 12,
+        history_days: 1,
+        verified_tasks: 1,
+        seed_tasks: 1,
+        server_checked_tasks: 0,
+        confirmed_tasks: 0,
+        distinct_operators: 0,
+        safety_incidents_90d: 0,
+      },
+      operator: { verified: false },
+      identity: [],
+      last_active: now - HOUR,
+      dormant_days: 0,
     };
     return sign(payload, serverKey.privateKey, KID);
   }

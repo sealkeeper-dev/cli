@@ -7,6 +7,7 @@ import {
   Dimension,
   Ed25519PublicKey,
   Jws,
+  Level,
   Sha256Hex,
   TaskState,
   TaskType,
@@ -111,33 +112,67 @@ export const ScoreResponse = z.object({
 });
 export type ScoreResponse = z.infer<typeof ScoreResponse>;
 
-// The claims inside a SEAL. iss is any text here so seal verify can name a
-// wrong issuer instead of calling the SEAL malformed. scores takes any
-// dimension name, so a dimension added later does not break an older CLI.
+// One identity attestation reference in a SEAL, loose. Text fields stay
+// text, so a kind or scope added later does not break an older CLI.
+export const IdentityClaim = z.object({
+  provider: z.string(),
+  kind: z.string(),
+  ref: z.string(),
+  subject_hash: z.string(),
+  attested_at: Seconds,
+  scope: z.string(),
+});
+export type IdentityClaim = z.infer<typeof IdentityClaim>;
+
+// The claims inside a SEAL, version 1 or the legacy shape without ver. iss
+// is any text here so seal verify can name a wrong issuer instead of
+// calling the SEAL malformed. scores takes any dimension name and level any
+// text, so a dimension or level added later does not break an older CLI.
+// Every field version 1 added is optional, since a legacy SEAL has none of
+// them. Whether the ver is one this CLI understands is checked before
+// these, with sealVersionProblem from @vouched-dev/schema.
 const sealClaims = {
   sub: AgentId,
+  ver: z.int().optional(),
   iat: Seconds,
   exp: Seconds,
-  version: Version,
+  agent_version: Version.optional(),
+  // agent_version under its old name, sent beside it for one release.
+  version: Version.optional(),
+  level: z.string().optional(),
   scores: z.record(z.string(), z.number().nullable()),
-  // seed_tasks is optional, since a SEAL issued before it was added has none.
+  // seed_tasks is optional, since a SEAL issued before it was added has
+  // none. The other five arrived with version 1.
   counts: z.object({
     events: Count,
     verified_tasks: Count,
     seed_tasks: Count.optional(),
+    history_days: Count.optional(),
+    server_checked_tasks: Count.optional(),
+    confirmed_tasks: Count.optional(),
+    distinct_operators: Count.optional(),
+    safety_incidents_90d: Count.optional(),
   }),
+  operator: z.object({ verified: z.boolean() }).optional(),
+  identity: z.array(IdentityClaim).optional(),
+  last_active: Seconds.nullable().optional(),
+  dormant_days: Count.nullable().optional(),
 };
 const expAfterIat = (c: { iat: number; exp: number }) => c.exp > c.iat;
+const hasAgentVersion = (c: { agent_version?: string; version?: string }) =>
+  c.agent_version !== undefined || c.version !== undefined;
 
 export const SealClaims = z
   .object({ iss: z.string(), ...sealClaims })
-  .refine(expAfterIat, 'exp must be after iat');
+  .refine(expAfterIat, 'exp must be after iat')
+  .refine(hasAgentVersion, 'expected agent_version or version');
 export type SealClaims = z.infer<typeof SealClaims>;
 
 // The same claims with the issuer pinned to vouched.run.
 export const CredentialPayload = z
   .object({ iss: z.literal(CREDENTIAL_ISSUER), ...sealClaims })
-  .refine(expAfterIat, 'exp must be after iat');
+  .refine(expAfterIat, 'exp must be after iat')
+  .refine(hasAgentVersion, 'expected agent_version or version');
 export type CredentialPayload = z.infer<typeof CredentialPayload>;
 
 // GET /v1/agents/:id/credential. The API adds seal next to credential, both
@@ -173,10 +208,11 @@ export const WellKnown = z.object({
 });
 export type WellKnown = z.infer<typeof WellKnown>;
 
+// minLevel is the one check whose required and actual are levels.
 export const Check = z.object({
   name: CheckName,
-  required: z.number().min(0),
-  actual: z.number().min(0).nullable(),
+  required: z.union([z.number().min(0), Level]),
+  actual: z.union([z.number().min(0), Level]).nullable(),
   ok: z.boolean(),
 });
 export type Check = z.infer<typeof Check>;

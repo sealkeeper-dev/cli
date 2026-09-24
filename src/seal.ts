@@ -4,6 +4,7 @@ import {
   base64urlDecode,
   CREDENTIAL_ISSUER,
   decodeHeader,
+  sealVersionProblem,
   utf8Decode,
   verify,
 } from '@vouched-dev/schema';
@@ -26,7 +27,7 @@ const KEYS_TIMEOUT_MS = 10_000;
 export type SealCheck = {
   valid: boolean;
   // null when valid. Otherwise bad signature, unknown kid, wrong issuer,
-  // expired N minutes ago or malformed.
+  // unsupported version, expired N minutes ago or malformed.
   reason: string | null;
   // The payload as signed. null unless the signature checked out, so an
   // unverified claim is never shown.
@@ -44,8 +45,11 @@ export function sealKid(jws: string): string | null {
 }
 
 // Checks in order. The header, then the signature over the exact bytes of
-// header.payload with the key the kid names, then the issuer, then expiry.
-// Verify first, parse second.
+// header.payload with the key the kid names, then the issuer, then the
+// version, then expiry. Verify first, parse second. A version other than
+// 1 is unsupported, and so is a SEAL without ver once LEGACY_UNTIL has
+// passed, as sealVersionProblem in @vouched-dev/schema says. The API's
+// POST /v1/seal/verify and the web's checkSeal use the same rule.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
@@ -74,6 +78,19 @@ export async function checkSeal(
     );
   }
 
+  // Issuer before version, so a SEAL from another issuer is named as such
+  // whatever its ver. The shape is only read once the version is known.
+  const iss =
+    typeof payload === 'object' && payload !== null && 'iss' in payload
+      ? (payload as { iss: unknown }).iss
+      : undefined;
+  if (
+    iss === CREDENTIAL_ISSUER &&
+    sealVersionProblem(payload, nowMs / 1000) !== null
+  ) {
+    return broken('unsupported version', payload);
+  }
+
   const claims = SealClaims.safeParse(payload);
   if (!claims.success) return broken('malformed', payload);
   const expiresAt = new Date(claims.data.exp * 1000).toISOString();
@@ -90,6 +107,60 @@ export async function checkSeal(
     );
   }
   return { valid: true, reason: null, payload, expiresAt };
+}
+
+// What a verified SEAL says, one line each, for seal show and seal verify.
+// Level, the eight counts, operator verified, last active as a date,
+// dormant days and any identity references. A legacy SEAL, issued before
+// version 1, has only some of these, so a line is left out when its field
+// is. Nothing for a payload that is not a SEAL.
+const COUNT_LINES = [
+  ['events', 'events'],
+  ['history_days', 'history days'],
+  ['verified_tasks', 'verified tasks'],
+  ['seed_tasks', 'seed tasks'],
+  ['server_checked_tasks', 'server checked tasks'],
+  ['confirmed_tasks', 'confirmed tasks'],
+  ['distinct_operators', 'distinct operators'],
+  ['safety_incidents_90d', 'safety incidents in 90 days'],
+] as const;
+
+const day = (seconds: number) =>
+  new Date(seconds * 1000).toISOString().slice(0, 10);
+
+export function sealSummary(payload: unknown): string[] {
+  const parsed = SealClaims.safeParse(payload);
+  if (!parsed.success) return [];
+  const c = parsed.data;
+  const lines: string[] = [];
+  lines.push(
+    c.level === undefined
+      ? 'level not in this SEAL, it was issued before version 1'
+      : `level ${c.level}`,
+  );
+  for (const [key, label] of COUNT_LINES) {
+    const value = c.counts[key];
+    if (value !== undefined) lines.push(`${label} ${value}`);
+  }
+  if (c.operator !== undefined) {
+    lines.push(`operator verified ${c.operator.verified ? 'yes' : 'no'}`);
+  }
+  if (c.last_active !== undefined) {
+    lines.push(
+      `last active ${c.last_active === null ? 'never' : day(c.last_active)}`,
+    );
+  }
+  if (c.dormant_days !== undefined) {
+    lines.push(
+      `dormant days ${c.dormant_days === null ? 'none' : c.dormant_days}`,
+    );
+  }
+  for (const ref of c.identity ?? []) {
+    lines.push(
+      `identity ${ref.kind} ${ref.scope} from ${ref.provider}, attested ${day(ref.attested_at)}`,
+    );
+  }
+  return lines;
 }
 
 // The payload of a SEAL the CLI already verified, as it was signed.

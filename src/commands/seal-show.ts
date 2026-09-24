@@ -2,14 +2,15 @@
 import type { Command } from 'commander';
 import { loadSeal } from '../card.js';
 import { stdout, wantsJson } from '../output.js';
-import { decodeSealPayload, expiresInText } from '../seal.js';
+import { decodeSealPayload, expiresInText, sealSummary } from '../seal.js';
 import type { SealDeps } from './seal.js';
 
 export const NO_SEAL =
   "could not get the agent's SEAL, the Vouched API is unreachable and none is cached";
 
-// The compact SEAL, then its payload, then how long it has left. It is the
-// SEAL card show embeds, from the same cache.
+// The compact SEAL, then what it says one line each, then its payload, then
+// how long it has left. It is the SEAL card show embeds, from the same
+// cache.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent
     .command('show')
@@ -25,6 +26,7 @@ export function register(parent: Command, deps: SealDeps): Command {
         return;
       }
       stdout(seal);
+      for (const line of sealSummary(payload)) stdout(line);
       stdout(JSON.stringify(payload, null, 2));
       stdout(expiresInText(expiresAt, deps.now()));
     });

@@ -367,6 +367,7 @@ It prints one line per check, `ok` or `FAIL` first, then `PASS carelmeyer/claude
 | `--max-incidents <n>` | incidents allowed, default 0 |
 | `--min-reliability <x>` | reliability score needed, 0 to 1. Checked only when given |
 | `--min-safety <x>` | safety score needed, 0 to 1. Checked only when given |
+| `--min-level <level>` | level needed, `none`, `bronze`, `silver` or `gold`, default `none`. Checked only when given, against the level in the SEAL |
 | `--json` | print the API answer, `{ ok, id, handle, checks, credential }` |
 
 A score the agent does not have yet fails its check. It is never read as 0 or as a pass. Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run (bad handle or flag, unknown agent, network). A renamed agent exits 2 and names its new handle. `credential` is the agent's current SEAL, which you can verify offline with `vouched seal verify` or as described at https://vouched.run/verify.

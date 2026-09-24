@@ -144,6 +144,42 @@ describe('vouched check', () => {
     ]);
   });
 
+  it('--min-level sends minLevel and prints the level line', async () => {
+    reply = () =>
+      Response.json({
+        ...passing,
+        ok: false,
+        checks: [
+          ...passing.checks,
+          { name: 'minLevel', required: 'silver', actual: 'bronze', ok: false },
+        ],
+      });
+    const r = await run(
+      'check',
+      'carelmeyer/claude-code',
+      '--min-verified',
+      '0',
+      '--min-level',
+      'silver',
+    );
+    expect(r.code).toBe(1);
+    expect(r.out.split('\n').at(-3)).toBe(
+      'FAIL level bronze, need at least silver',
+    );
+    expect(urls).toEqual([
+      'http://api.test/v1/check/carelmeyer/claude-code?minVerified=0&minLevel=silver',
+    ]);
+    const bad = await run(
+      'check',
+      'carelmeyer/claude-code',
+      '--min-level',
+      'platinum',
+    );
+    expect(bad.code).toBe(2);
+    expect(bad.err).toContain('invalid minLevel platinum');
+    expect(urls).toHaveLength(1);
+  });
+
   it('--json prints the CheckResponse and keeps the exit code', async () => {
     reply = () => Response.json(failing);
     const r = await run('check', 'carelmeyer/claude-code', '--json');

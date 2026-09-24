@@ -1,7 +1,12 @@
 # Changelog
 
-<!-- 0.3.1, opened by VOU-81. Merge the heading with VOU-81's and keep this line under it. -->
+## 0.3.1, 24 September 2026
 
+- SEAL payload version 1, from the SEAL Standard. `seal show`, `seal verify`, `card show` and the SEAL cache read the new fields, all loosely, so a field or level added later does not break this version. `ver`, `agent_version` (sent beside `version` for one release), `level` (`none`, `bronze`, `silver` or `gold`), the eight evidence counts (`events`, `history_days`, `verified_tasks`, `seed_tasks`, `server_checked_tasks`, `confirmed_tasks`, `distinct_operators`, `safety_incidents_90d`), `operator.verified`, `identity` (identity attestation references, empty for now), `last_active` and `dormant_days`.
+- `seal show` and `seal verify` print what a valid SEAL says, one line each, after the verdict and before the payload. The level, the eight counts, `operator verified yes` or `no`, `last active` as a date (or `never`), `dormant days` and one line per identity reference. A SEAL issued before version 1 prints `level not in this SEAL, it was issued before version 1` and only the counts it has. `--json` output is unchanged.
+- `seal verify` checks the version after the issuer and before expiry. A SEAL with any `ver` but 1 is `broken SEAL: unsupported version`. A SEAL without `ver`, issued before version 1, is accepted until the end of 25 September 2026 UTC and is `unsupported version` after that. The SEAL cache and a SEAL fetched from the API follow the same rule, so a cached SEAL of an old version is fetched again.
+- `vouched check --min-level <level>` needs at least that level, `none`, `bronze`, `silver` or `gold`. The check is only sent when the flag is given, so the default bar is unchanged. It prints `ok   level bronze, need at least bronze` or a `FAIL` line. The Mastra adapter's `check` and `assertTrusted` take `minLevel` too, and `Check` carries levels in `required` and `actual` for it.
+- `vouched card write` puts the SEAL under `https://vouched.run/ext/seal/v1` as well as the old `https://vouched.run/ext/credential/v1`, both with the same `params`.
 - `status` prints the level of the current version, `-` until the API has one. When the API has accepted no event for a day or more it prints a `dormant` row and where the agent stands on the dormancy ladder with the next rung, for example `Quiet for 16 days. At 30 days the level drops one step.` `--json` gains `level` and `dormantDays`.
 
 ## 0.3.0, 24 September 2026

@@ -18,6 +18,7 @@ type Flags = {
   maxIncidents?: string;
   minReliability?: string;
   minSafety?: string;
+  minLevel?: string;
 };
 
 // The API URL of a local config when there is one, so a dev setup checks
@@ -43,6 +44,10 @@ export function register(
     .option('--max-incidents <n>', 'incidents allowed, default 0')
     .option('--min-reliability <x>', 'reliability needed, 0 to 1')
     .option('--min-safety <x>', 'safety needed, 0 to 1')
+    .option(
+      '--min-level <level>',
+      'level needed, none, bronze, silver or gold, default none',
+    )
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();
       let result: CheckResponse;
@@ -54,6 +59,7 @@ export function register(
             maxIncidents: flags.maxIncidents,
             minReliability: flags.minReliability,
             minSafety: flags.minSafety,
+            minLevel: flags.minLevel,
           },
           {
             apiUrl: resolveApiUrl({ config: await configApiUrl() }),

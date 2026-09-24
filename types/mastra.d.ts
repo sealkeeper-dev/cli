@@ -33,12 +33,14 @@ export declare function withVouched<
 export declare function vouchedSession(sessionId?: string): VouchedSession;
 
 // Every value optional. The API defaults minVerified to 1 and maxIncidents
-// to 0. minReliability and minSafety (0 to 1) are checked only when given.
+// to 0. minReliability and minSafety (0 to 1) and minLevel are checked only
+// when given.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
   minReliability?: number | undefined;
   minSafety?: number | undefined;
+  minLevel?: 'none' | 'bronze' | 'silver' | 'gold' | undefined;
 };
 
 export type CheckOptions = {
@@ -50,11 +52,17 @@ export type CheckOptions = {
 
 // One check. min checks pass when actual >= required, max checks when
 // actual <= required. actual is null when the agent has no value yet, and a
-// null never passes.
+// null never passes. minLevel compares levels, none below bronze, silver
+// and gold, with the level in the SEAL as actual.
 export type Check = {
-  name: 'minVerified' | 'maxIncidents' | 'minReliability' | 'minSafety';
-  required: number;
-  actual: number | null;
+  name:
+    | 'minVerified'
+    | 'maxIncidents'
+    | 'minReliability'
+    | 'minSafety'
+    | 'minLevel';
+  required: number | 'none' | 'bronze' | 'silver' | 'gold';
+  actual: number | 'none' | 'bronze' | 'silver' | 'gold' | null;
   ok: boolean;
 };
 

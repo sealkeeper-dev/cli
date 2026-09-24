@@ -12,6 +12,7 @@ import {
   readKeysFile,
   type SealCheck,
   sealKid,
+  sealSummary,
 } from '../seal.js';
 import { configApiUrl } from './check.js';
 import type { SealDeps } from './seal.js';
@@ -72,6 +73,11 @@ export function register(parent: Command, deps: SealDeps): Command {
         stdout(JSON.stringify(result));
       } else {
         stdout(result.valid ? 'valid SEAL' : `broken SEAL: ${result.reason}`);
+        // What it says only for a valid SEAL. A broken one shows the raw
+        // payload and nothing that reads like a claim.
+        if (result.valid) {
+          for (const line of sealSummary(result.payload)) stdout(line);
+        }
         if (result.payload !== null) {
           stdout(JSON.stringify(result.payload, null, 2));
         }

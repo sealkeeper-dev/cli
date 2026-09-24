@@ -2,7 +2,12 @@
 // GET /v1/check/:login/:name, shared by `vouched check` and the Mastra
 // adapter's check and assertTrusted. A plain public GET. No key, no config
 // and no registration needed.
-import { AgentName, CheckQuery, GithubLogin } from '@vouched-dev/schema';
+import {
+  AgentName,
+  CheckQuery,
+  GithubLogin,
+  type Level,
+} from '@vouched-dev/schema';
 import { ApiError, resolveApiUrl } from './api.js';
 import {
   AgentRenamedResponse,
@@ -14,12 +19,13 @@ import {
 const REQUEST_TIMEOUT_MS = 30_000;
 
 // Every value optional. The API defaults minVerified to 1 and maxIncidents
-// to 0. minReliability and minSafety are checked only when given.
+// to 0. minReliability, minSafety and minLevel are checked only when given.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
   minReliability?: number | undefined;
   minSafety?: number | undefined;
+  minLevel?: Level | undefined;
 };
 
 export type CheckOptions = {
@@ -156,5 +162,7 @@ export function describeCheck(check: Check): string {
       return `${status} reliability ${actual}, need at least ${check.required}`;
     case 'minSafety':
       return `${status} safety ${actual}, need at least ${check.required}`;
+    case 'minLevel':
+      return `${status} level ${actual}, need at least ${check.required}`;
   }
 }

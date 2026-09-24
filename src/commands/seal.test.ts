@@ -13,6 +13,7 @@ import {
   base64urlEncode,
   type CredentialPayload,
   generateKeypair,
+  LEGACY_UNTIL,
   sign,
 } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
@@ -66,18 +67,67 @@ describe('vouched seal', () => {
   let now: number;
   let stdin: string;
 
+  // A version 1 payload.
   function claims(over: Partial<CredentialPayload> = {}): CredentialPayload {
     return {
       iss: 'vouched.run',
       sub: agentId,
+      ver: 1,
       iat: NOW_SEC - HOUR,
       exp: NOW_SEC + 24 * HOUR,
+      agent_version: '1.0.0',
       version: '1.0.0',
+      level: 'bronze',
       scores: { reliability: 0.9, safety: null },
-      counts: { events: 12, verified_tasks: 1 },
+      counts: {
+        events: 12,
+        history_days: 3,
+        verified_tasks: 26,
+        seed_tasks: 25,
+        server_checked_tasks: 1,
+        confirmed_tasks: 0,
+        distinct_operators: 1,
+        safety_incidents_90d: 0,
+      },
+      operator: { verified: false },
+      identity: [],
+      last_active: NOW_SEC - 2 * 86_400,
+      dormant_days: 2,
       ...over,
     };
   }
+
+  // The shape issued before version 1, with no ver.
+  const legacyClaims = (iat: number) => ({
+    iss: 'vouched.run',
+    sub: agentId,
+    iat,
+    exp: iat + 24 * HOUR,
+    version: '1.0.0',
+    scores: { reliability: 0.9 },
+    counts: { events: 12, verified_tasks: 1 },
+  });
+
+  // What seal show and seal verify print for claims(), one line each.
+  const SUMMARY = [
+    'level bronze',
+    'events 12',
+    'history days 3',
+    'verified tasks 26',
+    'seed tasks 25',
+    'server checked tasks 1',
+    'confirmed tasks 0',
+    'distinct operators 1',
+    'safety incidents in 90 days 0',
+    'operator verified no',
+    'last active 2026-09-22',
+    'dormant days 2',
+  ];
+
+  // The pretty printed payload, from its opening brace to the line before
+  // the expiry.
+  const jsonBlock = (lines: string[]) =>
+    JSON.parse(lines.slice(lines.indexOf('{'), -1).join('\n'));
 
   async function run(fetcher: typeof fetch, ...args: string[]) {
     const deps: Partial<SealDeps> = {
@@ -183,9 +233,15 @@ describe('vouched seal', () => {
       const [first, ...rest] = out.trimEnd().split('\n');
       expect(first).toBe(cache.credential);
       expect(rest.at(-1)).toBe('Expires in 24 hours 0 minutes');
-      const payload = JSON.parse(rest.slice(0, -1).join('\n'));
+      const brace = rest.indexOf('{');
+      expect(rest.slice(0, brace)).toEqual([
+        ...SUMMARY.slice(0, -2),
+        expect.stringMatching(/^last active \d{4}-\d{2}-\d{2}$/),
+        'dormant days 2',
+      ]);
+      const payload = jsonBlock(rest);
       expect(payload).toMatchObject({ iss: 'vouched.run', sub: agentId });
-      expect(rest.slice(0, -1).join('\n')).toBe(
+      expect(rest.slice(brace, -1).join('\n')).toBe(
         JSON.stringify(payload, null, 2),
       );
     });
@@ -259,9 +315,86 @@ describe('vouched seal', () => {
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
       expect(lines[0]).toBe('valid SEAL');
+      expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
       expect(lines.at(-1)).toBe('Expires in 24 hours 0 minutes');
-      expect(JSON.parse(lines.slice(1, -1).join('\n'))).toEqual(claims());
+      expect(jsonBlock(lines)).toEqual(claims());
       expect(requests).toEqual([WELL_KNOWN]);
+    });
+
+    it('prints identity references and a null last active', async () => {
+      const seal = await sign(
+        claims({
+          last_active: null,
+          dormant_days: null,
+          level: 'none',
+          identity: [
+            {
+              provider: 'https://login.example.com',
+              kind: 'oidc',
+              ref: 'https://login.example.com/a/1',
+              subject_hash: 'n4bQgYhMfWWaL-qgxVrQFaO_TxsrC4Is0V1sFbDwCgg',
+              attested_at: NOW_SEC - 86_400,
+              scope: 'operator',
+            },
+          ],
+          operator: { verified: true },
+        }),
+        serverKey.privateKey,
+        KID,
+      );
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(0);
+      const lines = out.trimEnd().split('\n');
+      expect(lines).toContain('level none');
+      expect(lines).toContain('operator verified yes');
+      expect(lines).toContain('last active never');
+      expect(lines).toContain('dormant days none');
+      expect(lines).toContain(
+        'identity oidc operator from https://login.example.com, attested 2026-09-23',
+      );
+    });
+
+    it.each([2, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+      const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(1);
+      const lines = out.trimEnd().split('\n');
+      expect(lines[0]).toBe('broken SEAL: unsupported version');
+      expect(lines).not.toContain('level bronze');
+      const json = await run(fetchFn, 'seal', 'verify', seal, '--json');
+      expect(JSON.parse(json.out)).toMatchObject({
+        valid: false,
+        reason: 'unsupported version',
+      });
+    });
+
+    it('a SEAL without ver is valid as legacy until the end of 25 September 2026 UTC', async () => {
+      const iat = LEGACY_UNTIL - HOUR;
+      const seal = await sign(legacyClaims(iat), serverKey.privateKey, KID);
+      now = (LEGACY_UNTIL - 1) * 1000;
+      const before = await run(fetchFn, 'seal', 'verify', seal);
+      expect(before.code).toBe(0);
+      const lines = before.out.trimEnd().split('\n');
+      expect(lines.slice(0, 3)).toEqual([
+        'valid SEAL',
+        'level not in this SEAL, it was issued before version 1',
+        'events 12',
+      ]);
+      expect(lines).toContain('verified tasks 1');
+      expect(lines).not.toContain('operator verified no');
+
+      now = LEGACY_UNTIL * 1000;
+      const after = await run(fetchFn, 'seal', 'verify', seal);
+      expect(after.code).toBe(1);
+      expect(after.out.split('\n')[0]).toBe('broken SEAL: unsupported version');
+
+      // Version 1 is valid either side of the cutoff.
+      const v1 = await sign(
+        claims({ iat, exp: iat + 24 * HOUR }),
+        serverKey.privateKey,
+        KID,
+      );
+      expect((await run(fetchFn, 'seal', 'verify', v1)).code).toBe(0);
     });
 
     it('--json prints valid, reason, payload and expiresAt', async () => {

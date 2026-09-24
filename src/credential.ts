@@ -4,6 +4,7 @@ import {
   base64urlDecode,
   decodeHeader,
   Jws,
+  sealVersionProblem,
   verify,
 } from '@vouched-dev/schema';
 import { z } from 'zod';
@@ -54,7 +55,7 @@ export async function getCredential(
 ): Promise<Credential | null> {
   const p = options.paths ?? paths();
   const nowSec = Math.floor((options.now ?? Date.now)() / 1000);
-  const cached = await readCache(p, options.agentId);
+  const cached = await readCache(p, options.agentId, nowSec);
 
   if (
     !options.force &&
@@ -123,6 +124,11 @@ async function fetchVerified(
       'the SEAL from the API is broken, it failed signature verification, not using it',
     );
   }
+  if (sealVersionProblem(verified, nowSec) !== null) {
+    throw new CredentialError(
+      'the SEAL from the API has a version this CLI does not understand, not using it',
+    );
+  }
   const payload = CredentialPayload.safeParse(verified);
   if (!payload.success) {
     throw new CredentialError(
@@ -151,11 +157,13 @@ function unreachable(error: unknown): boolean {
   );
 }
 
-// null when there is no cache, it does not parse, or it belongs to another
-// agent id (after init --force). The next fetch rewrites it.
+// null when there is no cache, it does not parse, it belongs to another
+// agent id (after init --force) or its version is no longer accepted, a
+// legacy SEAL past LEGACY_UNTIL. The next fetch rewrites it.
 async function readCache(
   p: Paths,
   agentId: string,
+  nowSec: number,
 ): Promise<Credential | null> {
   let raw: string;
   try {
@@ -172,5 +180,6 @@ async function readCache(
   }
   const cached = CachedCredential.safeParse(json);
   if (!cached.success || cached.data.payload.sub !== agentId) return null;
+  if (sealVersionProblem(cached.data.payload, nowSec) !== null) return null;
   return { credential: cached.data.credential, payload: cached.data.payload };
 }

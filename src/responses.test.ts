@@ -64,6 +64,37 @@ const payload = {
   counts: { events: 1, verified_tasks: 0 },
 };
 
+// The same SEAL as version 1 of the standard, every field it added.
+const payloadV1 = {
+  ...payload,
+  ver: 1,
+  agent_version: '0.1.0',
+  level: 'bronze',
+  counts: {
+    events: 1,
+    history_days: 1,
+    verified_tasks: 0,
+    seed_tasks: 0,
+    server_checked_tasks: 0,
+    confirmed_tasks: 0,
+    distinct_operators: 0,
+    safety_incidents_90d: 0,
+  },
+  operator: { verified: false },
+  identity: [
+    {
+      provider: 'https://login.example.com',
+      kind: 'oidc',
+      ref: 'r',
+      subject_hash: 'h',
+      attested_at: 1,
+      scope: 'operator',
+    },
+  ],
+  last_active: 1,
+  dormant_days: 0,
+};
+
 const scoreEntry = {
   version: '0.1.0',
   dimension: 'reliability',
@@ -92,6 +123,8 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
   ],
   ['CredentialPayload', CredentialPayload, payload, ['counts']],
   ['SealClaims', SealClaims, payload, ['counts']],
+  ['SealClaims version 1', SealClaims, payloadV1, ['operator']],
+  ['CredentialPayload version 1', CredentialPayload, payloadV1, ['counts']],
   [
     'WellKnown',
     WellKnown,
@@ -273,6 +306,41 @@ describe('response schemas parse loosely', () => {
       expect(CredentialPayload.parse({ ...payload, counts }).counts).toEqual(
         counts,
       );
+    });
+
+    it('a version 1 SEAL payload, keeping every field', () => {
+      expect(SealClaims.parse(payloadV1)).toEqual(payloadV1);
+    });
+
+    it('a version 1 SEAL with a level, kind or scope it does not know yet', () => {
+      const later = {
+        ...payloadV1,
+        level: 'platinum',
+        identity: [
+          { ...payloadV1.identity[0], kind: 'passkey', scope: 'team' },
+        ],
+      };
+      expect(SealClaims.parse(later).level).toBe('platinum');
+    });
+
+    it('a SEAL with agent_version only, once version is dropped', () => {
+      const { version: _v, ...rest } = payloadV1;
+      expect(SealClaims.safeParse(rest).success).toBe(true);
+      const { agent_version: _a, ...neither } = rest;
+      expect(SealClaims.safeParse(neither).success).toBe(false);
+    });
+
+    it('a minLevel check with levels for required and actual', () => {
+      const got = CheckResponse.parse({
+        ok: false,
+        id: ID,
+        handle: 'carelmeyer/scout',
+        checks: [
+          { name: 'minLevel', required: 'silver', actual: 'bronze', ok: false },
+        ],
+        credential: JWS,
+      });
+      expect(got.checks[0]?.actual).toBe('bronze');
     });
   });
 
