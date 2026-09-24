@@ -69,6 +69,9 @@ export type ApiClient = {
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
   renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
+  // DELETE /v1/agents/:id, signed. deleted on 204, gone on 404. Anything
+  // else throws.
+  deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -247,6 +250,16 @@ export function createApiClient(options: {
       const result = AgentResponse.safeParse(json);
       if (!result.success) throw toError(status, undefined);
       return result.data;
+    },
+    async deleteAgent(agentId, envelope) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}`,
+        { envelope },
+        'DELETE',
+      );
+      if (status === 204) return 'deleted';
+      if (status === 404) return 'gone';
+      throw toError(status, json, headers);
     },
   };
 }
