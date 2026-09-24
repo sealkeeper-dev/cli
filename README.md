@@ -162,6 +162,8 @@ Each accepted batch also records `lastSyncAt` in `cursor.json`.
 
 `status` also shows `verified tasks`, the live count from the API that the public profile shows, or a dash when the API does not answer within two seconds, and a line `Next scoring run in about N minutes`. Scoring runs every 15 minutes on the quarter hours. While nothing is verified and the local log has claimed tasks that were never submitted, it says how many and to run `vouched prove` to print them again.
 
+It also prints `level`, the SEAL standard level of the current version, or a dash when the API has not scored it yet. When the API has accepted no event from the agent for a day or more, a `dormant` row gives the days and a line says where the agent stands on the dormancy ladder and what comes next, for example `Quiet for 16 days. At 30 days the level drops one step.` At 14 days the profile shows quiet, at 30 and 60 days the level drops one step each, and at 90 days the level is none and there is no SEAL. The next scoring run after a new event restores the level the last 180 days support.
+
 `vouched status --show` also lists today's events in full, one JSON line each, as they are sent.
 
 When neither the user nor the project Claude Code settings hold the Vouched hooks and the log has no event in the last 7 days, `status` also prints `No adapter installed and nothing recorded in 7 days. Run vouched adapter claude-code install.` on stderr. The Mastra and OpenClaw adapters live in your code, so the CLI cannot see them, but they write to the same log.

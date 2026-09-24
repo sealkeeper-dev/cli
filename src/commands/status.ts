@@ -1,9 +1,16 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 
 import { stat } from 'node:fs/promises';
-import { BaseDimension, type Event, EventType } from '@vouched-dev/schema';
+import {
+  BaseDimension,
+  DORMANCY,
+  type Event,
+  EventType,
+  Level,
+} from '@vouched-dev/schema';
 import type { Command } from 'commander';
-import { createApiClient, resolveApiUrl } from '../api.js';
+import { z } from 'zod';
+import { resolveApiUrl } from '../api.js';
 import {
   claudeConfigDir,
   hasHooks,
@@ -65,6 +72,12 @@ export type Status = {
   // Live from the API, the count on the public profile. null when the API
   // did not answer.
   verifiedTasks: number | null;
+  // The SEAL standard level of the current version, live from the API. null
+  // when the API did not answer or has not scored this version yet.
+  level: Level | null;
+  // Whole days since the API last accepted an event from this agent. null
+  // when unknown or when it has accepted none.
+  dormantDays: number | null;
   // Claimed in the local log and not submitted, over the last week.
   unsubmittedClaims: number;
   // Whole minutes until the next quarter hour, when scoring runs.
@@ -128,15 +141,16 @@ export async function readStatus(
     now,
     paths: p,
   });
-  const [events, pending, cursor, score, verifiedTasks, unsubmitted] =
-    await Promise.all([
+  const [events, pending, cursor, score, live, unsubmitted] = await Promise.all(
+    [
       readDay(day, p),
       countPending(p),
       readCursor(p),
       scorePromise,
-      liveVerifiedTasks(config, deps),
+      liveAgent(config, deps),
       unsubmittedClaims(now, p),
-    ]);
+    ],
+  );
 
   return {
     agentId: config.agentId,
@@ -144,7 +158,9 @@ export async function readStatus(
     profileUrl: profileUrl(config),
     day,
     ...countEvents(events),
-    verifiedTasks,
+    verifiedTasks: live?.counts?.verifiedTasks ?? null,
+    level: live?.level ?? null,
+    dormantDays: live?.standing?.dormant_days ?? null,
     unsubmittedClaims: unsubmitted.length,
     nextScoringRunMinutes: minutesToNextScoring(now),
     pending,
@@ -156,20 +172,41 @@ export async function readStatus(
   };
 }
 
-// The verified task count from GET /v1/agents/<id>, with the same two
-// second limit as the score. null when the API does not answer.
-async function liveVerifiedTasks(
+// The part of GET /v1/agents/<id> status reads. level and standing are
+// optional on the answer, since a version the scoring job has not reached
+// has neither. Read loosely here, so a field that fails to parse costs only
+// that field.
+const LiveAgent = z.object({
+  counts: z
+    .object({ verifiedTasks: z.int().min(0) })
+    .optional()
+    .catch(undefined),
+  level: Level.optional().catch(undefined),
+  standing: z
+    .object({ dormant_days: z.int().min(0).nullable() })
+    .optional()
+    .catch(undefined),
+});
+type LiveAgent = z.infer<typeof LiveAgent>;
+
+// The agent answer, with the same two second limit as the score. null when
+// the API does not answer or answers with something else.
+async function liveAgent(
   config: Config,
   deps: StatusDeps,
-): Promise<number | null> {
+): Promise<LiveAgent | null> {
+  const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
   try {
-    const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
-      fetch: deps.fetch,
-      timeoutMs: SCORE_TIMEOUT_MS,
-    });
-    const agent = await api.getAgent(config.agentId);
-    return agent.counts?.verifiedTasks ?? null;
+    const res = await deps.fetch(
+      `${apiUrl}/v1/agents/${encodeURIComponent(config.agentId)}`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
+      },
+    );
+    if (res.status !== 200) return null;
+    const parsed = LiveAgent.safeParse(await res.json());
+    return parsed.success ? parsed.data : null;
   } catch {
     return null;
   }
@@ -310,6 +347,10 @@ function printStatus(status: Status): void {
       'verified tasks',
       status.verifiedTasks === null ? '-' : String(status.verifiedTasks),
     ],
+    ['level', status.level ?? '-'],
+    ...(status.dormantDays !== null && status.dormantDays > 0
+      ? ([['dormant', days(status.dormantDays)]] as [string, string][])
+      : []),
     ['pending', String(status.pending)],
     ['last sync', status.lastSyncAt ?? 'never'],
     [
@@ -326,6 +367,8 @@ function printStatus(status: Status): void {
   );
   stdout('');
   stdout(nextScoringLine(status.nextScoringRunMinutes));
+  const dormancy = dormancyLine(status.dormantDays);
+  if (dormancy) stdout(dormancy);
   const hint = unsubmittedHint(status);
   if (hint) stdout(hint);
 
@@ -338,6 +381,29 @@ function printStatus(status: Status): void {
 
 export function nextScoringLine(minutes: number): string {
   return `Next scoring run in about ${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+
+// Where the agent is on the dormancy ladder of the SEAL standard and the
+// next rung, in plain words. Nothing when it is active today or unknown.
+export function dormancyLine(dormantDays: number | null): string | null {
+  if (dormantDays === null || dormantDays <= 0) return null;
+  const d = DORMANCY;
+  const n = days(dormantDays);
+  if (dormantDays < d.quietDays) {
+    return `No accepted event for ${n}. At ${d.quietDays} days the profile shows quiet.`;
+  }
+  if (dormantDays < d.dropOneDays) {
+    return `Quiet for ${n}. At ${d.dropOneDays} days the level drops one step.`;
+  }
+  if (dormantDays < d.dropTwoDays) {
+    return `Quiet for ${n}, the level is one step down. At ${d.dropTwoDays} days it drops one more.`;
+  }
+  if (dormantDays < d.noneDays) {
+    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none and there is no SEAL.`;
+  }
+  return `Quiet for ${n}. The level is none and there is no SEAL until the next scoring run after a new event.`;
 }
 
 // Only while nothing is verified yet, so it points at the one thing left to

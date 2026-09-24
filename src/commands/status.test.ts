@@ -11,6 +11,7 @@ import { paths, writeConfig } from '../config.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
 import {
+  dormancyLine,
   HOOKS_MISSING,
   minutesToNextScoring,
   NO_ADAPTER,
@@ -32,8 +33,22 @@ const offline = (async () => {
   throw new TypeError('fetch failed');
 }) as typeof fetch;
 
-function agentAnswer(verifiedTasks: number) {
+type Live = { level?: string; dormantDays?: number | null };
+
+function agentAnswer(verifiedTasks: number, live: Live = {}) {
   return {
+    ...(live.level === undefined ? {} : { level: live.level }),
+    ...(live.dormantDays === undefined
+      ? {}
+      : {
+          standing: {
+            counts: {},
+            history_days: 3,
+            last_active: null,
+            dormant_days: live.dormantDays,
+            quiet: (live.dormantDays ?? 0) >= 14,
+          },
+        }),
     id: AGENT_ID,
     name: 'scout',
     version: '1.0.0',
@@ -58,11 +73,12 @@ function agentAnswer(verifiedTasks: number) {
 function scoreFetch(
   scores: { dimension: string; value: number | null }[],
   verifiedTasks = 2,
+  live: Live = {},
 ) {
   return (async (input: string | URL | Request) => {
     const url = String(input);
     if (url === `${API_URL}/v1/agents/${AGENT_ID}`) {
-      return Response.json(agentAnswer(verifiedTasks));
+      return Response.json(agentAnswer(verifiedTasks, live));
     }
     expect(url).toBe(`${API_URL}/v1/agents/${AGENT_ID}/score`);
     return Response.json({
@@ -299,6 +315,82 @@ describe('status', () => {
     });
   });
 
+  describe('level and dormancy', () => {
+    it('prints the level and the next rung when dormant', async () => {
+      const { code, out } = await run(
+        scoreFetch([], 30, { level: 'bronze', dormantDays: 16 }),
+        'status',
+      );
+      expect(code).toBe(0);
+      const lines = out.split('\n');
+      expect(lines).toContain('level             bronze');
+      expect(lines).toContain('dormant           16 days');
+      expect(lines).toContain(
+        'Quiet for 16 days. At 30 days the level drops one step.',
+      );
+    });
+
+    it('prints no dormant row or line when active today', async () => {
+      const { out } = await run(
+        scoreFetch([], 30, { level: 'none', dormantDays: 0 }),
+        'status',
+      );
+      expect(out).toContain('level             none\n');
+      expect(out).not.toContain('dormant');
+      expect(out).not.toContain('Quiet');
+    });
+
+    it('prints a dash for the level when the API has none or is offline', async () => {
+      expect((await run(scoreFetch([]), 'status')).out).toContain(
+        'level             -\n',
+      );
+      expect((await run(offline, 'status')).out).toContain(
+        'level             -\n',
+      );
+    });
+
+    it('keeps the verified count when the level fails to parse', async () => {
+      const json = JSON.parse(
+        (
+          await run(
+            scoreFetch([], 7, { level: 'platinum', dormantDays: 3 }),
+            'status',
+            '--json',
+          )
+        ).out,
+      );
+      expect(json).toMatchObject({
+        verifiedTasks: 7,
+        level: null,
+        dormantDays: 3,
+      });
+    });
+
+    it('names every rung of the ladder in plain words', () => {
+      expect(dormancyLine(null)).toBeNull();
+      expect(dormancyLine(0)).toBeNull();
+      expect(dormancyLine(1)).toBe(
+        'No accepted event for 1 day. At 14 days the profile shows quiet.',
+      );
+      expect(dormancyLine(13)).toBe(
+        'No accepted event for 13 days. At 14 days the profile shows quiet.',
+      );
+      expect(dormancyLine(14)).toBe(
+        'Quiet for 14 days. At 30 days the level drops one step.',
+      );
+      expect(dormancyLine(30)).toBe(
+        'Quiet for 30 days, the level is one step down. At 60 days it drops one more.',
+      );
+      expect(dormancyLine(60)).toBe(
+        'Quiet for 60 days, the level is two steps down. At 90 days the level is none and there is no SEAL.',
+      );
+      expect(dormancyLine(89)).toContain('At 90 days');
+      expect(dormancyLine(90)).toBe(
+        'Quiet for 90 days. The level is none and there is no SEAL until the next scoring run after a new event.',
+      );
+    });
+  });
+
   it('prints one JSON object with --json', async () => {
     await seedMixedLog();
     const { code, out } = await run(
@@ -326,6 +418,8 @@ describe('status', () => {
       toolCalls: { total: 3, ok: 2, okRatio: 2 / 3 },
       tasks: { claimed: 1, submitted: 1 },
       verifiedTasks: 2,
+      level: null,
+      dormantDays: null,
       unsubmittedClaims: 0,
       nextScoringRunMinutes: expect.any(Number),
       pending: 4,
