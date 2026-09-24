@@ -3,14 +3,20 @@
 // web use, parseSealPayload from @vouched-dev/schema, for version 1 SEALs.
 // Each fixture is signed with a test key and checked both ways. Where the
 // strict parser says ok the CLI must say valid, and where it says malformed
-// the CLI must say malformed too.
+// the CLI must say malformed too. Below that, the SEAL conformance cases
+// every verifier runs.
 import {
   base64urlEncode,
   type CredentialPayload,
   generateKeypair,
   parseSealPayload,
+  type SealBrokenReason,
   sign,
 } from '@vouched-dev/schema';
+import {
+  type SealConformance,
+  sealConformanceCases,
+} from '@vouched-dev/schema/conformance';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { checkSeal } from './seal.js';
 
@@ -165,6 +171,19 @@ describe('seal verify parity with the strict parser for version 1', () => {
     }
   });
 
+  it('calls a score out of range and a life over 24 hours malformed', async () => {
+    for (const payload of [
+      { ...base, scores: { reliability: 1.5 } },
+      { ...base, exp: base.iat + 24 * HOUR + 1 },
+    ]) {
+      const jws = await sign(payload, privateKey, KID);
+      expect(await checkSeal(jws, keys as never, NOW)).toMatchObject({
+        valid: false,
+        reason: 'malformed',
+      });
+    }
+  });
+
   it('covers both answers', () => {
     const verdicts = FIXTURES.map(
       ([, payload]) =>
@@ -172,5 +191,70 @@ describe('seal verify parity with the strict parser for version 1', () => {
     );
     expect(verdicts).toContain(true);
     expect(verdicts).toContain(false);
+  });
+});
+
+// The SEAL conformance cases from @vouched-dev/schema. The API's verifySeal
+// (apps/api/src/routes/seal-conformance.test.ts) and the web's checkSeal
+// (apps/web/lib/seal-conformance.test.ts) run the same cases and must give
+// the same answers. The CLI spells each reason with spaces and adds how
+// long ago a SEAL expired, so it is mapped to the API's name here.
+const API_NAME: Record<string, SealBrokenReason> = {
+  malformed: 'malformed',
+  'unknown kid': 'unknown_kid',
+  'bad signature': 'bad_signature',
+  'wrong issuer': 'wrong_issuer',
+  'unsupported version': 'unsupported_version',
+  'not yet valid': 'not_yet_valid',
+};
+const apiName = (reason: string) =>
+  reason.startsWith('expired ') ? 'expired' : API_NAME[reason];
+
+describe('seal verify against the SEAL conformance cases', () => {
+  let suite: SealConformance;
+  beforeAll(async () => {
+    suite = await sealConformanceCases();
+  });
+
+  it('gives the expected answer for every case', async () => {
+    const answers = await Promise.all(
+      suite.cases.map(async (c) => {
+        const r = await checkSeal(
+          c.jws,
+          suite.wellKnown as never,
+          suite.nowSeconds * 1000,
+        );
+        return [c.name, r.valid ? 'valid' : apiName(r.reason ?? '')];
+      }),
+    );
+    expect(answers).toEqual(suite.cases.map((c) => [c.name, c.expected]));
+  });
+
+  it('says a SEAL issued ahead of the clock is not yet valid', async () => {
+    const future = suite.cases.find((c) => c.expected === 'not_yet_valid');
+    if (!future) throw new Error('no not_yet_valid case');
+    const nowMs = suite.nowSeconds * 1000;
+    const r = await checkSeal(future.jws, suite.wellKnown as never, nowMs);
+    expect(r).toMatchObject({ valid: false, reason: 'not yet valid' });
+    expect(r.payload).not.toBeNull();
+    const later = await checkSeal(
+      future.jws,
+      suite.wellKnown as never,
+      nowMs + 3600 * 1000,
+    );
+    expect(later.valid).toBe(true);
+  });
+
+  it('names a foreign issuer wrong issuer, whatever the payload shape', async () => {
+    const foreign = suite.cases.filter((c) => c.expected === 'wrong_issuer');
+    expect(foreign.length).toBeGreaterThanOrEqual(2);
+    for (const c of foreign) {
+      const r = await checkSeal(
+        c.jws,
+        suite.wellKnown as never,
+        suite.nowSeconds * 1000,
+      );
+      expect(r).toMatchObject({ valid: false, reason: 'wrong issuer' });
+    }
   });
 });

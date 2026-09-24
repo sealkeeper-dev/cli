@@ -6,6 +6,7 @@ import {
   Dimension,
   Ed25519PublicKey,
   Jws,
+  SEAL_MAX_TTL_SECONDS,
   Sha256Hex,
   TaskState,
   TaskType,
@@ -141,7 +142,8 @@ const sealClaims = {
   // agent_version under its old name, sent beside it for one release.
   version: Version.optional(),
   level: z.string().optional(),
-  scores: z.record(z.string(), z.number().nullable()),
+  // Each score 0 to 1 or null, as the standard says.
+  scores: z.record(z.string(), z.number().min(0).max(1).nullable()),
   // seed_tasks is optional, since a SEAL issued before it was added has
   // none. The other five arrived with version 1.
   counts: z.object({
@@ -159,20 +161,22 @@ const sealClaims = {
   last_active: Seconds.nullable().optional(),
   dormant_days: Count.nullable().optional(),
 };
-const expAfterIat = (c: { iat: number; exp: number }) => c.exp > c.iat;
+// exp after iat and at most 24 hours after it, standard section 2.
+const expAfterIat = (c: { iat: number; exp: number }) =>
+  c.exp > c.iat && c.exp - c.iat <= SEAL_MAX_TTL_SECONDS;
 const hasAgentVersion = (c: { agent_version?: string; version?: string }) =>
   c.agent_version !== undefined || c.version !== undefined;
 
 export const SealClaims = z
   .object({ iss: z.string(), ...sealClaims })
-  .refine(expAfterIat, 'exp must be after iat')
+  .refine(expAfterIat, 'exp must be after iat and within 24 hours of it')
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type SealClaims = z.infer<typeof SealClaims>;
 
 // The same claims with the issuer pinned to vouched.run.
 export const CredentialPayload = z
   .object({ iss: z.literal(CREDENTIAL_ISSUER), ...sealClaims })
-  .refine(expAfterIat, 'exp must be after iat')
+  .refine(expAfterIat, 'exp must be after iat and within 24 hours of it')
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type CredentialPayload = z.infer<typeof CredentialPayload>;
 

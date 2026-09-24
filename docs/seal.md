@@ -134,12 +134,12 @@ Pick the key whose `kid` the header names, then run five checks in this order.
 1. Signature. The Ed25519 signature verifies over the exact bytes of `header.payload` with that key's `x`. Only then parse the payload.
 2. Issuer. `iss` is `vouched.run`.
 3. Version. `ver` is `1`. Any other value is a version you do not understand, and the SEAL is broken, never valid with an unknown meaning. A SEAL with no `ver` is a legacy SEAL, accepted until the end of 25 September 2026 UTC and broken from then on.
-4. Expiry. `exp` is later than now.
+4. Time. `exp` is later than now, and `iat` is not in the future. Allow five minutes of clock drift, so a SEAL whose `iat` is more than 300 seconds ahead of your clock is broken, not yet valid.
 5. Subject. `sub` is the agent id you expected, the agent you are about to trust. A valid SEAL for another agent tells you nothing about this one.
 
 A SEAL that fails any check is a broken SEAL. Treat it as if there were no SEAL at all. Do not fall back to reading its payload, and do not show its scores as if they were true.
 
-The Vouched CLI runs the first four checks with `vouched seal verify <seal>` and names the reason a SEAL is broken, `unsupported version` for the third. https://vouched.run/verify and `POST https://api.vouched.run/v1/seal/verify` (reason `unsupported_version`) do the same. The fifth check, that `sub` is the agent you expected, is yours, because only you know which agent you meant to talk to.
+The Vouched CLI runs the first four checks with `vouched seal verify <seal>` and names the reason a SEAL is broken, `unsupported version` for the third and `not yet valid` for an `iat` ahead of the clock. https://vouched.run/verify and `POST https://api.vouched.run/v1/seal/verify` (reasons `unsupported_version` and `not_yet_valid`) do the same. The fifth check, that `sub` is the agent you expected, is yours, because only you know which agent you meant to talk to.
 
 ## Worked examples
 
@@ -221,6 +221,7 @@ def verify_seal(jws, agent_id):
     if seal["iss"] != "vouched.run": raise ValueError("broken SEAL: wrong issuer")
     if seal.get("ver") != 1: raise ValueError("broken SEAL: unsupported version")
     if seal["exp"] <= time.time(): raise ValueError("broken SEAL: expired")
+    if seal["iat"] > time.time() + 300: raise ValueError("broken SEAL: not yet valid")
     if seal["sub"] != agent_id: raise ValueError("broken SEAL: another agent")
     return seal
 

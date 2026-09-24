@@ -73,7 +73,7 @@ describe('vouched seal', () => {
       iss: 'vouched.run',
       sub: agentId,
       ver: 1,
-      iat: NOW_SEC - HOUR,
+      iat: NOW_SEC,
       exp: NOW_SEC + 24 * HOUR,
       agent_version: '1.0.0',
       version: '1.0.0',
@@ -209,9 +209,11 @@ describe('vouched seal', () => {
     beforeEach(async () => {
       now = Date.now();
       const nowSec = Math.floor(now / 1000);
+      // Issued 30 seconds ahead of the clock, inside the five minute skew,
+      // so the time left still reads 24 hours 0 minutes.
       currentSeal = () =>
         sign(
-          claims({ iat: nowSec - HOUR, exp: nowSec + 24 * HOUR + 30 }),
+          claims({ iat: nowSec + 30, exp: nowSec + 24 * HOUR + 30 }),
           serverKey.privateKey,
           KID,
         );
@@ -492,11 +494,36 @@ describe('vouched seal', () => {
       expect(requests).toEqual([]);
     });
 
-    it('a signed payload that is not a SEAL is malformed', async () => {
-      const seal = await sign({ hello: 'world' }, serverKey.privateKey, KID);
+    it('a signed vouched.run payload that is not a SEAL is malformed', async () => {
+      const seal = await sign(
+        { iss: 'vouched.run', ver: 1, hello: 'world' },
+        serverKey.privateKey,
+        KID,
+      );
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
       expect(out.split('\n')[0]).toBe('broken SEAL: malformed');
+    });
+
+    it('a signed payload of another issuer, in no SEAL shape, is a wrong issuer', async () => {
+      for (const payload of [{ hello: 'world' }, { iss: 'other.example' }]) {
+        const seal = await sign(payload, serverKey.privateKey, KID);
+        const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+        expect(code).toBe(1);
+        expect(out.split('\n')[0]).toBe('broken SEAL: wrong issuer');
+      }
+    });
+
+    it('a SEAL issued more than five minutes ahead is not yet valid', async () => {
+      const seal = await sign(
+        claims({ iat: NOW_SEC + 301, exp: NOW_SEC + 301 + 24 * HOUR }),
+        serverKey.privateKey,
+        KID,
+      );
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(1);
+      expect(out.split('\n')[0]).toBe('broken SEAL: not yet valid');
+      expect(out).not.toContain('Expires in');
     });
 
     it('--keys reads the keys from a file and never fetches', async () => {
@@ -630,7 +657,7 @@ describe('vouched seal', () => {
     async function currentSealAt(atMs: number): Promise<string> {
       const sec = Math.floor(atMs / 1000);
       return sign(
-        claims({ iat: sec - HOUR, exp: sec + 24 * HOUR }),
+        claims({ iat: sec, exp: sec + 24 * HOUR }),
         serverKey.privateKey,
         KID,
       );

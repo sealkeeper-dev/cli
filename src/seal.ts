@@ -5,6 +5,7 @@ import {
   CREDENTIAL_ISSUER,
   decodeHeader,
   parseSealPayload,
+  sealIatProblem,
   sealVersionProblem,
   utf8Decode,
   verify,
@@ -28,7 +29,8 @@ const KEYS_TIMEOUT_MS = 10_000;
 export type SealCheck = {
   valid: boolean;
   // null when valid. Otherwise bad signature, unknown kid, wrong issuer,
-  // unsupported version, expired N minutes ago or malformed.
+  // unsupported version, expired N minutes ago, not yet valid or
+  // malformed.
   reason: string | null;
   // The payload as signed. null unless the signature checked out, so an
   // unverified claim is never shown.
@@ -47,11 +49,13 @@ export function sealKid(jws: string): string | null {
 
 // Checks in order. The header, then the signature over the exact bytes of
 // header.payload with the key the kid names, then the issuer, then the
-// version, then expiry. Verify first, parse second. A version other than
-// 1 is unsupported, and so is a SEAL without ver once LEGACY_UNTIL has
-// passed, as sealVersionProblem in @vouched-dev/schema says. A version 1
-// payload must then match the strict shape, parseSealPayload. The API's
-// POST /v1/seal/verify and the web's checkSeal use the same rules.
+// version, then the shape, then expiry, then iat. Verify first, parse
+// second. A version other than 1 is unsupported, and so is a SEAL without
+// ver once LEGACY_UNTIL has passed, as sealVersionProblem in
+// @vouched-dev/schema says. A version 1 payload must then match the strict
+// shape, parseSealPayload. The API's POST /v1/seal/verify and the web's
+// checkSeal use the same rules, and the SEAL conformance cases in
+// @vouched-dev/schema hold all three to the same answers.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
@@ -62,6 +66,7 @@ export async function checkSeal(
     payload: unknown = null,
     expiresAt: string | null = null,
   ): SealCheck => ({ valid: false, reason, payload, expiresAt });
+  const nowSec = nowMs / 1000;
 
   const kid = sealKid(jws);
   if (kid === null) return broken('malformed');
@@ -80,37 +85,31 @@ export async function checkSeal(
     );
   }
 
-  // Issuer before version, so a SEAL from another issuer is named as such
-  // whatever its ver. The shape is only read once the version is known.
+  // The issuer straight after the signature, as in the API and the web, so
+  // a SEAL from another issuer is named wrong issuer whatever its ver or
+  // shape. The shape is only read once the version is known.
   const iss =
     typeof payload === 'object' && payload !== null && 'iss' in payload
       ? (payload as { iss: unknown }).iss
       : undefined;
-  if (
-    iss === CREDENTIAL_ISSUER &&
-    sealVersionProblem(payload, nowMs / 1000) !== null
-  ) {
+  if (iss !== CREDENTIAL_ISSUER) {
+    return broken('wrong issuer', payload, expiresAtOf(payload));
+  }
+  if (sealVersionProblem(payload, nowSec) !== null) {
     return broken('unsupported version', payload);
   }
   // A version 1 SEAL from vouched.run has one exact shape, and the API and
   // the web check it with the strict parser. So does this, so the three
   // never disagree about one. The loose read below is kept for what it
   // prints and for the legacy shape.
-  if (
-    iss === CREDENTIAL_ISSUER &&
-    hasVer(payload) &&
-    !parseSealPayload(payload, nowMs / 1000).ok
-  ) {
+  if (hasVer(payload) && !parseSealPayload(payload, nowSec).ok) {
     return broken('malformed', payload);
   }
 
   const claims = SealClaims.safeParse(payload);
   if (!claims.success) return broken('malformed', payload);
   const expiresAt = new Date(claims.data.exp * 1000).toISOString();
-  if (claims.data.iss !== CREDENTIAL_ISSUER) {
-    return broken('wrong issuer', payload, expiresAt);
-  }
-  const leftSec = claims.data.exp - nowMs / 1000;
+  const leftSec = claims.data.exp - nowSec;
   if (leftSec <= 0) {
     const minutes = Math.max(1, Math.ceil(-leftSec / 60));
     return broken(
@@ -119,7 +118,22 @@ export async function checkSeal(
       expiresAt,
     );
   }
+  // exp first, then iat, in the standard's order (sealIatProblem).
+  if (sealIatProblem(claims.data.iat, nowSec) !== null) {
+    return broken('not yet valid', payload, expiresAt);
+  }
   return { valid: true, reason: null, payload, expiresAt };
+}
+
+// The expiry of a payload of any shape, when it carries one in Unix seconds.
+function expiresAtOf(payload: unknown): string | null {
+  const exp =
+    typeof payload === 'object' && payload !== null && 'exp' in payload
+      ? (payload as { exp: unknown }).exp
+      : undefined;
+  return typeof exp === 'number' && Number.isFinite(exp) && exp >= 0
+    ? new Date(exp * 1000).toISOString()
+    : null;
 }
 
 function hasVer(payload: unknown): boolean {

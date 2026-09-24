@@ -17,7 +17,11 @@ const ALLOWED_BARE = new Set([
   'zod',
   '@noble/ed25519',
 ]);
-const TEST_ONLY_BARE = new Set(['vitest', 'tsup']);
+const TEST_ONLY_BARE = new Set([
+  'vitest',
+  'tsup',
+  '@vouched-dev/schema/conformance',
+]);
 
 const HEADER =
   '// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.';
