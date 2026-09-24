@@ -2,7 +2,7 @@
 import {
   A2A_PROTOCOL_VERSION,
   AgentCard,
-  credentialExtension,
+  sealExtensions,
 } from '@vouched-dev/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
@@ -47,10 +47,9 @@ export function buildCard(
     description: `Vouched agent ${config.agentId}. Verified track record at ${profile}`,
     ...(url === undefined ? {} : { url }),
     version: config.version,
+    // ext/seal/v1 and the old ext/credential/v1, the same SEAL in both.
     capabilities: {
-      extensions: credential
-        ? [credentialExtension(credential.credential)]
-        : [],
+      extensions: credential ? sealExtensions(credential.credential) : [],
     },
     skills: [],
   });

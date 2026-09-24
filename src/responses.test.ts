@@ -195,6 +195,51 @@ describe('response schemas parse loosely', () => {
     expect(CredentialResponse.safeParse({ payload }).success).toBe(false);
   });
 
+  // The fields the API added with the SEAL routes (VOU-73). CLI 0.3.0 must
+  // read every answer that carries them.
+  describe('fields added with the SEAL routes', () => {
+    const counts = { events: 1, verified_tasks: 2, seed_tasks: 2 };
+
+    it('the SEAL answer with seal beside credential and seed_tasks', () => {
+      const seal = 'eyJz.eyJz.c2Vh';
+      const got = CredentialResponse.parse({
+        credential: seal,
+        seal,
+        payload: { ...payload, counts },
+      });
+      expect(got).toEqual({
+        credential: seal,
+        payload: { ...payload, counts },
+      });
+    });
+
+    it('the check answer with seal beside credential', () => {
+      const got = CheckResponse.parse({
+        ok: true,
+        id: ID,
+        handle: 'carelmeyer/scout',
+        checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
+        credential: JWS,
+        seal: JWS,
+      });
+      expect(got.credential).toBe(JWS);
+    });
+
+    it('GET by id with counts.seedTasks', () => {
+      const got = AgentResponse.parse({
+        ...agent,
+        counts: { ...agent.counts, seedTasks: 0 },
+      });
+      expect(got.counts?.seedTasks).toBe(0);
+    });
+
+    it('a SEAL payload with seed_tasks', () => {
+      expect(CredentialPayload.parse({ ...payload, counts }).counts).toEqual(
+        counts,
+      );
+    });
+  });
+
   it('the API client takes an answer with keys it does not know', async () => {
     const api = createApiClient({
       apiUrl: 'http://api.test',

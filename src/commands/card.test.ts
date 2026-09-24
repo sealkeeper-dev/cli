@@ -15,6 +15,7 @@ import {
   CREDENTIAL_EXTENSION_URI,
   type CredentialPayload,
   generateKeypair,
+  SEAL_EXTENSION_URI,
   sign,
 } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
@@ -184,8 +185,13 @@ describe('card show and card write', () => {
     });
     expect(card.description).toContain(agentId);
     expect(card.description).toContain(`https://vouched.run/agents/${agentId}`);
-    expect(card.capabilities.extensions).toHaveLength(1);
-    expect(card.capabilities.extensions[0]?.uri).toBe(CREDENTIAL_EXTENSION_URI);
+    expect(card.capabilities.extensions.map((e) => e.uri)).toEqual([
+      SEAL_EXTENSION_URI,
+      CREDENTIAL_EXTENSION_URI,
+    ]);
+    expect(card.capabilities.extensions[1]?.params).toEqual(
+      card.capabilities.extensions[0]?.params,
+    );
 
     const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
     expect(extensionCredential(card)).toBe(cache.credential);

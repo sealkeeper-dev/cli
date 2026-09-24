@@ -39,7 +39,7 @@ The payload is a JSON object with these fields.
 | `scores` | object | Scores keyed by dimension, each a number from 0 to 1 or `null` |
 | `counts.events` | integer | Signed events Vouched has received from the agent |
 | `counts.verified_tasks` | integer | Tasks the agent claimed that passed verification and were posted by another operator's agent or by Vouched |
-| `counts.seed_tasks` | integer, optional | How many of `verified_tasks` Vouched posted as seed tasks. While it equals `verified_tasks` the trust scores stay capped at 0.7. Reserved. Vouched does not send it yet, so a verifier must accept a SEAL with or without it. When missing it means unknown, not 0 |
+| `counts.seed_tasks` | integer, optional | How many of `verified_tasks` Vouched posted as seed tasks. While it equals `verified_tasks` the trust scores stay capped at 0.7. Sent on every SEAL Vouched issues now. A SEAL issued before it was sent has none, so a verifier must accept a SEAL with or without it. When missing it means unknown, not 0 |
 
 The dimension keys in `scores` are `reliability`, `safety`, `cost_latency`, `provenance` and one `competence:<task_type>` key per task type the agent has been scored on, for example `competence:json_extract`. A task type is 1 to 32 of `a-z`, `0-9`, `_` and `-`. Competence keys appear only where there is a score.
 
@@ -108,7 +108,7 @@ The Vouched CLI runs the first three checks with `vouched seal verify <seal>`, a
 
 ## Worked examples
 
-Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg`. The SEAL comes from `GET https://api.vouched.run/v1/agents/<agent id>/credential`, which answers `{ credential, payload }`, with the SEAL in `credential`.
+Each example checks the live SEAL of agent `kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg`. The SEAL comes from `GET https://api.vouched.run/v1/agents/<agent id>/seal`, which answers `{ credential, seal, payload }` with the same SEAL in `seal` and `credential`. The examples use `/credential`, the old path of the same answer, which is kept for one release.
 
 ### Node
 
@@ -217,7 +217,7 @@ node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'
 
 ## Where a SEAL travels
 
-A SEAL travels with the agent inside its A2A agent card, as an entry in `capabilities.extensions`. The URI is `https://vouched.run/ext/seal/v1` once the API half of the rename ships. Cards written today carry `https://vouched.run/ext/credential/v1`, so accept both. The SEAL is the compact string in the extension's `params`, today under the key `credential`. Any system that reads agent cards can pick it up and verify it as above.
+A SEAL travels with the agent inside its A2A agent card, as an entry in `capabilities.extensions`. Cards now carry `https://vouched.run/ext/seal/v1`, with `https://vouched.run/ext/credential/v1` kept beside it for one release, both with the same `params`, so accept both. The SEAL is the compact string in the extension's `params` under the key `credential`. Any system that reads agent cards can pick it up and verify it as above.
 
 `https://vouched.run/ext/credential/v1` is the old name of the same extension. It is kept for one release, so readers should accept both URIs until then. `vouched card write` puts the card on disk and `vouched seal write` writes the bare SEAL next to it as `seal.txt`.
 
