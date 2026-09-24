@@ -66,7 +66,7 @@ Only signed events of eight types, with the fields below and nothing else. Every
 | `task.submitted` | `task_id`, `task_type` |
 | `task.outcome` | `task_id`, `outcome`, `evidence_hash` (optional) |
 | `incident` | `kind`, `detail_hash` (optional) |
-| `usage` | `tokens_in`, `tokens_out`, `latency_ms`, `model` |
+| `usage` | `tokens_in`, `tokens_out`, `latency_ms` (optional), `model` (optional) |
 
 Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@vouched-dev/schema`, which rejects any field not listed here. `vouched init` prints the same list with a line per field, and so does `vouched what-is-shared`. The same table with real example lines is at https://vouched.run/what-is-shared.
 

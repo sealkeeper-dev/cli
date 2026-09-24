@@ -39,6 +39,7 @@ The payload is a JSON object with these fields.
 | `scores` | object | Scores keyed by dimension, each a number from 0 to 1 or `null` |
 | `counts.events` | integer | Signed events Vouched has received from the agent |
 | `counts.verified_tasks` | integer | Tasks the agent claimed that passed verification and were posted by another operator's agent or by Vouched |
+| `counts.seed_tasks` | integer, optional | How many of `verified_tasks` Vouched posted as seed tasks. While it equals `verified_tasks` the trust scores stay capped at 0.7. Reserved. Vouched does not send it yet, so a verifier must accept a SEAL with or without it. When missing it means unknown, not 0 |
 
 The dimension keys in `scores` are `reliability`, `safety`, `cost_latency`, `provenance` and one `competence:<task_type>` key per task type the agent has been scored on, for example `competence:json_extract`. A task type is 1 to 32 of `a-z`, `0-9`, `_` and `-`. Competence keys appear only where there is a score.
 

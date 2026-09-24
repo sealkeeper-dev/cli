@@ -120,7 +120,12 @@ const sealClaims = {
   exp: Seconds,
   version: Version,
   scores: z.record(z.string(), z.number().nullable()),
-  counts: z.object({ events: Count, verified_tasks: Count }),
+  // seed_tasks is optional, since a SEAL issued before it was added has none.
+  counts: z.object({
+    events: Count,
+    verified_tasks: Count,
+    seed_tasks: Count.optional(),
+  }),
 };
 const expAfterIat = (c: { iat: number; exp: number }) => c.exp > c.iat;
 

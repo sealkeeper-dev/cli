@@ -170,6 +170,18 @@ describe('response schemas parse loosely', () => {
     expect(schema.safeParse(rest).success).toBe(false);
   });
 
+  it('SealClaims keeps seed_tasks when present and takes a SEAL without it', () => {
+    const counts = { events: 1, verified_tasks: 2, seed_tasks: 2 };
+    expect(SealClaims.parse({ ...payload, counts }).counts).toEqual(counts);
+    expect(SealClaims.parse(payload).counts).toEqual(payload.counts);
+    expect(
+      SealClaims.safeParse({
+        ...payload,
+        counts: { ...counts, seed_tasks: -1 },
+      }).success,
+    ).toBe(false);
+  });
+
   it('CredentialResponse prefers seal over credential', () => {
     const seal = 'eyJz.eyJz.c2Vh';
     expect(

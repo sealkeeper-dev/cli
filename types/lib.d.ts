@@ -38,8 +38,8 @@ export type EventPayloads = {
   usage: {
     tokens_in: number;
     tokens_out: number;
-    latency_ms: number;
-    model: string;
+    latency_ms?: number | undefined;
+    model?: string | undefined;
   };
 };
 
