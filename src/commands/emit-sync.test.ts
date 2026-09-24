@@ -172,7 +172,7 @@ describe('emit and sync', () => {
   const api = (...args: string[]) => run(fakeFetch(server), ...args);
 
   // 'unset' is a config from init, before any sync was confirmed. false is
-  // one turned off with vouched config auto-sync off.
+  // one turned off with sealkeeper config auto-sync off.
   async function initialise(
     version = '1.2.0',
     autoSync: boolean | 'unset' = true,
@@ -201,9 +201,9 @@ describe('emit and sync', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-emit-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-emit-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     server = {
       agentId: '',
       verify: true,
@@ -348,7 +348,7 @@ describe('emit and sync', () => {
       const [event] = await logged();
       expect(out).toBe(`${event?.event_id}\n`);
       expect(event?.version).toBe('0.1.0');
-      expect(err).toContain('run vouched init');
+      expect(err).toContain('run sealkeeper init');
       expect(err.trim().split('\n')).toHaveLength(1);
     });
 
@@ -366,7 +366,7 @@ describe('emit and sync', () => {
       expect(code).toBe(0);
       expect(out).toMatch(/^[0-9a-f-]{36}\n$/);
       expect(err).toBe(
-        'warning: sync did not finish, 3 events pending, run vouched sync\n',
+        'warning: sync did not finish, 3 events pending, run sealkeeper sync\n',
       );
       expect(await countPending()).toBe(3);
     });
@@ -672,7 +672,7 @@ describe('emit and sync', () => {
       server.reply = () => apiError(401, 'unknown_agent');
       const { code, err } = await api('sync');
       expect(code).toBe(1);
-      expect(err).toContain('run vouched init');
+      expect(err).toContain('run sealkeeper init');
       expect(err).toContain('2 events pending');
       expect((await readCursor()).lastAcked).toBeNull();
     });
@@ -683,7 +683,7 @@ describe('emit and sync', () => {
       const { code, out, err } = await run(failingFetch, 'sync');
       expect(code).toBe(1);
       expect(out).toBe('');
-      expect(err).toContain('could not reach the Vouched API');
+      expect(err).toContain('could not reach the SealKeeper API');
       expect(err).toContain('3 events pending');
       expect((await readCursor()).lastAcked).toBeNull();
       expect(await countPending()).toBe(3);
@@ -692,7 +692,7 @@ describe('emit and sync', () => {
     it('without config exits 1', async () => {
       const { code, err } = await api('sync');
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run vouched init\n');
+      expect(err).toBe('not initialised, run sealkeeper init\n');
     });
   });
 
@@ -720,7 +720,7 @@ describe('emit and sync', () => {
       expect(code).toBe(0);
       expect(out).toMatch(/^[0-9a-f-]{36}\n$/);
       expect(err).toBe(
-        '2 events waiting, run vouched sync to review and send\n',
+        '2 events waiting, run sealkeeper sync to review and send\n',
       );
       expect(calls).toBe(0);
       expect(await countPending()).toBe(2);
@@ -736,7 +736,7 @@ describe('emit and sync', () => {
         '{"session_id":"s1"}',
       );
       expect(err).toBe(
-        '1 event waiting, run vouched sync to review and send\n',
+        '1 event waiting, run sealkeeper sync to review and send\n',
       );
     });
 
@@ -808,7 +808,7 @@ describe('emit and sync', () => {
       expect(err).toContain(
         'send these 2 events now and turn on automatic sync for future events? [y/N] ',
       );
-      expect(err).toContain('vouched config auto-sync off');
+      expect(err).toContain('sealkeeper config auto-sync off');
       expect(server.batches).toEqual([events]);
       expect((await readConfig())?.autoSync).toBe(true);
     });
@@ -841,7 +841,7 @@ describe('emit and sync', () => {
       expect(code).toBe(1);
       expect(input.asked).toBe(0);
       expect(out).toContain(JSON.stringify(events[1]));
-      expect(err).toContain('vouched sync --yes');
+      expect(err).toContain('sealkeeper sync --yes');
       expect(server.batches).toEqual([]);
       expect((await readCursor()).lastAcked).toBeNull();
       expect((await readConfig())?.autoSync).toBeUndefined();
@@ -972,7 +972,7 @@ describe('emit and sync', () => {
         '{"session_id":"s1"}',
       );
       expect(err).toBe(
-        '1 event waiting, run vouched sync to review and send\n',
+        '1 event waiting, run sealkeeper sync to review and send\n',
       );
       expect(server.batches).toEqual([]);
     });

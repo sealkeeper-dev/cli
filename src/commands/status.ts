@@ -14,6 +14,7 @@ import { resolveApiUrl } from '../api.js';
 import {
   claudeConfigDir,
   hasHooks,
+  isOldPackageCommand,
   ourCommands,
   parseHookCommand,
   settingsPath,
@@ -40,7 +41,7 @@ import { defaultSyncDeps, loadConfig } from './sync.js';
 import { NOT_INITIALISED } from './whoami.js';
 
 // A local dashboard of today's activity. Everything but the score comes from
-// files under the Vouched home, so it works offline. The score comes from the
+// files under the SealKeeper home, so it works offline. The score comes from the
 // score cache, which gives up on the network after two seconds.
 
 // claudeDir and cwd say where to look for the Claude Code settings, and
@@ -53,7 +54,9 @@ export type StatusDeps = {
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING =
-  'The Claude Code hooks point at a vouched that is no longer there. Run vouched adapter claude-code install again, or npm i -g vouched for a stable path.';
+  'The Claude Code hooks point at a sealkeeper that is no longer there. Run sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.';
+export const HOOKS_OLD_PACKAGE =
+  'The Claude Code hooks still run the old vouched package, which records to the old directory. Run sealkeeper init or sealkeeper adapter claude-code install to replace them.';
 const QUIET_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
@@ -84,7 +87,7 @@ export type Status = {
   nextScoringRunMinutes: number;
   pending: number;
   lastSyncAt: string | null;
-  // Whether emit sends events on its own. See vouched config auto-sync.
+  // Whether emit sends events on its own. See sealkeeper config auto-sync.
   autoSync: boolean;
   // Score per dimension for the configured version. null when there is no
   // score for that dimension or the score could not be fetched.
@@ -121,7 +124,8 @@ export function register(
       else printStatus(status);
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
-      if (await hooksGone(deps)) stderr(HOOKS_MISSING);
+      if (await oldPackageHooks(deps)) stderr(HOOKS_OLD_PACKAGE);
+      else if (await hooksGone(deps)) stderr(HOOKS_MISSING);
     });
 }
 
@@ -226,8 +230,22 @@ function claudeDirs(deps: StatusDeps) {
   };
 }
 
+// True when a hook in the user or project settings was written by the old
+// vouched package. It still runs and records to ~/.vouched, which this CLI
+// no longer reads, so those events would never be sent.
+export async function oldPackageHooks(deps: StatusDeps): Promise<boolean> {
+  const dirs = claudeDirs(deps);
+  const commands = (
+    await Promise.all([
+      ourCommands(settingsPath('user', dirs)),
+      ourCommands(settingsPath('project', dirs)),
+    ])
+  ).flat();
+  return commands.some(isOldPackageCommand);
+}
+
 // True when a hook of ours in the user or project settings runs a node
-// binary or a vouched script that is not there any more, as happens once
+// binary or a sealkeeper script that is not there any more, as happens once
 // the npx cache is cleared. The legacy bare and npx forms name no path, so
 // there is nothing to check for them.
 export async function hooksGone(deps: StatusDeps): Promise<boolean> {
@@ -241,7 +259,7 @@ export async function hooksGone(deps: StatusDeps): Promise<boolean> {
   for (const command of commands) {
     const parsed = parseHookCommand(command);
     // A legacy form, bare or through npx, names no path and only works when
-    // vouched is on the hook shell's PATH. 0.2.0 wrote it under npx where it
+    // sealkeeper is on the hook shell's PATH. 0.2.0 wrote it under npx where it
     // never is, so it counts as gone and gets the reinstall pointer.
     if (parsed === null) return true;
     for (const path of [parsed.node, parsed.script]) {
@@ -358,7 +376,7 @@ function printStatus(status: Status): void {
     ['last sync', status.lastSyncAt ?? 'never'],
     [
       'auto-sync',
-      status.autoSync ? 'on' : 'off, run vouched sync to review and send',
+      status.autoSync ? 'on' : 'off, run sealkeeper sync to review and send',
     ],
     ['scores', status.scoresFetchedAt ? `as of ${status.scoresFetchedAt}` : ''],
   ]);
@@ -419,7 +437,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
 export function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
-  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run vouched prove to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
+  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run sealkeeper prove to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
 }
 
 function formatScore(value: number): string {

@@ -280,7 +280,7 @@ function stopMessage(error: ApiError): string {
     case 'bad_response':
       return error.message;
     case 'unknown_agent':
-      return 'the API does not know this agent, run vouched init';
+      return 'the API does not know this agent, run sealkeeper init';
     case 'rate_limited':
       return 'the API is rate limiting this agent, try again later';
     default:

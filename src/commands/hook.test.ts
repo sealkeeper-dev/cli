@@ -152,9 +152,9 @@ describe('hook claude-code', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-hook-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-hook-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     fetches = [];
   });
 
@@ -353,7 +353,7 @@ describe('hook claude-code', () => {
       vi.restoreAllMocks();
     }
     expect(out).toBe('');
-    expect(err).toBe('vouched: sync did not finish, run vouched sync\n');
+    expect(err).toBe('sealkeeper: sync did not finish, run sealkeeper sync\n');
     expect((await logged()).map((e) => e.type)).toEqual([
       'session.start',
       'session.end',

@@ -13,6 +13,8 @@ import {
   base64urlEncode,
   type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
+  LEGACY_ISSUER_UNTIL,
+  LEGACY_ISSUERS,
   LEGACY_UNTIL,
   sign,
 } from '@sealkeeper/schema';
@@ -26,8 +28,8 @@ import type { SealDeps } from './seal.js';
 import { NO_SEAL } from './seal-show.js';
 
 const API_URL = 'http://api.test';
-const WELL_KNOWN = `${API_URL}/.well-known/vouched.json`;
-const KID = 'vouched-test-1';
+const WELL_KNOWN = `${API_URL}/.well-known/seal.json`;
+const KID = 'sealkeeper-test-1';
 const HOUR = 3600;
 const NOW = Date.parse('2026-09-24T12:00:00.000Z');
 const NOW_SEC = NOW / 1000;
@@ -56,7 +58,7 @@ function tamper(seal: string): string {
   return `${header}.${payload}.${signature.slice(0, i)}${swapped}${signature.slice(i + 1)}`;
 }
 
-describe('vouched seal', () => {
+describe('sealkeeper seal', () => {
   let home: string;
   let agentId: string;
   let serverKey: Keypair;
@@ -70,7 +72,7 @@ describe('vouched seal', () => {
   // A version 1 payload.
   function claims(over: Partial<CredentialPayload> = {}): CredentialPayload {
     return {
-      iss: 'vouched.run',
+      iss: 'sealkeeper.run',
       sub: agentId,
       ver: 1,
       iat: NOW_SEC,
@@ -99,7 +101,7 @@ describe('vouched seal', () => {
 
   // The shape issued before version 1, with no ver.
   const legacyClaims = (iat: number) => ({
-    iss: 'vouched.run',
+    iss: 'sealkeeper.run',
     sub: agentId,
     iat,
     exp: iat + 24 * HOUR,
@@ -169,9 +171,9 @@ describe('vouched seal', () => {
   }) as typeof fetch;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-seal-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', API_URL);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-seal-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     ({ agentId } = await createKey());
     serverKey = await generateKeypair();
     requests = [];
@@ -242,7 +244,7 @@ describe('vouched seal', () => {
         'dormant days 2',
       ]);
       const payload = jsonBlock(rest);
-      expect(payload).toMatchObject({ iss: 'vouched.run', sub: agentId });
+      expect(payload).toMatchObject({ iss: 'sealkeeper.run', sub: agentId });
       expect(rest.slice(brace, -1).join('\n')).toBe(
         JSON.stringify(payload, null, 2),
       );
@@ -279,7 +281,7 @@ describe('vouched seal', () => {
       await rm(paths().config);
       const { code, err } = await run(fetchFn, 'seal', 'show');
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run vouched init\n');
+      expect(err).toBe('not initialised, run sealkeeper init\n');
     });
 
     it('seal write writes seal.txt with the SEAL and a newline', async () => {
@@ -453,7 +455,7 @@ describe('vouched seal', () => {
 
     it('a wrong issuer is broken, with the signed payload shown', async () => {
       const seal = await sign(
-        claims({ iss: 'evil.example' as 'vouched.run' }),
+        claims({ iss: 'evil.example' as 'sealkeeper.run' }),
         serverKey.privateKey,
         KID,
       );
@@ -462,6 +464,24 @@ describe('vouched seal', () => {
       const lines = out.trimEnd().split('\n');
       expect(lines[0]).toBe('broken SEAL: wrong issuer');
       expect(JSON.parse(lines.slice(1).join('\n')).iss).toBe('evil.example');
+    });
+
+    it('accepts the old issuer until LEGACY_ISSUER_UNTIL, then names it a wrong issuer', async () => {
+      const legacy = LEGACY_ISSUERS[0];
+      const iat = LEGACY_ISSUER_UNTIL - HOUR;
+      const seal = await sign(
+        claims({ iss: legacy as 'sealkeeper.run', iat, exp: iat + 24 * HOUR }),
+        serverKey.privateKey,
+        KID,
+      );
+      now = (LEGACY_ISSUER_UNTIL - 1) * 1000;
+      const before = await run(fetchFn, 'seal', 'verify', seal);
+      expect(before.code).toBe(0);
+      expect(before.out.split('\n')[0]).toBe('valid SEAL');
+      now = LEGACY_ISSUER_UNTIL * 1000;
+      const after = await run(fetchFn, 'seal', 'verify', seal);
+      expect(after.code).toBe(1);
+      expect(after.out.split('\n')[0]).toBe('broken SEAL: wrong issuer');
     });
 
     it('an expired SEAL says how long ago and exits 1', async () => {
@@ -494,9 +514,9 @@ describe('vouched seal', () => {
       expect(requests).toEqual([]);
     });
 
-    it('a signed vouched.run payload that is not a SEAL is malformed', async () => {
+    it('a signed sealkeeper.run payload that is not a SEAL is malformed', async () => {
       const seal = await sign(
-        { iss: 'vouched.run', ver: 1, hello: 'world' },
+        { iss: 'sealkeeper.run', ver: 1, hello: 'world' },
         serverKey.privateKey,
         KID,
       );
@@ -527,7 +547,7 @@ describe('vouched seal', () => {
     });
 
     it('--keys reads the keys from a file and never fetches', async () => {
-      const file = join(home, 'vouched.json');
+      const file = join(home, 'sealkeeper.json');
       await writeFile(file, JSON.stringify(published()));
       const seal = await currentSeal();
       const { code, out } = await run(
@@ -560,7 +580,7 @@ describe('vouched seal', () => {
       await writeFile(file, '{"keys":[]}');
       const wrong = await run(offline, 'seal', 'verify', seal, '--keys', file);
       expect(wrong.code).toBe(2);
-      expect(wrong.err).toContain('is not a Vouched keys document');
+      expect(wrong.err).toContain('is not a SealKeeper keys document');
       expect(requests).toEqual([]);
     });
 
@@ -574,7 +594,7 @@ describe('vouched seal', () => {
       expect(code).toBe(2);
       expect(out).toBe('');
       expect(err).toContain(
-        `could not load the Vouched keys from ${WELL_KNOWN}`,
+        `could not load the SealKeeper keys from ${WELL_KNOWN}`,
       );
     });
 
@@ -605,10 +625,14 @@ describe('vouched seal', () => {
       await run(fetchFn, 'seal', 'verify', await currentSeal());
       const rotated = await generateKeypair();
       published = () => ({
-        keys: [jwk(KID, serverKey), jwk('vouched-test-2', rotated)],
+        keys: [jwk(KID, serverKey), jwk('sealkeeper-test-2', rotated)],
       });
       requests = [];
-      const seal = await sign(claims(), rotated.privateKey, 'vouched-test-2');
+      const seal = await sign(
+        claims(),
+        rotated.privateKey,
+        'sealkeeper-test-2',
+      );
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
       expect(out.split('\n')[0]).toBe('valid SEAL');
@@ -628,7 +652,7 @@ describe('vouched seal', () => {
       );
       expect(code).toBe(0);
       expect(out.split('\n')[0]).toBe('valid SEAL');
-      expect(err).toMatch(/^warning: could not fetch the Vouched keys/);
+      expect(err).toMatch(/^warning: could not fetch the SealKeeper keys/);
     });
 
     it('reads the SEAL from stdin when the argument is -', async () => {

@@ -64,7 +64,7 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
-describe('vouched rate', () => {
+describe('sealkeeper rate', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
@@ -95,9 +95,9 @@ describe('vouched rate', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-rate-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-rate-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -265,7 +265,7 @@ describe('vouched rate', () => {
       '3',
     );
     expect(code).toBe(1);
-    expect(err).toBe('not initialised, run vouched init\n');
+    expect(err).toBe('not initialised, run sealkeeper init\n');
     expect(api.calls).toEqual([]);
   });
 });

@@ -1,5 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { z } from 'zod';
+import { readEnv } from './env.js';
 import { stderr } from './output.js';
 
 // GitHub OAuth device flow. The operator opens a URL, types a short code and
@@ -11,9 +12,10 @@ import { stderr } from './output.js';
 export const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
-export const CLIENT_ID_ENV = 'VOUCHED_GITHUB_CLIENT_ID';
+export const CLIENT_ID_ENV = 'SEALKEEPER_GITHUB_CLIENT_ID';
 export const MISSING_CLIENT_ID = `missing GitHub OAuth client id, set ${CLIENT_ID_ENV}`;
-export const CODE_EXPIRED = 'the GitHub code expired, run vouched init again';
+export const CODE_EXPIRED =
+  'the GitHub code expired, run sealkeeper init again';
 export const ACCESS_DENIED = 'GitHub authorisation was denied';
 
 const SLOW_DOWN_SECONDS = 5;
@@ -28,7 +30,7 @@ declare const __GITHUB_CLIENT_ID__: string;
 export function githubClientId(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const fromEnv = env[CLIENT_ID_ENV]?.trim();
+  const fromEnv = readEnv(CLIENT_ID_ENV, env);
   if (fromEnv) return fromEnv;
   const built = __GITHUB_CLIENT_ID__.trim();
   return built.length > 0 ? built : null;

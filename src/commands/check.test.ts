@@ -43,7 +43,7 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
-describe('vouched check', () => {
+describe('sealkeeper check', () => {
   let home: string;
   let urls: string[];
   let reply: () => Response | Promise<Response>;
@@ -77,9 +77,9 @@ describe('vouched check', () => {
 
   beforeEach(async () => {
     // No config and no key here. check needs neither.
-    home = await mkdtemp(join(tmpdir(), 'vouched-check-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', 'http://api.test');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-check-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', 'http://api.test');
     urls = [];
     reply = () => Response.json(passing);
     vi.stubGlobal(
@@ -317,7 +317,7 @@ describe('vouched check', () => {
     const r = await run('check', 'carelmeyer/claude-code');
     expect(r.code).toBe(2);
     expect(r.err).toBe(
-      'could not reach the Vouched API at http://api.test: fetch failed\n',
+      'could not reach the SealKeeper API at http://api.test: fetch failed\n',
     );
   });
 

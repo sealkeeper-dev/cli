@@ -6,7 +6,7 @@ import { decodeSealPayload, expiresInText, sealSummary } from '../seal.js';
 import type { SealDeps } from './seal.js';
 
 export const NO_SEAL =
-  "could not get the agent's SEAL, the Vouched API is unreachable and none is cached";
+  "could not get the agent's SEAL, the SealKeeper API is unreachable and none is cached";
 
 // The compact SEAL, then what it says one line each, then its payload, then
 // how long it has left. It is the SEAL card show embeds, from the same

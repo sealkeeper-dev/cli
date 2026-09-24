@@ -13,6 +13,7 @@ import { createProgram } from '../program.js';
 import {
   dormancyLine,
   HOOKS_MISSING,
+  HOOKS_OLD_PACKAGE,
   minutesToNextScoring,
   NO_ADAPTER,
   nextScoringLine,
@@ -100,7 +101,7 @@ async function run(fetchFn: typeof fetch, ...args: string[]) {
     sync: {
       fetch: fetchFn,
       sleep: async () => {},
-      cwd: () => join(String(process.env.VOUCHED_HOME), 'project'),
+      cwd: () => join(String(process.env.SEALKEEPER_HOME), 'project'),
     },
   });
   throwOnExit(program);
@@ -171,9 +172,9 @@ describe('status', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-status-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-status-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     // Never the real ~/.claude.
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     await writeConfig(
@@ -208,7 +209,7 @@ describe('status', () => {
     expect(lines).toContain(`agent             ${AGENT_ID}`);
     expect(lines).toContain('handle            carelmeyer/scout');
     expect(lines).toContain(
-      'profile           https://vouched.run/agents/carelmeyer/scout',
+      'profile           https://sealkeeper.run/agents/carelmeyer/scout',
     );
     expect(lines).toContain(`today             ${dayOf(new Date())} UTC`);
     expect(lines).toContain('  session.start   1');
@@ -227,7 +228,7 @@ describe('status', () => {
     expect(lines).toContain('pending           4');
     expect(lines).toContain(`last sync         ${LAST_SYNC}`);
     expect(lines).toContain(
-      'auto-sync         off, run vouched sync to review and send',
+      'auto-sync         off, run sealkeeper sync to review and send',
     );
     expect(out).not.toContain('"event_id"');
     expect(lines).toContain('  reliability     0.82');
@@ -276,7 +277,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(out).toContain('verified tasks    0\n');
       expect(out).toContain(
-        '2 claimed tasks are not submitted yet. Run vouched prove to print them again with the submit lines.\n',
+        '2 claimed tasks are not submitted yet. Run sealkeeper prove to print them again with the submit lines.\n',
       );
       const json = JSON.parse(
         (await run(scoreFetch([], 0), 'status', '--json')).out,
@@ -311,7 +312,7 @@ describe('status', () => {
     it('uses one line for a single unsubmitted claim', async () => {
       await claimOnly();
       expect((await run(scoreFetch([], 0), 'status')).out).toContain(
-        '1 claimed task is not submitted yet. Run vouched prove to print it again with the submit lines.\n',
+        '1 claimed task is not submitted yet. Run sealkeeper prove to print it again with the submit lines.\n',
       );
     });
   });
@@ -424,7 +425,7 @@ describe('status', () => {
     expect(status).toEqual({
       agentId: AGENT_ID,
       handle: 'carelmeyer/scout',
-      profileUrl: 'https://vouched.run/agents/carelmeyer/scout',
+      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/scout',
       day: dayOf(new Date()),
       counts: {
         'session.start': 1,
@@ -515,14 +516,14 @@ describe('status', () => {
     const { code, out, err } = await run(offline, 'status');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run vouched init\n');
+    expect(err).toBe('not initialised, run sealkeeper init\n');
   });
   describe('adapter warning', () => {
     const DAY_MS = 24 * 60 * 60 * 1000;
     // The current form, node and a script by absolute path, shaped like a
     // global install and present on disk, so the hook is ours and not gone.
     async function settingsIn(dir: string): Promise<void> {
-      const scriptDir = join(home, 'lib', 'node_modules', 'vouched', 'dist');
+      const scriptDir = join(home, 'lib', 'node_modules', 'sealkeeper', 'dist');
       await mkdir(scriptDir, { recursive: true });
       const script = join(scriptDir, 'index.js');
       await writeFile(script, '');
@@ -556,7 +557,7 @@ describe('status', () => {
 
     it('warns once on stderr with no hooks and nothing in 7 days', async () => {
       expect(NO_ADAPTER).toBe(
-        'No adapter installed and nothing recorded in 7 days. Run vouched adapter claude-code install.',
+        'No adapter installed and nothing recorded in 7 days. Run sealkeeper adapter claude-code install.',
       );
       await eventDaysAgo(8);
       const { code, out, err } = await run(offline, 'status');
@@ -588,7 +589,7 @@ describe('status', () => {
     });
   });
 
-  describe('hooks that point at a vouched that is gone', () => {
+  describe('hooks that point at a sealkeeper that is gone', () => {
     function settings(command: string): string {
       return JSON.stringify({
         hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
@@ -608,7 +609,7 @@ describe('status', () => {
         '_npx',
         'abc123',
         'node_modules',
-        'vouched',
+        'sealkeeper',
         'dist',
       );
       await mkdir(dir, { recursive: true });
@@ -629,7 +630,7 @@ describe('status', () => {
       const { code, out, err } = await run(offline, 'status');
       expect(code).toBe(0);
       expect(HOOKS_MISSING).toBe(
-        'The Claude Code hooks point at a vouched that is no longer there. Run vouched adapter claude-code install again, or npm i -g vouched for a stable path.',
+        'The Claude Code hooks point at a sealkeeper that is no longer there. Run sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.',
       );
       expect(err).toBe(`${HOOKS_MISSING}\n`);
       expect(out).not.toContain(HOOKS_MISSING);
@@ -638,21 +639,40 @@ describe('status', () => {
     it('warns for the project settings too, and with --json', async () => {
       await writeSettings(
         join(home, 'project', '.claude'),
-        hookCommand(process.execPath, '/no/such/vouched/dist/index.js'),
+        hookCommand(process.execPath, '/no/such/sealkeeper/dist/index.js'),
       );
       const { out, err } = await run(offline, 'status', '--json');
       expect(JSON.parse(out)).toMatchObject({ pending: 0 });
       expect(err).toBe(`${HOOKS_MISSING}\n`);
     });
 
-    it('warns for the legacy forms, which only work with vouched on PATH', async () => {
+    it('warns for the bare forms, which only work with sealkeeper on PATH', async () => {
       await writeSettings(
         join(home, 'claude'),
-        'npx -y vouched hook claude-code',
+        'npx -y sealkeeper hook claude-code',
       );
       expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
-      await writeSettings(join(home, 'claude'), 'vouched hook claude-code');
+      await writeSettings(join(home, 'claude'), 'sealkeeper hook claude-code');
       expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
+    });
+
+    it('says when the hooks still run the old vouched package', async () => {
+      await writeSettings(join(home, 'claude'), 'vouched hook claude-code');
+      expect((await run(offline, 'status')).err).toBe(`${HOOKS_OLD_PACKAGE}\n`);
+      // The absolute form, even with both paths still there, in the project
+      // settings while the user settings are current.
+      const dir = join(home, 'lib', 'node_modules', 'vouched', 'dist');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'index.js'), '');
+      await writeSettings(
+        join(home, 'project', '.claude'),
+        hookCommand(process.execPath, join(dir, 'index.js')),
+      );
+      await writeSettings(
+        join(home, 'claude'),
+        hookCommand(process.execPath, await npxScript()),
+      );
+      expect((await run(offline, 'status')).err).toBe(`${HOOKS_OLD_PACKAGE}\n`);
     });
   });
 });

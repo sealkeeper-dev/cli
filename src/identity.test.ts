@@ -68,18 +68,18 @@ describe('identity', () => {
     [...err.mock.calls, ...out.mock.calls].map((c) => String(c[0])).join('');
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'vouched-identity-'));
+    root = await mkdtemp(join(tmpdir(), 'sealkeeper-identity-'));
     home = join(root, 'home');
-    savedHome = process.env.VOUCHED_HOME;
-    process.env.VOUCHED_HOME = home;
+    savedHome = process.env.SEALKEEPER_HOME;
+    process.env.SEALKEEPER_HOME = home;
     err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (savedHome === undefined) delete process.env.VOUCHED_HOME;
-    else process.env.VOUCHED_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.SEALKEEPER_HOME;
+    else process.env.SEALKEEPER_HOME = savedHome;
     await rm(root, { recursive: true, force: true });
   });
 

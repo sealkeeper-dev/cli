@@ -32,7 +32,7 @@ export const defaultSyncDeps: SyncDeps = {
 };
 
 export const AUTO_SYNC_ON =
-  'automatic sync is on, emit now sends new events as they happen. Turn it off with vouched config auto-sync off';
+  'automatic sync is on, emit now sends new events as they happen. Turn it off with sealkeeper config auto-sync off';
 
 type SyncOptions = { dryRun?: boolean; yes?: boolean };
 
@@ -49,7 +49,7 @@ export function register(
     )
     .option(
       '--yes',
-      'send without asking first, and turn on automatic sync unless it was turned off with vouched config auto-sync off',
+      'send without asking first, and turn on automatic sync unless it was turned off with sealkeeper config auto-sync off',
     )
     .action(async function (this: Command, options: SyncOptions) {
       const json = wantsJson(this);
@@ -146,8 +146,8 @@ async function confirmSync(
   if (!input.isTTY) {
     cmd.error(
       first
-        ? 'nothing sent. There is no terminal to ask, so review the events above and run vouched sync --yes to send them and turn on automatic sync'
-        : 'nothing sent. There is no terminal to ask, so review the events above and run vouched sync --yes to send them. Automatic sync stays off',
+        ? 'nothing sent. There is no terminal to ask, so review the events above and run sealkeeper sync --yes to send them and turn on automatic sync'
+        : 'nothing sent. There is no terminal to ask, so review the events above and run sealkeeper sync --yes to send them. Automatic sync stays off',
     );
   }
   const n = preview.count;

@@ -8,10 +8,10 @@ import type * as openclaw from './openclaw.js';
 describe('published openclaw types', () => {
   it('match the source types', () => {
     expectTypeOf<published.OpenClawPluginApiLike>().toEqualTypeOf<openclaw.OpenClawPluginApiLike>();
-    expectTypeOf<published.VouchedOpenClawOptions>().toEqualTypeOf<openclaw.VouchedOpenClawOptions>();
-    expectTypeOf<published.VouchedOpenClawPlugin>().toEqualTypeOf<openclaw.VouchedOpenClawPlugin>();
-    expectTypeOf<typeof published.vouchedPlugin>().toEqualTypeOf<
-      typeof openclaw.vouchedPlugin
+    expectTypeOf<published.SealKeeperOpenClawOptions>().toEqualTypeOf<openclaw.SealKeeperOpenClawOptions>();
+    expectTypeOf<published.SealKeeperOpenClawPlugin>().toEqualTypeOf<openclaw.SealKeeperOpenClawPlugin>();
+    expectTypeOf<typeof published.sealKeeperPlugin>().toEqualTypeOf<
+      typeof openclaw.sealKeeperPlugin
     >();
     expectTypeOf<typeof published.default>().toEqualTypeOf<
       typeof openclaw.default
@@ -21,7 +21,7 @@ describe('published openclaw types', () => {
   it('accepts an api shaped like OpenClaw plugin api', () => {
     // A trimmed copy of the shape OpenClaw passes to register.
     const api = {
-      id: 'vouched',
+      id: 'sealkeeper',
       logger: { info: (_: string) => {} },
       on: (
         _hookName: string,

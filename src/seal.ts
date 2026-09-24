@@ -1,14 +1,15 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
 import {
+  acceptedIssuer,
   base64urlDecode,
-  CREDENTIAL_ISSUER,
   decodeHeader,
   parseSealPayload,
   sealIatProblem,
   sealVersionProblem,
   utf8Decode,
   verify,
+  WELL_KNOWN_PATH,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
@@ -18,9 +19,11 @@ import { SealClaims, WellKnown } from './responses.js';
 
 // A SEAL, Signed Evidence of Agent Legitimacy, is the compact JWS the API
 // signs over an agent's scores and counts. This file checks one offline
-// against the Vouched public keys and keeps a copy of those keys.
+// against the SealKeeper public keys and keeps a copy of those keys.
 
-export const WELL_KNOWN_PATH = '/.well-known/vouched.json';
+// The path the keys are served at, from the schema, so the CLI, the API and
+// the web never name different ones.
+export { WELL_KNOWN_PATH };
 // Cached keys are fetched again once they are older than this, or sooner
 // when a SEAL names a kid they do not have.
 export const KEYS_MAX_AGE_MS = 24 * 3600 * 1000;
@@ -87,18 +90,20 @@ export async function checkSeal(
 
   // The issuer straight after the signature, as in the API and the web, so
   // a SEAL from another issuer is named wrong issuer whatever its ver or
-  // shape. The shape is only read once the version is known.
+  // shape. acceptedIssuer takes sealkeeper.run always and the legacy
+  // issuer only until LEGACY_ISSUER_UNTIL. The shape is only read once
+  // the version is known.
   const iss =
     typeof payload === 'object' && payload !== null && 'iss' in payload
       ? (payload as { iss: unknown }).iss
       : undefined;
-  if (iss !== CREDENTIAL_ISSUER) {
+  if (!acceptedIssuer(iss, nowSec)) {
     return broken('wrong issuer', payload, expiresAtOf(payload));
   }
   if (sealVersionProblem(payload, nowSec) !== null) {
     return broken('unsupported version', payload);
   }
-  // A version 1 SEAL from vouched.run has one exact shape, and the API and
+  // A version 1 SEAL from an accepted issuer has one exact shape, and the API and
   // the web check it with the strict parser. So does this, so the three
   // never disagree about one. The loose read below is kept for what it
   // prints and for the legacy shape.
@@ -216,7 +221,7 @@ export class KeysError extends Error {
   override name = 'KeysError';
 }
 
-// Reads a copy of /.well-known/vouched.json from disk. Never touches the
+// Reads a saved copy of the keys document (WELL_KNOWN_PATH) from disk. Never touches the
 // network.
 export async function readKeysFile(file: string): Promise<WellKnown> {
   let raw: string;
@@ -230,7 +235,7 @@ export async function readKeysFile(file: string): Promise<WellKnown> {
   const parsed = parseWellKnown(raw);
   if (!parsed) {
     throw new KeysError(
-      `${file} is not a Vouched keys document like ${WELL_KNOWN_PATH}`,
+      `${file} is not a SealKeeper keys document like ${WELL_KNOWN_PATH}`,
     );
   }
   return parsed;
@@ -286,12 +291,12 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   } catch (error) {
     if (cached && knowsKid(cached.wellKnown)) {
       stderr(
-        `warning: could not fetch the Vouched keys, using the copy fetched at ${cached.fetchedAt}`,
+        `warning: could not fetch the SealKeeper keys, using the copy fetched at ${cached.fetchedAt}`,
       );
       return cached.wellKnown;
     }
     throw new KeysError(
-      `could not load the Vouched keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}`,
+      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}`,
     );
   }
 

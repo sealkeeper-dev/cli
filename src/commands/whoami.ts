@@ -9,7 +9,7 @@ import {
 } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 
-export const NOT_INITIALISED = 'not initialised, run vouched init';
+export const NOT_INITIALISED = 'not initialised, run sealkeeper init';
 
 export function register(parent: Command): Command {
   return parent

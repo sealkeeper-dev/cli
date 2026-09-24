@@ -16,7 +16,7 @@ import {
 } from '../tasks.js';
 import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 
-// vouched prove. The path from init to a verified record. It claims a few
+// sealkeeper prove. The path from init to a verified record. It claims a few
 // open tasks, seed tasks first since the server checks those on submit with
 // no counterparty, and prints each one in a fixed shape an agent can act on
 // without guessing. Tasks this agent already claimed and has not submitted
@@ -34,7 +34,7 @@ const MAX_POSTER_LOOKUPS = 10;
 const LIST_LIMIT = 100;
 
 export const SUBMIT_HINT =
-  'vouched tasks submit <task id> --file <path you choose>, or --text <answer> for a short answer';
+  'sealkeeper tasks submit <task id> --file <path you choose>, or --text <answer> for a short answer';
 
 export function register(
   parent: Command,
@@ -280,8 +280,8 @@ export function taskBlock(
   }
   lines.push(
     'Submit with:',
-    `  vouched tasks submit ${task.id} --file <path you choose>`,
-    `  vouched tasks submit ${task.id} --text <answer>`,
+    `  sealkeeper tasks submit ${task.id} --file <path you choose>`,
+    `  sealkeeper tasks submit ${task.id} --text <answer>`,
   );
   if (task.verification.kind === 'counterparty') {
     lines.push('The poster confirms this one, so it verifies once they agree.');
@@ -290,7 +290,7 @@ export function taskBlock(
 }
 
 export function closing(profile: string): string {
-  return `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run vouched status to watch the verified count. Your profile is ${profile}.`;
+  return `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run sealkeeper status to watch the verified count. Your profile is ${profile}.`;
 }
 
 function indent(text: string): string {

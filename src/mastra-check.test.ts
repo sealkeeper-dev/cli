@@ -1,8 +1,8 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// check and assertTrusted from vouched/mastra, with a mocked fetch.
+// check and assertTrusted from sealkeeper/mastra, with a mocked fetch.
 import type { SealCheckResponse } from '@sealkeeper/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertTrusted, check, VouchedCheckError } from './mastra.js';
+import { assertTrusted, check, SealKeeperCheckError } from './mastra.js';
 
 const answer = (ok: boolean): SealCheckResponse => ({
   ok,
@@ -44,8 +44,8 @@ describe('mastra check', () => {
     ]);
   });
 
-  it('uses VOUCHED_API_URL and the global fetch by default', async () => {
-    vi.stubEnv('VOUCHED_API_URL', 'http://env.test');
+  it('uses SEALKEEPER_API_URL and the global fetch by default', async () => {
+    vi.stubEnv('SEALKEEPER_API_URL', 'http://env.test');
     const { fn, urls } = fakeFetch(() => Response.json(answer(true)));
     vi.stubGlobal('fetch', fn);
     await check('carelmeyer/claude-code');
@@ -70,11 +70,11 @@ describe('mastra check', () => {
       { minVerified: 5 },
       { apiUrl: 'http://api.test', fetch: fn },
     ).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(VouchedCheckError);
-    const e = error as VouchedCheckError;
+    expect(error).toBeInstanceOf(SealKeeperCheckError);
+    const e = error as SealKeeperCheckError;
     expect(e.message).toBe(
       [
-        'carelmeyer/claude-code did not pass the Vouched check',
+        'carelmeyer/claude-code did not pass the SealKeeper check',
         'FAIL verified tasks 2, need at least 5',
       ].join('\n'),
     );
@@ -99,11 +99,11 @@ describe('mastra check', () => {
       { minLevel: 'none' },
       { apiUrl: 'http://api.test', fetch: fn },
     ).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(VouchedCheckError);
-    const e = error as VouchedCheckError;
+    expect(error).toBeInstanceOf(SealKeeperCheckError);
+    const e = error as SealKeeperCheckError;
     expect(e.message).toBe(
       [
-        'carelmeyer/claude-code did not pass the Vouched check',
+        'carelmeyer/claude-code did not pass the SealKeeper check',
         'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
       ].join('\n'),
     );

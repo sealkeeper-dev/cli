@@ -46,7 +46,7 @@ import {
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const HOOK_COMMAND = hookCommand(
   '/usr/local/bin/node',
-  '/usr/local/lib/node_modules/vouched/dist/index.js',
+  '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
 );
 const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
 const API_URL = 'http://api.test';
@@ -114,7 +114,7 @@ function apiError(status: number, code: string, message: string): ApiReply {
   return { status, body: { error: { code, message } } };
 }
 
-// Stands in for GitHub and the Vouched API. The API side checks the envelope
+// Stands in for GitHub and the SealKeeper API. The API side checks the envelope
 // signature against the kid, like the real one, before it answers.
 function fakeFetch(world: World): typeof fetch {
   return (async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -224,7 +224,7 @@ async function readIfExists(file: string): Promise<string> {
   }
 }
 
-describe('vouched init', () => {
+describe('sealkeeper init', () => {
   let home: string;
   let world: World;
 
@@ -250,10 +250,10 @@ describe('vouched init', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-init-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_GITHUB_CLIENT_ID', 'client-abc');
-    vi.stubEnv('VOUCHED_API_URL', API_URL);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-init-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', 'client-abc');
+    vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     // Never the real ~/.claude. Tests that want Claude Code create it.
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     world = newWorld();
@@ -277,7 +277,7 @@ describe('vouched init', () => {
         `registered agent ${agentId}`,
         'operator carelmeyer',
         'handle carelmeyer/scout',
-        'profile https://vouched.run/agents/carelmeyer/scout',
+        'profile https://sealkeeper.run/agents/carelmeyer/scout',
         '',
         NEXT_PROVE,
         NEXT_WHAT_IS_SHARED,
@@ -312,7 +312,7 @@ describe('vouched init', () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
     expect(CONSENT).toBe(
-      'By continuing you accept https://vouched.run/terms and https://vouched.run/privacy.',
+      'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.',
     );
     const lines = result.err.split('\n');
     const consent = lines.indexOf(CONSENT);
@@ -366,8 +366,8 @@ describe('vouched init', () => {
     });
   });
 
-  it('--api-url wins over VOUCHED_API_URL', async () => {
-    vi.stubEnv('VOUCHED_API_URL', 'http://unreachable.test');
+  it('--api-url wins over SEALKEEPER_API_URL', async () => {
+    vi.stubEnv('SEALKEEPER_API_URL', 'http://unreachable.test');
     const result = await run(world, 'init', '--api-url', API_URL);
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
@@ -379,7 +379,7 @@ describe('vouched init', () => {
     const printed = JSON.parse(result.out) as Record<string, string>;
     expect(printed.handle).toBe('carelmeyer/scout');
     expect(printed.profileUrl).toBe(
-      'https://vouched.run/agents/carelmeyer/scout',
+      'https://sealkeeper.run/agents/carelmeyer/scout',
     );
     await expectNoTokenAnywhere(result);
   });
@@ -427,15 +427,15 @@ describe('vouched init', () => {
     ],
     [
       apiError(409, 'conflict', 'This key is registered to another operator'),
-      'this key is already registered by another operator, run vouched init --force to create a new key',
+      'this key is already registered by another operator, run sealkeeper init --force to create a new key',
     ],
     [
       apiError(401, 'invalid_signature', 'bad signature'),
-      'the API rejected the registration signature, check the key file or run vouched init --force',
+      'the API rejected the registration signature, check the key file or run sealkeeper init --force',
     ],
     [
       apiError(401, 'github_token_rejected', 'GitHub rejected the token'),
-      'the API could not verify your GitHub login, run vouched init again',
+      'the API could not verify your GitHub login, run sealkeeper init again',
     ],
     [
       apiError(400, 'key_mismatch', 'publicKey must equal the kid'),
@@ -475,7 +475,7 @@ describe('vouched init', () => {
     const result = await run(world, 'init', '--api-url', 'http://down.test');
     expect(result.code).toBe(1);
     expect(result.err).toMatch(
-      /\ncould not reach the Vouched API at http:\/\/down\.test: fetch failed\n$/,
+      /\ncould not reach the SealKeeper API at http:\/\/down\.test: fetch failed\n$/,
     );
     expect(await readConfig(paths(home))).toBeNull();
   });
@@ -525,7 +525,7 @@ describe('vouched init', () => {
     expect((await run(world, 'init')).code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
 
-    vi.stubEnv('VOUCHED_API_URL', '');
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     world = newWorld();
     const result = await run(world, 'init', '--force');
     expect(result.code).toBe(0);
@@ -545,11 +545,11 @@ describe('vouched init', () => {
   });
 
   it('exits 1 naming the env var when there is no client id', async () => {
-    vi.stubEnv('VOUCHED_GITHUB_CLIENT_ID', '');
+    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
     const result = await run(world, 'init');
     expect(result.code).toBe(1);
     expect(result.err).toBe(`${MISSING_CLIENT_ID}\n`);
-    expect(result.err).toContain('VOUCHED_GITHUB_CLIENT_ID');
+    expect(result.err).toContain('SEALKEEPER_GITHUB_CLIENT_ID');
     expect(world.fetchUrls).toEqual([]);
     expect(await readIfExists(paths(home).key)).toBe('');
   });
@@ -564,7 +564,7 @@ describe('vouched init', () => {
       world.serverVersion = '0.1.0';
     }
 
-    it('offers to move Vouched to the version on this machine and does on y', async () => {
+    it('offers to move SealKeeper to the version on this machine and does on y', async () => {
       await registeredThenMoved();
       const stdin = answering('y');
       world.stdin = stdin;
@@ -573,26 +573,28 @@ describe('vouched init', () => {
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(versionQuestion('0.1.0', '2.0.0'));
       expect(versionQuestion('0.1.0', '2.0.0')).toBe(
-        'Vouched has this agent on version 0.1.0 and this machine on 2.0.0. Move Vouched to 2.0.0? [y/N] ',
+        'SealKeeper has this agent on version 0.1.0 and this machine on 2.0.0. Move SealKeeper to 2.0.0? [y/N] ',
       );
       expect(world.versionChanges).toEqual([
         { version: '2.0.0', issuedAt: expect.any(String) },
       ]);
-      expect(result.out).toContain('moved Vouched from version 0.1.0 to 2.0.0');
+      expect(result.out).toContain(
+        'moved SealKeeper from version 0.1.0 to 2.0.0',
+      );
       expect(result.out).toContain(
         "2.0.0 starts from half of 0.1.0's counts, with its level capped one below 0.1.0's",
       );
       expect((await readConfig(paths(home)))?.version).toBe('2.0.0');
     });
 
-    it('leaves Vouched alone on Enter, since no is the default', async () => {
+    it('leaves SealKeeper alone on Enter, since no is the default', async () => {
       await registeredThenMoved();
       world.stdin = answering('');
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(world.versionChanges).toEqual([]);
       expect(result.out).toContain(
-        'Vouched stays on 0.1.0. Run vouched agent version 2.0.0 to move it later.',
+        'SealKeeper stays on 0.1.0. Run sealkeeper agent version 2.0.0 to move it later.',
       );
     });
 
@@ -618,7 +620,7 @@ describe('vouched init', () => {
       expect(world.fetchUrls).toEqual([]);
     });
 
-    it('goes on to the hooks offer when Vouched refuses the move', async () => {
+    it('goes on to the hooks offer when SealKeeper refuses the move', async () => {
       await registeredThenMoved();
       await mkdir(join(home, 'claude'), { recursive: true });
       world.versionRefusal = {
@@ -632,10 +634,10 @@ describe('vouched init', () => {
       expect(result.code).toBe(0);
       expect(result.err).toContain(versionQuestion('0.1.0', '2.0.0'));
       expect(result.err).toContain(
-        'version not moved, too many requests, try again in 3600 seconds. Run vouched agent version 2.0.0 to try again.',
+        'version not moved, too many requests, try again in 3600 seconds. Run sealkeeper agent version 2.0.0 to try again.',
       );
       expect(result.out).not.toContain('registration failed');
-      expect(result.out).not.toContain('moved Vouched');
+      expect(result.out).not.toContain('moved SealKeeper');
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(stdin.reads).toBe(2);
       expect((await readConfig(paths(home)))?.version).toBe('2.0.0');
@@ -709,7 +711,7 @@ describe('vouched init', () => {
             Stop: [
               {
                 hooks: [
-                  { type: 'command', command: 'vouched hook claude-code' },
+                  { type: 'command', command: 'sealkeeper hook claude-code' },
                 ],
               },
             ],
@@ -725,10 +727,10 @@ describe('vouched init', () => {
       expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(HOOKS_QUESTION);
-      expect(result.out).toContain('updated vouched hooks for Stop');
+      expect(result.out).toContain('updated sealkeeper hooks for Stop');
       expect(result.out).toContain(NEXT_PROVE);
       const after = await readFile(settingsFile(), 'utf8');
-      expect(after).not.toContain('"vouched hook claude-code"');
+      expect(after).not.toContain('"sealkeeper hook claude-code"');
       expect(after).toContain('hook claude-code');
     });
 
@@ -770,7 +772,7 @@ describe('vouched init', () => {
             Stop: [
               {
                 hooks: [
-                  { type: 'command', command: 'vouched hook claude-code' },
+                  { type: 'command', command: 'sealkeeper hook claude-code' },
                 ],
               },
             ],
@@ -780,11 +782,92 @@ describe('vouched init', () => {
       world.stdin = answering('');
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(result.out).toContain('updated vouched hooks for Stop');
+      expect(result.out).toContain('updated sealkeeper hooks for Stop');
       const after = await readFile(projectFile, 'utf8');
-      expect(after).not.toContain('"vouched hook claude-code"');
+      expect(after).not.toContain('"sealkeeper hook claude-code"');
       expect(after).toContain(JSON.stringify(HOOK_COMMAND).slice(1, -1));
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('replaces the old vouched hooks in place in both scopes on a repeat init, without asking', async () => {
+      const oldHook = hookCommand(
+        '/usr/local/bin/node',
+        '/usr/local/lib/node_modules/vouched/dist/index.js',
+      );
+      const oldSettings = (command: string) =>
+        `${JSON.stringify(
+          {
+            hooks: {
+              Stop: [
+                { hooks: [{ type: 'command', command: 'other-tool stop' }] },
+                { hooks: [{ type: 'command', command }] },
+              ],
+            },
+          },
+          null,
+          2,
+        )}\n`;
+      const oldProve = '---\nmanaged-by: vouched\n---\nold body\n';
+      await withClaudeCode();
+      const project = join(home, 'project');
+      world.cwd = project;
+      world.stdin = answering('n');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      // Then the old package's hooks and slash commands, as 0.3 left them.
+      await writeFile(settingsFile(), oldSettings(oldHook));
+      const projectFile = join(project, '.claude', 'settings.json');
+      await mkdir(join(project, '.claude', 'commands'), { recursive: true });
+      await writeFile(projectFile, oldSettings('vouched hook claude-code'));
+      await mkdir(join(claudeDir(), 'commands'), { recursive: true });
+      const oldUserProve = join(claudeDir(), 'commands', 'vouched-prove.md');
+      const oldProjectProve = join(
+        project,
+        '.claude',
+        'commands',
+        'vouched-prove.md',
+      );
+      await writeFile(oldUserProve, oldProve);
+      await writeFile(oldProjectProve, oldProve);
+
+      const stdin = answering('n');
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      for (const [file, prove] of [
+        [settingsFile(), oldUserProve],
+        [projectFile, oldProjectProve],
+      ] as const) {
+        expect(result.out).toContain(
+          `replaced the old vouched hooks for Stop in ${file} with sealkeeper hooks`,
+        );
+        expect(result.out).toContain(
+          `removed the old /vouched-prove command at ${prove}`,
+        );
+        const after = await readFile(file, 'utf8');
+        expect(after).not.toContain('vouched');
+        expect(after).toContain('other-tool stop');
+        expect(hooksIn(after)).toEqual([
+          'Stop',
+          'SessionStart',
+          'SessionEnd',
+          'PreToolUse',
+          'PostToolUse',
+        ]);
+        // The old Stop hook became the new one where it stood.
+        expect(JSON.parse(after).hooks.Stop).toEqual(
+          JSON.parse(oldSettings(HOOK_COMMAND)).hooks.Stop,
+        );
+        expect(await readIfExists(prove)).toBe('');
+        expect(
+          await readFile(join(prove, '..', 'sealkeeper-prove.md'), 'utf8'),
+        ).toBe(PROVE_COMMAND_TEXT);
+      }
+
+      // Once replaced, a further init has nothing to do.
+      const again = await run(world, 'init');
+      expect(again.out).not.toContain('replaced');
     });
 
     it('asks nothing on a repeat init when the hooks are current', async () => {
@@ -808,7 +891,7 @@ describe('vouched init', () => {
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(
-        `added vouched hooks for SessionStart, SessionEnd, PreToolUse, PostToolUse, Stop to ${settingsFile()}`,
+        `added sealkeeper hooks for SessionStart, SessionEnd, PreToolUse, PostToolUse, Stop to ${settingsFile()}`,
       );
       expect(result.out).not.toContain(NEXT_HOOKS);
       expect(
@@ -823,9 +906,9 @@ describe('vouched init', () => {
         'PostToolUse',
       ]);
       expect(after).toContain('other-tool stop');
-      const command = join(claudeDir(), 'commands', 'vouched-prove.md');
+      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
       expect(result.out).toContain(
-        `added the /vouched-prove command at ${command}`,
+        `added the /sealkeeper-prove command at ${command}`,
       );
       expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
     });
@@ -837,7 +920,7 @@ describe('vouched init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(NEXT_NPX).toBe(
-        'Hooks point at this npx copy. For a stable path run npm i -g vouched and then vouched adapter claude-code install.',
+        'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.',
       );
       expect(
         result.out.endsWith(
@@ -868,11 +951,13 @@ describe('vouched init', () => {
         ),
       ).toBe(true);
       expect(NEXT_HOOKS).toBe(
-        'Run vouched adapter claude-code install to record your Claude Code sessions',
+        'Run sealkeeper adapter claude-code install to record your Claude Code sessions',
       );
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
       expect(
-        await readIfExists(join(claudeDir(), 'commands', 'vouched-prove.md')),
+        await readIfExists(
+          join(claudeDir(), 'commands', 'sealkeeper-prove.md'),
+        ),
       ).toBe('');
     });
 

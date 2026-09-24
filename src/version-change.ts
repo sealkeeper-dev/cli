@@ -12,11 +12,11 @@ export const inheritLine = (previous: string, next: string): string =>
 
 export type VersionChange = { previous: string; next: string; config: Config };
 
-// Moves the agent's version on Vouched with a request signed by its key,
+// Moves the agent's version on SealKeeper with a request signed by its key,
 // then writes the new version to config.json, which the card and every
 // later event take it from. The SEAL cache names the old version, so it
 // goes, and the next card or seal command fetches the new SEAL. previous
-// is the version Vouched had, which the caller read first.
+// is the version SealKeeper had, which the caller read first.
 export async function changeVersion(options: {
   api: ApiClient;
   signer: Signer;

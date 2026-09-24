@@ -62,8 +62,10 @@ export type EmitInput = {
   };
 }[EventType];
 
-// Appends one event to the local log under VOUCHED_HOME (default ~/.vouched)
-// and returns it. event_id is generated, occurred_at defaults to now and
-// version to the one in config. Throws when the event does not match the
-// taxonomy. It does not send anything. Run vouched sync for that.
+// Appends one event to the local log under SEALKEEPER_HOME (default
+// ~/.sealkeeper) and returns it. event_id is generated, occurred_at defaults
+// to now and version to the one in config. Throws when the event does not
+// match the taxonomy. It does not send anything. Run sealkeeper sync for
+// that. The first call after the rename copies ~/.vouched to ~/.sealkeeper,
+// as every CLI command does.
 export declare function emit(input: EmitInput): Promise<Event>;

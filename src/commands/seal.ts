@@ -26,7 +26,7 @@ export const defaultSealDeps: SealDeps = {
 };
 
 // A SEAL is the agent's signed record of its scores and counts, the thing
-// callers check offline with the Vouched public key.
+// callers check offline with the SealKeeper public key.
 export function register(
   parent: Command,
   deps: Partial<SealDeps> = {},

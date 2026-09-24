@@ -66,7 +66,7 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
-describe('vouched agent rename', () => {
+describe('sealkeeper agent rename', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
@@ -97,9 +97,9 @@ describe('vouched agent rename', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-agent-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-agent-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -135,7 +135,7 @@ describe('vouched agent rename', () => {
     expect(out).toBe(
       [
         'handle   carelmeyer/ranger',
-        'profile  https://vouched.run/agents/carelmeyer/ranger',
+        'profile  https://sealkeeper.run/agents/carelmeyer/ranger',
         '',
       ].join('\n'),
     );
@@ -148,7 +148,7 @@ describe('vouched agent rename', () => {
     expect(JSON.parse(out)).toEqual({
       agentId,
       handle: 'carelmeyer/ranger',
-      profileUrl: 'https://vouched.run/agents/carelmeyer/ranger',
+      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/ranger',
     });
   });
 
@@ -180,7 +180,7 @@ describe('vouched agent rename', () => {
     await rm(join(home, 'config.json'));
     const { code, err } = await run('agent', 'rename', 'ranger');
     expect(code).toBe(1);
-    expect(err).toContain('not initialised, run vouched init');
+    expect(err).toContain('not initialised, run sealkeeper init');
     expect(api.calls).toEqual([]);
   });
 });

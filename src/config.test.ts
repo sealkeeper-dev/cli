@@ -8,7 +8,7 @@ import {
   DEFAULT_API_URL,
   paths,
   readConfig,
-  vouchedHome,
+  sealkeeperHome,
   writeConfig,
 } from './config.js';
 
@@ -24,17 +24,19 @@ describe('config', () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'vouched-config-'));
+    root = await mkdtemp(join(tmpdir(), 'sealkeeper-config-'));
   });
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('uses VOUCHED_HOME when set, else ~/.vouched', () => {
-    expect(vouchedHome({ VOUCHED_HOME: '/x/y' })).toBe('/x/y');
-    expect(vouchedHome({})).toBe(join(homedir(), '.vouched'));
-    expect(vouchedHome({ VOUCHED_HOME: '' })).toBe(join(homedir(), '.vouched'));
+  it('uses SEALKEEPER_HOME when set, else ~/.sealkeeper', () => {
+    expect(sealkeeperHome({ SEALKEEPER_HOME: '/x/y' })).toBe('/x/y');
+    expect(sealkeeperHome({})).toBe(join(homedir(), '.sealkeeper'));
+    expect(sealkeeperHome({ SEALKEEPER_HOME: '' })).toBe(
+      join(homedir(), '.sealkeeper'),
+    );
   });
 
   it('builds every path under the home directory', () => {

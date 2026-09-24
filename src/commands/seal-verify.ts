@@ -1,4 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import { WELL_KNOWN_PATH } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { resolveApiUrl } from '../api.js';
 import { paths } from '../config.js';
@@ -23,7 +24,7 @@ export const EXIT_BROKEN = 1;
 export const EXIT_NO_KEYS = 2;
 
 // Needs no key, no init and no account. The keys come from --keys, or from
-// the API's /.well-known/vouched.json through a cache in VOUCHED_HOME.
+// the API's keys document (WELL_KNOWN_PATH) through a cache in the home.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent
     .command('verify <seal>')
@@ -32,7 +33,7 @@ export function register(parent: Command, deps: SealDeps): Command {
     )
     .option(
       '--keys <file>',
-      'a saved copy of /.well-known/vouched.json, nothing is fetched',
+      `a saved copy of ${WELL_KNOWN_PATH}, nothing is fetched`,
     )
     .action(async function (
       this: Command,

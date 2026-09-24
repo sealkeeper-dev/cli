@@ -5,7 +5,7 @@ import { defineConfig, type Options } from 'tsup';
 // The version is read here at build time and injected as __VERSION__, so the
 // bundle never embeds package.json and its devDependencies. The GitHub OAuth
 // client id comes from GITHUB_CLIENT_ID at build time and defaults to empty,
-// in which case the CLI needs VOUCHED_GITHUB_CLIENT_ID at runtime.
+// in which case the CLI needs SEALKEEPER_GITHUB_CLIENT_ID at runtime.
 //
 // Four entries. index is the bin. lib is the importable API ("." in the
 // package exports), mastra is the Mastra adapter ("./mastra") and openclaw

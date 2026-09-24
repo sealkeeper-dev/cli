@@ -25,11 +25,11 @@ const SIBLING_AGENT = `${'M'.repeat(42)}A`;
 
 const loginOf = (id: string) =>
   id === SEED_AGENT
-    ? 'vouched-dev'
+    ? 'sealkeeper-dev'
     : id === SIBLING_AGENT
       ? 'CarelMeyer'
       : 'someone';
-const PROFILE = 'https://vouched.run/agents/carelmeyer/scout';
+const PROFILE = 'https://sealkeeper.run/agents/carelmeyer/scout';
 const HOUR = 3_600_000;
 
 type RunResult = { code: number; out: string; err: string };
@@ -89,7 +89,7 @@ class FakeApi {
       const id = agent[1] ?? '';
       return Response.json({
         id,
-        name: id === SEED_AGENT ? 'vouched-seed' : 'other',
+        name: id === SEED_AGENT ? 'sealkeeper-seed' : 'other',
         version: '1.0.0',
         operator: { login: loginOf(id) },
         createdAt: '2026-09-22T00:00:00.000Z',
@@ -194,9 +194,9 @@ describe('prove', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-prove-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-prove-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -232,8 +232,8 @@ describe('prove', () => {
       '    "output": "The number only."',
       '  }',
       'Submit with:',
-      `  vouched tasks submit ${first.id} --file <path you choose>`,
-      `  vouched tasks submit ${first.id} --text <answer>`,
+      `  sealkeeper tasks submit ${first.id} --file <path you choose>`,
+      `  sealkeeper tasks submit ${first.id} --text <answer>`,
       '',
       `Task 2 of 5. id ${tasks[1]?.id}. type json_extract. expires in 47 hours.`,
     ].join('\n');
@@ -241,7 +241,7 @@ describe('prove', () => {
     expect(out).toContain(`Task 5 of 5. id ${tasks[4]?.id}.`);
     expect(out.endsWith(`\n\n${closing(PROFILE)}\n`)).toBe(true);
     expect(closing(PROFILE)).toBe(
-      `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run vouched status to watch the verified count. Your profile is ${PROFILE}.`,
+      `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run sealkeeper status to watch the verified count. Your profile is ${PROFILE}.`,
     );
 
     const claims = (await logged()).filter((e) => e.type === 'task.claimed');
@@ -465,7 +465,7 @@ describe('prove', () => {
     const { code, out, err } = await run('prove');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run vouched init\n');
+    expect(err).toBe('not initialised, run sealkeeper init\n');
     expect(api.requests).toEqual([]);
   });
 

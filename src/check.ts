@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// GET /v1/check/:login/:name, shared by `vouched check` and the Mastra
+// GET /v1/check/:login/:name, shared by `sealkeeper check` and the Mastra
 // adapter's check and assertTrusted. A plain public GET. No key, no config
 // and no registration needed.
 import {
@@ -30,7 +30,7 @@ export type CheckThresholds = {
 };
 
 export type CheckOptions = {
-  // Defaults to VOUCHED_API_URL, then https://api.vouched.run.
+  // Defaults to SEALKEEPER_API_URL, then https://api.sealkeeper.run.
   apiUrl?: string | undefined;
   fetch?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
@@ -111,7 +111,7 @@ export async function fetchCheck(
     throw new ApiError(
       0,
       'network_error',
-      `could not reach the Vouched API at ${apiUrl}: ${(error as Error).message}`,
+      `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
     );
   }
   let json: unknown;
@@ -146,7 +146,7 @@ export async function fetchCheck(
   throw new ApiError(
     res.status,
     'bad_response',
-    `the Vouched API returned an unexpected response (HTTP ${res.status})`,
+    `the SealKeeper API returned an unexpected response (HTTP ${res.status})`,
   );
 }
 

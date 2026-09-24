@@ -85,8 +85,8 @@ describe('logout', () => {
   const SESSION = () => [p.config, p.cursor, p.credential, p.score];
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-logout-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-logout-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     p = paths(home);
   });
 

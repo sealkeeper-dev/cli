@@ -13,10 +13,12 @@ import { type Input, isYes, streamInput } from '../ask.js';
 import {
   installProveCommand,
   proveCommandPath,
+  removeOldProveCommand,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
   hasHooks,
+  hasOldPackageHooks,
   hookCommand,
   installHooks,
   invocationOf,
@@ -57,31 +59,37 @@ import {
   inheritLine,
   type VersionChange,
 } from '../version-change.js';
-import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
+import {
+  commandLine,
+  hooksLines,
+  INSTALL_COMMAND,
+  oldCommandLine,
+} from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
 export const NOTHING_SENT =
-  'No events have been sent yet. Run vouched sync to review them and send.';
+  'No events have been sent yet. Run sealkeeper sync to review them and send.';
 export const CONSENT =
-  'By continuing you accept https://vouched.run/terms and https://vouched.run/privacy.';
+  'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
 // Asked on a repeat init when the version on this machine is not the one
-// Vouched has. No is the default, since a new version starts a new record.
+// SealKeeper has. No is the default, since a new version starts a new record.
 export const versionQuestion = (server: string, local: string): string =>
-  `Vouched has this agent on version ${server} and this machine on ${local}. Move Vouched to ${local}? [y/N] `;
-export const NEXT_PROVE = 'Run vouched prove to earn your first verified tasks';
+  `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
+export const NEXT_PROVE =
+  'Run sealkeeper prove to earn your first verified tasks';
 export const NEXT_WHAT_IS_SHARED =
-  'Run vouched what-is-shared to see exactly what leaves this machine';
+  'Run sealkeeper what-is-shared to see exactly what leaves this machine';
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
-export const NEXT_NPX = `Hooks point at this npx copy. For a stable path run npm i -g vouched and then ${INSTALL_COMMAND}.`;
+export const NEXT_NPX = `Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then ${INSTALL_COMMAND}.`;
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
 // without a network or real waits. stdin answers the hooks question, which is
 // never asked without it. claudeDir is the Claude Code config dir and
-// hookCommand the command the hooks run, both defaulting to what vouched
+// hookCommand the command the hooks run, both defaulting to what sealkeeper
 // adapter claude-code install uses. isNpx says whether this CLI runs from
 // the npx cache.
 export type InitDeps = {
@@ -125,14 +133,14 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
   operator_cap_reached: (m) =>
     `registration refused, your GitHub account has reached its agent limit (${m})`,
   conflict: () =>
-    'this key is already registered by another operator, run vouched init --force to create a new key',
+    'this key is already registered by another operator, run sealkeeper init --force to create a new key',
   // The API's message names the handle and a free name, as in
   // carelmeyer/claude-code is taken, try claude-code-2.
   name_taken: (m) => m,
   invalid_signature: () =>
-    'the API rejected the registration signature, check the key file or run vouched init --force',
+    'the API rejected the registration signature, check the key file or run sealkeeper init --force',
   github_token_rejected: () =>
-    'the API could not verify your GitHub login, run vouched init again',
+    'the API could not verify your GitHub login, run sealkeeper init again',
   network_error: (m) => m,
   bad_response: (m) => m,
 };
@@ -153,7 +161,7 @@ export function register(
     .description('Create a keypair, register via GitHub, write config')
     .option('--name <name>', 'agent name (default: current directory name)')
     .option('--version <version>', 'agent version', DEFAULT_AGENT_VERSION)
-    .option('--api-url <url>', 'Vouched API base URL')
+    .option('--api-url <url>', 'SealKeeper API base URL')
     .option('--force', 'regenerate the key and register again')
     .action(async function (this: Command, options: InitOptions) {
       try {
@@ -200,7 +208,7 @@ async function init(
       await offerVersionMove(existing, deps);
       // Registered already, but the hooks may be missing, the bare form an
       // older version wrote, or pointing at a path that moved. Offer them the
-      // way a fresh init does, so npx vouched init is always enough.
+      // way a fresh init does, so npx sealkeeper init is always enough.
       const hooks = await offerHooks(deps, true);
       if (hooks === 'installed' || hooks === 'not-installed') {
         stdout('');
@@ -325,8 +333,8 @@ async function init(
 const VERSION_CHECK_TIMEOUT_MS = 10_000;
 
 // On a repeat init where a person can answer, compares the version in
-// config.json, which the card and every event carry, with the one Vouched
-// has, and offers to move Vouched to it. Nothing is asked without a
+// config.json, which the card and every event carry, with the one SealKeeper
+// has, and offers to move SealKeeper to it. Nothing is asked without a
 // terminal, and an API that cannot be reached skips the question quietly,
 // since registration is already done.
 async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
@@ -348,7 +356,7 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
   process.stderr.write(`\n${versionQuestion(server, config.version)}`);
   if (!isYes(await input.readLine())) {
     stdout(
-      `Vouched stays on ${server}. Run vouched agent version ${config.version} to move it later.`,
+      `SealKeeper stays on ${server}. Run sealkeeper agent version ${config.version} to move it later.`,
     );
     return;
   }
@@ -369,11 +377,11 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
     }
     const reason = error instanceof ApiError ? refusal(error) : error.message;
     stderr(
-      `version not moved, ${reason}. Run vouched agent version ${config.version} to try again.`,
+      `version not moved, ${reason}. Run sealkeeper agent version ${config.version} to try again.`,
     );
     return;
   }
-  stdout(`moved Vouched from version ${change.previous} to ${change.next}`);
+  stdout(`moved SealKeeper from version ${change.previous} to ${change.next}`);
   stdout(inheritLine(change.previous, change.next));
 }
 
@@ -384,7 +392,8 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
-// vouched adapter claude-code install, the /vouched-prove command included.
+// sealkeeper adapter claude-code install, the /sealkeeper-prove command
+// included.
 // Hooks already there, in the user or the project settings, count as
 // installed and nothing is asked.
 async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
@@ -394,6 +403,15 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const user = settingsPath('user', dirs);
   const project = settingsPath('project', dirs);
   const hook = (deps.hookCommand ?? hookCommand)();
+  // Hooks the old vouched package wrote are replaced in place, in the user
+  // and in the project settings, without asking again, since the operator
+  // agreed to them when they went in. Each scope's slash command moves too.
+  let replaced = false;
+  for (const file of new Set([user, project])) {
+    if (!(await hasOldPackageHooks(file))) continue;
+    if (await installAt(file, hook)) replaced = true;
+  }
+  if (replaced) return 'installed';
   // Only hooks that run this very command count. An older form, bare or
   // through npx, or a path that moved, is offered the install again, which
   // rewrites our entries in place.
@@ -408,6 +426,14 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   if (!ask || input === undefined || !input.isTTY) return 'not-installed';
   process.stderr.write(`\n${HOOKS_QUESTION}`);
   if (!isYesByDefault(await input.readLine())) return 'not-installed';
+  return (await installAt(file, hook)) ? 'installed' : 'not-installed';
+}
+
+// The same install as sealkeeper adapter claude-code install into one
+// settings file, the hooks and then the /sealkeeper-prove command, with the
+// old /vouched-prove command removed once the new one is there. false when
+// the settings file could not be changed.
+async function installAt(file: string, hook: string): Promise<boolean> {
   try {
     const result = await installHooks(file, hook);
     for (const line of hooksLines(result, file)) stdout(line);
@@ -416,24 +442,24 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
     // only means the hooks wait for a later install.
     if (error instanceof SettingsError) {
       stderr(error.message);
-      return 'not-installed';
+      return false;
     }
     throw error;
   }
   const commandPath = proveCommandPath(file);
   try {
-    stdout(
-      commandLine(
-        await installProveCommand(commandPath, invocationOf(hook)),
-        commandPath,
-      ),
-    );
+    const command = await installProveCommand(commandPath, invocationOf(hook));
+    stdout(commandLine(command, commandPath));
+    if (command !== 'kept') {
+      const old = await removeOldProveCommand(file);
+      if (old !== null) stdout(oldCommandLine(old));
+    }
   } catch (error) {
     // The hooks are in, so this is only a warning.
     if (!(error instanceof SettingsError)) throw error;
     stderr(error.message);
   }
-  return 'installed';
+  return true;
 }
 
 // Enter or y or yes is yes. n, no or a closed input is no, and so is

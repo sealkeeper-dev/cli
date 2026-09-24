@@ -135,7 +135,7 @@ describe('cli bundle', () => {
       mastra: 'src/mastra.ts',
       openclaw: 'src/openclaw.ts',
     });
-    expect(pkg.bin.vouched).toBe('dist/index.js');
+    expect(pkg.bin.sealkeeper).toBe('dist/index.js');
     expect(pkg.exports['.']).toEqual({
       types: './types/lib.d.ts',
       import: './dist/lib.js',
@@ -155,19 +155,19 @@ describe('cli bundle', () => {
     expect(mastra).not.toMatch(importOf('@sealkeeper/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
     expect(mastra).toContain('kickBackgroundSync');
-    expect(mastra).toMatch(/export\s*\{[^}]*\bwithVouched\b/);
-    expect(mastra).toMatch(/export\s*\{[^}]*\bvouchedSession\b/);
+    expect(mastra).toMatch(/export\s*\{[^}]*\bwithSealKeeper\b/);
+    expect(mastra).toMatch(/export\s*\{[^}]*\bsealKeeperSession\b/);
   });
 
   it('the built adapter wraps a tool and records a session', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vouched-mastra-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    const home = await mkdtemp(join(tmpdir(), 'sealkeeper-mastra-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     try {
       const mod = (await import(
         pathToFileURL(join(outDir, 'mastra.js')).href
       )) as typeof import('./mastra.js');
-      const session = mod.vouchedSession('bundle-session');
-      const tools = mod.withVouched({
+      const session = mod.sealKeeperSession('bundle-session');
+      const tools = mod.withSealKeeper({
         echo: { id: 'echo', execute: async (x: number) => x + 1 },
       });
       expect(await tools.echo.execute(1)).toBe(2);
@@ -200,13 +200,13 @@ describe('cli bundle', () => {
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
     // It syncs only through the throttled background sync.
     expect(openclaw).toContain('kickBackgroundSync');
-    expect(openclaw).toMatch(/export\s*\{[^}]*\bvouchedPlugin\b/);
+    expect(openclaw).toMatch(/export\s*\{[^}]*\bsealKeeperPlugin\b/);
     expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
   });
 
   it('the built OpenClaw entry records a session, a tool call and usage', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vouched-openclaw-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    const home = await mkdtemp(join(tmpdir(), 'sealkeeper-openclaw-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     try {
       const mod = (await import(
         pathToFileURL(join(outDir, 'openclaw.js')).href
@@ -253,8 +253,8 @@ describe('cli bundle', () => {
   });
 
   it('the built lib appends a validated event to the log', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vouched-lib-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    const home = await mkdtemp(join(tmpdir(), 'sealkeeper-lib-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     try {
       const mod = (await import(
         pathToFileURL(join(outDir, 'lib.js')).href
@@ -296,7 +296,7 @@ describe('cli bundle', () => {
   // for about ten seconds when the network drops packets. The bin must not
   // wait for it. 10.255.255.1 is not routed, so the connect never answers.
   it('status exits soon after the score timeout when the network drops packets', async () => {
-    const home = await mkdtemp(join(tmpdir(), 'vouched-bin-'));
+    const home = await mkdtemp(join(tmpdir(), 'sealkeeper-bin-'));
     try {
       await writeFile(
         join(home, 'config.json'),
@@ -319,8 +319,8 @@ describe('cli bundle', () => {
           {
             env: {
               ...process.env,
-              VOUCHED_HOME: home,
-              VOUCHED_API_URL: 'http://10.255.255.1',
+              SEALKEEPER_HOME: home,
+              SEALKEEPER_API_URL: 'http://10.255.255.1',
             },
           },
         );

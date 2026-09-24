@@ -27,11 +27,12 @@ import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
 import { register as registerWhoami } from './commands/whoami.js';
+import { HomeMigrationError, migrateHomeFromEnv } from './home-migration.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
 // Root help lists leaf commands with their full path ("card show", not "card")
-// so `vouched --help` is the whole map of the CLI.
+// so `sealkeeper --help` is the whole map of the CLI.
 function visibleCommands(this: Help, cmd: Command): Command[] {
   const direct = Help.prototype.visibleCommands.call(this, cmd);
   if (cmd.parent) return direct;
@@ -54,7 +55,7 @@ const JSON_FLAG = '--json';
 const JSON_HELP = 'print machine readable JSON where a command supports it';
 
 // Adds --json to every leaf command. Root options are positional (see
-// createProgram), so without this `vouched whoami --json` would be rejected.
+// createProgram), so without this `sealkeeper whoami --json` would be rejected.
 function addJsonFlag(cmd: Command): void {
   if (cmd.commands.length === 0) {
     cmd.option(JSON_FLAG, JSON_HELP);
@@ -80,15 +81,28 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   const program = new Command();
 
   // Positional options stop the root from reading options that follow a
-  // subcommand. Without it `vouched init --version 1.0.0` would print the
+  // subcommand. Without it `sealkeeper init --version 1.0.0` would print the
   // CLI version instead of passing the agent version to init.
   program
-    .name('vouched')
+    .name('sealkeeper')
     .description('Cryptographic identity and track record for AI agents')
     .version(VERSION)
     .option(JSON_FLAG, JSON_HELP)
     .enablePositionalOptions()
     .configureHelp({ visibleCommands, subcommandTerm });
+
+  // preAction runs before the
+  // action of whichever subcommand was picked, and only then, so --help and
+  // --version never touch the disk. It copies ~/.vouched to ~/.sealkeeper
+  // on the first run after the rename, before any command reads config.
+  program.hook('preAction', async (_root, actionCommand) => {
+    try {
+      await migrateHomeFromEnv();
+    } catch (error) {
+      if (!(error instanceof HomeMigrationError)) throw error;
+      actionCommand.error(error.message, { exitCode: 1 });
+    }
+  });
 
   registerInit(program, deps.init);
   registerEmit(program, deps.sync);

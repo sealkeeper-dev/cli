@@ -63,16 +63,16 @@ describe('log', () => {
   let warn: MockInstance<typeof process.stderr.write>;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'vouched-log-'));
-    previousHome = process.env.VOUCHED_HOME;
-    process.env.VOUCHED_HOME = join(root, 'home');
+    root = await mkdtemp(join(tmpdir(), 'sealkeeper-log-'));
+    previousHome = process.env.SEALKEEPER_HOME;
+    process.env.SEALKEEPER_HOME = join(root, 'home');
     warn = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
   });
 
   afterEach(async () => {
     warn.mockRestore();
-    if (previousHome === undefined) delete process.env.VOUCHED_HOME;
-    else process.env.VOUCHED_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.SEALKEEPER_HOME;
+    else process.env.SEALKEEPER_HOME = previousHome;
     await rm(root, { recursive: true, force: true });
   });
 

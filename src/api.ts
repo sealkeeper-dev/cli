@@ -1,7 +1,8 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { ListTasksQuery } from '@sealkeeper/schema';
+import { ListTasksQuery, WELL_KNOWN_PATH } from '@sealkeeper/schema';
 import type { z } from 'zod';
 import { DEFAULT_API_URL } from './config.js';
+import { readEnv } from './env.js';
 import {
   AgentResponse,
   CredentialResponse,
@@ -15,11 +16,11 @@ import {
   WellKnown,
 } from './responses.js';
 
-// A small client for the Vouched API. Every response is parsed before
+// A small client for the SealKeeper API. Every response is parsed before
 // anything reads it, with the loose schemas in responses.ts, so a field the
 // API adds later never breaks this CLI.
 
-export const API_URL_ENV = 'VOUCHED_API_URL';
+export const API_URL_ENV = 'SEALKEEPER_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
 
 export type ApiIssue = ErrorIssue;
@@ -41,13 +42,13 @@ export class ApiError extends Error {
   }
 }
 
-// An explicit flag wins, then VOUCHED_API_URL, then the config, then the
-// production default.
+// An explicit flag wins, then SEALKEEPER_API_URL (or its old name for one
+// release, see env.ts), then the config, then the production default.
 export function resolveApiUrl(
   sources: { flag?: string; config?: string | null },
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  const fromEnv = env[API_URL_ENV]?.trim();
+  const fromEnv = readEnv(API_URL_ENV, env);
   return (
     sources.flag?.trim() || fromEnv || sources.config?.trim() || DEFAULT_API_URL
   );
@@ -106,7 +107,7 @@ export function createApiClient(options: {
       throw new ApiError(
         0,
         'network_error',
-        `could not reach the Vouched API at ${apiUrl}: ${(error as Error).message}`,
+        `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
       );
     }
     let json: unknown;
@@ -170,7 +171,7 @@ export function createApiClient(options: {
     return new ApiError(
       status,
       'bad_response',
-      `the Vouched API returned an unexpected response (HTTP ${status})`,
+      `the SealKeeper API returned an unexpected response (HTTP ${status})`,
     );
   }
 
@@ -214,9 +215,7 @@ export function createApiClient(options: {
       return result.data;
     },
     async getWellKnown() {
-      const { status, json, headers } = await request(
-        '/.well-known/vouched.json',
-      );
+      const { status, json, headers } = await request(WELL_KNOWN_PATH);
       if (status !== 200) throw toError(status, json, headers);
       const result = WellKnown.safeParse(json);
       if (!result.success) throw toError(status, undefined);

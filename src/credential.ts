@@ -15,7 +15,7 @@ import { CredentialPayload } from './responses.js';
 
 // The agent's current SEAL, Signed Evidence of Agent Legitimacy. In code it
 // keeps its first name, the credential. It is cached in
-// ~/.vouched/credential.json so card write and seal write can run on a
+// ~/.sealkeeper/credential.json so card write and seal write can run on a
 // schedule without a round trip each time. The cache holds only what the API
 // already made public.
 
@@ -78,7 +78,7 @@ export async function getCredential(
     if (cached !== null && cached.payload.exp > nowSec) {
       const expires = new Date(cached.payload.exp * 1000).toISOString();
       stderr(
-        `warning: could not reach the Vouched API, using the cached SEAL that expires at ${expires}`,
+        `warning: could not reach the SealKeeper API, using the cached SEAL that expires at ${expires}`,
       );
       return cached;
     }
@@ -94,7 +94,7 @@ export async function getCredential(
 }
 
 // Verify first, parse second. The key is picked by the kid in the header
-// from the keys the API publishes at /.well-known/vouched.json.
+// from the keys the API publishes at WELL_KNOWN_PATH.
 async function fetchVerified(
   api: ApiClient,
   agentId: string,

@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// The Mastra adapter, imported as vouched/mastra. It runs in the agent's own
+// The Mastra adapter, imported as sealkeeper/mastra. It runs in the agent's own
 // process and appends to the local log through emit from lib.ts. Once
 // automatic sync is on it also starts a background sync, at most once every
 // five minutes, see background-sync.ts. A failing emit or sync is swallowed
@@ -34,12 +34,12 @@ export type MastraToolLike = {
   execute?: ((...args: never[]) => unknown) | undefined;
 };
 
-export type WithVouchedOptions = {
+export type WithSealKeeperOptions = {
   // Reserved to attribute tool calls to a competence dimension. Not stored yet.
   taskType?: string | undefined;
 };
 
-export type VouchedSession = {
+export type SealKeeperSession = {
   sessionId: string;
   // Pass to agent.generate or agent.stream as onStepFinish.
   onStepFinish: (step: unknown) => Promise<void>;
@@ -103,9 +103,9 @@ function wrapTool<T extends MastraToolLike>(tool: T): T {
 
 // Wraps the execute of every tool in a record or an array and returns the
 // same shape. Tools without an execute are returned as they are.
-export function withVouched<
+export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T, _options: WithVouchedOptions = {}): T {
+>(tools: T, _options: WithSealKeeperOptions = {}): T {
   if (Array.isArray(tools)) {
     return tools.map((tool: MastraToolLike) => wrapTool(tool)) as never;
   }
@@ -158,9 +158,9 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
 }
 
 // Starts a session and emits session.start. The id defaults to a new UUID.
-export function vouchedSession(
+export function sealKeeperSession(
   sessionId: string = randomUUID(),
-): VouchedSession {
+): SealKeeperSession {
   const start = performance.now();
   // A step's latency runs from the end of the previous step, or from session
   // creation for the first one.
@@ -199,8 +199,8 @@ export function vouchedSession(
 // GET /v1/check for handle, as in carelmeyer/claude-code. Resolves with the
 // answer whether it passed or not. Rejects when the check could not run, a
 // bad handle or threshold, an unknown agent or the network. seal in the
-// answer is the agent's SEAL, which can be verified offline with vouched
-// seal verify, see https://vouched.run/verify. credential is the same
+// answer is the agent's SEAL, which can be verified offline with sealkeeper
+// seal verify, see https://sealkeeper.run/verify. credential is the same
 // string under its old name. Both are null when the SEAL is withheld after
 // 90 dormant days, and the answer then fails.
 export function check(
@@ -212,14 +212,14 @@ export function check(
 }
 
 // Thrown by assertTrusted. failed lists the checks that did not pass.
-export class VouchedCheckError extends Error {
-  override name = 'VouchedCheckError';
+export class SealKeeperCheckError extends Error {
+  override name = 'SealKeeperCheckError';
   readonly failed: Check[];
   constructor(readonly result: CheckResponse) {
     const failed = result.checks.filter((c) => !c.ok);
     super(
       [
-        `${result.handle} did not pass the Vouched check`,
+        `${result.handle} did not pass the SealKeeper check`,
         ...failed.map(describeCheck),
       ].join('\n'),
     );
@@ -228,13 +228,13 @@ export class VouchedCheckError extends Error {
 }
 
 // Resolves with the answer when every check passed, else throws
-// VouchedCheckError listing the failing checks.
+// SealKeeperCheckError listing the failing checks.
 export async function assertTrusted(
   handle: string,
   thresholds?: CheckThresholds,
   options?: CheckOptions,
 ): Promise<CheckResponse> {
   const result = await check(handle, thresholds, options);
-  if (!result.ok) throw new VouchedCheckError(result);
+  if (!result.ok) throw new SealKeeperCheckError(result);
   return result;
 }

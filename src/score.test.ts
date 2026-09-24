@@ -41,7 +41,7 @@ describe('getScore', () => {
   let p: Paths;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-score-'));
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-score-'));
     p = paths(home);
     failing.mockClear();
   });

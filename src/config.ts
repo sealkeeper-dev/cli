@@ -5,12 +5,23 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { AgentId, agentHandle } from '@sealkeeper/schema';
 import { z } from 'zod';
+import { readEnv } from './env.js';
 
-export const DEFAULT_API_URL = 'https://api.vouched.run';
+export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
-export const PROFILE_BASE_URL = 'https://vouched.run/agents';
+export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
+// The default API before the rename. init wrote it into every config.json,
+// and the home migration copies that file as it is, so reading a config maps
+// it to DEFAULT_API_URL. Any other apiUrl was chosen on purpose and stays.
+export const LEGACY_DEFAULT_API_URL = 'https://api.vouched.run';
+
+export function upgradeApiUrl(url: string): string {
+  return url.replace(/\/+$/, '') === LEGACY_DEFAULT_API_URL
+    ? DEFAULT_API_URL
+    : url;
+}
 
 type Named = { operatorLogin: string; name: string };
 
@@ -38,7 +49,10 @@ export const Config = z
     operatorLogin: z.string().min(1),
     name: z.string().min(1),
     version: z.string().min(1),
-    apiUrl: z.url({ protocol: /^https?$/ }).default(DEFAULT_API_URL),
+    apiUrl: z
+      .url({ protocol: /^https?$/ })
+      .transform(upgradeApiUrl)
+      .default(DEFAULT_API_URL),
     registeredAt: z.iso.datetime({ offset: true }),
     // Whether emit and the hook adapters send events on their own. Unset
     // means no sync has been confirmed yet, and the first confirmed sync turns
@@ -62,7 +76,7 @@ export type Paths = {
   log: string;
   cursor: string;
   credential: string;
-  // The Vouched public keys seal verify last fetched, with the fetch time.
+  // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
   score: string;
   // Start time markers for hook adapters, one small file per session or tool
@@ -71,17 +85,17 @@ export type Paths = {
   logFile(day: string): string;
 };
 
-// VOUCHED_HOME wins so tests and multiple agents on one machine can each have
-// their own directory. The default is ~/.vouched.
-export function vouchedHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.VOUCHED_HOME;
-  return override && override.length > 0
-    ? override
-    : join(homedir(), '.vouched');
+export const HOME_DIR_NAME = '.sealkeeper';
+
+// SEALKEEPER_HOME wins so tests and multiple agents on one machine can each
+// have their own directory. The old name is still read for one release, see
+// env.ts. The default is ~/.sealkeeper.
+export function sealkeeperHome(env: NodeJS.ProcessEnv = process.env): string {
+  return readEnv('SEALKEEPER_HOME', env) ?? join(homedir(), HOME_DIR_NAME);
 }
 
-// The only place file paths under the Vouched home are built.
-export function paths(home: string = vouchedHome()): Paths {
+// The only place file paths under the SealKeeper home are built.
+export function paths(home: string = sealkeeperHome()): Paths {
   const log = join(home, 'log');
   return {
     home,

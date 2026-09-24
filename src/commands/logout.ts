@@ -66,7 +66,7 @@ export function register(parent: Command): Command {
           [
             `--delete-key would delete the key at ${p.key} along with the local session.`,
             `The identity of ${identity} would be gone for good and its track record could not be extended.`,
-            'Nothing was deleted. Run vouched logout --delete-key --yes to go ahead.',
+            'Nothing was deleted. Run sealkeeper logout --delete-key --yes to go ahead.',
           ].join('\n'),
         );
       }
@@ -90,7 +90,7 @@ export function register(parent: Command): Command {
         );
       } else {
         stdout(
-          `kept the key at ${p.key} and the log at ${p.log}, run vouched init to sign in again`,
+          `kept the key at ${p.key} and the log at ${p.log}, run sealkeeper init to sign in again`,
         );
       }
     });

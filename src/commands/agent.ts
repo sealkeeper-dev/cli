@@ -43,7 +43,7 @@ export const DELETE_ON_SERVER =
 export const DELETE_ON_MACHINE =
   'the key, config.json, the log, the SEAL cache and the well-known cache';
 
-// The agent's own identity on Vouched. Its name and its version.
+// The agent's own identity on SealKeeper. Its name and its version.
 export function register(
   parent: Command,
   deps: AgentDeps = defaultAgentDeps,
@@ -100,7 +100,7 @@ export function register(
   agent
     .command('version <version>')
     .description(
-      'Move this agent to a new version on Vouched, which starts its record on that version',
+      'Move this agent to a new version on SealKeeper, which starts its record on that version',
     )
     .action(async function (this: Command, version: string): Promise<void> {
       // Checked before the key is loaded or anything is signed, the same
@@ -112,7 +112,7 @@ export function register(
 
       let change: Awaited<ReturnType<typeof changeVersion>>;
       try {
-        // The version Vouched has now, which is what moves. The local
+        // The version SealKeeper has now, which is what moves. The local
         // config can differ from it.
         const { version: previous } = await api.getAgent(config.agentId);
         change = await changeVersion({
@@ -140,12 +140,12 @@ export function register(
         return;
       }
       if (previous === next) {
-        // Vouched was already there. config.json may still have named
+        // SealKeeper was already there. config.json may still have named
         // another version, and changeVersion has set it, so say so.
         stdout(
           config.version === next
             ? `already on version ${next}, nothing changed`
-            : `Vouched is already on version ${next}, set config.json from ${config.version} to ${next}`,
+            : `SealKeeper is already on version ${next}, set config.json from ${config.version} to ${next}`,
         );
         return;
       }
@@ -159,7 +159,7 @@ export function register(
   agent
     .command('delete')
     .description(
-      'Delete this agent on Vouched and its key and files on this machine',
+      'Delete this agent on SealKeeper and its key and files on this machine',
     )
     .option('--yes', 'delete without asking, for scripts')
     .action(async function (
@@ -177,7 +177,7 @@ export function register(
       const fields: [string, string][] = [
         ['handle', handle],
         ['profile', profileUrl(config)],
-        ['on Vouched', DELETE_ON_SERVER],
+        ['on SealKeeper', DELETE_ON_SERVER],
         ['on this machine', `${DELETE_ON_MACHINE}, in ${p.home}`],
       ];
       const width = Math.max(...fields.map(([key]) => key.length));
@@ -189,7 +189,7 @@ export function register(
         const input = (deps.stdin ?? noInput)();
         if (!input.isTTY) {
           this.error(
-            `nothing deleted. There is no terminal to ask, so run vouched agent delete --yes to delete ${handle}`,
+            `nothing deleted. There is no terminal to ask, so run sealkeeper agent delete --yes to delete ${handle}`,
           );
         }
         process.stderr.write(`Delete ${handle}? Type the name to confirm: `);
@@ -233,7 +233,7 @@ export function register(
       }
       if (result === 'gone') {
         stdout(
-          `${handle} was already gone from Vouched, removed the files on this machine`,
+          `${handle} was already gone from SealKeeper, removed the files on this machine`,
         );
       }
       stdout(`deleted ${handle}`);
@@ -263,7 +263,7 @@ async function stillRegistered(
   }
 }
 
-// Everything under the Vouched home that belongs to this agent. The home
+// Everything under the SealKeeper home that belongs to this agent. The home
 // directory itself stays. config.json goes last, so a run cut short leaves
 // a config that still names the agent.
 async function removeLocal(p: Paths): Promise<void> {

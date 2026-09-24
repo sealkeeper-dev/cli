@@ -8,13 +8,13 @@ import type * as mastra from './mastra.js';
 describe('published mastra types', () => {
   it('match the source types', () => {
     expectTypeOf<published.MastraToolLike>().toEqualTypeOf<mastra.MastraToolLike>();
-    expectTypeOf<published.WithVouchedOptions>().toEqualTypeOf<mastra.WithVouchedOptions>();
-    expectTypeOf<published.VouchedSession>().toEqualTypeOf<mastra.VouchedSession>();
-    expectTypeOf<typeof published.withVouched>().toEqualTypeOf<
-      typeof mastra.withVouched
+    expectTypeOf<published.WithSealKeeperOptions>().toEqualTypeOf<mastra.WithSealKeeperOptions>();
+    expectTypeOf<published.SealKeeperSession>().toEqualTypeOf<mastra.SealKeeperSession>();
+    expectTypeOf<typeof published.withSealKeeper>().toEqualTypeOf<
+      typeof mastra.withSealKeeper
     >();
-    expectTypeOf<typeof published.vouchedSession>().toEqualTypeOf<
-      typeof mastra.vouchedSession
+    expectTypeOf<typeof published.sealKeeperSession>().toEqualTypeOf<
+      typeof mastra.sealKeeperSession
     >();
     expectTypeOf<published.CheckThresholds>().toEqualTypeOf<mastra.CheckThresholds>();
     expectTypeOf<published.CheckOptions>().toEqualTypeOf<mastra.CheckOptions>();
@@ -24,7 +24,7 @@ describe('published mastra types', () => {
     expectTypeOf<typeof published.assertTrusted>().toEqualTypeOf<
       typeof mastra.assertTrusted
     >();
-    expectTypeOf<published.VouchedCheckError>().toEqualTypeOf<mastra.VouchedCheckError>();
+    expectTypeOf<published.SealKeeperCheckError>().toEqualTypeOf<mastra.SealKeeperCheckError>();
   });
 
   it('accepts a createTool shaped object and keeps its type', () => {
@@ -36,10 +36,10 @@ describe('published mastra types', () => {
         execute: async ({ city }: { city: string }) => ({ city, temp: 21 }),
       },
     };
-    type Wrapped = ReturnType<typeof published.withVouched<typeof tools>>;
+    type Wrapped = ReturnType<typeof published.withSealKeeper<typeof tools>>;
     expectTypeOf<Wrapped>().toEqualTypeOf<typeof tools>();
     type WrappedList = ReturnType<
-      typeof published.withVouched<(typeof tools.weather)[]>
+      typeof published.withSealKeeper<(typeof tools.weather)[]>
     >;
     expectTypeOf<WrappedList>().toEqualTypeOf<(typeof tools.weather)[]>();
   });

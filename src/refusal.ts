@@ -20,7 +20,7 @@ export function refusal(error: ApiError): string {
         ? 'too many requests, try again later'
         : `too many requests, try again in ${error.retryAfterSec} seconds`;
     case 'unknown_agent':
-      return 'this agent is not registered, run vouched init';
+      return 'this agent is not registered, run sealkeeper init';
     case 'forbidden':
       return 'the API refused, the key on this machine is not this agent';
     default:

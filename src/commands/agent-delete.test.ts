@@ -93,7 +93,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-describe('vouched agent delete', () => {
+describe('sealkeeper agent delete', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
@@ -158,9 +158,9 @@ describe('vouched agent delete', () => {
   };
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-agent-delete-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-agent-delete-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -199,8 +199,8 @@ describe('vouched agent delete', () => {
     expect(out).toBe(
       [
         'handle           carelmeyer/app',
-        'profile          https://vouched.run/agents/carelmeyer/app',
-        'on Vouched       the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
+        'profile          https://sealkeeper.run/agents/carelmeyer/app',
+        'on SealKeeper    the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
         `on this machine  the key, config.json, the log, the SEAL cache and the well-known cache, in ${home}`,
         'deleted carelmeyer/app',
         '',
@@ -237,7 +237,7 @@ describe('vouched agent delete', () => {
     expect(code).toBe(1);
     expect(out).toContain('handle           carelmeyer/app');
     expect(err).toContain(
-      'nothing deleted. There is no terminal to ask, so run vouched agent delete --yes to delete carelmeyer/app',
+      'nothing deleted. There is no terminal to ask, so run sealkeeper agent delete --yes to delete carelmeyer/app',
     );
     expect(input.asked).toBe(0);
     expect(api.calls).toEqual([]);
@@ -274,7 +274,7 @@ describe('vouched agent delete', () => {
     const { code, out } = await run('agent', 'delete', '--yes');
     expect(code).toBe(0);
     expect(out).toContain(
-      'carelmeyer/app was already gone from Vouched, removed the files on this machine\ndeleted carelmeyer/app\n',
+      'carelmeyer/app was already gone from SealKeeper, removed the files on this machine\ndeleted carelmeyer/app\n',
     );
     expect(api.calls.map((c) => c.method)).toEqual(['DELETE', 'GET']);
     expect(await remaining()).toEqual([]);
@@ -306,7 +306,7 @@ describe('vouched agent delete', () => {
     await rm(join(home, 'config.json'));
     const { code, err } = await run('agent', 'delete', '--yes');
     expect(code).toBe(1);
-    expect(err).toContain('not initialised, run vouched init');
+    expect(err).toContain('not initialised, run sealkeeper init');
     expect(api.calls).toEqual([]);
   });
 });

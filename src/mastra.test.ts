@@ -15,7 +15,7 @@ import { resetBackgroundSyncThrottle } from './background-sync.js';
 import { writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { countPending } from './log.js';
-import { vouchedSession, withVouched } from './mastra.js';
+import { sealKeeperSession, withSealKeeper } from './mastra.js';
 
 class RateLimitError extends Error {}
 
@@ -23,8 +23,8 @@ describe('mastra adapter', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-mastra-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-mastra-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     await writeFile(
       join(home, 'config.json'),
       JSON.stringify({
@@ -62,7 +62,7 @@ describe('mastra adapter', () => {
     return lines;
   }
 
-  describe('withVouched', () => {
+  describe('withSealKeeper', () => {
     it('wraps a record and keeps keys and other fields', async () => {
       const original = {
         id: 'add',
@@ -70,7 +70,7 @@ describe('mastra adapter', () => {
         inputSchema: { type: 'object' },
         execute: async (n: number) => n + 1,
       };
-      const tools = withVouched({ add: original, noop: { id: 'noop' } });
+      const tools = withSealKeeper({ add: original, noop: { id: 'noop' } });
       expect(Object.keys(tools)).toEqual(['add', 'noop']);
       expect(tools.add).not.toBe(original);
       expect(tools.add.execute).not.toBe(original.execute);
@@ -81,7 +81,7 @@ describe('mastra adapter', () => {
     });
 
     it('wraps an array', async () => {
-      const tools = withVouched(
+      const tools = withSealKeeper(
         [
           { id: 'a', execute: async () => 'a' },
           { id: 'b', execute: async () => 'b' },
@@ -108,13 +108,13 @@ describe('mastra adapter', () => {
           return 'from the prototype';
         }
       }
-      const [tool] = withVouched([new Tool()]);
+      const [tool] = withSealKeeper([new Tool()]);
       expect(tool).toBeInstanceOf(Tool);
       expect(await tool?.execute()).toBe('from the prototype');
     });
 
     it('emits tool.call with ok true and a duration on success', async () => {
-      const tools = withVouched({
+      const tools = withSealKeeper({
         slow: {
           id: 'slow-tool',
           execute: async () => {
@@ -139,7 +139,7 @@ describe('mastra adapter', () => {
 
     it('emits ok false with the error class and rethrows the same error', async () => {
       const boom = new RateLimitError('slow down');
-      const tools = withVouched({
+      const tools = withSealKeeper({
         search: {
           id: 'web-search',
           execute: async () => {
@@ -158,7 +158,7 @@ describe('mastra adapter', () => {
     });
 
     it('rethrows a sync throw and a non error value', async () => {
-      const tools = withVouched({
+      const tools = withSealKeeper({
         sync: {
           id: 'sync',
           execute: () => {
@@ -204,7 +204,7 @@ describe('mastra adapter', () => {
         },
       };
       let received: unknown[] = [];
-      const tools = withVouched({
+      const tools = withSealKeeper({
         guarded: {
           id: 'guarded',
           execute: (...args: unknown[]) => {
@@ -231,9 +231,9 @@ describe('mastra adapter', () => {
     });
   });
 
-  describe('vouchedSession', () => {
+  describe('sealKeeperSession', () => {
     it('emits session.start, usage from a step and session.end', async () => {
-      const session = vouchedSession('run-42');
+      const session = sealKeeperSession('run-42');
       expect(session.sessionId).toBe('run-42');
       await new Promise((done) => setTimeout(done, 30));
       await session.onStepFinish({
@@ -279,7 +279,7 @@ describe('mastra adapter', () => {
     });
 
     it('defaults the session id to a uuid', async () => {
-      const session = vouchedSession();
+      const session = sealKeeperSession();
       expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
       await session.end();
       expect((await logged()).map((e) => e.type)).toEqual([
@@ -289,7 +289,7 @@ describe('mastra adapter', () => {
     });
 
     it('skips a step without tokens or a model id', async () => {
-      const session = vouchedSession('s');
+      const session = sealKeeperSession('s');
       await session.onStepFinish(undefined);
       await session.onStepFinish({
         usage: { promptTokens: 1 },
@@ -325,7 +325,7 @@ describe('mastra adapter', () => {
         .map((e) => e.payload as Usage);
 
     it('reads inputTokens and outputTokens from newer versions', async () => {
-      const session = vouchedSession('newer');
+      const session = sealKeeperSession('newer');
       await session.onStepFinish({
         usage: { inputTokens: 7, outputTokens: 3 },
         response: { modelId: 'claude-sonnet-4-5' },
@@ -337,7 +337,7 @@ describe('mastra adapter', () => {
     });
 
     it('falls back to step.model.modelId when the response has none', async () => {
-      const session = vouchedSession('fallback');
+      const session = sealKeeperSession('fallback');
       await session.onStepFinish({
         usage: { promptTokens: 4, completionTokens: 2 },
         response: { modelId: '', timestamp: new Date() },
@@ -350,7 +350,7 @@ describe('mastra adapter', () => {
     });
 
     it('measures latency locally since the previous step', async () => {
-      const session = vouchedSession('timing');
+      const session = sealKeeperSession('timing');
       await new Promise((done) => setTimeout(done, 40));
       // Mastra falls back to a timestamp made at step finish.
       await session.onStepFinish({
@@ -369,7 +369,7 @@ describe('mastra adapter', () => {
     });
 
     it('keeps the event when the provider clock runs ahead', async () => {
-      const session = vouchedSession('skew');
+      const session = sealKeeperSession('skew');
       await session.onStepFinish({
         usage: { promptTokens: 1, completionTokens: 1 },
         response: { modelId: 'm', timestamp: new Date(Date.now() + 5_000) },
@@ -385,7 +385,7 @@ describe('mastra adapter', () => {
       // A file where the log directory should be, so every append fails.
       await writeFile(join(home, 'log'), 'not a directory');
       const boom = new RangeError('tool failed');
-      const tools = withVouched({
+      const tools = withSealKeeper({
         ok: { id: 'ok', execute: async () => 'fine' },
         bad: {
           id: 'bad',
@@ -397,7 +397,7 @@ describe('mastra adapter', () => {
       await expect(tools.ok.execute()).resolves.toBe('fine');
       await expect(tools.bad.execute()).rejects.toBe(boom);
 
-      const session = vouchedSession('offline');
+      const session = sealKeeperSession('offline');
       await expect(
         session.onStepFinish({
           usage: { promptTokens: 1, completionTokens: 1 },
@@ -409,9 +409,9 @@ describe('mastra adapter', () => {
 
     it('never throws when the home directory is read only', async () => {
       await chmod(home, 0o500);
-      const tools = withVouched([{ id: 'ok', execute: async () => 1 }]);
+      const tools = withSealKeeper([{ id: 'ok', execute: async () => 1 }]);
       await expect(tools[0]?.execute()).resolves.toBe(1);
-      const session = vouchedSession();
+      const session = sealKeeperSession();
       await expect(session.end()).resolves.toBeUndefined();
     });
   });
@@ -430,7 +430,7 @@ describe('mastra adapter', () => {
         autoSync: true,
       });
       resetBackgroundSyncThrottle();
-      vi.stubEnv('VOUCHED_API_URL', '');
+      vi.stubEnv('SEALKEEPER_API_URL', '');
       let requests = 0;
       vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
         requests++;
@@ -449,7 +449,7 @@ describe('mastra adapter', () => {
 
     it('sends in the background once automatic sync is on, at most once per interval', async () => {
       const api = await autoSyncOn();
-      const [tool] = withVouched([{ id: 'a', execute: async () => 'a' }]);
+      const [tool] = withSealKeeper([{ id: 'a', execute: async () => 'a' }]);
       expect(await tool?.execute()).toBe('a');
       await vi.waitFor(async () => {
         expect(await countPending()).toBe(0);
@@ -467,7 +467,7 @@ describe('mastra adapter', () => {
       vi.stubGlobal('fetch', async () => {
         throw new TypeError('fetch failed');
       });
-      const [tool] = withVouched([{ id: 'a', execute: async () => 'a' }]);
+      const [tool] = withSealKeeper([{ id: 'a', execute: async () => 'a' }]);
       expect(await tool?.execute()).toBe('a');
       await new Promise((done) => setTimeout(done, 50));
       expect(await countPending()).toBe(1);

@@ -74,7 +74,7 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
-describe('vouched agent version', () => {
+describe('sealkeeper agent version', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
@@ -105,9 +105,9 @@ describe('vouched agent version', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-agent-version-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-agent-version-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -163,7 +163,7 @@ describe('vouched agent version', () => {
     });
   });
 
-  it('says nothing changed for the version Vouched already has', async () => {
+  it('says nothing changed for the version SealKeeper already has', async () => {
     const { code, out } = await run('agent', 'version', '1.0.0');
     expect(code).toBe(0);
     expect(out).toBe('already on version 1.0.0, nothing changed\n');
@@ -174,12 +174,12 @@ describe('vouched agent version', () => {
     const { code, out } = await run('agent', 'version', '2.0.0');
     expect(code).toBe(0);
     expect(out).toBe(
-      'Vouched is already on version 2.0.0, set config.json from 1.0.0 to 2.0.0\n',
+      'SealKeeper is already on version 2.0.0, set config.json from 1.0.0 to 2.0.0\n',
     );
     expect((await readConfig())?.version).toBe('2.0.0');
   });
 
-  it('names the version Vouched had as the old one', async () => {
+  it('names the version SealKeeper had as the old one', async () => {
     api.version = '0.9.0';
     const { code, out } = await run('agent', 'version', '2.0.0');
     expect(code).toBe(0);

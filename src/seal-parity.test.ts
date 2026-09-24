@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// Parity between `vouched seal verify` and the strict parser the API and the
+// Parity between `sealkeeper seal verify` and the strict parser the API and the
 // web use, parseSealPayload from @sealkeeper/schema, for version 1 SEALs.
 // Each fixture is signed with a test key and checked both ways. Where the
 // strict parser says ok the CLI must say valid, and where it says malformed
@@ -20,14 +20,14 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import { checkSeal } from './seal.js';
 
-const KID = 'vouched-parity-1';
+const KID = 'sealkeeper-parity-1';
 const NOW = Date.parse('2026-09-24T12:00:00.000Z');
 const NOW_SEC = NOW / 1000;
 const HOUR = 3600;
 const SUB = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
 
 const base: CredentialPayload = {
-  iss: 'vouched.run',
+  iss: 'sealkeeper.run',
   sub: SUB,
   ver: 1,
   iat: NOW_SEC - HOUR,
@@ -222,7 +222,7 @@ describe('seal verify against the SEAL conformance cases', () => {
         const r = await checkSeal(
           c.jws,
           suite.wellKnown as never,
-          suite.nowSeconds * 1000,
+          (c.nowSeconds ?? suite.nowSeconds) * 1000,
         );
         return [c.name, r.valid ? 'valid' : apiName(r.reason ?? '')];
       }),
@@ -252,7 +252,7 @@ describe('seal verify against the SEAL conformance cases', () => {
       const r = await checkSeal(
         c.jws,
         suite.wellKnown as never,
-        suite.nowSeconds * 1000,
+        (c.nowSeconds ?? suite.nowSeconds) * 1000,
       );
       expect(r).toMatchObject({ valid: false, reason: 'wrong issuer' });
     }

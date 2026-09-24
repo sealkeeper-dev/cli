@@ -12,10 +12,9 @@ import { join } from 'node:path';
 import {
   AgentCard,
   base64urlEncode,
-  CREDENTIAL_EXTENSION_URI,
   type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
-  SEAL_EXTENSION_URI,
+  SEAL_EXTENSION_URIS,
   sign,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -26,13 +25,13 @@ import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 
 const API_URL = 'http://api.test';
-const KID = 'vouched-test-1';
+const KID = 'sealkeeper-test-1';
 const HOUR = 3600;
 
 type RunResult = { code: number; out: string; err: string };
 
 // Stands in for GET /v1/agents/:id/seal and GET
-// /.well-known/vouched.json. credential decides what the API hands out.
+// /.well-known/seal.json. credential decides what the API hands out.
 type Server = {
   requests: string[];
   credential: () => Promise<string>;
@@ -46,7 +45,7 @@ function fakeFetch(
   return (async (input: string | URL | Request) => {
     const url = String(input);
     server.requests.push(url);
-    if (url === `${API_URL}/.well-known/vouched.json`) {
+    if (url === `${API_URL}/.well-known/seal.json`) {
       return Response.json(wellKnown());
     }
     if (url === `${API_URL}/v1/agents/${agentId}/seal`) {
@@ -81,7 +80,7 @@ describe('card show and card write', () => {
   async function credentialFor(expSec: number): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     const payload: CredentialPayload = {
-      iss: 'vouched.run',
+      iss: 'sealkeeper.run',
       sub: agentId,
       ver: 1,
       iat: now + expSec - 24 * HOUR,
@@ -143,9 +142,9 @@ describe('card show and card write', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-card-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-card-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -200,14 +199,15 @@ describe('card show and card write', () => {
       defaultOutputModes: ['text'],
     });
     expect(card.description).toContain(agentId);
-    expect(card.description).toContain(`https://vouched.run/agents/${agentId}`);
-    expect(card.capabilities.extensions.map((e) => e.uri)).toEqual([
-      SEAL_EXTENSION_URI,
-      CREDENTIAL_EXTENSION_URI,
-    ]);
-    expect(card.capabilities.extensions[1]?.params).toEqual(
-      card.capabilities.extensions[0]?.params,
+    expect(card.description).toContain(
+      `https://sealkeeper.run/agents/${agentId}`,
     );
+    expect(card.capabilities.extensions.map((e) => e.uri)).toEqual([
+      ...SEAL_EXTENSION_URIS,
+    ]);
+    for (const extension of card.capabilities.extensions.slice(1)) {
+      expect(extension.params).toEqual(card.capabilities.extensions[0]?.params);
+    }
 
     const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
     expect(extensionCredential(card)).toBe(cache.credential);
@@ -275,7 +275,7 @@ describe('card show and card write', () => {
       const forged = base64urlEncode(
         new TextEncoder().encode(
           JSON.stringify({
-            iss: 'vouched.run',
+            iss: 'sealkeeper.run',
             sub: agentId,
             iat: Math.floor(Date.now() / 1000),
             exp: Math.floor(Date.now() / 1000) + 24 * HOUR,
@@ -322,7 +322,7 @@ describe('card show and card write', () => {
     expect(extensionCredential(AgentCard.parse(JSON.parse(out)))).toBe(cached);
     expect(err.trim().split('\n')).toHaveLength(1);
     expect(err).toMatch(
-      /^warning: could not reach the Vouched API, using the cached SEAL/,
+      /^warning: could not reach the SealKeeper API, using the cached SEAL/,
     );
   });
 
@@ -383,7 +383,7 @@ describe('card show and card write', () => {
     const { code, out, err } = await run(fetchFn, ...args);
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run vouched init\n');
+    expect(err).toBe('not initialised, run sealkeeper init\n');
     expect(server.requests).toEqual([]);
   });
 

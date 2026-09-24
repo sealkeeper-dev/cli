@@ -17,7 +17,7 @@ import { createKey } from './identity.js';
 import { countPending } from './log.js';
 import plugin, {
   type OpenClawPluginApiLike,
-  vouchedPlugin,
+  sealKeeperPlugin,
 } from './openclaw.js';
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -43,8 +43,8 @@ describe('openclaw adapter', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-openclaw-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-openclaw-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
     await writeFile(
       join(home, 'config.json'),
       JSON.stringify({
@@ -84,19 +84,21 @@ describe('openclaw adapter', () => {
 
   function registered() {
     const fake = fakeApi();
-    vouchedPlugin().register(fake.api);
+    sealKeeperPlugin().register(fake.api);
     return fake;
   }
 
   describe('the plugin entry', () => {
     it('is what the OpenClaw loader expects as a default export', () => {
       expect(plugin).toMatchObject({
-        id: 'vouched',
-        name: 'Vouched',
+        id: 'sealkeeper',
+        name: 'SealKeeper',
         register: expect.any(Function),
       });
       expect(typeof plugin.description).toBe('string');
-      expect(vouchedPlugin({ taskType: 'code_review' }).id).toBe('vouched');
+      expect(sealKeeperPlugin({ taskType: 'code_review' }).id).toBe(
+        'sealkeeper',
+      );
     });
 
     it('registers observation hooks only', () => {
@@ -113,7 +115,7 @@ describe('openclaw adapter', () => {
 
     it('keeps the other hooks when OpenClaw refuses one', async () => {
       const fake = fakeApi(['llm_output']);
-      expect(() => vouchedPlugin().register(fake.api)).not.toThrow();
+      expect(() => sealKeeperPlugin().register(fake.api)).not.toThrow();
       expect(fake.handlers.has('llm_output')).toBe(false);
       await fake.fire('session_start', { sessionId: 's1' });
       expect((await logged()).map((e) => e.type)).toEqual(['session.start']);
@@ -420,7 +422,7 @@ describe('openclaw adapter', () => {
         autoSync: true,
       });
       resetBackgroundSyncThrottle();
-      vi.stubEnv('VOUCHED_API_URL', '');
+      vi.stubEnv('SEALKEEPER_API_URL', '');
       let requests = 0;
       vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
         requests++;

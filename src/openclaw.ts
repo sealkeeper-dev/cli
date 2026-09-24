@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// The OpenClaw adapter, imported as vouched/openclaw. OpenClaw loads plugins
+// The OpenClaw adapter, imported as sealkeeper/openclaw. OpenClaw loads plugins
 // into the Gateway process and calls register(api) once, where the plugin
 // subscribes to typed hooks with api.on(name, handler). This file is such a
 // plugin entry. It appends to the local log through emit from lib.ts and,
@@ -37,15 +37,15 @@ export type OpenClawPluginApiLike = {
   ): unknown;
 };
 
-export type VouchedOpenClawOptions = {
+export type SealKeeperOpenClawOptions = {
   // Reserved to attribute tool calls to a competence dimension. Not stored yet.
   taskType?: string | undefined;
 };
 
 // What OpenClaw's loader expects as a plugin entry. It is the same object
 // definePluginEntry from openclaw/plugin-sdk returns, minus the config schema.
-export type VouchedOpenClawPlugin = {
-  id: 'vouched';
+export type SealKeeperOpenClawPlugin = {
+  id: 'sealkeeper';
   name: string;
   description: string;
   register: (api: OpenClawPluginApiLike) => void;
@@ -248,17 +248,17 @@ function register(api: OpenClawPluginApiLike): void {
   });
 }
 
-// A plugin entry for OpenClaw. The default export is vouchedPlugin().
-export function vouchedPlugin(
-  _options: VouchedOpenClawOptions = {},
-): VouchedOpenClawPlugin {
+// A plugin entry for OpenClaw. The default export is sealKeeperPlugin().
+export function sealKeeperPlugin(
+  _options: SealKeeperOpenClawOptions = {},
+): SealKeeperOpenClawPlugin {
   return {
-    id: 'vouched',
-    name: 'Vouched',
+    id: 'sealkeeper',
+    name: 'SealKeeper',
     description:
-      'Records session, tool call and usage metadata in the local Vouched log.',
+      'Records session, tool call and usage metadata in the local SealKeeper log.',
     register,
   };
 }
 
-export default vouchedPlugin();
+export default sealKeeperPlugin();

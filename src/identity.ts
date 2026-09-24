@@ -21,7 +21,7 @@ export class KeyError extends Error {
   override name = 'KeyError';
 }
 
-export const NO_KEY = 'no key found, run vouched init';
+export const NO_KEY = 'no key found, run sealkeeper init';
 
 export type Identity = {
   agentId: AgentId;

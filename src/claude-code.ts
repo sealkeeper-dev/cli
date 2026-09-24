@@ -18,7 +18,7 @@ import { syncEvents } from './sync.js';
 
 export { toolNameOf } from './names.js';
 
-// The Claude Code hooks adapter. Claude Code runs `vouched hook claude-code`
+// The Claude Code hooks adapter. Claude Code runs `sealkeeper hook claude-code`
 // for each hook event with one JSON object on stdin. handleHook maps it to
 // the event taxonomy and appends to the local log. It prints nothing on
 // stdout, since Claude Code may read that, and it never throws.
@@ -308,11 +308,11 @@ async function trySync(
       paths: p,
     });
   } catch {
-    stderr('vouched: sync did not finish, run vouched sync');
+    stderr('sealkeeper: sync did not finish, run sealkeeper sync');
   }
 }
 
 function warn(error: unknown): void {
   const reason = error instanceof Error ? error.message : String(error);
-  stderr(`vouched: hook failed, ${reason.split('\n')[0]}`);
+  stderr(`sealkeeper: hook failed, ${reason.split('\n')[0]}`);
 }

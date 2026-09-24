@@ -63,7 +63,7 @@ export function register(
 
       if (config === null) {
         stderr(
-          'not initialised, the event is kept in the local log, run vouched init to send it',
+          'not initialised, the event is kept in the local log, run sealkeeper init to send it',
         );
         return;
       }
@@ -79,7 +79,7 @@ export function register(
           pending === null
             ? 'events'
             : `${pending} event${pending === 1 ? '' : 's'}`;
-        stderr(`${count} waiting, run vouched sync to review and send`);
+        stderr(`${count} waiting, run sealkeeper sync to review and send`);
         return;
       }
 
@@ -101,7 +101,7 @@ export function register(
             ? error.pending
             : await countPending().catch(() => null);
         const count = pending === null ? 'events' : pendingText(pending);
-        stderr(`warning: sync did not finish, ${count}, run vouched sync`);
+        stderr(`warning: sync did not finish, ${count}, run sealkeeper sync`);
       }
     });
 }

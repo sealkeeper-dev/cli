@@ -1,6 +1,10 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { publicVerification } from '@sealkeeper/schema';
-import { describe, expect, it } from 'vitest';
+import {
+  LEGACY_ISSUER_UNTIL,
+  LEGACY_ISSUERS,
+  publicVerification,
+} from '@sealkeeper/schema';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { z } from 'zod';
 import { createApiClient } from './api.js';
 import {
@@ -55,7 +59,7 @@ const task = {
 };
 
 const payload = {
-  iss: 'vouched.run',
+  iss: 'sealkeeper.run',
   sub: ID,
   iat: 1,
   exp: 2,
@@ -393,7 +397,7 @@ describe('response schemas parse loosely', () => {
       fetch: (async () =>
         Response.json({
           ...agent,
-          badge: 'https://vouched.run/badge.svg',
+          badge: 'https://sealkeeper.run/badge.svg',
         })) as unknown as typeof fetch,
     });
     const got = await api.getAgent(ID);
@@ -427,5 +431,31 @@ describe('response schemas parse loosely', () => {
     expect(urls).toEqual([`http://api.test/v1/agents/${ID}/seal`]);
     expect(got.seal).toBe(JWS);
     expect(got.credential).toBe(JWS);
+  });
+});
+
+describe('CredentialPayload issuer', () => {
+  const legacy = LEGACY_ISSUERS[0];
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('accepts the old issuer until LEGACY_ISSUER_UNTIL, then not', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime((LEGACY_ISSUER_UNTIL - 1) * 1000);
+    expect(
+      CredentialPayload.safeParse({ ...payload, iss: legacy }).success,
+    ).toBe(true);
+    vi.setSystemTime(LEGACY_ISSUER_UNTIL * 1000);
+    expect(
+      CredentialPayload.safeParse({ ...payload, iss: legacy }).success,
+    ).toBe(false);
+    expect(CredentialPayload.safeParse(payload).success).toBe(true);
+  });
+
+  it('never accepts another issuer', () => {
+    expect(
+      CredentialPayload.safeParse({ ...payload, iss: 'evil.example' }).success,
+    ).toBe(false);
   });
 });

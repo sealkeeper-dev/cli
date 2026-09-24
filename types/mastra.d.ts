@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// Types for the Mastra adapter in src/mastra.ts, imported as vouched/mastra.
+// Types for the Mastra adapter in src/mastra.ts, imported as sealkeeper/mastra.
 // Written by hand like lib.d.ts. src/mastra-types.test.ts fails the
 // typecheck if these drift from the source.
 
@@ -9,12 +9,12 @@ export type MastraToolLike = {
   execute?: ((...args: never[]) => unknown) | undefined;
 };
 
-export type WithVouchedOptions = {
+export type WithSealKeeperOptions = {
   // Reserved to attribute tool calls to a competence dimension. Not stored yet.
   taskType?: string | undefined;
 };
 
-export type VouchedSession = {
+export type SealKeeperSession = {
   sessionId: string;
   // Pass to agent.generate or agent.stream as onStepFinish.
   onStepFinish: (step: unknown) => Promise<void>;
@@ -25,12 +25,14 @@ export type VouchedSession = {
 // Wraps the execute of every tool in a record or an array and returns the
 // same shape. Each call emits tool.call with the tool id, duration and
 // outcome. Arguments and results are never read. Errors are rethrown.
-export declare function withVouched<
+export declare function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T, options?: WithVouchedOptions): T;
+>(tools: T, options?: WithSealKeeperOptions): T;
 
 // Starts a session and emits session.start. The id defaults to a new UUID.
-export declare function vouchedSession(sessionId?: string): VouchedSession;
+export declare function sealKeeperSession(
+  sessionId?: string,
+): SealKeeperSession;
 
 // Every value optional. The API defaults minVerified to 1 and maxIncidents
 // to 0. minReliability and minSafety (0 to 1) and minLevel are checked only
@@ -45,7 +47,7 @@ export type CheckThresholds = {
 };
 
 export type CheckOptions = {
-  // Defaults to VOUCHED_API_URL, then https://api.vouched.run.
+  // Defaults to SEALKEEPER_API_URL, then https://api.sealkeeper.run.
   apiUrl?: string | undefined;
   fetch?: typeof fetch | undefined;
   timeoutMs?: number | undefined;
@@ -68,7 +70,7 @@ export type Check = {
 };
 
 // ok is true only when every check passed. seal is the agent's current
-// SEAL, to verify offline with the Vouched public key. credential is the
+// SEAL, to verify offline with the SealKeeper public key. credential is the
 // same string under its old name, kept for one release. Both are null when
 // the SEAL is withheld, and ok is then false.
 export type CheckResponse = {
@@ -91,14 +93,14 @@ export declare function check(
 ): Promise<CheckResponse>;
 
 // Thrown by assertTrusted. The message lists the failing checks.
-export declare class VouchedCheckError extends Error {
+export declare class SealKeeperCheckError extends Error {
   readonly result: CheckResponse;
   readonly failed: Check[];
   constructor(result: CheckResponse);
 }
 
 // Resolves with the answer when every check passed, else throws
-// VouchedCheckError. Use it right before delegating.
+// SealKeeperCheckError. Use it right before delegating.
 export declare function assertTrusted(
   handle: string,
   thresholds?: CheckThresholds,

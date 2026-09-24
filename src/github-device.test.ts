@@ -148,12 +148,14 @@ describe('githubClientId', () => {
     vi.unstubAllEnvs();
   });
 
-  it('reads VOUCHED_GITHUB_CLIENT_ID', () => {
-    expect(githubClientId({ VOUCHED_GITHUB_CLIENT_ID: ' abc ' })).toBe('abc');
+  it('reads SEALKEEPER_GITHUB_CLIENT_ID', () => {
+    expect(githubClientId({ SEALKEEPER_GITHUB_CLIENT_ID: ' abc ' })).toBe(
+      'abc',
+    );
   });
 
   it('returns null when neither the env var nor the build value is set', () => {
     expect(githubClientId({})).toBeNull();
-    expect(githubClientId({ VOUCHED_GITHUB_CLIENT_ID: '' })).toBeNull();
+    expect(githubClientId({ SEALKEEPER_GITHUB_CLIENT_ID: '' })).toBeNull();
   });
 });

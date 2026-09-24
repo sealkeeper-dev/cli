@@ -2,7 +2,7 @@
 import {
   AgentHandle,
   AgentId,
-  CREDENTIAL_ISSUER,
+  acceptedIssuer,
   Dimension,
   Ed25519PublicKey,
   Jws,
@@ -173,9 +173,16 @@ export const SealClaims = z
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type SealClaims = z.infer<typeof SealClaims>;
 
-// The same claims with the issuer pinned to vouched.run.
+// The same claims with the issuer checked. It accepts what acceptedIssuer
+// accepts at the time of the read, so sealkeeper.run always and the old
+// issuer only until LEGACY_ISSUER_UNTIL. The rest stays loose.
 export const CredentialPayload = z
-  .object({ iss: z.literal(CREDENTIAL_ISSUER), ...sealClaims })
+  .object({
+    iss: z
+      .string()
+      .refine((iss) => acceptedIssuer(iss, Date.now() / 1000), 'wrong issuer'),
+    ...sealClaims,
+  })
   .refine(expAfterIat, 'exp must be after iat and within 24 hours of it')
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type CredentialPayload = z.infer<typeof CredentialPayload>;
@@ -209,7 +216,7 @@ export const WellKnownKey = z.object({
   x: Ed25519PublicKey,
 });
 
-// /.well-known/vouched.json, the keys SEALs are signed with.
+// The keys document at WELL_KNOWN_PATH, the keys SEALs are signed with.
 export const WellKnown = z.object({
   keys: z.array(WellKnownKey).min(1).max(16),
 });

@@ -21,14 +21,14 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
   event_id: 'a random id made on this machine for this event',
   type: 'the event type',
   occurred_at: 'when it happened',
-  version: 'the agent version you set with vouched init',
+  version: 'the agent version you set with sealkeeper init',
   session_id: 'the id your agent framework gives the session',
   duration_ms: 'how long it took in milliseconds',
   tool: 'the tool name, for example Bash or Read',
   ok: 'whether the tool call succeeded',
   error_class:
     'when it failed, the kind of error, for example TypeError, never the message',
-  task_id: 'the id of a task from the Vouched task exchange',
+  task_id: 'the id of a task from the SealKeeper task exchange',
   task_type: 'the kind of task, for example lint',
   outcome: 'whether the task succeeded',
   evidence_hash: 'a SHA-256 hash of the evidence, never the evidence',
@@ -82,7 +82,7 @@ export function taxonomyRows(): TypeRow[] {
 }
 
 // The What leaves this machine block. init prints it at the end and the
-// hidden command vouched what-is-shared prints it on its own.
+// hidden command sealkeeper what-is-shared prints it on its own.
 export function describeTaxonomy(): string {
   const common = commonFields();
   const rows = taxonomyRows();

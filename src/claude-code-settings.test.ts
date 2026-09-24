@@ -33,9 +33,9 @@ import {
 // A hook command in the absolute form hookCommand writes, for a global
 // install and for an npx copy.
 const HOOK_COMMAND =
-  '"/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js" hook claude-code';
+  '"/usr/local/bin/node" "/usr/local/lib/node_modules/sealkeeper/dist/index.js" hook claude-code';
 const NPX_COMMAND =
-  '"/usr/local/bin/node" "/home/carl/.npm/_npx/abc123/node_modules/vouched/dist/index.js" hook claude-code';
+  '"/usr/local/bin/node" "/home/carl/.npm/_npx/abc123/node_modules/sealkeeper/dist/index.js" hook claude-code';
 
 // Shaped like a real settings file with another tool's hooks under every
 // event name, most without a matcher. Written with no trailing newline, as
@@ -90,7 +90,7 @@ describe('Claude Code settings', () => {
   const file = () => join(dir, 'settings.json');
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'vouched-settings-'));
+    dir = await mkdtemp(join(tmpdir(), 'sealkeeper-settings-'));
   });
 
   afterEach(async () => {
@@ -133,6 +133,7 @@ describe('Claude Code settings', () => {
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
       added: [],
       updated: [],
+      replaced: [],
     });
     expect(await readFile(file(), 'utf8')).toBe(once);
     expect((await stat(file())).mtimeMs).toBe(mtime);
@@ -218,7 +219,11 @@ describe('Claude Code settings', () => {
     await installHooks(file(), NPX_COMMAND);
     const before = await readFile(file(), 'utf8');
     const result = await installHooks(file(), HOOK_COMMAND);
-    expect(result).toEqual({ added: [], updated: [...HOOK_EVENTS] });
+    expect(result).toEqual({
+      added: [],
+      updated: [...HOOK_EVENTS],
+      replaced: [],
+    });
     const after = await readFile(file(), 'utf8');
     // The text is the old text with our command swapped, nothing else.
     expect(after).toBe(
@@ -265,7 +270,7 @@ describe('Claude Code settings', () => {
 
   it('uninstall removes the absolute, legacy and current forms and nothing else', async () => {
     const dev =
-      '"/usr/bin/node" "/src/vouched/packages/cli/dist/index.js" hook claude-code';
+      '"/usr/bin/node" "/src/sealkeeper/packages/cli/dist/index.js" hook claude-code';
     const before = {
       hooks: {
         Stop: [
@@ -294,7 +299,7 @@ describe('hookCommand', () => {
   let root: string;
 
   beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'vouched-bin-'));
+    root = await mkdtemp(join(tmpdir(), 'sealkeeper-bin-'));
   });
 
   afterEach(async () => {
@@ -302,37 +307,39 @@ describe('hookCommand', () => {
   });
 
   async function script(...parts: string[]): Promise<string> {
-    const path = join(root, ...parts, 'vouched', 'dist', 'index.js');
-    await mkdir(join(root, ...parts, 'vouched', 'dist'), { recursive: true });
+    const path = join(root, ...parts, 'sealkeeper', 'dist', 'index.js');
+    await mkdir(join(root, ...parts, 'sealkeeper', 'dist'), {
+      recursive: true,
+    });
     await writeFile(path, '');
     return path;
   }
 
   it('quotes the node binary and the real script path for a global install', async () => {
     const real = await script('lib', 'node_modules');
-    // npm links bin/vouched to the script. argv[1] is the link.
+    // npm links bin/sealkeeper to the script. argv[1] is the link.
     await mkdir(join(root, 'bin'));
-    await symlink(real, join(root, 'bin', 'vouched'));
+    await symlink(real, join(root, 'bin', 'sealkeeper'));
     const command = hookCommand(
       '/usr/local/bin/node',
-      join(root, 'bin', 'vouched'),
+      join(root, 'bin', 'sealkeeper'),
     );
     const realRoot = parseHookCommand(command)?.script;
-    expect(realRoot?.endsWith('/lib/node_modules/vouched/dist/index.js')).toBe(
-      true,
-    );
+    expect(
+      realRoot?.endsWith('/lib/node_modules/sealkeeper/dist/index.js'),
+    ).toBe(true);
     expect(command).toBe(
       `"/usr/local/bin/node" "${realRoot}" hook claude-code`,
     );
     expect(isOurCommand(command)).toBe(true);
-    expect(isNpxCopy(join(root, 'bin', 'vouched'))).toBe(false);
+    expect(isNpxCopy(join(root, 'bin', 'sealkeeper'))).toBe(false);
   });
 
   it('points at the npx cache copy under npx', async () => {
     const npx = await script('.npm', '_npx', 'abc123', 'node_modules');
     const command = hookCommand('/opt/node/bin/node', npx);
     expect(command).toMatch(
-      /^"\/opt\/node\/bin\/node" "[^"]*\/\.npm\/_npx\/abc123\/node_modules\/vouched\/dist\/index\.js" hook claude-code$/,
+      /^"\/opt\/node\/bin\/node" "[^"]*\/\.npm\/_npx\/abc123\/node_modules\/sealkeeper\/dist\/index\.js" hook claude-code$/,
     );
     expect(isOurCommand(command)).toBe(true);
     expect(isNpxCopy(npx)).toBe(true);
@@ -373,9 +380,9 @@ describe('hookCommand', () => {
 
   it('never looks at PATH', async () => {
     const npx = await script('_npx', 'x', 'node_modules');
-    // A vouched on PATH that runs this very script, the case 0.2.1 got wrong.
+    // A sealkeeper on PATH that runs this very script, the case 0.2.1 got wrong.
     await mkdir(join(root, 'bin'));
-    await symlink(npx, join(root, 'bin', 'vouched'));
+    await symlink(npx, join(root, 'bin', 'sealkeeper'));
     const saved = process.env.PATH;
     try {
       process.env.PATH = join(root, 'bin');
@@ -391,29 +398,29 @@ describe('hookCommand', () => {
   it('escapes what is special inside double quotes', () => {
     const command = hookCommand(
       '/Program Files/node',
-      '/no/such/dir with "quotes" $HOME `x`/vouched/dist/index.js',
+      '/no/such/dir with "quotes" $HOME `x`/sealkeeper/dist/index.js',
     );
     expect(command).toBe(
-      '"/Program Files/node" "/no/such/dir with \\"quotes\\" \\$HOME \\`x\\`/vouched/dist/index.js" hook claude-code',
+      '"/Program Files/node" "/no/such/dir with \\"quotes\\" \\$HOME \\`x\\`/sealkeeper/dist/index.js" hook claude-code',
     );
     expect(parseHookCommand(command)).toEqual({
       node: '/Program Files/node',
-      script: '/no/such/dir with "quotes" $HOME `x`/vouched/dist/index.js',
+      script: '/no/such/dir with "quotes" $HOME `x`/sealkeeper/dist/index.js',
     });
     expect(isOurCommand(command)).toBe(true);
   });
 
   it('gives the invocation without the hook arguments', () => {
     expect(invocationOf(HOOK_COMMAND)).toBe(
-      '"/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js"',
+      '"/usr/local/bin/node" "/usr/local/lib/node_modules/sealkeeper/dist/index.js"',
     );
     expect(invocationOf(HOOK_COMMAND)).toBe(
       cliInvocation(
         '/usr/local/bin/node',
-        '/usr/local/lib/node_modules/vouched/dist/index.js',
+        '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
       ),
     );
-    expect(cliInvocation('/n', '')).toBe('vouched');
+    expect(cliInvocation('/n', '')).toBe('sealkeeper');
   });
 
   it('does not claim a command that only looks similar', () => {
@@ -422,7 +429,7 @@ describe('hookCommand', () => {
       false,
     );
     expect(isOurCommand(NOTIFY)).toBe(false);
-    expect(isOurCommand('vouched hook claude-code')).toBe(true);
-    expect(isOurCommand('npx -y vouched hook claude-code')).toBe(true);
+    expect(isOurCommand('sealkeeper hook claude-code')).toBe(true);
+    expect(isOurCommand('npx -y sealkeeper hook claude-code')).toBe(true);
   });
 });

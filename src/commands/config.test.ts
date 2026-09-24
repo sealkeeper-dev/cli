@@ -47,8 +47,8 @@ describe('config', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-config-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-config-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
   });
 
   afterEach(async () => {
@@ -74,13 +74,13 @@ describe('config', () => {
     const on = await run('config', 'auto-sync', 'on');
     expect(on.code).toBe(0);
     expect(on.out).toContain('automatic sync is on');
-    expect(on.out).toContain('vouched config auto-sync off');
+    expect(on.out).toContain('sealkeeper config auto-sync off');
     expect((await readConfig())?.autoSync).toBe(true);
     expect((await run('config', 'show')).out).toContain('autoSync       on\n');
 
     const off = await run('config', 'auto-sync', 'off');
     expect(off.code).toBe(0);
-    expect(off.out).toContain('vouched sync --dry-run');
+    expect(off.out).toContain('sealkeeper sync --dry-run');
     expect((await readConfig())?.autoSync).toBe(false);
     expect((await run('config', 'show')).out).toContain('autoSync       off\n');
   });
@@ -97,7 +97,7 @@ describe('config', () => {
     const { code, out } = await run('config', 'show');
     expect(code).toBe(0);
     expect(out).toContain(`agentId        ${AGENT_ID}\n`);
-    expect(out).toContain('apiUrl         https://api.vouched.run\n');
+    expect(out).toContain('apiUrl         https://api.sealkeeper.run\n');
     const json = JSON.parse((await run('config', 'show', '--json')).out);
     expect(json).toEqual({ ...(await readConfig()), autoSync: false });
   });
@@ -117,7 +117,7 @@ describe('config', () => {
     ]) {
       const { code, err } = await run(...args);
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run vouched init\n');
+      expect(err).toBe('not initialised, run sealkeeper init\n');
     }
   });
 });

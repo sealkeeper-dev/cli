@@ -61,9 +61,9 @@ describe('background sync', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-bg-'));
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-bg-'));
     p = paths(home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     requests = 0;
     agentId = null;
     clock = Date.now();

@@ -5,15 +5,21 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { writeFileAtomic } from './config.js';
 
-// Adds and removes the Vouched hooks in a Claude Code settings file. Hooks
+// Adds and removes the SealKeeper hooks in a Claude Code settings file. Hooks
 // live under a top level hooks object keyed by event name. Each value is an
 // array of {matcher?, hooks: [{type: 'command', command}]}. Entries that are
 // not ours are never changed.
 
 // What follows the CLI invocation in every hook command we write.
 export const HOOK_ARGS = 'hook claude-code';
-// The forms 0.2.1 and earlier wrote. Still ours, and rewritten on install.
+// The bare and npx forms. Ours, and rewritten on install.
 export const LEGACY_HOOK_COMMANDS = [
+  `sealkeeper ${HOOK_ARGS}`,
+  `npx -y sealkeeper ${HOOK_ARGS}`,
+] as const;
+// The bare and npx forms 0.2.1 and earlier wrote, before the package was
+// renamed. Replaced on install.
+export const OLD_PACKAGE_HOOK_COMMANDS = [
   `vouched ${HOOK_ARGS}`,
   `npx -y vouched ${HOOK_ARGS}`,
 ] as const;
@@ -57,15 +63,15 @@ export function settingsPath(
 
 // How to run this CLI from any shell, whatever its PATH. The absolute node
 // binary and the real path of the running script, each double quoted, for
-// example "/usr/local/bin/node" "/usr/local/lib/node_modules/vouched/dist/index.js".
+// example "/usr/local/bin/node" "/usr/local/lib/node_modules/sealkeeper/dist/index.js".
 // Under npx the script sits in the npx cache, which works until the cache is
 // cleared. Without a script path, which only happens when this is not run as
-// the CLI, it falls back to plain vouched.
+// the CLI, it falls back to plain sealkeeper.
 export function cliInvocation(
   execPath: string = process.execPath,
   argv1: string | undefined = process.argv[1],
 ): string {
-  if (argv1 === undefined || argv1.length === 0) return 'vouched';
+  if (argv1 === undefined || argv1.length === 0) return 'sealkeeper';
   const script = realOrNull(argv1) ?? argv1;
   return `${shellQuote(stableNode(execPath))} ${shellQuote(script)}`;
 }
@@ -119,7 +125,8 @@ function shellQuote(value: string): string {
 
 // "<node>" "<script>" hook claude-code, as hookCommand writes it.
 const ABSOLUTE = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)" hook claude-code$/;
-const OUR_SCRIPT = /[\\/]vouched[\\/]dist[\\/]index\.js$/;
+const OUR_SCRIPT = /[\\/]sealkeeper[\\/]dist[\\/]index\.js$/;
+const OLD_PACKAGE_SCRIPT = /[\\/]vouched[\\/]dist[\\/]index\.js$/;
 
 function unquote(value: string): string {
   return value.replace(/\\(.)/g, '$1');
@@ -135,14 +142,32 @@ export function parseHookCommand(
   return { node: unquote(match[1] ?? ''), script: unquote(match[2] ?? '') };
 }
 
+// Whether a hook command was written by the package before it was renamed
+// to sealkeeper. The bare or npx form of vouched, or the absolute form whose
+// script is the vouched package, <...>/vouched/dist/index.js, global or in
+// the npx cache. Only the package directory counts, so a home or project
+// that merely has vouched somewhere in its path is not mistaken for it.
+// Install replaces these in place.
+export function isOldPackageCommand(command: string): boolean {
+  if (
+    (OLD_PACKAGE_HOOK_COMMANDS as readonly string[]).includes(command.trim())
+  ) {
+    return true;
+  }
+  const parsed = parseHookCommand(command);
+  return parsed !== null && OLD_PACKAGE_SCRIPT.test(parsed.script);
+}
+
 // Whether a command is one of ours. The absolute form whose script is a
-// vouched package, either legacy form, or exactly the command being
-// installed now, which covers running from a checkout.
+// sealkeeper package, the bare or npx form, a hook of the old vouched
+// package, or exactly the command being installed now, which covers
+// running from a checkout.
 export function isOurCommand(command: string, current?: string): boolean {
   if (command === current) return true;
   if ((LEGACY_HOOK_COMMANDS as readonly string[]).includes(command.trim())) {
     return true;
   }
+  if (isOldPackageCommand(command)) return true;
   const parsed = parseHookCommand(command);
   return parsed !== null && OUR_SCRIPT.test(parsed.script);
 }
@@ -155,7 +180,13 @@ function realOrNull(path: string): string | null {
   }
 }
 
-export type InstallResult = { added: string[]; updated: string[] };
+// replaced lists the events where a hook of the old vouched package was
+// rewritten, updated those where one of ours ran another command.
+export type InstallResult = {
+  added: string[];
+  updated: string[];
+  replaced: string[];
+};
 
 // Adds one hook entry per event that has none of ours yet, and rewrites
 // any of ours whose command differs from command, in place. Entries that
@@ -169,6 +200,7 @@ export async function installHooks(
   const hooks = hooksOf(settings.data, file) ?? {};
   const added: string[] = [];
   const updated: string[] = [];
+  const replaced: string[] = [];
   for (const event of HOOK_EVENTS) {
     const list = hooks[event] ?? [];
     if (!Array.isArray(list)) {
@@ -176,26 +208,29 @@ export async function installHooks(
     }
     let found = false;
     let rewrote = false;
+    let old = false;
     for (const group of list) {
       for (const hook of ourHooks(group, command)) {
         found = true;
         if (hook.command !== command) {
+          if (isOldPackageCommand(hook.command)) old = true;
+          else rewrote = true;
           hook.command = command;
-          rewrote = true;
         }
       }
     }
-    if (rewrote) updated.push(event);
+    if (old) replaced.push(event);
+    else if (rewrote) updated.push(event);
     if (found) continue;
     list.push({ hooks: [{ type: 'command', command }] });
     hooks[event] = list;
     added.push(event);
   }
-  if (added.length > 0 || updated.length > 0) {
+  if (added.length > 0 || updated.length > 0 || replaced.length > 0) {
     settings.data.hooks = hooks;
     await writeSettings(file, settings);
   }
-  return { added, updated };
+  return { added, updated, replaced };
 }
 
 // Whether the file holds at least one of our hooks. A missing or unreadable
@@ -209,6 +244,11 @@ export async function hasHooks(
   const commands = await ourCommands(file);
   if (current === undefined) return commands.length > 0;
   return commands.includes(current);
+}
+
+// Whether the file holds a hook of the old vouched package.
+export async function hasOldPackageHooks(file: string): Promise<boolean> {
+  return (await ourCommands(file)).some(isOldPackageCommand);
 }
 
 // The commands of our hooks in the file, each once. A missing or unreadable

@@ -117,7 +117,7 @@ export function register(
         } catch (error) {
           if (error instanceof ApiError) {
             this.error(
-              `submitted, but reporting the outcome failed: ${error.message}. Run vouched tasks submit again to retry`,
+              `submitted, but reporting the outcome failed: ${error.message}. Run sealkeeper tasks submit again to retry`,
             );
           }
           throw error;

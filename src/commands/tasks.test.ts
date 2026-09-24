@@ -224,9 +224,9 @@ describe('tasks pull, submit and post', () => {
   }
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-tasks-'));
-    vi.stubEnv('VOUCHED_HOME', home);
-    vi.stubEnv('VOUCHED_API_URL', '');
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-tasks-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -263,7 +263,7 @@ describe('tasks pull, submit and post', () => {
       await rm(paths().config);
       const { code, err } = await run(...args);
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run vouched init\n');
+      expect(err).toBe('not initialised, run sealkeeper init\n');
       expect(api.requests).toEqual([]);
     });
 
@@ -271,7 +271,7 @@ describe('tasks pull, submit and post', () => {
       await rm(paths().key);
       const { code, err } = await run('tasks', 'pull');
       expect(code).toBe(1);
-      expect(err).toBe('no key found, run vouched init\n');
+      expect(err).toBe('no key found, run sealkeeper init\n');
     });
   });
 

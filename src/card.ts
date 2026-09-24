@@ -44,7 +44,7 @@ export function buildCard(
   return AgentCard.parse({
     protocolVersion: A2A_PROTOCOL_VERSION,
     name: config.name,
-    description: `Vouched agent ${config.agentId}. Verified track record at ${profile}`,
+    description: `SealKeeper agent ${config.agentId}. Verified track record at ${profile}`,
     ...(url === undefined ? {} : { url }),
     version: config.version,
     // ext/seal/v1 and the old ext/credential/v1, the same SEAL in both.

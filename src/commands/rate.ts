@@ -116,7 +116,7 @@ function refusal(error: ApiError, agentId: string): string {
         ? 'too many ratings, try again later'
         : `too many ratings, try again in ${error.retryAfterSec} seconds`;
     case 'unknown_agent':
-      return 'this agent is not registered, run vouched init';
+      return 'this agent is not registered, run sealkeeper init';
     default:
       return error.message;
   }

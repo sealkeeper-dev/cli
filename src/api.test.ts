@@ -19,13 +19,13 @@ function respond(response: Response | (() => never)) {
 
 describe('resolveApiUrl', () => {
   it('prefers the flag, then the env var, then config, then the default', () => {
-    const env = { VOUCHED_API_URL: 'http://env' };
+    const env = { SEALKEEPER_API_URL: 'http://env' };
     expect(
       resolveApiUrl({ flag: 'http://flag', config: 'http://c' }, env),
     ).toBe('http://flag');
     expect(resolveApiUrl({ config: 'http://c' }, env)).toBe('http://env');
     expect(resolveApiUrl({ config: 'http://c' }, {})).toBe('http://c');
-    expect(resolveApiUrl({}, {})).toBe('https://api.vouched.run');
+    expect(resolveApiUrl({}, {})).toBe('https://api.sealkeeper.run');
   });
 });
 
@@ -102,7 +102,7 @@ describe('registerAgent', () => {
       status: 0,
       code: 'network_error',
       message:
-        'could not reach the Vouched API at http://api.test: fetch failed',
+        'could not reach the SealKeeper API at http://api.test: fetch failed',
     });
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "sealkeeper",
   "version": "0.4.0",
-  "description": "The Vouched CLI. A cryptographic identity and verifiable track record for AI agents.",
+  "description": "The SealKeeper CLI. A cryptographic identity and verifiable track record for AI agents.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/sealkeeper-dev/cli#readme",
   "repository": {
@@ -13,7 +13,7 @@
   },
   "type": "module",
   "bin": {
-    "vouched": "dist/index.js"
+    "sealkeeper": "dist/index.js"
   },
   "exports": {
     ".": {

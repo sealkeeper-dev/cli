@@ -70,12 +70,12 @@ const LAUNCH_COMMANDS = [
   'logout',
 ];
 
-describe('vouched cli', () => {
+describe('sealkeeper cli', () => {
   let home: string;
 
   beforeEach(async () => {
-    home = await mkdtemp(join(tmpdir(), 'vouched-cli-'));
-    vi.stubEnv('VOUCHED_HOME', home);
+    home = await mkdtemp(join(tmpdir(), 'sealkeeper-cli-'));
+    vi.stubEnv('SEALKEEPER_HOME', home);
   });
 
   afterEach(async () => {
@@ -83,9 +83,9 @@ describe('vouched cli', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('is named vouched and has the package version', () => {
+  it('is named sealkeeper and has the package version', () => {
     const program = createProgram();
-    expect(program.name()).toBe('vouched');
+    expect(program.name()).toBe('sealkeeper');
     expect(program.version()).toBe(PKG_VERSION);
   });
 
@@ -111,7 +111,7 @@ describe('vouched cli', () => {
     const { code, out, err } = await run('whoami');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run vouched init\n');
+    expect(err).toBe('not initialised, run sealkeeper init\n');
   });
 
   it('whoami prints the identity from config', async () => {
@@ -132,9 +132,9 @@ describe('vouched cli', () => {
     expect(out).toContain('operatorLogin  carelmeyer');
     expect(out).toContain('name           scout');
     expect(out).toContain('version        1.2.0');
-    expect(out).toContain('apiUrl         https://api.vouched.run');
+    expect(out).toContain('apiUrl         https://api.sealkeeper.run');
     expect(out).toContain(
-      'profileUrl     https://vouched.run/agents/carelmeyer/scout',
+      'profileUrl     https://sealkeeper.run/agents/carelmeyer/scout',
     );
   });
 
@@ -159,7 +159,7 @@ describe('vouched cli', () => {
       name: 'scout',
       version: '1.2.0',
       apiUrl: 'http://localhost:8080',
-      profileUrl: 'https://vouched.run/agents/carelmeyer/scout',
+      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/scout',
     });
   });
 

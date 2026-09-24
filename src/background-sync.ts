@@ -1,7 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 // The background sync the in-process adapters (Mastra, OpenClaw) start after
 // they append an event. Without it an agent whose operator never runs a
-// vouched command would only ever write to the local log, go quiet on its
+// sealkeeper command would only ever write to the local log, go quiet on its
 // profile and drop down the dormancy ladder.
 //
 // It only runs when automatic sync is on, at most once every
