@@ -7,7 +7,7 @@
 // every verifier runs.
 import {
   base64urlEncode,
-  type CredentialPayload,
+  type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
   parseSealPayload,
   type SealBrokenReason,

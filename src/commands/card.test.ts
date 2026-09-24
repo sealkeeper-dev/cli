@@ -13,7 +13,7 @@ import {
   AgentCard,
   base64urlEncode,
   CREDENTIAL_EXTENSION_URI,
-  type CredentialPayload,
+  type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
   SEAL_EXTENSION_URI,
   sign,

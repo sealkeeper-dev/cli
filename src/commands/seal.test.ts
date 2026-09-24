@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   base64urlEncode,
-  type CredentialPayload,
+  type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
   LEGACY_UNTIL,
   sign,
