@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { Event } from '@vouched-dev/schema';
 import { type Command, CommanderError } from 'commander';
@@ -118,8 +118,17 @@ describe('hook claude-code', () => {
     return result;
   }
 
+  // Every day file in date order. A test can pin the clock to one day and
+  // then write at the real time, which may be another day.
   async function logged(): Promise<Event[]> {
-    return readDay(dayOf(new Date()), paths(home));
+    const dir = dirname(paths(home).logFile(dayOf(new Date())));
+    const days = (await readdir(dir).catch(() => []))
+      .filter((f) => f.endsWith('.jsonl'))
+      .map((f) => f.slice(0, 10))
+      .sort();
+    const all: Event[] = [];
+    for (const day of days) all.push(...(await readDay(day, paths(home))));
+    return all;
   }
 
   async function markers(): Promise<string[]> {
