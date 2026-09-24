@@ -1,4 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import { publicVerification } from '@vouched-dev/schema';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import { createApiClient } from './api.js';
@@ -180,6 +181,41 @@ describe('response schemas parse loosely', () => {
         counts: { ...counts, seed_tasks: -1 },
       }).success,
     ).toBe(false);
+  });
+
+  it('TaskResponse takes the redacted schema the API shows for a schema task', () => {
+    // A json_shape seed schema, as stored and as GET /v1/tasks shows it.
+    const verification = publicVerification({
+      kind: 'schema',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          guest: { type: 'string', const: 'Amara' },
+          nights: { type: 'integer', const: 3 },
+          breakfast: { type: 'boolean', const: true },
+        },
+        required: ['guest', 'nights', 'breakfast'],
+        additionalProperties: false,
+      },
+    });
+    const parsed = TaskResponse.parse({
+      ...task,
+      taskType: 'json_shape',
+      verification,
+    });
+    expect(parsed.verification).toEqual({
+      kind: 'schema',
+      jsonSchema: {
+        type: 'object',
+        properties: {
+          guest: { type: 'string' },
+          nights: { type: 'integer' },
+          breakfast: { type: 'boolean' },
+        },
+        required: ['guest', 'nights', 'breakfast'],
+        additionalProperties: false,
+      },
+    });
   });
 
   it('CredentialResponse prefers seal over credential', () => {
