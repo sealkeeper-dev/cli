@@ -311,5 +311,6 @@ describe('log', () => {
     const pending = await readPending(1000);
     expect(ids(pending.events)).toEqual(ids(all));
     expect(pending.last?.eventId).toBe(all[999]?.event_id);
-  });
+    // A thousand file appends, slow on a busy machine.
+  }, 30_000);
 });
