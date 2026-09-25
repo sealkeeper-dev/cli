@@ -66,6 +66,5 @@ export type EmitInput = {
 // ~/.sealkeeper) and returns it. event_id is generated, occurred_at defaults
 // to now and version to the one in config. Throws when the event does not
 // match the taxonomy. It does not send anything. Run sealkeeper sync for
-// that. The first call after the rename copies ~/.vouched to ~/.sealkeeper,
-// as every CLI command does.
+// that.
 export declare function emit(input: EmitInput): Promise<Event>;

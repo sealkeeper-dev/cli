@@ -13,12 +13,10 @@ import { type Input, isYes, streamInput } from '../ask.js';
 import {
   installProveCommand,
   proveCommandPath,
-  removeOldProveCommand,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
   hasHooks,
-  hasOldPackageHooks,
   hookCommand,
   installHooks,
   invocationOf,
@@ -61,12 +59,7 @@ import {
   inheritLine,
   type VersionChange,
 } from '../version-change.js';
-import {
-  commandLine,
-  hooksLines,
-  INSTALL_COMMAND,
-  oldCommandLine,
-} from './adapter.js';
+import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
@@ -407,23 +400,14 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const user = settingsPath('user', dirs);
   const project = settingsPath('project', dirs);
   const hook = (deps.hookCommand ?? hookCommand)();
-  // Hooks the old vouched package wrote are replaced in place, in the user
-  // and in the project settings, without asking again, since the operator
-  // agreed to them when they went in. Each scope's slash command moves too.
-  let replaced = false;
-  for (const file of new Set([user, project])) {
-    if (!(await hasOldPackageHooks(file))) continue;
-    if (await installAt(file, hook)) replaced = true;
-  }
-  if (replaced) return 'installed';
-  // Only hooks that run this very command count. An older form, bare or
-  // through npx, or a path that moved, is offered the install again, which
-  // rewrites our entries in place.
+  // Only hooks that run this very command count. A path that moved is
+  // offered the install again, which rewrites our entries in place.
   if ((await hasHooks(user, hook)) || (await hasHooks(project, hook))) {
     return 'present';
   }
-  // Hooks of ours in the project settings, in an older form, are rewritten
-  // there, so a second set never lands in the user settings beside them.
+  // Hooks of ours in the project settings, with an older path, are
+  // rewritten there, so a second set never lands in the user settings
+  // beside them.
   const file = (await hasHooks(project)) ? project : user;
 
   const input = deps.stdin?.();
@@ -434,9 +418,8 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
 }
 
 // The same install as sealkeeper adapter claude-code install into one
-// settings file, the hooks and then the /sealkeeper-prove command, with the
-// old /vouched-prove command removed once the new one is there. false when
-// the settings file could not be changed.
+// settings file, the hooks and then the /sealkeeper-prove command. false
+// when the settings file could not be changed.
 async function installAt(file: string, hook: string): Promise<boolean> {
   try {
     const result = await installHooks(file, hook);
@@ -454,10 +437,6 @@ async function installAt(file: string, hook: string): Promise<boolean> {
   try {
     const command = await installProveCommand(commandPath, invocationOf(hook));
     stdout(commandLine(command, commandPath));
-    if (command !== 'kept') {
-      const old = await removeOldProveCommand(file);
-      if (old !== null) stdout(oldCommandLine(old));
-    }
   } catch (error) {
     // The hooks are in, so this is only a warning.
     if (!(error instanceof SettingsError)) throw error;

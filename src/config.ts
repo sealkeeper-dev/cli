@@ -12,11 +12,6 @@ export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
 export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
-// The default API before the rename. init wrote it into every config.json,
-// and the home migration copies that file as it is, so reading a config maps
-// it to DEFAULT_API_URL. Any other apiUrl was chosen on purpose and stays.
-export const LEGACY_DEFAULT_API_URL = 'https://api.vouched.run';
-
 // The API gets the GitHub token at registration and every signed request, so
 // it must be https. Plain http is allowed only to this machine, for a local
 // API during development.
@@ -37,12 +32,6 @@ export function isSecureApiUrl(url: string): boolean {
 
 export const INSECURE_API_URL =
   'expected an https URL, or http only to localhost';
-
-export function upgradeApiUrl(url: string): string {
-  return url.replace(/\/+$/, '') === LEGACY_DEFAULT_API_URL
-    ? DEFAULT_API_URL
-    : url;
-}
 
 type Named = { operatorLogin: string; name: string };
 
@@ -73,7 +62,6 @@ export const Config = z
     apiUrl: z
       .url({ protocol: /^https?$/ })
       .refine(isSecureApiUrl, INSECURE_API_URL)
-      .transform(upgradeApiUrl)
       .default(DEFAULT_API_URL),
     registeredAt: z.iso.datetime({ offset: true }),
     // Whether emit and the hook adapters send events on their own. Unset
@@ -110,8 +98,7 @@ export type Paths = {
 export const HOME_DIR_NAME = '.sealkeeper';
 
 // SEALKEEPER_HOME wins so tests and multiple agents on one machine can each
-// have their own directory. The old name is still read for one release, see
-// env.ts. The default is ~/.sealkeeper.
+// have their own directory. The default is ~/.sealkeeper.
 export function sealkeeperHome(env: NodeJS.ProcessEnv = process.env): string {
   return readEnv('SEALKEEPER_HOME', env) ?? join(homedir(), HOME_DIR_NAME);
 }

@@ -42,8 +42,8 @@ export class ApiError extends Error {
   }
 }
 
-// An explicit flag wins, then SEALKEEPER_API_URL (or its old name for one
-// release, see env.ts), then the config, then the production default.
+// An explicit flag wins, then SEALKEEPER_API_URL, then the config, then the
+// production default.
 export function resolveApiUrl(
   sources: { flag?: string; config?: string | null },
   env: NodeJS.ProcessEnv = process.env,

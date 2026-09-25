@@ -13,7 +13,6 @@ import { createProgram } from '../program.js';
 import {
   dormancyLine,
   HOOKS_MISSING,
-  HOOKS_OLD_PACKAGE,
   minutesToNextScoring,
   NO_ADAPTER,
   nextScoringLine,
@@ -644,35 +643,6 @@ describe('status', () => {
       const { out, err } = await run(offline, 'status', '--json');
       expect(JSON.parse(out)).toMatchObject({ pending: 0 });
       expect(err).toBe(`${HOOKS_MISSING}\n`);
-    });
-
-    it('warns for the bare forms, which only work with sealkeeper on PATH', async () => {
-      await writeSettings(
-        join(home, 'claude'),
-        'npx -y sealkeeper hook claude-code',
-      );
-      expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
-      await writeSettings(join(home, 'claude'), 'sealkeeper hook claude-code');
-      expect((await run(offline, 'status')).err).toBe(`${HOOKS_MISSING}\n`);
-    });
-
-    it('says when the hooks still run the old vouched package', async () => {
-      await writeSettings(join(home, 'claude'), 'vouched hook claude-code');
-      expect((await run(offline, 'status')).err).toBe(`${HOOKS_OLD_PACKAGE}\n`);
-      // The absolute form, even with both paths still there, in the project
-      // settings while the user settings are current.
-      const dir = join(home, 'lib', 'node_modules', 'vouched', 'dist');
-      await mkdir(dir, { recursive: true });
-      await writeFile(join(dir, 'index.js'), '');
-      await writeSettings(
-        join(home, 'project', '.claude'),
-        hookCommand(process.execPath, join(dir, 'index.js')),
-      );
-      await writeSettings(
-        join(home, 'claude'),
-        hookCommand(process.execPath, await npxScript()),
-      );
-      expect((await run(offline, 'status')).err).toBe(`${HOOKS_OLD_PACKAGE}\n`);
     });
   });
 });

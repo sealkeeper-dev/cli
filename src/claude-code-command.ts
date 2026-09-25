@@ -9,17 +9,9 @@ import { writeFileAtomic } from './config.js';
 // carries a managed-by: sealkeeper key that marks it as ours, so install
 // only ever writes or removes a file we wrote. A file without the marker
 // belongs to the operator and is left alone.
-//
-// Before the rename the file was vouched-prove.md with managed-by: vouched,
-// and in 0.2.1 and earlier an HTML comment on its first line. Both count as
-// ours, and install removes that old file once the new one is written.
 
 export const PROVE_COMMAND_FILE = 'sealkeeper-prove.md';
 export const PROVE_COMMAND_MARKER = 'managed-by: sealkeeper';
-export const OLD_PROVE_COMMAND_FILE = 'vouched-prove.md';
-export const OLD_PROVE_COMMAND_MARKER = 'managed-by: vouched';
-export const LEGACY_PROVE_COMMAND_MARKER =
-  '<!-- written by vouched adapter claude-code install. Delete this line to keep your own edits. -->';
 
 // A one line shell function that makes sealkeeper mean invocation. For
 // plain sealkeeper it goes through command, so the function does not call
@@ -77,11 +69,6 @@ export function proveCommandPath(settingsFile: string): string {
   return join(dirname(settingsFile), 'commands', PROVE_COMMAND_FILE);
 }
 
-// Where the command was before the rename, next to the new one.
-export function oldProveCommandPath(settingsFile: string): string {
-  return join(dirname(settingsFile), 'commands', OLD_PROVE_COMMAND_FILE);
-}
-
 // Writes the command when the file is missing or ours. written when the
 // file changed, unchanged when it already matched, kept when it is someone
 // else's file.
@@ -120,30 +107,13 @@ export async function uninstallProveCommand(file: string): Promise<boolean> {
   return true;
 }
 
-// Removes the vouched-prove.md next to the settings file when it is ours.
-// Returns its path when it did, null when there was none or it is not ours.
-export async function removeOldProveCommand(
-  settingsFile: string,
-): Promise<string | null> {
-  const file = oldProveCommandPath(settingsFile);
-  return (await uninstallProveCommand(file)) ? file : null;
-}
-
-// Ours when the frontmatter at the very top holds the managed-by key, new
-// or old, or when the first line is the marker 0.2.1 and earlier wrote.
+// Ours when the frontmatter at the very top holds the managed-by key.
 export function isOurs(text: string): boolean {
   const lines = text.split(/\r?\n/);
-  if (lines[0] === LEGACY_PROVE_COMMAND_MARKER) return true;
   if (lines[0] !== '---') return false;
   for (const line of lines.slice(1)) {
     if (line === '---') return false;
-    const trimmed = line.trim();
-    if (
-      trimmed === PROVE_COMMAND_MARKER ||
-      trimmed === OLD_PROVE_COMMAND_MARKER
-    ) {
-      return true;
-    }
+    if (line.trim() === PROVE_COMMAND_MARKER) return true;
   }
   return false;
 }

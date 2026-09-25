@@ -5,7 +5,6 @@ import {
   type CommandResult,
   installProveCommand,
   proveCommandPath,
-  removeOldProveCommand,
   uninstallProveCommand,
 } from '../claude-code-command.js';
 import {
@@ -75,26 +74,19 @@ export function register(
       const command = await orExit(this, () =>
         installProveCommand(commandPath, invocationOf(hook)),
       );
-      const oldCommand =
-        command === 'kept'
-          ? null
-          : await orExit(this, () => removeOldProveCommand(file));
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
             path: file,
             added: result.added,
             updated: result.updated,
-            replaced: result.replaced,
             command: { path: commandPath, result: command },
-            oldCommandRemoved: oldCommand,
           }),
         );
         return;
       }
       for (const line of hooksLines(result, file)) stdout(line);
       stdout(commandLine(command, commandPath));
-      if (oldCommand !== null) stdout(oldCommandLine(oldCommand));
     });
 
   claude
@@ -110,14 +102,12 @@ export function register(
       const commandRemoved = await orExit(this, () =>
         uninstallProveCommand(commandPath),
       );
-      const oldCommand = await orExit(this, () => removeOldProveCommand(file));
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
             path: file,
             removed,
             command: { path: commandPath, removed: commandRemoved },
-            oldCommandRemoved: oldCommand,
           }),
         );
         return;
@@ -130,7 +120,6 @@ export function register(
         );
       }
       if (commandRemoved) stdout(`removed ${PROVE_SLASH} from ${commandPath}`);
-      if (oldCommand !== null) stdout(oldCommandLine(oldCommand));
     });
 
   return adapter;
@@ -142,11 +131,6 @@ const PROVE_SLASH = 'the /sealkeeper-prove command';
 // what it rewrote, or one saying nothing changed.
 export function hooksLines(result: InstallResult, file: string): string[] {
   const lines: string[] = [];
-  if (result.replaced.length > 0) {
-    lines.push(
-      `replaced the old vouched hooks for ${result.replaced.join(', ')} in ${file} with sealkeeper hooks`,
-    );
-  }
   if (result.added.length > 0) {
     lines.push(
       `added sealkeeper hooks for ${result.added.join(', ')} to ${file}`,
@@ -167,12 +151,6 @@ export function commandLine(result: CommandResult, path: string): string {
   if (result === 'written') return `added ${PROVE_SLASH} at ${path}`;
   if (result === 'unchanged') return `${PROVE_SLASH} is up to date at ${path}`;
   return `left ${path} alone, sealkeeper did not write it`;
-}
-
-// One line when install removed the slash command the old vouched package
-// wrote.
-export function oldCommandLine(path: string): string {
-  return `removed the old /vouched-prove command at ${path}`;
 }
 
 function pathFor(scope: Scope, deps: AdapterDeps): string {
