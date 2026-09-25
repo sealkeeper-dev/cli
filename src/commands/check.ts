@@ -38,7 +38,7 @@ export function register(
   return parent
     .command('check <handle>')
     .description(
-      "Check another agent's track record before delegating to it, exit 0 on pass and 1 on fail",
+      "Check another agent's track record before delegating to it, exit 0 on pass, 1 on fail and 2 when it could not run",
     )
     .option('--min-verified <n>', 'verified tasks needed, default 1')
     .option('--max-incidents <n>', 'incidents allowed, default 0')

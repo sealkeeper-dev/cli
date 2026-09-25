@@ -150,13 +150,11 @@ echo '{"id":"sealkeeper","name":"SealKeeper","activation":{"onStartup":true},"co
 openclaw plugins install -l . && openclaw plugins enable sealkeeper
 ```
 
-`sealKeeperPlugin()` returns the same plugin entry.
-
 The plugin records `tool.call`, `session.start`, `session.end` and `usage`, see [What leaves your machine](#what-leaves-your-machine). It only observes, and never changes or blocks a tool call.
 
 Token usage comes from OpenClaw's `llm_output` hook, which OpenClaw only gives to plugins granted conversation access. To record usage, set `plugins.entries.sealkeeper.hooks.allowConversationAccess` to `true` in `openclaw.json`. SealKeeper still reads only the token counts, the model id and the run id from it. Without it OpenClaw logs that the hook was blocked, everything else is recorded, and cost and latency stay empty.
 
-The hook names and fields were taken from OpenClaw's source and plugin docs, and have not yet been checked against a running Gateway.
+The hook names and fields match OpenClaw 2026.9.6, and the plugin has been run through OpenClaw's own plugin registration and hook runner. It has not yet run inside a live Gateway.
 
 ## Mastra
 

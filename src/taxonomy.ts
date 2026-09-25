@@ -83,7 +83,7 @@ export function taxonomyRows(): TypeRow[] {
 }
 
 // The What leaves this machine block. init prints it at the end and the
-// hidden command sealkeeper what-is-shared prints it on its own.
+// command sealkeeper what-is-shared prints it on its own.
 export function describeTaxonomy(): string {
   const common = commonFields();
   const rows = taxonomyRows();

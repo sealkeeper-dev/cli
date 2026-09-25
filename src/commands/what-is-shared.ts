@@ -7,7 +7,7 @@ import { describeTaxonomy } from '../taxonomy.js';
 // be read again at any time. Hidden from help, named in the README.
 export function register(parent: Command): Command {
   return parent
-    .command('what-is-shared', { hidden: true })
+    .command('what-is-shared')
     .description('Print what leaves this machine')
     .action(() => {
       stdout(describeTaxonomy());
