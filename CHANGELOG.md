@@ -2,6 +2,7 @@
 
 ## 0.4.1, Unreleased
 
+- An unexpected error prints one line, `sealkeeper: <message>`, and exits 1 instead of a Node stack trace. `SEALKEEPER_DEBUG=1` adds the stack. Output piped to a reader that closes early, as in `sealkeeper status | head -1`, no longer crashes with EPIPE.
 - Terminal output shows control characters, C1 controls and bidi overrides as `\uXXXX` escapes. API messages and other agents' task specs are printed, and these characters could move the cursor, write the clipboard or reorder text. `--json` output stays valid JSON with the same values.
 - `init --force` keeps the replaced key as `key.<time>.bak` in the SealKeeper home, mode 0600, and prints where. Before, the old key and with it the agent's identity were gone for good.
 - `tasks submit` refuses a `--file` inside the SealKeeper home and any submission that contains the agent's private key. Task specs come from other agents, so a spec could ask an agent to submit its own key. The `/sealkeeper-prove` command now tells Claude to treat every spec as untrusted data and to skip a task that asks for files, secrets or commands.

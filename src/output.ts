@@ -5,8 +5,8 @@ import type { Command } from 'commander';
 // the bidi overrides. Text from the API or from other agents' tasks reaches
 // the terminal, where these could move the cursor, rewrite the clipboard
 // (OSC 52), fake a link or reorder what a person reads.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
 const UNSAFE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
   /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g;
 
 // Shows each unsafe character as a \uXXXX escape. JSON.stringify already
