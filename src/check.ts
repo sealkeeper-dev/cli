@@ -41,7 +41,7 @@ export type CheckOptions = {
 
 // Splits login/name and checks both parts. Throws an ApiError with code
 // invalid_handle, before anything is sent.
-export function parseHandle(handle: string): { login: string; name: string } {
+function parseHandle(handle: string): { login: string; name: string } {
   const [login, name, ...rest] = handle.split('/');
   if (
     rest.length > 0 ||
@@ -62,13 +62,11 @@ export function parseHandle(handle: string): { login: string; name: string } {
 // code invalid_threshold instead of reaching the network. The CLI passes
 // its flags as the text that was typed, so an empty flag is refused rather
 // than read as 0.
-export type RawThresholds = {
+type RawThresholds = {
   [K in keyof CheckThresholds]?: string | undefined;
 };
 
-export function checkSearch(
-  thresholds: CheckThresholds | RawThresholds,
-): string {
+function checkSearch(thresholds: CheckThresholds | RawThresholds): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(thresholds)) {
     if (value !== undefined) search.set(key, String(value));

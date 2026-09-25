@@ -61,7 +61,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
 const SCORING_EVERY_MS = 15 * 60 * 1000;
 
-export type Status = {
+type Status = {
   agentId: string;
   // login/name, from config.
   handle: string;
@@ -126,7 +126,7 @@ export function register(
     });
 }
 
-export async function readStatus(
+async function readStatus(
   config: Config,
   deps: StatusDeps,
   now: Date,
@@ -234,7 +234,7 @@ function claudeDirs(deps: StatusDeps) {
 // True when a hook of ours in the user or project settings runs a node
 // binary or a sealkeeper script that is not there any more, as happens once
 // the npx cache is cleared.
-export async function hooksGone(deps: StatusDeps): Promise<boolean> {
+async function hooksGone(deps: StatusDeps): Promise<boolean> {
   const dirs = claudeDirs(deps);
   const commands = (
     await Promise.all([
@@ -256,7 +256,7 @@ export async function hooksGone(deps: StatusDeps): Promise<boolean> {
 // has no event in the last seven UTC days, today included. The CLI cannot see
 // the Mastra or OpenClaw adapters, which live in other code, but they write
 // to the same log, so an agent using them is never quiet for long.
-export async function noAdapterAndQuiet(
+async function noAdapterAndQuiet(
   deps: StatusDeps,
   now: Date,
   p: Paths = paths(),
@@ -410,7 +410,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
 
 // Only while nothing is verified yet, so it points at the one thing left to
 // do. The count comes from the local log, so some may have expired.
-export function unsubmittedHint(status: Status): string | null {
+function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
   return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove')} to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;

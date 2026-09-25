@@ -25,12 +25,12 @@ export class KeyError extends Error {
 
 export const NO_KEY = `no key found, run ${cli('init')}`;
 
-export type Identity = {
+type Identity = {
   agentId: AgentId;
   publicKey: Uint8Array;
 };
 
-export type LoadedKey = Identity & {
+type LoadedKey = Identity & {
   privateKey: Uint8Array;
 };
 

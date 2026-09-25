@@ -6,12 +6,12 @@ import { readConfig } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 import type { CheckResponse } from '../responses.js';
 
-export type CheckCommandDeps = { fetch?: typeof fetch };
+type CheckCommandDeps = { fetch?: typeof fetch };
 
 // Exit codes. 0 every check passed, 1 at least one failed, 2 the check
 // could not run (bad handle or flag, unknown agent, network).
-export const EXIT_FAIL = 1;
-export const EXIT_ERROR = 2;
+const EXIT_FAIL = 1;
+const EXIT_ERROR = 2;
 
 type Flags = {
   minVerified?: string;

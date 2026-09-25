@@ -20,10 +20,10 @@ import {
 // anything reads it, with the loose schemas in responses.ts, so a field the
 // API adds later never breaks this CLI.
 
-export const API_URL_ENV = 'SEALKEEPER_API_URL';
+const API_URL_ENV = 'SEALKEEPER_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
 
-export type ApiIssue = ErrorIssue;
+type ApiIssue = ErrorIssue;
 
 // status is 0 for a network failure. code is the API error code, or
 // network_error or bad_response when the API never gave one. issues are the

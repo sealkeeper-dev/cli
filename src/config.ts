@@ -12,7 +12,7 @@ export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
-export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
+const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
 // The API gets the GitHub token at registration and every signed request, so
 // it must be https. Plain http is allowed only to this machine, for a local
 // API during development.
@@ -74,7 +74,7 @@ export const Config = z
   })
   .strict();
 export type Config = z.infer<typeof Config>;
-export type ConfigInput = z.input<typeof Config>;
+type ConfigInput = z.input<typeof Config>;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -96,7 +96,7 @@ export type Paths = {
   logFile(day: string): string;
 };
 
-export const HOME_DIR_NAME = '.sealkeeper';
+const HOME_DIR_NAME = '.sealkeeper';
 
 // SEALKEEPER_HOME wins so tests and multiple agents on one machine can each
 // have their own directory. The default is ~/.sealkeeper.

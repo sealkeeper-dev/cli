@@ -26,7 +26,7 @@ export const defaultTasksDeps: TasksDeps = {
   fetch: (...args) => fetch(...args),
 };
 
-export type TaskSession = {
+type TaskSession = {
   config: Config;
   signer: Signer;
   api: ApiClient;

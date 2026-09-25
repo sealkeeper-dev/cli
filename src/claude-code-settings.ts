@@ -11,7 +11,7 @@ import { writeFileAtomic } from './config.js';
 // not ours are never changed.
 
 // What follows the CLI invocation in every hook command we write.
-export const HOOK_ARGS = 'hook claude-code';
+const HOOK_ARGS = 'hook claude-code';
 export const HOOK_EVENTS = [
   'SessionStart',
   'SessionEnd',

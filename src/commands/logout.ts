@@ -12,7 +12,7 @@ import { stdout, wantsJson } from '../output.js';
 // --yes are both given. There is no prompt, the --yes flag is the
 // confirmation.
 
-export const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
+const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
 type LogoutOptions = {
   deleteKey?: boolean;

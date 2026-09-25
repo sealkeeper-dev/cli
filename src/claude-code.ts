@@ -19,7 +19,7 @@ export { toolNameOf } from './names.js';
 
 // Only the SessionEnd hook tries a sync, only once autoSync is on, and never
 // for longer than this per request. Every other hook only appends.
-export const HOOK_SYNC_TIMEOUT_MS = 2_000;
+const HOOK_SYNC_TIMEOUT_MS = 2_000;
 
 // Markers older than this belong to sessions or tool calls that never ended.
 export const STALE_MARKER_MS = 24 * 60 * 60 * 1000;
@@ -35,14 +35,14 @@ const TOOL_MARKER_PREFIX = 'tool.';
 // so a later SessionStart for the same id does not count a second session.
 const ENDED_MARKER_PREFIX = 'ended.';
 
-export type HookInput = {
+type HookInput = {
   event: string;
   sessionId: string | null;
   toolName: string | null;
   toolUseId: string | null;
 };
 
-export type HookDeps = {
+type HookDeps = {
   fetch: typeof fetch;
   sleep: (ms: number) => Promise<void>;
   now?: () => Date;

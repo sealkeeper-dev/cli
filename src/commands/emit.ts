@@ -13,7 +13,7 @@ import { pendingText, SyncError, syncEvents } from '../sync.js';
 import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 // emit never waits long on the network. The hook that called it is waiting.
-export const EMIT_SYNC_TIMEOUT_MS = 2_000;
+const EMIT_SYNC_TIMEOUT_MS = 2_000;
 
 type EmitOptions = {
   type: string;

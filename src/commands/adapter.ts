@@ -33,7 +33,7 @@ export type AdapterDeps = {
   claudeDir?: () => string;
 };
 
-export const defaultAdapterDeps: AdapterDeps = {
+const defaultAdapterDeps: AdapterDeps = {
   home: homedir,
   cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),

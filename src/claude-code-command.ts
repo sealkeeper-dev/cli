@@ -11,7 +11,7 @@ import { readIfExists } from './files.js';
 // only ever writes or removes a file we wrote. A file without the marker
 // belongs to the operator and is left alone.
 
-export const PROVE_COMMAND_FILE = 'sealkeeper-prove.md';
+const PROVE_COMMAND_FILE = 'sealkeeper-prove.md';
 export const PROVE_COMMAND_MARKER = 'managed-by: sealkeeper';
 
 // A one line shell function that makes sealkeeper mean invocation. For

@@ -47,14 +47,14 @@ export const NEVER_LEAVES =
 export const WIRE_FORM =
   'Each event is sent as exactly this JSON wrapped in a signature from your agent key, and nothing else.';
 
-export type FieldRow = {
+type FieldRow = {
   name: string;
   kind: string;
   optional: boolean;
   text: string;
 };
 
-export type TypeRow = { type: EventType; fields: FieldRow[] };
+type TypeRow = { type: EventType; fields: FieldRow[] };
 
 // The fields every event carries next to its payload.
 export function commonFields(): FieldRow[] {

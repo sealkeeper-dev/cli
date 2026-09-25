@@ -4,7 +4,7 @@ import type { Command } from 'commander';
 import { type Config, ConfigError, readConfig } from './config.js';
 import { cli } from './invocation.js';
 
-export const NOT_INITIALISED = `not initialised, run ${cli('init')}`;
+const NOT_INITIALISED = `not initialised, run ${cli('init')}`;
 
 // The config, or null when not initialised. A broken config ends the command
 // with the reason.

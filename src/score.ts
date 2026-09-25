@@ -9,7 +9,7 @@ import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 // score.json so status can show them offline. Scores change when the scoring
 // job runs, so fifteen minutes old is fresh enough.
 
-export const SCORE_CACHE_VERSION = 1;
+const SCORE_CACHE_VERSION = 1;
 export const SCORE_TTL_MS = 15 * 60 * 1000;
 export const SCORE_TIMEOUT_MS = 2_000;
 
@@ -20,7 +20,7 @@ const ScoreCache = z.strictObject({
 });
 export type ScoreCache = z.infer<typeof ScoreCache>;
 
-export type ScoreOptions = {
+type ScoreOptions = {
   agentId: string;
   apiUrl: string;
   fetch?: typeof fetch;

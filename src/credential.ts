@@ -20,7 +20,7 @@ import { CredentialPayload } from './responses.js';
 // already made public.
 
 // A cached SEAL is reused while it has more than this left.
-export const REFRESH_MARGIN_SEC = 2 * 3600;
+const REFRESH_MARGIN_SEC = 2 * 3600;
 
 // The cache keeps the SEAL as seal and as credential, the same string, so
 // an older CLI that reads only credential still finds it. It reads either.
@@ -41,7 +41,7 @@ export class CredentialError extends Error {
   override name = 'CredentialError';
 }
 
-export type GetCredentialOptions = {
+type GetCredentialOptions = {
   api: ApiClient;
   agentId: string;
   force?: boolean;

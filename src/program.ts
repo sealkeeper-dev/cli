@@ -64,7 +64,7 @@ function addJsonFlag(cmd: Command): void {
   for (const sub of cmd.commands) addJsonFlag(sub);
 }
 
-export type ProgramDeps = {
+type ProgramDeps = {
   init?: InitDeps;
   // Used by emit, sync and status. claudeDir and cwd only matter to status.
   sync?: SyncDeps & Omit<StatusDeps, 'fetch'>;

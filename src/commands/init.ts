@@ -68,7 +68,6 @@ export const ALREADY_INITIALISED = 'already initialised';
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
 export const CONSENT =
   'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
-export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
 // Asked on a repeat init when the version on this machine is not the one

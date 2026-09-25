@@ -20,8 +20,8 @@ import type { SealDeps } from './seal.js';
 
 // Exit codes. 0 a valid SEAL, 1 a broken or expired one, 2 the keys could
 // not be loaded.
-export const EXIT_BROKEN = 1;
-export const EXIT_NO_KEYS = 2;
+const EXIT_BROKEN = 1;
+const EXIT_NO_KEYS = 2;
 
 // Needs no key, no init and no account. The keys come from --keys, or from
 // the API's keys document (WELL_KNOWN_PATH) through a cache in the home.

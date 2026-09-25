@@ -19,7 +19,7 @@ async function readStdin(): Promise<string> {
   return text;
 }
 
-export const defaultSealDeps: SealDeps = {
+const defaultSealDeps: SealDeps = {
   fetch: (...args) => fetch(...args),
   readStdin,
   now: () => Date.now(),

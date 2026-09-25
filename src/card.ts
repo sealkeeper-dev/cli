@@ -34,7 +34,7 @@ export const NO_CREDENTIAL =
 
 const CardUrl = AgentCard.shape.url.unwrap();
 
-export function buildCard(
+function buildCard(
   config: Config,
   credential: Credential | null,
   url?: string,
