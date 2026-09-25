@@ -9,9 +9,7 @@
     "includes": [
       "**",
       "!**/node_modules",
-      "!**/dist",
-      "!**/.next",
-      "!packages/schema/drizzle"
+      "!**/dist"
     ]
   },
   "formatter": {

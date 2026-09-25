@@ -27,7 +27,7 @@ export const options: Options = {
   outDir: 'dist',
   format: ['esm'],
   platform: 'node',
-  target: 'node24',
+  target: 'node22',
   splitting: false,
   clean: true,
   noExternal: ['@sealkeeper/schema'],
