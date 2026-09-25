@@ -2,12 +2,8 @@
 import type { Command } from 'commander';
 import { createApiClient, resolveApiUrl } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
-import {
-  type Config,
-  ConfigError,
-  readConfig,
-  writeConfig,
-} from '../config.js';
+import { requireConfig } from '../cli-config.js';
+import { writeConfig } from '../config.js';
 import { type Sleep, sleep } from '../github-device.js';
 import { KeyError } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -15,7 +11,6 @@ import { CursorError, type LogPosition } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { type Preview, previewLines, readPreview } from '../preview.js';
 import { SyncError, syncEvents } from '../sync.js';
-import { NOT_INITIALISED } from './whoami.js';
 
 // fetch and sleep are injectable so tests can stand in for the API and skip
 // real waits. emit and sync share them. stdin is where sync reads the answer
@@ -70,8 +65,7 @@ export function register(
         return;
       }
 
-      const config = await loadConfig(this);
-      if (config === null) this.error(NOT_INITIALISED);
+      const config = await requireConfig(this);
 
       // Unless automatic sync is on, every sync shows what it is about to
       // send and asks. --yes is the answer given in advance. autoSync unset
@@ -169,17 +163,6 @@ async function loadPreview(cmd: Command): Promise<Preview> {
     return await readPreview();
   } catch (error) {
     if (error instanceof CursorError) cmd.error(error.message);
-    throw error;
-  }
-}
-
-// The config, or null when not initialised. A broken config ends the command
-// with the reason.
-export async function loadConfig(cmd: Command): Promise<Config | null> {
-  try {
-    return await readConfig();
-  } catch (error) {
-    if (error instanceof ConfigError) cmd.error(error.message);
     throw error;
   }
 }

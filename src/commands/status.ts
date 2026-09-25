@@ -18,6 +18,7 @@ import {
   parseHookCommand,
   settingsPath,
 } from '../claude-code-settings.js';
+import { requireConfig } from '../cli-config.js';
 import {
   type Config,
   handleOf,
@@ -37,8 +38,7 @@ import { stderr, stdout, wantsJson } from '../output.js';
 import { getScore, SCORE_TIMEOUT_MS, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
-import { defaultSyncDeps, loadConfig } from './sync.js';
-import { NOT_INITIALISED } from './whoami.js';
+import { defaultSyncDeps } from './sync.js';
 
 // A local dashboard of today's activity. Everything but the score comes from
 // files under the SealKeeper home, so it works offline. The score comes from the
@@ -106,8 +106,7 @@ export function register(
       this: Command,
       options: { show?: boolean },
     ): Promise<void> {
-      const config = await loadConfig(this);
-      if (config === null) this.error(NOT_INITIALISED);
+      const config = await requireConfig(this);
 
       let status: Status;
       try {

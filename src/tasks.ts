@@ -9,8 +9,7 @@ import {
   createApiClient,
   resolveApiUrl,
 } from './api.js';
-import { loadConfig } from './commands/sync.js';
-import { NOT_INITIALISED } from './commands/whoami.js';
+import { requireConfig } from './cli-config.js';
 import { type Config, type Paths, paths } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
@@ -39,8 +38,7 @@ export async function openTaskSession(
   cmd: Command,
   deps: TasksDeps,
 ): Promise<TaskSession> {
-  const config = await loadConfig(cmd);
-  if (config === null) cmd.error(NOT_INITIALISED);
+  const config = await requireConfig(cmd);
   let signer: Signer;
   try {
     signer = await loadSigner();
