@@ -22,6 +22,7 @@ import { requireConfig } from '../cli-config.js';
 import {
   type Config,
   handleOf,
+  isSecureApiUrl,
   type Paths,
   paths,
   profileUrl,
@@ -196,11 +197,15 @@ async function liveAgent(
   deps: StatusDeps,
 ): Promise<LiveAgent | null> {
   const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
+  // Its own request rather than the API client, for the loose parse, with
+  // the same rules as every other request.
+  if (!isSecureApiUrl(apiUrl)) return null;
   try {
     const res = await deps.fetch(
       `${apiUrl}/v1/agents/${encodeURIComponent(config.agentId)}`,
       {
         headers: { Accept: 'application/json' },
+        redirect: 'error',
         signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
       },
     );
