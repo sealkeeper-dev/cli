@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Guards the rule that the package is self-contained.
 // Source may import only the allowed runtime packages, node builtins and
 // relative paths that stay inside this package folder. Every .ts file in the
@@ -24,7 +24,7 @@ const TEST_ONLY_BARE = new Set([
 ]);
 
 const HEADER =
-  '// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.';
+  '// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.';
 const SKIP_DIRS = new Set(['node_modules', 'dist']);
 
 const SPECIFIER_PATTERNS = [

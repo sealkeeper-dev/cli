@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { access, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command } from 'commander';

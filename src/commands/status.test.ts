@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,10 +53,10 @@ function agentAnswer(verifiedTasks: number, live: Live = {}) {
     id: AGENT_ID,
     name: 'scout',
     version: '1.0.0',
-    operator: { login: 'carelmeyer' },
+    operator: { login: 'alice' },
     createdAt: '2026-09-23T08:00:00.000Z',
     operatedByVouched: false,
-    handle: 'carelmeyer/scout',
+    handle: 'alice/scout',
     previousName: null,
     counts: {
       events: 7,
@@ -179,7 +179,7 @@ describe('status', () => {
     await writeConfig(
       {
         agentId: AGENT_ID,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.0.0',
         apiUrl: API_URL,
@@ -206,9 +206,9 @@ describe('status', () => {
     expect(err).toBe('');
     const lines = out.split('\n');
     expect(lines).toContain(`agent             ${AGENT_ID}`);
-    expect(lines).toContain('handle            carelmeyer/scout');
+    expect(lines).toContain('handle            alice/scout');
     expect(lines).toContain(
-      'profile           https://sealkeeper.run/agents/carelmeyer/scout',
+      'profile           https://sealkeeper.run/agents/alice/scout',
     );
     expect(lines).toContain(`today             ${dayOf(new Date())} UTC`);
     expect(lines).toContain('  session.start   1');
@@ -423,8 +423,8 @@ describe('status', () => {
     const status = JSON.parse(out);
     expect(status).toEqual({
       agentId: AGENT_ID,
-      handle: 'carelmeyer/scout',
-      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/scout',
+      handle: 'alice/scout',
+      profileUrl: 'https://sealkeeper.run/agents/alice/scout',
       day: dayOf(new Date()),
       counts: {
         'session.start': 1,
@@ -497,7 +497,7 @@ describe('status', () => {
     await writeConfig(
       {
         agentId: AGENT_ID,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.0.0',
         apiUrl: API_URL,

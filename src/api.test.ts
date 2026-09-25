@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 
@@ -7,7 +7,7 @@ const AGENT = {
   id: AGENT_ID,
   name: 'scout',
   version: '0.1.0',
-  operator: { login: 'carelmeyer' },
+  operator: { login: 'alice' },
   createdAt: '2026-09-23T10:00:00.000Z',
 };
 

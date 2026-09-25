@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -60,7 +60,7 @@ describe('logout', () => {
     await writeConfig(
       {
         agentId,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.0.0',
         registeredAt: '2026-09-23T08:00:00Z',

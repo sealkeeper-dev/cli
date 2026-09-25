@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The background sync the in-process adapters (Mastra, OpenClaw) start after
 // they append an event. Without it an agent whose operator never runs a
 // sealkeeper command would only ever write to the local log, go quiet on its

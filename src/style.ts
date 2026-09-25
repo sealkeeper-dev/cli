@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { terminalSafe } from './output.js';
 
 // Terminal styling for the human output, ANSI escape codes only. Styling is

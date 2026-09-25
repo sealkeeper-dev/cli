@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -34,9 +34,9 @@ const loginOf = (id: string) =>
   id === SEED_AGENT
     ? 'sealkeeper-dev'
     : id === SIBLING_AGENT
-      ? 'CarelMeyer'
+      ? 'Alice'
       : 'someone';
-const PROFILE = 'https://sealkeeper.run/agents/carelmeyer/scout';
+const PROFILE = 'https://sealkeeper.run/agents/alice/scout';
 const HOUR = 3_600_000;
 
 type RunResult = { code: number; out: string; err: string };
@@ -211,7 +211,7 @@ describe('prove', () => {
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'scout',
       version: '1.0.0',
       apiUrl: API_URL,
@@ -352,7 +352,7 @@ describe('prove', () => {
   it('uses the operator on the task when the API sends it', async () => {
     const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
     const own = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(9) });
-    Object.assign(own, { posterOperator: { login: 'carelmeyer' } });
+    Object.assign(own, { posterOperator: { login: 'alice' } });
     const theirs = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
     Object.assign(theirs, { posterOperator: { login: 'someone-else' } });
 
@@ -368,13 +368,13 @@ describe('prove', () => {
       id: ownSeed,
       name: 'sealkeeper-seed',
       version: '1.0.0',
-      operator: { login: 'CarelMeyer' },
+      operator: { login: 'Alice' },
       createdAt: '2026-09-23T09:44:36.047Z',
       operatedByVouched: true,
     });
     const seed = api.add({ posterAgentId: ownSeed, postedAt: at(9) });
     const stated = api.add({ posterAgentId: ownSeed, postedAt: at(8) });
-    Object.assign(stated, { posterOperator: { login: 'carelmeyer' } });
+    Object.assign(stated, { posterOperator: { login: 'alice' } });
     const sibling = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(7) });
     const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
 
@@ -399,10 +399,10 @@ describe('prove', () => {
       id: seedAgent,
       name: 'sealkeeper-seed',
       version: '1.0.0',
-      operator: { login: 'carelmeyer' },
+      operator: { login: 'alice' },
       createdAt: '2026-09-23T09:44:36.047Z',
       operatedByVouched: true,
-      handle: 'carelmeyer/sealkeeper-seed',
+      handle: 'alice/sealkeeper-seed',
       previousName: 'vouched-seed',
       lastSeenAt: null,
       level: 'none',

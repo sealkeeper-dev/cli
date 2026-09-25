@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -48,10 +48,10 @@ class FakeApi {
       id: this.agentId,
       name: call.payload.name,
       version: '1.0.0',
-      operator: { login: 'carelmeyer' },
+      operator: { login: 'alice' },
       createdAt: '2026-09-23T10:00:00.000Z',
       operatedByVouched: false,
-      handle: `carelmeyer/${call.payload.name}`,
+      handle: `alice/${call.payload.name}`,
       previousName: 'scout',
     });
   }) as typeof fetch;
@@ -103,7 +103,7 @@ describe('sealkeeper agent rename', () => {
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'scout',
       version: '1.0.0',
       apiUrl: API_URL,
@@ -134,8 +134,8 @@ describe('sealkeeper agent rename', () => {
     expect(issuedAt).toBeGreaterThanOrEqual(before - 1000);
     expect(out).toBe(
       [
-        'handle   carelmeyer/ranger',
-        'profile  https://sealkeeper.run/agents/carelmeyer/ranger',
+        'handle   alice/ranger',
+        'profile  https://sealkeeper.run/agents/alice/ranger',
         '',
       ].join('\n'),
     );
@@ -147,8 +147,8 @@ describe('sealkeeper agent rename', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       agentId,
-      handle: 'carelmeyer/ranger',
-      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/ranger',
+      handle: 'alice/ranger',
+      profileUrl: 'https://sealkeeper.run/agents/alice/ranger',
     });
   });
 
@@ -164,15 +164,11 @@ describe('sealkeeper agent rename', () => {
 
   it('prints the API message on a clash and keeps the old name', async () => {
     api.reply = () =>
-      error(
-        409,
-        'name_taken',
-        'carelmeyer/claude-code is taken, try claude-code-2',
-      );
+      error(409, 'name_taken', 'alice/claude-code is taken, try claude-code-2');
     const { code, out, err } = await run('agent', 'rename', 'claude-code');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toContain('carelmeyer/claude-code is taken, try claude-code-2');
+    expect(err).toContain('alice/claude-code is taken, try claude-code-2');
     expect((await readConfig())?.name).toBe('scout');
   });
 

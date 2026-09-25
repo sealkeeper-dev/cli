@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   mkdir,
   mkdtemp,
@@ -120,7 +120,7 @@ function created(payload: Record<string, unknown>): ApiReply {
       id: payload.publicKey,
       name: payload.name,
       version: payload.version,
-      operator: { login: 'carelmeyer' },
+      operator: { login: 'alice' },
       createdAt: '2026-09-23T10:00:00.000Z',
     },
   };
@@ -187,7 +187,7 @@ function fakeFetch(world: World): typeof fetch {
         id: agentRoute[1],
         name: 'scout',
         version: world.serverVersion,
-        operator: { login: 'carelmeyer' },
+        operator: { login: 'alice' },
         createdAt: '2026-09-23T10:00:00.000Z',
       });
     }
@@ -296,10 +296,10 @@ describe('sealkeeper init', () => {
 
     expect(result.out).toBe(
       [
-        '  ✓ Signed in as carelmeyer',
+        '  ✓ Signed in as alice',
         '',
-        '  ✓ Registered carelmeyer/scout',
-        '    Profile  https://sealkeeper.run/agents/carelmeyer/scout',
+        '  ✓ Registered alice/scout',
+        '    Profile  https://sealkeeper.run/agents/alice/scout',
         '',
         '  Next',
         '  1  Earn your first verified tasks with npx sealkeeper prove',
@@ -327,7 +327,7 @@ describe('sealkeeper init', () => {
     ]);
     expect(await readConfig(paths(home))).toEqual({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'scout',
       version: '0.1.0',
       apiUrl: API_URL,
@@ -426,9 +426,9 @@ describe('sealkeeper init', () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     const printed = JSON.parse(result.out) as Record<string, string>;
-    expect(printed.handle).toBe('carelmeyer/scout');
+    expect(printed.handle).toBe('alice/scout');
     expect(printed.profileUrl).toBe(
-      'https://sealkeeper.run/agents/carelmeyer/scout',
+      'https://sealkeeper.run/agents/alice/scout',
     );
     await expectNoTokenAnywhere(result);
   });
@@ -471,8 +471,8 @@ describe('sealkeeper init', () => {
       'registration refused, your GitHub account has reached its agent limit (An operator can register at most 100 agents)',
     ],
     [
-      apiError(409, 'name_taken', 'carelmeyer/cli is taken, try cli-2'),
-      'carelmeyer/cli is taken, try cli-2',
+      apiError(409, 'name_taken', 'alice/cli is taken, try cli-2'),
+      'alice/cli is taken, try cli-2',
     ],
     [
       apiError(409, 'conflict', 'This key is registered to another operator'),
@@ -517,7 +517,7 @@ describe('sealkeeper init', () => {
     const result = await run(world, 'init').finally(() => cwd.mockRestore());
     expect(result.code).toBe(0);
     expect(world.registrations[0]?.name).toBe('my-project-v2');
-    expect(result.out).toContain('Registered carelmeyer/my-project-v2');
+    expect(result.out).toContain('Registered alice/my-project-v2');
   });
 
   it('reports a network error on one line', async () => {
@@ -547,9 +547,9 @@ describe('sealkeeper init', () => {
     world = newWorld();
     const result = await run(world, 'init');
     expect(result.code).toBe(0);
-    expect(result.out).toContain('  ✓ Already set up as carelmeyer/scout\n');
+    expect(result.out).toContain('  ✓ Already set up as alice/scout\n');
     expect(result.out).toContain(
-      '    Profile  https://sealkeeper.run/agents/carelmeyer/scout\n',
+      '    Profile  https://sealkeeper.run/agents/alice/scout\n',
     );
     expect(result.err).not.toContain(TERMS);
     expect(result.out).not.toContain('operatorLogin');
@@ -569,7 +569,7 @@ describe('sealkeeper init', () => {
     expect(after?.agentId).not.toBe(before?.agentId);
     expect(world.registrations[0]?.publicKey).toBe(after?.agentId);
     expect((await readConfig(paths(home)))?.agentId).toBe(after?.agentId);
-    expect(result.out).toContain('Registered carelmeyer/');
+    expect(result.out).toContain('Registered alice/');
     expect(result.err).toMatch(
       /\n {2}✓ The old key is kept at .*key\.[^\n]*\.bak\n/,
     );
@@ -714,7 +714,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
-      expect(result.out).toContain('Already set up as carelmeyer/scout');
+      expect(result.out).toContain('Already set up as alice/scout');
     });
   });
 
@@ -789,7 +789,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
-      expect(result.out).toContain('Already set up as carelmeyer/scout');
+      expect(result.out).toContain('Already set up as alice/scout');
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
@@ -1048,10 +1048,10 @@ describe('sealkeeper init', () => {
 
           Sign in with GitHub
           Open https://github.com/login/device and enter ABCD-1234
-          ✓ Signed in as carelmeyer
+          ✓ Signed in as alice
 
-          ✓ Registered carelmeyer/scout
-            Profile  https://sealkeeper.run/agents/carelmeyer/scout
+          ✓ Registered alice/scout
+            Profile  https://sealkeeper.run/agents/alice/scout
 
           What leaves this machine
           Tool names, durations, outcomes, session boundaries and token counts,
@@ -1092,8 +1092,8 @@ describe('sealkeeper init', () => {
           Prove your agent. A signed, portable track record
           anyone can check offline.
 
-          ✓ Already set up as carelmeyer/scout
-            Profile  https://sealkeeper.run/agents/carelmeyer/scout
+          ✓ Already set up as alice/scout
+            Profile  https://sealkeeper.run/agents/alice/scout
 
           Claude Code
           The hooks record each session and tool call as above, into a local log.

@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { type Event, MAX_EVENTS_PER_BATCH } from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';

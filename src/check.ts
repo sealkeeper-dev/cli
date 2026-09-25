@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // GET /v1/check/:login/:name, shared by `sealkeeper check` and the Mastra
 // adapter's check and assertTrusted. A plain public GET. No key, no config
 // and no registration needed.
@@ -49,7 +49,7 @@ export function parseHandle(handle: string): { login: string; name: string } {
     throw new ApiError(
       0,
       'invalid_handle',
-      `invalid handle ${handle}, use <github login>/<agent name>, as in carelmeyer/claude-code`,
+      `invalid handle ${handle}, use <github login>/<agent name>, as in alice/claude-code`,
     );
   }
   return { login: login as string, name: name as string };

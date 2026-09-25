@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,7 +14,7 @@ const JWS = 'eyJh.eyJi.c2ln';
 const failing: SealCheckResponse = {
   ok: false,
   id: ID,
-  handle: 'carelmeyer/claude-code',
+  handle: 'alice/claude-code',
   checks: [
     { name: 'minVerified', required: 1, actual: 0, ok: false },
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
@@ -27,7 +27,7 @@ const failing: SealCheckResponse = {
 const passing: SealCheckResponse = {
   ok: true,
   id: ID,
-  handle: 'carelmeyer/claude-code',
+  handle: 'alice/claude-code',
   checks: [
     { name: 'minVerified', required: 0, actual: 0, ok: true },
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
@@ -100,24 +100,19 @@ describe('sealkeeper check', () => {
   });
 
   it('prints each check and PASS, exit 0', async () => {
-    const r = await run(
-      'check',
-      'carelmeyer/claude-code',
-      '--min-verified',
-      '0',
-    );
+    const r = await run('check', 'alice/claude-code', '--min-verified', '0');
     expect(r).toEqual({
       code: 0,
       out: [
         'ok   verified tasks 0, need at least 0',
         'ok   incidents 0, allow at most 0',
-        'PASS carelmeyer/claude-code',
+        'PASS alice/claude-code',
         '',
       ].join('\n'),
       err: '',
     });
     expect(urls).toEqual([
-      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=0',
+      'https://api.test/v1/check/alice/claude-code?minVerified=0',
     ]);
   });
 
@@ -125,7 +120,7 @@ describe('sealkeeper check', () => {
     reply = () => Response.json(failing);
     const r = await run(
       'check',
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       '--min-reliability',
       '0.8',
       '--max-incidents',
@@ -138,12 +133,12 @@ describe('sealkeeper check', () => {
         'FAIL verified tasks 0, need at least 1',
         'ok   incidents 0, allow at most 0',
         'FAIL reliability none yet, need at least 0.8',
-        'FAIL carelmeyer/claude-code',
+        'FAIL alice/claude-code',
         '',
       ].join('\n'),
     );
     expect(urls).toEqual([
-      'https://api.test/v1/check/carelmeyer/claude-code?maxIncidents=0&minReliability=0.8',
+      'https://api.test/v1/check/alice/claude-code?maxIncidents=0&minReliability=0.8',
     ]);
   });
 
@@ -151,7 +146,7 @@ describe('sealkeeper check', () => {
     const withheld: SealCheckResponse = {
       ok: false,
       id: ID,
-      handle: 'carelmeyer/claude-code',
+      handle: 'alice/claude-code',
       checks: [
         { name: 'seal', required: 'present', actual: 'withheld', ok: false },
         { name: 'minVerified', required: 1, actual: 30, ok: true },
@@ -162,7 +157,7 @@ describe('sealkeeper check', () => {
       seal: null,
     };
     reply = () => Response.json(withheld);
-    const r = await run('check', 'carelmeyer/claude-code');
+    const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(1);
     expect(r.err).toBe('');
     expect(r.out).toBe(
@@ -171,11 +166,11 @@ describe('sealkeeper check', () => {
         'ok   verified tasks 30, need at least 1',
         'ok   incidents 0, allow at most 0',
         'FAIL level none, need at least bronze',
-        'FAIL carelmeyer/claude-code',
+        'FAIL alice/claude-code',
         '',
       ].join('\n'),
     );
-    const json = await run('check', 'carelmeyer/claude-code', '--json');
+    const json = await run('check', 'alice/claude-code', '--json');
     expect(json.code).toBe(1);
     expect(JSON.parse(json.out)).toMatchObject({
       ok: false,
@@ -186,17 +181,17 @@ describe('sealkeeper check', () => {
 
   it('refuses an answer with no SEAL and no withheld check', async () => {
     reply = () => Response.json({ ...passing, seal: null, credential: null });
-    const r = await run('check', 'carelmeyer/claude-code');
+    const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(2);
     expect(r.err).toContain('unexpected response');
   });
 
   it('leaves the bronze default to the API, and --min-level none asks for no level', async () => {
-    await run('check', 'carelmeyer/claude-code');
-    await run('check', 'carelmeyer/claude-code', '--min-level', 'none');
+    await run('check', 'alice/claude-code');
+    await run('check', 'alice/claude-code', '--min-level', 'none');
     expect(urls).toEqual([
-      'https://api.test/v1/check/carelmeyer/claude-code',
-      'https://api.test/v1/check/carelmeyer/claude-code?minLevel=none',
+      'https://api.test/v1/check/alice/claude-code',
+      'https://api.test/v1/check/alice/claude-code?minLevel=none',
     ]);
     const help = createProgram()
       .commands.find((c) => c.name() === 'check')
@@ -216,7 +211,7 @@ describe('sealkeeper check', () => {
       });
     const r = await run(
       'check',
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       '--min-verified',
       '0',
       '--min-level',
@@ -227,11 +222,11 @@ describe('sealkeeper check', () => {
       'FAIL level bronze, need at least silver',
     );
     expect(urls).toEqual([
-      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=0&minLevel=silver',
+      'https://api.test/v1/check/alice/claude-code?minVerified=0&minLevel=silver',
     ]);
     const bad = await run(
       'check',
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       '--min-level',
       'platinum',
     );
@@ -242,11 +237,11 @@ describe('sealkeeper check', () => {
 
   it('--json prints the CheckResponse and keeps the exit code', async () => {
     reply = () => Response.json(failing);
-    const r = await run('check', 'carelmeyer/claude-code', '--json');
+    const r = await run('check', 'alice/claude-code', '--json');
     expect(r.code).toBe(1);
     expect(JSON.parse(r.out)).toEqual(failing);
     reply = () => Response.json(passing);
-    const ok = await run('--json', 'check', 'carelmeyer/claude-code');
+    const ok = await run('--json', 'check', 'alice/claude-code');
     expect(ok.code).toBe(0);
     expect(JSON.parse(ok.out)).toEqual(passing);
   });
@@ -254,12 +249,12 @@ describe('sealkeeper check', () => {
   it('reads an answer with only seal or only credential and prints both', async () => {
     const { credential: _c, ...sealOnly } = passing;
     reply = () => Response.json(sealOnly);
-    const a = await run('--json', 'check', 'carelmeyer/claude-code');
+    const a = await run('--json', 'check', 'alice/claude-code');
     expect(a.code).toBe(0);
     expect(JSON.parse(a.out)).toEqual(passing);
     const { seal: _s, ...credentialOnly } = passing;
     reply = () => Response.json(credentialOnly);
-    const b = await run('--json', 'check', 'carelmeyer/claude-code');
+    const b = await run('--json', 'check', 'alice/claude-code');
     expect(b.code).toBe(0);
     expect(JSON.parse(b.out)).toEqual(passing);
   });
@@ -275,7 +270,7 @@ describe('sealkeeper check', () => {
           { name: 'minLevel', required: 'platinum', actual: 'gold', ok: false },
         ],
       });
-    const r = await run('check', 'carelmeyer/claude-code');
+    const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(1);
     expect(r.out).toContain('FAIL minTenure 12, required 30');
     expect(r.out).toContain('FAIL level gold, need at least platinum');
@@ -287,11 +282,11 @@ describe('sealkeeper check', () => {
         { error: { code: 'not_found', message: 'Agent not found' } },
         { status: 404 },
       );
-    const r = await run('check', 'carelmeyer/nobody');
+    const r = await run('check', 'alice/nobody');
     expect(r).toEqual({
       code: 2,
       out: '',
-      err: 'no agent carelmeyer/nobody\n',
+      err: 'no agent alice/nobody\n',
     });
   });
 
@@ -301,20 +296,20 @@ describe('sealkeeper check', () => {
         {
           error: { code: 'renamed', message: 'This agent is now x' },
           id: ID,
-          handle: 'carelmeyer/ranger',
+          handle: 'alice/ranger',
         },
         { status: 404 },
       );
-    const r = await run('check', 'carelmeyer/scout');
+    const r = await run('check', 'alice/scout');
     expect(r.code).toBe(2);
-    expect(r.err).toBe('carelmeyer/scout is now carelmeyer/ranger\n');
+    expect(r.err).toBe('alice/scout is now alice/ranger\n');
   });
 
   it('exits 2 when the API cannot be reached', async () => {
     reply = () => {
       throw new TypeError('fetch failed');
     };
-    const r = await run('check', 'carelmeyer/claude-code');
+    const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(2);
     expect(r.err).toBe(
       'could not reach the SealKeeper API at https://api.test: fetch failed\n',
@@ -322,23 +317,13 @@ describe('sealkeeper check', () => {
   });
 
   it('exits 2 without a request for a bad handle or flag', async () => {
-    const handle = await run('check', 'carelmeyer');
+    const handle = await run('check', 'alice');
     expect(handle.code).toBe(2);
-    expect(handle.err).toContain('invalid handle carelmeyer');
-    const flag = await run(
-      'check',
-      'carelmeyer/claude-code',
-      '--min-safety',
-      '1.5',
-    );
+    expect(handle.err).toContain('invalid handle alice');
+    const flag = await run('check', 'alice/claude-code', '--min-safety', '1.5');
     expect(flag.code).toBe(2);
     expect(flag.err).toContain('invalid minSafety 1.5');
-    const empty = await run(
-      'check',
-      'carelmeyer/claude-code',
-      '--min-verified',
-      '',
-    );
+    const empty = await run('check', 'alice/claude-code', '--min-verified', '');
     expect(empty.code).toBe(2);
     expect(urls).toEqual([]);
   });

@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
@@ -31,9 +31,9 @@ const agent = {
   id: ID,
   name: 'scout',
   version: '0.1.0',
-  operator: { login: 'carelmeyer' },
+  operator: { login: 'alice' },
   createdAt: AT,
-  handle: 'carelmeyer/scout',
+  handle: 'alice/scout',
   counts: {
     events: 1,
     verifiedTasks: 0,
@@ -157,7 +157,7 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
     {
       ok: true,
       id: ID,
-      handle: 'carelmeyer/scout',
+      handle: 'alice/scout',
       checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
       credential: JWS,
     },
@@ -169,7 +169,7 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
     {
       error: { code: 'renamed', message: 'moved' },
       id: ID,
-      handle: 'carelmeyer/scout',
+      handle: 'alice/scout',
     },
     ['error'],
   ],
@@ -292,7 +292,7 @@ describe('response schemas parse loosely', () => {
       const got = CheckResponse.parse({
         ok: true,
         id: ID,
-        handle: 'carelmeyer/scout',
+        handle: 'alice/scout',
         checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
         credential: JWS,
         seal: JWS,
@@ -305,7 +305,7 @@ describe('response schemas parse loosely', () => {
       const got = CheckResponse.parse({
         ok: true,
         id: ID,
-        handle: 'carelmeyer/scout',
+        handle: 'alice/scout',
         checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
         seal: JWS,
       });
@@ -315,7 +315,7 @@ describe('response schemas parse loosely', () => {
         CheckResponse.safeParse({
           ok: true,
           id: ID,
-          handle: 'carelmeyer/scout',
+          handle: 'alice/scout',
           checks: [{ name: 'minVerified', required: 1, actual: 1, ok: true }],
         }).success,
       ).toBe(false);
@@ -325,7 +325,7 @@ describe('response schemas parse loosely', () => {
       const got = CheckResponse.parse({
         ok: false,
         id: ID,
-        handle: 'carelmeyer/scout',
+        handle: 'alice/scout',
         checks: [
           { name: 'minTenure', required: 30, actual: null, ok: false },
           {
@@ -381,7 +381,7 @@ describe('response schemas parse loosely', () => {
       const got = CheckResponse.parse({
         ok: false,
         id: ID,
-        handle: 'carelmeyer/scout',
+        handle: 'alice/scout',
         checks: [
           { name: 'minLevel', required: 'silver', actual: 'bronze', ok: false },
         ],

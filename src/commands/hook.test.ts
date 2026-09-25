@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   mkdir,
   mkdtemp,
@@ -140,7 +140,7 @@ describe('hook claude-code', () => {
     await writeConfig(
       {
         agentId,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.2.0',
         apiUrl: API_URL,

@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { ApiError } from './api.js';
 import { cli } from './invocation.js';
 
@@ -7,7 +7,7 @@ import { cli } from './invocation.js';
 export function refusal(error: ApiError): string {
   switch (error.code) {
     // The API's message names the handle and a free name, as in
-    // carelmeyer/claude-code is taken, try claude-code-2.
+    // alice/claude-code is taken, try claude-code-2.
     case 'name_taken':
       return error.message;
     case 'stale_rename':

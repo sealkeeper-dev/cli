@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The OpenClaw adapter, imported as sealkeeper/openclaw. OpenClaw loads plugins
 // into the Gateway process and calls register(api) once, where the plugin
 // subscribes to typed hooks with api.on(name, handler). This file is such a

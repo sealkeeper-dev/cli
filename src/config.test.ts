@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { chmod, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import {
 
 const VALID = {
   agentId: 'A'.repeat(43),
-  operatorLogin: 'carelmeyer',
+  operatorLogin: 'alice',
   name: 'scout',
   version: '1.2.0',
   registeredAt: '2026-09-23T10:00:00Z',

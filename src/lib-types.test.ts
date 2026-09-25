@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The published types in types/lib.d.ts are written by hand. These checks
 // run in the typecheck and fail it when they drift from the source types.
 import type { Event } from '@sealkeeper/schema';

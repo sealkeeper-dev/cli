@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Builds the CLI with the real tsup options into a temp directory and checks
 // what ends up in the bundles, the bin (index.js), the importable API
 // (lib.js), the Mastra adapter (mastra.js) and the OpenClaw plugin entry
@@ -302,7 +302,7 @@ describe('cli bundle', () => {
         join(home, 'config.json'),
         JSON.stringify({
           agentId: 'A'.repeat(43),
-          operatorLogin: 'carelmeyer',
+          operatorLogin: 'alice',
           name: 'scout',
           version: '1.0.0',
           registeredAt: '2026-09-23T08:00:00Z',

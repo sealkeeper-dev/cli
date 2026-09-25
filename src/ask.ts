@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createInterface } from 'node:readline';
 
 // Where a yes or no answer comes from. isTTY says whether a person could be

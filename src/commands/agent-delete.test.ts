@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   access,
   mkdir,
@@ -55,7 +55,7 @@ class FakeApi {
         id: this.agentId,
         name: 'app',
         version: '1.0.0',
-        operator: { login: 'carelmeyer' },
+        operator: { login: 'alice' },
         createdAt: '2026-09-23T10:00:00.000Z',
       });
     }
@@ -164,7 +164,7 @@ describe('sealkeeper agent delete', () => {
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'app',
       version: '1.0.0',
       apiUrl: API_URL,
@@ -195,14 +195,14 @@ describe('sealkeeper agent delete', () => {
     const { code, out, err } = await run('agent', 'delete');
     expect(code).toBe(0);
     expect(input.asked).toBe(1);
-    expect(err).toBe('Delete carelmeyer/app? Type the name to confirm: ');
+    expect(err).toBe('Delete alice/app? Type the name to confirm: ');
     expect(out).toBe(
       [
-        'handle           carelmeyer/app',
-        'profile          https://sealkeeper.run/agents/carelmeyer/app',
+        'handle           alice/app',
+        'profile          https://sealkeeper.run/agents/alice/app',
         'on SealKeeper    the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
         `on this machine  the key, config.json, the log, the SEAL cache and the well-known cache, in ${home}`,
-        'deleted carelmeyer/app',
+        'deleted alice/app',
         '',
       ].join('\n'),
     );
@@ -221,7 +221,7 @@ describe('sealkeeper agent delete', () => {
   });
 
   it('refuses a name that does not match and sends nothing', async () => {
-    for (const answer of ['carelmeyer/app', 'App', '']) {
+    for (const answer of ['alice/app', 'App', '']) {
       input.answers = [answer];
       const { code, err } = await run('agent', 'delete');
       expect(code, answer).toBe(1);
@@ -235,9 +235,9 @@ describe('sealkeeper agent delete', () => {
     input.isTTY = false;
     const { code, out, err } = await run('agent', 'delete');
     expect(code).toBe(1);
-    expect(out).toContain('handle           carelmeyer/app');
+    expect(out).toContain('handle           alice/app');
     expect(err).toContain(
-      'nothing deleted. There is no terminal to ask, so run npx sealkeeper agent delete --yes to delete carelmeyer/app',
+      'nothing deleted. There is no terminal to ask, so run npx sealkeeper agent delete --yes to delete alice/app',
     );
     expect(input.asked).toBe(0);
     expect(api.calls).toEqual([]);
@@ -249,7 +249,7 @@ describe('sealkeeper agent delete', () => {
     const { code, out } = await run('agent', 'delete', '--yes');
     expect(code).toBe(0);
     expect(input.asked).toBe(0);
-    expect(out.trim().split('\n').at(-1)).toBe('deleted carelmeyer/app');
+    expect(out.trim().split('\n').at(-1)).toBe('deleted alice/app');
     expect(api.calls.map((c) => c.method)).toEqual(['DELETE']);
     expect(await remaining()).toEqual([]);
   });
@@ -259,7 +259,7 @@ describe('sealkeeper agent delete', () => {
       api.deleteStatus = status;
       const { code, out, err } = await run('agent', 'delete', '--yes');
       expect(code, String(status)).toBe(1);
-      expect(out).not.toContain('deleted carelmeyer/app');
+      expect(out).not.toContain('deleted alice/app');
       expect(err).toContain(
         status === 403
           ? 'the API refused, the key on this machine is not this agent'
@@ -274,7 +274,7 @@ describe('sealkeeper agent delete', () => {
     const { code, out } = await run('agent', 'delete', '--yes');
     expect(code).toBe(0);
     expect(out).toContain(
-      'carelmeyer/app was already gone from SealKeeper, removed the files on this machine\ndeleted carelmeyer/app\n',
+      'alice/app was already gone from SealKeeper, removed the files on this machine\ndeleted alice/app\n',
     );
     expect(api.calls.map((c) => c.method)).toEqual(['DELETE', 'GET']);
     expect(await remaining()).toEqual([]);
@@ -295,10 +295,10 @@ describe('sealkeeper agent delete', () => {
     const { code, out, err } = await run('agent', 'delete', '--yes', '--json');
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
-      handle: 'carelmeyer/app',
+      handle: 'alice/app',
       deleted: true,
     });
-    expect(err).toContain('handle           carelmeyer/app');
+    expect(err).toContain('handle           alice/app');
     expect(await remaining()).toEqual([]);
   });
 

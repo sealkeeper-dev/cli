@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   mkdir,
   mkdtemp,
@@ -34,7 +34,7 @@ import {
 const HOOK_COMMAND =
   '"/usr/local/bin/node" "/usr/local/lib/node_modules/sealkeeper/dist/index.js" hook claude-code';
 const NPX_COMMAND =
-  '"/usr/local/bin/node" "/home/carl/.npm/_npx/abc123/node_modules/sealkeeper/dist/index.js" hook claude-code';
+  '"/usr/local/bin/node" "/home/alice/.npm/_npx/abc123/node_modules/sealkeeper/dist/index.js" hook claude-code';
 
 // Shaped like a real settings file with another tool's hooks under every
 // event name, most without a matcher. Written with no trailing newline, as
@@ -194,12 +194,12 @@ describe('Claude Code settings', () => {
   });
 
   it('finds the Claude Code dir from CLAUDE_CONFIG_DIR, else under home', () => {
-    expect(claudeConfigDir({}, '/home/carl')).toBe('/home/carl/.claude');
-    expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: '' }, '/home/carl')).toBe(
-      '/home/carl/.claude',
+    expect(claudeConfigDir({}, '/home/alice')).toBe('/home/alice/.claude');
+    expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: '' }, '/home/alice')).toBe(
+      '/home/alice/.claude',
     );
     expect(
-      claudeConfigDir({ CLAUDE_CONFIG_DIR: '/tmp/claude' }, '/home/carl'),
+      claudeConfigDir({ CLAUDE_CONFIG_DIR: '/tmp/claude' }, '/home/alice'),
     ).toBe('/tmp/claude');
     expect(
       settingsPath('user', { home: '/h', cwd: '/c', claudeDir: '/tmp/claude' }),

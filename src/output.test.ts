@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   promptStyled,
@@ -44,13 +44,13 @@ describe('styled writers', () => {
 
   it('keep the colour codes of a styled line when styling is on', () => {
     const s = createStyle({ isTTY: true }, { env: {} });
-    const line = s.line`Signed in as ${s.bold('carelmeyer')}`;
+    const line = s.line`Signed in as ${s.bold('alice')}`;
     const out = capture(process.stdout);
     const err = capture(process.stderr);
     stdoutStyled(line);
     stderrStyled(line);
     promptStyled(line);
-    const expected = `Signed in as ${ESC}[1mcarelmeyer${ESC}[22m`;
+    const expected = `Signed in as ${ESC}[1malice${ESC}[22m`;
     expect(out.text).toBe(`${expected}\n`);
     expect(err.text).toBe(`${expected}\n${expected}`);
   });

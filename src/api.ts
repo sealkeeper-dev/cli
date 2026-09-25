@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { ListTasksQuery, WELL_KNOWN_PATH } from '@sealkeeper/schema';
 import type { z } from 'zod';
 import { DEFAULT_API_URL, INSECURE_API_URL, isSecureApiUrl } from './config.js';

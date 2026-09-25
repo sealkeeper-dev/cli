@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -101,7 +101,7 @@ describe('sealkeeper rate', () => {
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'scout',
       version: '1.0.0',
       apiUrl: API_URL,

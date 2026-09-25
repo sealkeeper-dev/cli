@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Types for the Mastra adapter in src/mastra.ts, imported as sealkeeper/mastra.
 // Written by hand like lib.d.ts. src/mastra-types.test.ts fails the
 // typecheck if these drift from the source.
@@ -77,7 +77,7 @@ export type CheckResponse = {
   credential: string | null;
 };
 
-// Checks the agent at handle, as in carelmeyer/claude-code, against the
+// Checks the agent at handle, as in alice/claude-code, against the
 // thresholds and resolves with the answer, passed or not. Rejects when the
 // check could not run, for a bad handle or threshold, an unknown agent or
 // a network failure.

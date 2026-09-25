@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   chmod,
   mkdtemp,
@@ -29,7 +29,7 @@ describe('mastra adapter', () => {
       join(home, 'config.json'),
       JSON.stringify({
         agentId: 'A'.repeat(43),
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '3.1.0',
         registeredAt: '2026-09-23T08:00:00Z',
@@ -419,7 +419,7 @@ describe('mastra adapter', () => {
       const { agentId } = await createKey();
       await writeConfig({
         agentId,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'bot',
         version: '1.0.0',
         apiUrl: 'https://api.test',

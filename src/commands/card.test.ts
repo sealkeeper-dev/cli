@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   mkdir,
   mkdtemp,
@@ -148,7 +148,7 @@ describe('card show and card write', () => {
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
-      operatorLogin: 'carelmeyer',
+      operatorLogin: 'alice',
       name: 'summariser',
       version: '1.0.0',
       apiUrl: API_URL,

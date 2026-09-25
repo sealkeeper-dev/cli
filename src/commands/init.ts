@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, sep } from 'node:path';
@@ -163,7 +163,7 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
   conflict: () =>
     `this key is already registered by another operator, run ${cli('init --force')} to create a new key`,
   // The API's message names the handle and a free name, as in
-  // carelmeyer/claude-code is taken, try claude-code-2.
+  // alice/claude-code is taken, try claude-code-2.
   name_taken: (m) => m,
   invalid_signature: () =>
     `the API rejected the registration signature, check the key file or run ${cli('init --force')}`,

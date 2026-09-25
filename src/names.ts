@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Name handling shared by the adapters. Kept apart from claude-code.ts so an
 // in-process adapter can use it without bundling the hook command.
 

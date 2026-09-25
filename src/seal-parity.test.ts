@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Parity between `sealkeeper seal verify` and the strict parser the API and the
 // web use, parseSealPayload from @sealkeeper/schema, for version 1 SEALs.
 // Each fixture is signed with a test key and checked both ways. Where the
@@ -128,7 +128,7 @@ const FIXTURES: [string, unknown][] = [
     'an extra key in an identity reference',
     {
       ...base,
-      identity: [{ ...base.identity[0], name: 'Carl' }],
+      identity: [{ ...base.identity[0], name: 'Alice' }],
     },
   ],
   ['exp before iat', { ...base, exp: base.iat - 1 }],

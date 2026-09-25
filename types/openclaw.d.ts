@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Types for the OpenClaw adapter in src/openclaw.ts, imported as
 // sealkeeper/openclaw. Written by hand like lib.d.ts. src/openclaw-types.test.ts
 // fails the typecheck if these drift from the source.

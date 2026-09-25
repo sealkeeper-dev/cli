@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   chmod,
   mkdir,
@@ -51,7 +51,7 @@ const OTHER_TEXT = `${JSON.stringify(OTHER, null, 2)}\n`;
 const NODE = '/usr/local/bin/node';
 const SCRIPT = '/usr/local/lib/node_modules/sealkeeper/dist/index.js';
 const NPX_SCRIPT =
-  '/home/carl/.npm/_npx/abc123/node_modules/sealkeeper/dist/index.js';
+  '/home/alice/.npm/_npx/abc123/node_modules/sealkeeper/dist/index.js';
 const HOOK_COMMAND = hookCommand(NODE, SCRIPT);
 const NPX_COMMAND = hookCommand(NODE, NPX_SCRIPT);
 const INVOCATION = invocationOf(HOOK_COMMAND);

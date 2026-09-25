@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // check and assertTrusted from sealkeeper/mastra, with a mocked fetch.
 import type { SealCheckResponse } from '@sealkeeper/schema';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,7 +7,7 @@ import { assertTrusted, check, SealKeeperCheckError } from './mastra.js';
 const answer = (ok: boolean): SealCheckResponse => ({
   ok,
   id: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo',
-  handle: 'carelmeyer/claude-code',
+  handle: 'alice/claude-code',
   checks: [
     { name: 'minVerified', required: 5, actual: ok ? 7 : 2, ok },
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
@@ -34,13 +34,13 @@ describe('mastra check', () => {
   it('returns the answer and sends only the thresholds given', async () => {
     const { fn, urls } = fakeFetch(() => Response.json(answer(false)));
     const result = await check(
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       { minVerified: 5, minReliability: 0.8 },
       { apiUrl: 'https://api.test/', fetch: fn },
     );
     expect(result).toEqual(answer(false));
     expect(urls).toEqual([
-      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=5&minReliability=0.8',
+      'https://api.test/v1/check/alice/claude-code?minVerified=5&minReliability=0.8',
     ]);
   });
 
@@ -48,15 +48,15 @@ describe('mastra check', () => {
     vi.stubEnv('SEALKEEPER_API_URL', 'https://env.test');
     const { fn, urls } = fakeFetch(() => Response.json(answer(true)));
     vi.stubGlobal('fetch', fn);
-    await check('carelmeyer/claude-code');
-    expect(urls).toEqual(['https://env.test/v1/check/carelmeyer/claude-code']);
+    await check('alice/claude-code');
+    expect(urls).toEqual(['https://env.test/v1/check/alice/claude-code']);
   });
 
   it('assertTrusted resolves when every check passed', async () => {
     const { fn } = fakeFetch(() => Response.json(answer(true)));
     await expect(
       assertTrusted(
-        'carelmeyer/claude-code',
+        'alice/claude-code',
         { minVerified: 5 },
         { apiUrl: 'https://api.test', fetch: fn },
       ),
@@ -66,7 +66,7 @@ describe('mastra check', () => {
   it('assertTrusted throws with the failing checks listed', async () => {
     const { fn } = fakeFetch(() => Response.json(answer(false)));
     const error = await assertTrusted(
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       { minVerified: 5 },
       { apiUrl: 'https://api.test', fetch: fn },
     ).catch((e: unknown) => e);
@@ -74,7 +74,7 @@ describe('mastra check', () => {
     const e = error as SealKeeperCheckError;
     expect(e.message).toBe(
       [
-        'carelmeyer/claude-code did not pass the SealKeeper check',
+        'alice/claude-code did not pass the SealKeeper check',
         'FAIL verified tasks 2, need at least 5',
       ].join('\n'),
     );
@@ -95,7 +95,7 @@ describe('mastra check', () => {
     };
     const { fn } = fakeFetch(() => Response.json(withheld));
     const error = await assertTrusted(
-      'carelmeyer/claude-code',
+      'alice/claude-code',
       { minLevel: 'none' },
       { apiUrl: 'https://api.test', fetch: fn },
     ).catch((e: unknown) => e);
@@ -103,7 +103,7 @@ describe('mastra check', () => {
     const e = error as SealKeeperCheckError;
     expect(e.message).toBe(
       [
-        'carelmeyer/claude-code did not pass the SealKeeper check',
+        'alice/claude-code did not pass the SealKeeper check',
         'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
       ].join('\n'),
     );
@@ -118,15 +118,16 @@ describe('mastra check', () => {
       ),
     );
     const options = { apiUrl: 'https://api.test', fetch: fn };
-    await expect(check('carelmeyer/nobody', {}, options)).rejects.toMatchObject(
-      { code: 'not_found', status: 404 },
-    );
+    await expect(check('alice/nobody', {}, options)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
     await expect(check('nobody', {}, options)).rejects.toMatchObject({
       code: 'invalid_handle',
     });
     await expect(
-      assertTrusted('carelmeyer/x1', { minSafety: 2 }, options),
+      assertTrusted('alice/x1', { minSafety: 2 }, options),
     ).rejects.toMatchObject({ code: 'invalid_threshold' });
-    expect(urls).toEqual(['https://api.test/v1/check/carelmeyer/nobody']);
+    expect(urls).toEqual(['https://api.test/v1/check/alice/nobody']);
   });
 });

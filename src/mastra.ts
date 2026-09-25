@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The Mastra adapter, imported as sealkeeper/mastra. It runs in the agent's own
 // process and appends to the local log through emit from lib.ts. Once
 // automatic sync is on it also starts a background sync, at most once every
@@ -8,7 +8,7 @@
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
 //
 // Before delegating to another agent, gate on its track record.
-//   await assertTrusted('carelmeyer/claude-code', { minVerified: 5 })
+//   await assertTrusted('alice/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
 import { randomUUID } from 'node:crypto';
 import { EventPayload } from '@sealkeeper/schema';
@@ -191,7 +191,7 @@ export function sealKeeperSession(
   };
 }
 
-// GET /v1/check for handle, as in carelmeyer/claude-code. Resolves with the
+// GET /v1/check for handle, as in alice/claude-code. Resolves with the
 // answer whether it passed or not. Rejects when the check could not run, a
 // bad handle or threshold, an unknown agent or the network. seal in the
 // answer is the agent's SEAL, which can be verified offline with sealkeeper

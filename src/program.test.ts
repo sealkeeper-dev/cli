@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -118,7 +118,7 @@ describe('sealkeeper cli', () => {
     await writeConfig(
       {
         agentId: AGENT_ID,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.2.0',
         registeredAt: '2026-09-23T10:00:00Z',
@@ -128,13 +128,13 @@ describe('sealkeeper cli', () => {
     const { code, out } = await run('whoami');
     expect(code).toBe(0);
     expect(out).toContain(`agentId        ${AGENT_ID}`);
-    expect(out).toContain('handle         carelmeyer/scout');
-    expect(out).toContain('operatorLogin  carelmeyer');
+    expect(out).toContain('handle         alice/scout');
+    expect(out).toContain('operatorLogin  alice');
     expect(out).toContain('name           scout');
     expect(out).toContain('version        1.2.0');
     expect(out).toContain('apiUrl         https://api.sealkeeper.run');
     expect(out).toContain(
-      'profileUrl     https://sealkeeper.run/agents/carelmeyer/scout',
+      'profileUrl     https://sealkeeper.run/agents/alice/scout',
     );
   });
 
@@ -142,7 +142,7 @@ describe('sealkeeper cli', () => {
     await writeConfig(
       {
         agentId: AGENT_ID,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.2.0',
         apiUrl: 'http://localhost:8080',
@@ -154,12 +154,12 @@ describe('sealkeeper cli', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       agentId: AGENT_ID,
-      handle: 'carelmeyer/scout',
-      operatorLogin: 'carelmeyer',
+      handle: 'alice/scout',
+      operatorLogin: 'alice',
       name: 'scout',
       version: '1.2.0',
       apiUrl: 'http://localhost:8080',
-      profileUrl: 'https://sealkeeper.run/agents/carelmeyer/scout',
+      profileUrl: 'https://sealkeeper.run/agents/alice/scout',
     });
   });
 
@@ -167,7 +167,7 @@ describe('sealkeeper cli', () => {
     await writeConfig(
       {
         agentId: AGENT_ID,
-        operatorLogin: 'carelmeyer',
+        operatorLogin: 'alice',
         name: 'scout',
         version: '1.2.0',
         registeredAt: '2026-09-23T10:00:00Z',

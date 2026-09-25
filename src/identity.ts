@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { link, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { getPublicKeyAsync } from '@noble/ed25519';

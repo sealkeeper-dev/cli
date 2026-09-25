@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The importable API of the sealkeeper package, for adapters that run in the
 // same process as the agent. They load emit from the package root. Types are
 // in types/lib.d.ts, which lib-types.test.ts keeps in step with this file.

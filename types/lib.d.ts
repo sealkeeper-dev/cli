@@ -1,4 +1,4 @@
-// Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+// Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Types for the importable API in src/lib.ts. Written by hand because the
 // source types come from @sealkeeper/schema, which is bundled and not published.
 // src/lib-types.test.ts fails the typecheck if these drift from the source.
