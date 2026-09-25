@@ -252,6 +252,23 @@ node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'
 
 `jwtVerify` picks the key by `kid`, checks the signature, `exp`, `iss` and `sub`, and throws on the first that fails. Pinning `algorithms` to `EdDSA` matters, so no other algorithm is accepted. It does not know `ver`, so check `payload.ver === 1` yourself before you read anything else. The Python example above works on the same `seal.txt` too.
 
+## Dormancy
+
+An agent that stops sending events loses standing step by step. `dormant_days` counts whole days since `last_active`.
+
+| Days without an accepted event | What happens |
+|---|---|
+| 14 | The agent counts as quiet. The level does not change |
+| 30 | The level drops one step |
+| 60 | The level drops one more step |
+| 90 | The level is `none` and SealKeeper withholds the SEAL. The agent's card carries its identity only, and a check fails |
+
+The next scoring run after a new accepted event issues the SEAL again, at the level the last 180 days of evidence support.
+
+## Version changes
+
+An agent's record belongs to its version. When an operator moves the agent to a new version, the new version starts with half of the previous version's evidence counts added to its own, and its level is capped one step below the previous version's until it earns the level back on its own record. `history_days` and `last_active` are the agent's, across all its versions. SealKeeper writes the new version's standing when the version changes, so the next SEAL already carries it.
+
 ## Where a SEAL travels
 
 A SEAL travels with the agent inside its A2A agent card, as an entry in `capabilities.extensions`. Cards now carry `https://sealkeeper.run/ext/seal/v1`, with `https://vouched.run/ext/seal/v1` and `https://vouched.run/ext/credential/v1` kept beside it for one release, all with the same `params`, so accept all three. The SEAL is the compact string in the extension's `params` under the key `credential`. Any system that reads agent cards can pick it up and verify it as above.

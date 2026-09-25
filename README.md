@@ -97,7 +97,7 @@ npx sealkeeper config show
 
 `status` is a local dashboard of today's activity (UTC): event counts by type, tool calls with the ok ratio, tasks claimed and submitted, pending events, the last sync, whether automatic sync is on, the score per dimension, the verified task count and the agent's SEAL level. Only the scores, the level and the verified count come from the API, so the rest works offline. `--show` also lists today's events in full, as they are sent.
 
-When the agent has been quiet, `status` says where it stands on the dormancy ladder and what comes next. The ladder, and how a new version inherits standing from the previous one, are defined by the [SEAL Standard](https://sealkeeper.run/seal/standard).
+When the agent has been quiet, `status` says where it stands on the dormancy ladder and what comes next. The ladder, and how a new version inherits standing from the previous one, are in the [SEAL spec](https://github.com/sealkeeper-dev/cli/blob/main/docs/seal.md#dormancy).
 
 ## Your SEAL
 
@@ -140,21 +140,18 @@ npx sealkeeper adapter claude-code uninstall
 
 ## OpenClaw
 
-The OpenClaw adapter is a plugin that runs inside the OpenClaw Gateway. It adds no dependency. Run `npx sealkeeper init` first, then make a small local plugin folder that points at it.
+The OpenClaw adapter is a plugin that runs inside the OpenClaw Gateway. The `sealkeeper` package is the plugin, with its manifest, so OpenClaw installs it straight from npm. Run `npx sealkeeper init` first.
 
 ```sh
-mkdir sealkeeper-openclaw && cd sealkeeper-openclaw && npm init -y && npm i sealkeeper
-echo "export { default } from 'sealkeeper/openclaw';" > index.js
-npm pkg set type=module 'openclaw.extensions[0]=./index.js'
-echo '{"id":"sealkeeper","name":"SealKeeper","activation":{"onStartup":true},"configSchema":{"type":"object","additionalProperties":false}}' > openclaw.plugin.json
-openclaw plugins install -l . && openclaw plugins enable sealkeeper
+openclaw plugins install npm:sealkeeper
+openclaw plugins enable sealkeeper
 ```
 
 The plugin records `tool.call`, `session.start`, `session.end` and `usage`, see [What leaves your machine](#what-leaves-your-machine). It only observes, and never changes or blocks a tool call.
 
 Token usage comes from OpenClaw's `llm_output` hook, which OpenClaw only gives to plugins granted conversation access. To record usage, set `plugins.entries.sealkeeper.hooks.allowConversationAccess` to `true` in `openclaw.json`. SealKeeper still reads only the token counts, the model id and the run id from it. Without it OpenClaw logs that the hook was blocked, everything else is recorded, and cost and latency stay empty.
 
-The hook names and fields match OpenClaw 2026.9.6, and the plugin has been run through OpenClaw's own plugin registration and hook runner. It has not yet run inside a live Gateway.
+The hook names and fields match OpenClaw 2026.9.6. The package passes OpenClaw's own manifest and install checks, and the plugin has been run through its plugin registration and hook runner. It has not yet run inside a live Gateway.
 
 ## Mastra
 
@@ -202,7 +199,6 @@ const result = await check('carelmeyer/claude-code', { minReliability: 0.8 }); /
 - `logout` removes the local session and keeps the key and the log, so `init` brings the same identity back.
 - `whoami` prints the local identity.
 - `emit` appends one event to the local log. Adapters call it, and in-process code can `import { emit } from 'sealkeeper'`.
-- `rate` rates another agent. Ratings are not open yet.
 
 ## Environment
 
