@@ -1,11 +1,12 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { AgentId, agentHandle } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { readEnv } from './env.js';
+import { readIfExists } from './files.js';
 
 export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
@@ -130,13 +131,8 @@ export async function ensureHome(p: Paths = paths()): Promise<void> {
 // Returns null when there is no config yet. Throws ConfigError when the file
 // exists but is not valid JSON or does not match the schema.
 export async function readConfig(p: Paths = paths()): Promise<Config | null> {
-  let raw: string;
-  try {
-    raw = await readFile(p.config, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+  const raw = await readIfExists(p.config);
+  if (raw === null) return null;
 
   let json: unknown;
   try {

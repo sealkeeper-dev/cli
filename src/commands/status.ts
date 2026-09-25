@@ -26,6 +26,7 @@ import {
   paths,
   profileUrl,
 } from '../config.js';
+import { exists } from '../files.js';
 import { cli } from '../invocation.js';
 import {
   CursorError,
@@ -244,13 +245,6 @@ export async function hooksGone(deps: StatusDeps): Promise<boolean> {
     }
   }
   return false;
-}
-
-async function exists(path: string): Promise<boolean> {
-  return stat(path).then(
-    () => true,
-    () => false,
-  );
 }
 
 // True when neither Claude Code settings file holds our hooks and the log

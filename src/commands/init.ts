@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { rm, stat } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
   AgentName,
@@ -36,6 +36,7 @@ import {
   readConfig,
   writeConfig,
 } from '../config.js';
+import { isDirectory } from '../files.js';
 import {
   DeviceFlowError,
   deviceFlow,
@@ -460,14 +461,6 @@ async function installAt(file: string, hook: string): Promise<boolean> {
 export function isYesByDefault(answer: string | null): boolean {
   if (answer === null) return false;
   return /^(y(es)?)?$/i.test(answer.trim());
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 // The hooks this run wrote point at the running script, which under npx

@@ -1,8 +1,9 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { SettingsError } from './claude-code-settings.js';
 import { writeFileAtomic } from './config.js';
+import { readIfExists } from './files.js';
 
 // The /sealkeeper-prove slash command for Claude Code. A markdown file
 // under <claude dir>/commands, next to settings.json. Its YAML frontmatter
@@ -77,7 +78,7 @@ export async function installProveCommand(
   invocation: string,
 ): Promise<CommandResult> {
   const text = proveCommandText(invocation);
-  const current = await readIfExists(file);
+  const current = await readOurFile(file);
   if (current !== null) {
     if (!isOurs(current)) return 'kept';
     if (current === text) return 'unchanged';
@@ -95,7 +96,7 @@ export async function installProveCommand(
 
 // Removes the command only when it is ours. Returns whether it did.
 export async function uninstallProveCommand(file: string): Promise<boolean> {
-  const current = await readIfExists(file);
+  const current = await readOurFile(file);
   if (current === null || !isOurs(current)) return false;
   try {
     await rm(file, { force: true });
@@ -118,11 +119,10 @@ export function isOurs(text: string): boolean {
   return false;
 }
 
-async function readIfExists(file: string): Promise<string | null> {
+async function readOurFile(file: string): Promise<string | null> {
   try {
-    return await readFile(file, 'utf8');
+    return await readIfExists(file);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw new SettingsError(
       `could not read ${file}: ${(error as Error).message}`,
     );

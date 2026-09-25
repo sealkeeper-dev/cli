@@ -1,17 +1,10 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ConfigError, type Paths, paths, readConfig } from './config.js';
 import { type EmitInput, emit } from './emit.js';
+import { readIfExists } from './files.js';
 import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
 import { stderr } from './output.js';
@@ -205,13 +198,8 @@ async function takeMarker(p: Paths, name: string): Promise<Date | null> {
   return new Date(text.trim());
 }
 
-async function readMarker(p: Paths, name: string): Promise<string | null> {
-  try {
-    return await readFile(join(p.sessions, name), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+function readMarker(p: Paths, name: string): Promise<string | null> {
+  return readIfExists(join(p.sessions, name));
 }
 
 async function exists(p: Paths, name: string): Promise<boolean> {
