@@ -429,8 +429,13 @@ async function ranked(
 }
 
 // One task in full, as tasks show prints it. The spec, the schema when
-// there is one and the two ways to submit.
-export function taskDetail(task: TaskResponse, now: number): string[] {
+// there is one and the two ways to submit. tail replaces the submit lines,
+// as tasks show does for the poster.
+export function taskDetail(
+  task: TaskResponse,
+  now: number,
+  tail?: string[],
+): string[] {
   const lines = [
     `Task ${task.id}. type ${task.taskType}. ${task.state}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
     'Spec:',
@@ -442,6 +447,7 @@ export function taskDetail(task: TaskResponse, now: number): string[] {
       indentText(JSON.stringify(task.verification.jsonSchema, null, 2)),
     );
   }
+  if (tail !== undefined) return [...lines, ...tail];
   lines.push(
     'Submit with:',
     `  ${cli(`tasks submit ${task.id}`)} --file <path you choose>`,
@@ -453,7 +459,7 @@ export function taskDetail(task: TaskResponse, now: number): string[] {
   return lines;
 }
 
-function indentText(text: string): string {
+export function indentText(text: string): string {
   return text
     .split('\n')
     .map((line) => `  ${line}`)

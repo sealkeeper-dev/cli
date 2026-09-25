@@ -13,9 +13,25 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Input } from '../ask.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
+import {
+  ALREADY_VERIFIED,
+  BOTH_FAILURE,
+  CLAIMANT_REPORTS,
+  DISAGREED,
+  EXPIRED,
+  NO_SUBMISSION,
+  NOT_COUNTERPARTY,
+  NOT_POSTER,
+  NOT_SUBMITTED,
+  VERIFIED,
+  WAITING,
+  WAITING_AFTER_FAILURE,
+  WRONG_STATE,
+} from './tasks-outcome.js';
 import { MAX_CLAIM_ATTEMPTS, NOTHING_AVAILABLE } from './tasks-pull.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
@@ -40,6 +56,12 @@ class FakeApi {
   claims = new Map<string, ClaimReply>();
   submitReply: (() => Response) | null = null;
   outcomeReply: (() => Response) | null = null;
+  // Replaces the answer of the poster's signed read, for the second read
+  // when the number is 2.
+  submissionReply: ((n: number) => Response | null) | null = null;
+  submissionReads = 0;
+  // Outcome reports per task, by the reporting agent id.
+  reports = new Map<string, Map<string, string>>();
   requests: ApiCall[] = [];
   errors: string[] = [];
 
@@ -90,11 +112,14 @@ class FakeApi {
       return Response.json({ tasks });
     }
     const match = url.pathname.match(
-      /^\/v1\/tasks\/([^/]+)(?:\/(claim|submit|outcome))?$/,
+      /^\/v1\/tasks\/([^/]+)(?:\/(claim|submit|outcome|submission))?$/,
     );
     if (method === 'GET' && match && !match[2]) {
       const task = this.tasks.get(match[1] ?? '');
-      return task ? Response.json(task) : error(404, 'not_found');
+      if (!task) return error(404, 'not_found');
+      // The public read, like the API's, leaves the submission out.
+      const { submission: _, ...publicTask } = task;
+      return Response.json(publicTask);
     }
 
     // Signed writes from here on.
@@ -146,9 +171,41 @@ class FakeApi {
         });
         return Response.json(task);
       }
-      case 'outcome':
+      case 'outcome': {
         if (this.outcomeReply) return this.outcomeReply();
+        const reports = this.reports.get(id) ?? new Map<string, string>();
+        reports.set(this.agentId, String(request.payload.outcome));
+        this.reports.set(id, reports);
+        const outcomes = [...reports.values()];
+        if (outcomes.length === 2 && outcomes.every((o) => o === 'success')) {
+          Object.assign(task, {
+            state: 'verified',
+            verifiedAt: new Date().toISOString(),
+          });
+        }
         return Response.json(task);
+      }
+      case 'submission': {
+        this.submissionReads += 1;
+        const reply = this.submissionReply?.(this.submissionReads);
+        if (reply) return reply;
+        if (typeof request.payload.issuedAt !== 'string') {
+          this.errors.push('submission read without issuedAt');
+        }
+        if (task.posterAgentId !== this.agentId) {
+          return error(403, 'not_party');
+        }
+        const reports = this.reports.get(id);
+        const reportOf = (who: string | null) =>
+          (who && reports?.get(who)) ?? null;
+        return Response.json({
+          task,
+          reports: {
+            poster: reportOf(task.posterAgentId),
+            claimant: reportOf(task.claimantAgentId),
+          },
+        });
+      }
     }
     return error(404, 'not_found');
   }) as typeof fetch;
@@ -185,9 +242,16 @@ describe('tasks pull, submit and post', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
+  // What tasks outcome reads its answer from. Unset is no terminal.
+  let stdin: Input | undefined;
 
   async function run(...args: string[]): Promise<RunResult> {
-    const program = createProgram({ tasks: { fetch: api.fetch } });
+    const program = createProgram({
+      tasks: {
+        fetch: api.fetch,
+        ...(stdin === undefined ? {} : { stdin: () => stdin as Input }),
+      },
+    });
     throwOnExit(program);
     let out = '';
     let err = '';
@@ -239,6 +303,7 @@ describe('tasks pull, submit and post', () => {
       registeredAt: new Date().toISOString(),
     });
     api = new FakeApi(agentId);
+    stdin = undefined;
   });
 
   afterEach(async () => {
@@ -647,6 +712,376 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(err).toContain(message);
       expect(api.requests).toEqual([]);
+    });
+  });
+
+  describe('outcome', () => {
+    const THIRD_AGENT = 'E'.repeat(43);
+    const SUBMISSION = 'the summary, in 100 words';
+
+    // A counterparty task this agent posted, claimed and submitted by
+    // another agent, which reported success on submit unless told otherwise.
+    function submitted(
+      overrides: Partial<TaskResponse> = {},
+      claimantReport: string | null = 'success',
+    ): TaskResponse {
+      const now = new Date().toISOString();
+      const task = api.add({
+        posterAgentId: agentId,
+        claimantAgentId: OTHER_AGENT,
+        state: 'submitted',
+        claimedAt: now,
+        submittedAt: now,
+        submission: SUBMISSION,
+        ...overrides,
+      });
+      if (claimantReport !== null) {
+        api.reports.set(task.id, new Map([[OTHER_AGENT, claimantReport]]));
+      }
+      return task;
+    }
+
+    const outcomePosts = () =>
+      api.posts().filter((r) => r.path.endsWith('/outcome'));
+
+    function tty(answer: string | null): Input {
+      return { isTTY: true, readLine: async () => answer };
+    }
+
+    const report = (id: string, outcome: string, ...more: string[]) =>
+      run('tasks', 'outcome', id, outcome, '--yes', ...more);
+
+    it('confirms success, which verifies the task', async () => {
+      const task = submitted();
+      const before = api.tasks.size;
+      const { code, out } = await report(task.id, 'success');
+      expect(code).toBe(0);
+      expect(out).toContain(`Task ${task.id}. type summarise. submitted.`);
+      expect(out).toContain('Submission:');
+      expect(out).toContain(SUBMISSION);
+      expect(out).not.toContain('Submit with');
+      expect(out).toContain('state    verified');
+      expect(out).toContain(VERIFIED);
+      expect(api.tasks.size).toBe(before);
+      // A signed read, the report, and a signed read of the reports after.
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${task.id}/submission`,
+        `/v1/tasks/${task.id}/outcome`,
+        `/v1/tasks/${task.id}/submission`,
+      ]);
+      expect(outcomePosts()[0]?.payload).toEqual({
+        taskId: task.id,
+        outcome: 'success',
+        evidenceHash: sha256(SUBMISSION),
+      });
+      expect(await logged()).toMatchObject([
+        {
+          type: 'task.outcome',
+          payload: {
+            task_id: task.id,
+            outcome: 'success',
+            evidence_hash: sha256(SUBMISSION),
+          },
+        },
+      ]);
+    });
+
+    it('says the claimant has not reported when its report is missing', async () => {
+      const task = submitted({}, null);
+      const { code, out } = await report(task.id, 'success');
+      expect(code).toBe(0);
+      expect(out).toContain('state    submitted');
+      expect(out).toContain(WAITING);
+      expect(out).not.toContain(DISAGREED);
+    });
+
+    it('says the claimant has not reported on a failure with no claimant report', async () => {
+      const task = submitted({}, null);
+      const { code, out } = await report(task.id, 'failure', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({
+        id: task.id,
+        outcome: 'failure',
+        state: 'submitted',
+        verified: false,
+        reports: { poster: 'failure', claimant: null },
+        agreement: 'waiting',
+      });
+      const text = await report(task.id, 'failure');
+      expect(text.out).toContain(WAITING_AFTER_FAILURE);
+      expect(text.out).not.toContain(WAITING);
+    });
+
+    it('says the sides disagree on success against a claimant failure', async () => {
+      const task = submitted({}, 'failure');
+      const { code, out } = await report(task.id, 'success', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toMatchObject({
+        verified: false,
+        reports: { poster: 'success', claimant: 'failure' },
+        agreement: 'disagreed',
+      });
+      const text = await report(task.id, 'success');
+      expect(text.out).toContain(DISAGREED);
+    });
+
+    it('says the sides disagree when the API holds different reports', async () => {
+      const task = submitted();
+      const { code, out } = await report(task.id, 'failure');
+      expect(code).toBe(0);
+      expect(out).toContain('outcome  failure');
+      expect(out).toContain(DISAGREED);
+      expect(out).toContain(
+        `Run npx sealkeeper tasks outcome ${task.id} success if you change your mind`,
+      );
+      expect(outcomePosts()[0]?.payload).toMatchObject({ outcome: 'failure' });
+      expect(api.tasks.get(task.id)?.verifiedAt).toBeNull();
+      expect(await logged()).toMatchObject([
+        { type: 'task.outcome', payload: { outcome: 'failure' } },
+      ]);
+    });
+
+    it('still says the sides disagree on a repeated failure report', async () => {
+      const task = submitted();
+      await report(task.id, 'failure');
+      const { code, out } = await report(task.id, 'failure', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toMatchObject({
+        reports: { poster: 'failure', claimant: 'success' },
+        agreement: 'disagreed',
+      });
+      expect(outcomePosts()).toHaveLength(2);
+    });
+
+    it('says both report failure when the claimant reported failure too', async () => {
+      const task = submitted({}, 'failure');
+      const { code, out } = await report(task.id, 'failure');
+      expect(code).toBe(0);
+      expect(out).toContain(BOTH_FAILURE);
+      expect(out).not.toContain(DISAGREED);
+    });
+
+    it('prints one JSON object with --json and the submission on stderr', async () => {
+      const task = submitted();
+      const { code, out, err } = await report(task.id, 'success', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({
+        id: task.id,
+        outcome: 'success',
+        state: 'verified',
+        verified: true,
+        reports: { poster: 'success', claimant: 'success' },
+        agreement: 'verified',
+      });
+      expect(err).toContain(SUBMISSION);
+    });
+
+    it('warns and says nothing about agreement when the read back fails', async () => {
+      const task = submitted();
+      api.submissionReply = (n) => (n === 2 ? error(503, 'unavailable') : null);
+      const { code, out, err } = await report(task.id, 'failure');
+      expect(code).toBe(0);
+      expect(out).toContain('outcome  failure');
+      expect(out).not.toContain(DISAGREED);
+      expect(err).toContain(
+        'warning: reported failure, but could not read the reports back',
+      );
+      expect(await logged()).toHaveLength(1);
+    });
+
+    it('asks in a terminal and reports on yes', async () => {
+      const task = submitted();
+      stdin = tty('y');
+      const { code, out, err } = await run(
+        'tasks',
+        'outcome',
+        task.id,
+        'success',
+      );
+      expect(code).toBe(0);
+      expect(err).toContain('Report success for this submission? [y/N]');
+      expect(out).toContain(VERIFIED);
+    });
+
+    it('reports nothing when the answer is not yes', async () => {
+      const task = submitted();
+      stdin = tty('');
+      const { code, err } = await run('tasks', 'outcome', task.id, 'success');
+      expect(code).toBe(1);
+      expect(err).toContain('nothing reported');
+      expect(outcomePosts()).toEqual([]);
+      expect(await logged()).toEqual([]);
+    });
+
+    it('refuses without a terminal unless --yes, before any request', async () => {
+      const task = submitted();
+      const { code, err } = await run('tasks', 'outcome', task.id, 'success');
+      expect(code).toBe(1);
+      expect(err).toContain(
+        `nothing reported. There is no terminal to ask, so run npx sealkeeper tasks outcome ${task.id} success --yes to report success`,
+      );
+      expect(api.requests).toEqual([]);
+    });
+
+    it('takes a verdict on work submitted before the task expired', async () => {
+      const task = submitted({
+        state: 'expired',
+        expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      const { code, out } = await report(task.id, 'success');
+      expect(code).toBe(0);
+      expect(out).toContain(VERIFIED);
+    });
+
+    it.each([
+      [
+        'not the poster or the claimant',
+        () => submitted({ posterAgentId: THIRD_AGENT }),
+        NOT_POSTER,
+      ],
+      [
+        'the claimant',
+        () =>
+          submitted({ posterAgentId: OTHER_AGENT, claimantAgentId: agentId }),
+        CLAIMANT_REPORTS,
+      ],
+      [
+        'not submitted yet',
+        () => submitted({ state: 'claimed', submittedAt: null }),
+        NOT_SUBMITTED,
+      ],
+      [
+        'already verified',
+        () =>
+          submitted({
+            state: 'verified',
+            verifiedAt: new Date().toISOString(),
+          }),
+        ALREADY_VERIFIED,
+      ],
+      [
+        'expired before a submission',
+        () =>
+          submitted({
+            state: 'expired',
+            submittedAt: null,
+            expiresAt: new Date(Date.now() - 60_000).toISOString(),
+          }),
+        EXPIRED,
+      ],
+      [
+        'not a counterparty task',
+        () =>
+          submitted({
+            verification: { kind: 'hash', sha256: sha256('x') },
+          }),
+        NOT_COUNTERPARTY,
+      ],
+    ])('refuses when %s and signs nothing', async (_, make, message) => {
+      const task = make();
+      const { code, err } = await report(task.id, 'success');
+      expect(code).toBe(1);
+      expect(err).toContain(message);
+      expect(api.posts()).toEqual([]);
+      expect(await logged()).toEqual([]);
+    });
+
+    it.each([
+      [409, 'wrong_state', WRONG_STATE],
+      [403, 'not_party', NOT_POSTER],
+      [400, 'not_counterparty', NOT_COUNTERPARTY],
+      [429, 'rate_limited', 'too many requests'],
+      [401, 'unknown_agent', 'this agent is not registered'],
+    ])(
+      'says one line for a %i %s from the outcome route',
+      async (status, code, message) => {
+        const task = submitted();
+        api.outcomeReply = () => error(status, code);
+        const result = await report(task.id, 'success');
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(message);
+        expect(await logged()).toEqual([]);
+      },
+    );
+
+    it.each([
+      [403, 'not_party', NOT_POSTER],
+      [404, 'not_found', 'no task with id'],
+      [400, 'issued_at_out_of_window', 'check this machine clock'],
+    ])(
+      'says one line for a %i %s from the signed read and reports nothing',
+      async (status, code, message) => {
+        const task = submitted();
+        api.submissionReply = () => error(status, code);
+        const result = await report(task.id, 'success');
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(message);
+        expect(outcomePosts()).toEqual([]);
+      },
+    );
+
+    it('reports nothing when the signed read has no submission', async () => {
+      const task = submitted();
+      const { submission: _, ...withoutSubmission } = task;
+      api.submissionReply = () =>
+        Response.json({
+          task: withoutSubmission,
+          reports: { poster: null, claimant: 'success' },
+        });
+      const { code, err } = await report(task.id, 'success');
+      expect(code).toBe(1);
+      expect(err).toContain(NO_SUBMISSION);
+      expect(outcomePosts()).toEqual([]);
+    });
+
+    it('says no task for an unknown id', async () => {
+      const id = randomUUID();
+      const { code, err } = await report(id, 'success');
+      expect(code).toBe(1);
+      expect(err).toContain(`no task with id ${id}`);
+    });
+
+    it('rejects an outcome other than success or failure', async () => {
+      const task = submitted();
+      const { code, err } = await run('tasks', 'outcome', task.id, 'maybe');
+      expect(code).toBe(1);
+      expect(err).toContain('outcome must be success or failure, got maybe');
+      expect(api.requests).toEqual([]);
+    });
+
+    it('tasks show tells the poster a submission waits for its verdict', async () => {
+      const task = submitted();
+      const { code, out } = await run('tasks', 'show', task.id);
+      expect(code).toBe(0);
+      expect(out).toContain('a submission is waiting for your verdict');
+      expect(out).toContain(`npx sealkeeper tasks outcome ${task.id} success`);
+      expect(out).not.toContain('Submit with');
+
+      const json = await run('tasks', 'show', task.id, '--json');
+      const entry = JSON.parse(json.out);
+      expect(entry).toMatchObject({
+        id: task.id,
+        awaiting_verdict: true,
+        verdict: `npx sealkeeper tasks outcome ${task.id} success|failure`,
+      });
+      expect(entry).not.toHaveProperty('submit');
+    });
+
+    it('tasks show says nothing waits on an open task the agent posted', async () => {
+      const task = api.add({ posterAgentId: agentId });
+      const { out } = await run('tasks', 'show', task.id);
+      expect(out).toContain('You posted this task.');
+      expect(out).not.toContain('verdict');
+      const json = await run('tasks', 'show', task.id, '--json');
+      const entry = JSON.parse(json.out);
+      expect(entry.awaiting_verdict).toBeUndefined();
+      expect(entry).not.toHaveProperty('submit');
+    });
+
+    it('tasks show keeps the submit command for a task someone else posted', async () => {
+      const task = api.add({});
+      const json = await run('tasks', 'show', task.id, '--json');
+      expect(JSON.parse(json.out).submit).toContain(`tasks submit ${task.id}`);
     });
   });
 });

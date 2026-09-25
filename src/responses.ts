@@ -8,6 +8,7 @@ import {
   Jws,
   SEAL_MAX_TTL_SECONDS,
   Sha256Hex,
+  TaskOutcome,
   TaskState,
   TaskType,
   Version,
@@ -101,6 +102,17 @@ export const TaskResponse = z.object({
 export type TaskResponse = z.infer<typeof TaskResponse>;
 
 export const ListTasksResponse = z.object({ tasks: z.array(TaskResponse) });
+
+// POST /v1/tasks/:id/submission, the poster's signed read. reports holds
+// each side's current outcome, null until it reports.
+export const TaskSubmissionResponse = z.object({
+  task: TaskResponse,
+  reports: z.object({
+    poster: TaskOutcome.nullable(),
+    claimant: TaskOutcome.nullable(),
+  }),
+});
+export type TaskSubmissionResponse = z.infer<typeof TaskSubmissionResponse>;
 
 export const RatingResponse = z.object({
   rateeAgentId: AgentId,

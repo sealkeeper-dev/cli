@@ -9,6 +9,7 @@ import {
   createApiClient,
   resolveApiUrl,
 } from './api.js';
+import { type Input, streamInput } from './ask.js';
 import { requireConfig } from './cli-config.js';
 import { type Config, type Paths, paths } from './config.js';
 import { type EmitInput, emit } from './emit.js';
@@ -20,15 +21,18 @@ import { stderr, stdout } from './output.js';
 // injectable so tests can stand in for the API. isTTY says whether stdout
 // is a terminal, which prove reads to tell a person from an agent.
 // claudeDir and cwd say where prove looks for the Claude Code hooks.
+// stdin is where tasks outcome asks the poster, which tests replace.
 export type TasksDeps = {
   fetch: typeof fetch;
   isTTY?: () => boolean;
   claudeDir?: () => string;
   cwd?: () => string;
+  stdin?: () => Input;
 };
 
 export const defaultTasksDeps: TasksDeps = {
   fetch: (...args) => fetch(...args),
+  stdin: () => streamInput(process.stdin),
 };
 
 type TaskSession = {

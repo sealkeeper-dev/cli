@@ -11,10 +11,17 @@ import {
   unsubmittedClaims,
 } from '../tasks.js';
 import { proveEntry, serverHeld, taskDetail } from './prove.js';
+import {
+  awaitingVerdict,
+  posterLines,
+  verdictCommand,
+} from './tasks-outcome.js';
 
 // sealkeeper tasks show <id>. One task in full, its spec, its schema when
-// there is one and the submit lines. The id may be the short id prove
-// --claim prints, which is looked up among the tasks this agent holds.
+// there is one and the submit lines. For a task this agent posted it says
+// whether a submission waits for its verdict instead. The id may be the
+// short id prove --claim prints, which is looked up among the tasks this
+// agent holds.
 
 // A full task id, a UUID.
 const FULL_ID =
@@ -73,10 +80,13 @@ export function register(
         failOnApiError(this, error);
       }
       if (wantsJson(this)) {
-        stdout(JSON.stringify(proveEntry(task)));
+        stdout(JSON.stringify(showEntry(task, config.agentId)));
         return;
       }
-      for (const line of taskDetail(task, Date.now())) stdout(line);
+      // A task this agent posted gets poster lines instead of the submit
+      // lines, and says when a submission waits for its verdict.
+      const tail = posterLines(task, config.agentId);
+      for (const line of taskDetail(task, Date.now(), tail)) stdout(line);
     });
 }
 
@@ -96,4 +106,14 @@ async function heldIds(
     // The local log is all there is.
   }
   return [...ids];
+}
+
+// The JSON of tasks show. The poster gets no submit command, since only the
+// claimant submits, and gets the verdict command while a submission waits.
+function showEntry(task: TaskResponse, agentId: string) {
+  const { submit, ...entry } = proveEntry(task);
+  if (task.posterAgentId !== agentId) return { ...entry, submit };
+  return awaitingVerdict(task, agentId)
+    ? { ...entry, awaiting_verdict: true, verdict: verdictCommand(task.id) }
+    : entry;
 }

@@ -19,6 +19,7 @@ import {
   RatingResponse,
   ScoreResponse,
   TaskResponse,
+  TaskSubmissionResponse,
   WellKnown,
 } from './responses.js';
 
@@ -74,6 +75,12 @@ export type ApiClient = {
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
   submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
+  // POST /v1/tasks/:id/submission, signed by the poster. The task with its
+  // submission and both sides' outcome reports.
+  readSubmission(
+    taskId: string,
+    envelope: string,
+  ): Promise<TaskSubmissionResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
   renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
   // PATCH /v1/agents/:id with a signed { version, issuedAt }.
@@ -269,6 +276,16 @@ export function createApiClient(options: {
       taskRequest(taskPath(taskId, '/submit'), [200], envelope),
     postOutcome: (taskId, envelope) =>
       taskRequest(taskPath(taskId, '/outcome'), [200], envelope),
+    async readSubmission(taskId, envelope) {
+      const { status, json, headers } = await request(
+        taskPath(taskId, '/submission'),
+        { envelope },
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = TaskSubmissionResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
     async postRating(envelope) {
       const { status, json, headers } = await request('/v1/ratings', {
         envelope,
