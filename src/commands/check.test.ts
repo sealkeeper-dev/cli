@@ -4,8 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SealCheckResponse } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { createProgram } from '../program.js';
+import { type SealFixture, sealFixture } from '../test-seal.js';
 
 const ID = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
 const JWS = 'eyJh.eyJi.c2ln';
@@ -47,6 +56,14 @@ describe('sealkeeper check', () => {
   let home: string;
   let urls: string[];
   let reply: () => Response | Promise<Response>;
+  let fixture: SealFixture;
+
+  // A passing answer must carry a SEAL that verifies, so it is signed with
+  // a key the fake API publishes. A failing one is never verified.
+  beforeAll(async () => {
+    fixture = await sealFixture();
+    passing.seal = passing.credential = await fixture.seal(ID);
+  });
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram();
@@ -85,6 +102,8 @@ describe('sealkeeper check', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const keys = fixture.keysFor(String(input));
+        if (keys) return keys;
         urls.push(String(input));
         expect(init?.method ?? 'GET').toBe('GET');
         expect(init?.body).toBeUndefined();
@@ -238,6 +257,40 @@ describe('sealkeeper check', () => {
     expect(bad.code).toBe(2);
     expect(bad.err).toContain('invalid minLevel platinum');
     expect(urls).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'a SEAL whose signature does not verify',
+      async () => {
+        const [h, p, sig = ''] = (passing.seal ?? '').split('.');
+        const flipped = sig.startsWith('A')
+          ? `B${sig.slice(1)}`
+          : `A${sig.slice(1)}`;
+        return { ...passing, seal: `${h}.${p}.${flipped}` };
+      },
+      'its SEAL is bad signature',
+    ],
+    [
+      'a SEAL for another agent',
+      async () => {
+        const other = await fixture.seal('A'.repeat(43));
+        return { ...passing, seal: other, credential: other };
+      },
+      'its SEAL names another agent',
+    ],
+    [
+      'an answer about another handle',
+      async () => ({ ...passing, handle: 'someone/else' }),
+      'the API answered for someone/else',
+    ],
+  ])('does not pass on %s, exit 2', async (_, answer, why) => {
+    const body = await answer();
+    reply = () => Response.json(body);
+    const r = await run('check', 'carelmeyer/claude-code');
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('');
+    expect(r.err).toContain(`not trusting carelmeyer/claude-code, ${why}`);
   });
 
   it('--json prints the CheckResponse and keeps the exit code', async () => {

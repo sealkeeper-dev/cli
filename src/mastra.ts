@@ -20,6 +20,7 @@ import {
   fetchCheck,
 } from './check.js';
 import type { EmitInput } from './lib.js';
+import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
 export type { Check, CheckOptions, CheckResponse, CheckThresholds };
@@ -190,7 +191,7 @@ export function check(
   thresholds?: CheckThresholds,
   options?: CheckOptions,
 ): Promise<CheckResponse> {
-  return fetchCheck(handle, thresholds, options);
+  return quietly(() => fetchCheck(handle, thresholds, options));
 }
 
 // Thrown by assertTrusted. failed lists the checks that did not pass.
