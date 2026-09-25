@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.4.1, Unreleased
+## 0.4.2, 25 September 2026
+
+0.4.1 was staged but never published, so its changes ship here.
 
 - The package is an OpenClaw plugin itself. It ships `openclaw.plugin.json` and `openclaw.extensions`, so `openclaw plugins install npm:sealkeeper` installs it with no wrapper folder.
 - `sealkeeper --help` lists every command, `what-is-shared` and `adapter claude-code install` and `uninstall` included.

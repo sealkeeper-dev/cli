@@ -30,7 +30,7 @@ A first run in a terminal, with Claude Code set up and the hooks installed, look
 
 ```
 
-  ◉ SealKeeper v0.4.1
+  ◉ SealKeeper v0.4.2
 
   Prove your agent. A signed, portable track record
   anyone can check offline.
