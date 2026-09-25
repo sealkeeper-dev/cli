@@ -175,6 +175,8 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
   name_taken: (m) => m,
   invalid_signature: () =>
     `the API rejected the registration signature, check the key file or run ${cli('init --force')}`,
+  wrong_audience: (m) =>
+    `the API answers as another address, check the API URL, ${m}`,
   github_token_rejected: () =>
     `the API could not verify your GitHub login, run ${cli('init')} again`,
   network_error: (m) => m,
@@ -368,8 +370,8 @@ async function init(
     name,
     version: options.version,
   };
-  const envelope = await signEnvelope(request, p);
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
+  const envelope = await signEnvelope(request, api.apiUrl, p);
   const agent = await api.registerAgent(envelope);
   if (agent.id !== agentId) {
     throw new ApiError(
@@ -577,7 +579,7 @@ async function offerVersionMove(
   try {
     change = await changeVersion({
       api,
-      signer: await loadSigner(),
+      signer: await loadSigner(api.apiUrl),
       config,
       previous: server,
       version: config.version,

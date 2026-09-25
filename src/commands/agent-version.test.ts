@@ -6,6 +6,7 @@ import {
   base64urlDecode,
   ChangeVersionRequest,
   decodeHeader,
+  readAudience,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -15,6 +16,19 @@ import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 
 const API_URL = 'https://api.test';
+
+// Every signed payload names the API it is for (VOU-111). The fake takes
+// aud off before it parses, and a payload without the right aud fails the
+// test that sent it.
+const audErrors: unknown[] = [];
+const unsigned = (payload: unknown) => {
+  const check = readAudience(payload, [API_URL]);
+  if (check.result !== 'match') audErrors.push(payload);
+  return check.payload;
+};
+afterEach(() => {
+  expect(audErrors.splice(0)).toEqual([]);
+});
 
 type RunResult = { code: number; out: string; err: string };
 type Call = { method: string; path: string; payload?: ChangeVersionRequest };
@@ -57,7 +71,9 @@ class FakeApi {
     const { envelope } = JSON.parse(String(init?.body)) as { envelope: string };
     const kid = decodeHeader(envelope).kid;
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
-    const { payload } = await verify(envelope, base64urlDecode(kid));
+    const payload = unsigned(
+      (await verify(envelope, base64urlDecode(kid))).payload,
+    );
     call.payload = ChangeVersionRequest.parse(payload);
     if (this.reply) return this.reply(call.payload);
     this.version = call.payload.version;

@@ -7,6 +7,7 @@ import {
   base64urlDecode,
   decodeHeader,
   PostTaskRequest,
+  readAudience,
   type TaskResponse,
   type VerificationSpec,
   verify,
@@ -36,6 +37,19 @@ import { MAX_CLAIM_ATTEMPTS, NOTHING_AVAILABLE } from './tasks-pull.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
 const API_URL = 'https://api.test';
+
+// Every signed payload names the API it is for (VOU-111). The fake takes
+// aud off before it parses, and a payload without the right aud fails the
+// test that sent it.
+const audErrors: unknown[] = [];
+const unsigned = (payload: unknown) => {
+  const check = readAudience(payload, [API_URL]);
+  if (check.result !== 'match') audErrors.push(payload);
+  return check.payload;
+};
+afterEach(() => {
+  expect(audErrors.splice(0)).toEqual([]);
+});
 const OTHER_AGENT = 'A'.repeat(43);
 
 type RunResult = { code: number; out: string; err: string };
@@ -126,7 +140,9 @@ class FakeApi {
     const body = JSON.parse(String(init?.body)) as { envelope: string };
     const kid = decodeHeader(body.envelope).kid;
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
-    const { payload } = await verify(body.envelope, base64urlDecode(kid));
+    const payload = unsigned(
+      (await verify(body.envelope, base64urlDecode(kid))).payload,
+    );
     request.payload = payload as Record<string, unknown>;
 
     if (url.pathname === '/v1/tasks') {

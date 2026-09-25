@@ -13,6 +13,7 @@ import {
   base64urlDecode,
   decodeHeader,
   EventType,
+  readAudience,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -65,6 +66,23 @@ const STALE_SCRIPT = '/old/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
 const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
 const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
 const API_URL = 'https://api.test';
+
+// Every signed payload names the API it is for (VOU-111). The fake takes
+// aud off before it parses, and a payload without the right aud fails the
+// test that sent it.
+const audErrors: unknown[] = [];
+// The aud of every signed payload the fake took, in order.
+const auds: unknown[] = [];
+const unsigned = (payload: unknown) => {
+  auds.push((payload as { aud?: unknown }).aud);
+  const check = readAudience(payload, [API_URL]);
+  if (check.result !== 'match') audErrors.push(payload);
+  return check.payload;
+};
+afterEach(() => {
+  auds.length = 0;
+  expect(audErrors.splice(0)).toEqual([]);
+});
 
 // all is stdout and stderr in the order they were written, as a terminal
 // shows them.
@@ -171,7 +189,9 @@ function fakeFetch(world: World): typeof fetch {
         envelope: string;
       };
       const { kid } = decodeHeader(envelope);
-      const { payload } = await verify(envelope, base64urlDecode(kid));
+      const payload = unsigned(
+        (await verify(envelope, base64urlDecode(kid))).payload,
+      );
       const registration = payload as Record<string, unknown>;
       world.registrations.push(registration);
       const reply = world.api(registration);
@@ -204,7 +224,9 @@ function fakeFetch(world: World): typeof fetch {
           envelope: string;
         };
         const { kid } = decodeHeader(envelope);
-        const { payload } = await verify(envelope, base64urlDecode(kid));
+        const payload = unsigned(
+          (await verify(envelope, base64urlDecode(kid))).payload,
+        );
         const change = payload as { version: string };
         world.versionChanges.push(change);
         world.serverVersion = change.version;
@@ -452,6 +474,14 @@ describe('sealkeeper init', () => {
     const result = await run(world, 'init', '--api-url', API_URL);
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
+  });
+
+  it('signs the registration for the origin of --api-url', async () => {
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://unreachable.test');
+    const result = await run(world, 'init', '--api-url', `${API_URL}/`);
+    expect(result.code).toBe(0);
+    expect(world.registrations).toHaveLength(1);
+    expect(auds).toEqual([API_URL]);
   });
 
   it('prints JSON with --json after the command', async () => {

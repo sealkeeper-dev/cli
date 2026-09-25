@@ -5,12 +5,20 @@ import { getPublicKeyAsync } from '@noble/ed25519';
 import {
   type AgentId,
   agentIdFromPublicKey,
+  audienceOf,
   base64urlDecode,
   base64urlEncode,
   generateKeypair,
-  sign,
+  signRequest,
 } from '@sealkeeper/schema';
-import { ensureHome, type Paths, paths } from './config.js';
+import { ApiError } from './api.js';
+import {
+  ensureHome,
+  INSECURE_API_URL,
+  isSecureApiUrl,
+  type Paths,
+  paths,
+} from './config.js';
 import { readIfExists } from './files.js';
 import { cli } from './invocation.js';
 import { stderr } from './output.js';
@@ -117,26 +125,45 @@ export async function loadKey(p: Paths = paths()): Promise<LoadedKey | null> {
 
 export type Signer = {
   agentId: AgentId;
-  sign(payload: unknown): Promise<string>;
+  // The origin of the API URL. Every payload is signed with it as aud, so
+  // the request is good only at that API (VOU-111).
+  aud: string;
+  sign(payload: object): Promise<string>;
 };
 
 // The only place the CLI signs. It loads the local key once and hands every
-// payload to the schema helper, with kid set to the agent id. sync uses one
-// signer per run so a batch of 500 reads the key file once.
-export async function loadSigner(p: Paths = paths()): Promise<Signer> {
+// payload to the schema helper, with kid set to the agent id and aud set to
+// the origin of apiUrl. sync uses one signer per run so a batch of 500 reads
+// the key file once.
+export async function loadSigner(
+  apiUrl: string,
+  p: Paths = paths(),
+): Promise<Signer> {
+  // The same refusal the API client gives, so a bad apiUrl reads the same
+  // whether it is caught here or at the first request.
+  if (!isSecureApiUrl(apiUrl)) {
+    throw new ApiError(
+      0,
+      'insecure_api_url',
+      `refusing the SealKeeper API at ${apiUrl}, ${INSECURE_API_URL}`,
+    );
+  }
+  const aud = audienceOf(apiUrl);
   const key = await loadKey(p);
   if (key === null) throw new KeyError(NO_KEY);
   return {
     agentId: key.agentId,
-    sign: (payload) => sign(payload, key.privateKey, key.agentId),
+    aud,
+    sign: (payload) => signRequest(payload, key.privateKey, key.agentId, aud),
   };
 }
 
 export async function signEnvelope(
-  payload: unknown,
+  payload: object,
+  apiUrl: string,
   p: Paths = paths(),
 ): Promise<string> {
-  return (await loadSigner(p)).sign(payload);
+  return (await loadSigner(apiUrl, p)).sign(payload);
 }
 
 // Accepts exactly 43 base64url characters with at most one trailing newline.

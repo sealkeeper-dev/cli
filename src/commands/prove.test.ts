@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
+  readAudience,
   type TaskResponse,
   verify,
 } from '@sealkeeper/schema';
@@ -35,6 +36,19 @@ import {
 } from './prove.js';
 
 const API_URL = 'https://api.test';
+
+// Every signed payload names the API it is for (VOU-111). The fake takes
+// aud off before it parses, and a payload without the right aud fails the
+// test that sent it.
+const audErrors: unknown[] = [];
+const unsigned = (payload: unknown) => {
+  const check = readAudience(payload, [API_URL]);
+  if (check.result !== 'match') audErrors.push(payload);
+  return check.payload;
+};
+afterEach(() => {
+  expect(audErrors.splice(0)).toEqual([]);
+});
 const SEED_AGENT = `${'S'.repeat(42)}A`;
 const OTHER_AGENT = `${'O'.repeat(42)}A`;
 // Another agent of the same operator as the one running prove.
@@ -129,7 +143,9 @@ class FakeApi {
     const body = JSON.parse(String(init?.body)) as { envelope: string };
     const kid = decodeHeader(body.envelope).kid;
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
-    const { payload } = await verify(body.envelope, base64urlDecode(kid));
+    const payload = unsigned(
+      (await verify(body.envelope, base64urlDecode(kid))).payload,
+    );
     if ((payload as { taskId?: string }).taskId !== task.id) {
       this.errors.push(`taskId ${task.id}`);
     }

@@ -31,9 +31,12 @@ import {
   createKey,
   KeyError,
   loadKey,
+  loadSigner,
   NO_KEY,
   signEnvelope,
 } from './identity.js';
+
+const API = 'https://api.sealkeeper.run';
 
 const hex = (text: string) =>
   Uint8Array.from(text.match(/../g) ?? [], (b) => Number.parseInt(b, 16));
@@ -162,19 +165,39 @@ describe('identity', () => {
   it('signs an envelope that verifies against the loaded public key', async () => {
     const { agentId } = await createKey();
     const payload = { event_id: 'x', type: 'tool.call', n: 1 };
-    const jws = await signEnvelope(payload);
+    const jws = await signEnvelope(payload, `${API}/`);
 
     const key = await loadKey();
     if (key === null) throw new Error('expected a key');
     expect(decodeHeader(jws)).toEqual({ alg: 'EdDSA', kid: agentId });
     expect(await verify(jws, key.publicKey)).toEqual({
       header: { alg: 'EdDSA', kid: agentId },
-      payload,
+      payload: { ...payload, aud: API },
     });
   });
 
+  it('sets aud to the origin of the API URL', async () => {
+    await createKey();
+    const signer = await loadSigner('http://localhost:8080/some/path');
+    expect(signer.aud).toBe('http://localhost:8080');
+    const key = await loadKey();
+    if (key === null) throw new Error('expected a key');
+    const { payload } = await verify(
+      await signer.sign({ a: 1 }),
+      key.publicKey,
+    );
+    expect(payload).toEqual({ a: 1, aud: 'http://localhost:8080' });
+  });
+
+  it('refuses to sign for an insecure API URL', async () => {
+    await createKey();
+    await expect(loadSigner('http://api.example.com')).rejects.toThrow(
+      /refusing the SealKeeper API/,
+    );
+  });
+
   it('refuses to sign without a key', async () => {
-    await expect(signEnvelope({ a: 1 })).rejects.toThrow(NO_KEY);
+    await expect(signEnvelope({ a: 1 }, API)).rejects.toThrow(NO_KEY);
   });
 
   it.each(VECTORS)(
@@ -189,7 +212,7 @@ describe('identity', () => {
       expect(key?.publicKey).toEqual(hex(v.publicKey));
       expect(key?.agentId).toBe(v.agentId);
 
-      const jws = await signEnvelope({ ok: true });
+      const jws = await signEnvelope({ ok: true }, API);
       expect(decodeHeader(jws).kid).toBe(v.agentId);
     },
   );
@@ -199,7 +222,7 @@ describe('identity', () => {
     const seed = (await readFile(paths().key, 'utf8')).trim();
     await chmod(paths().key, 0o644);
     await loadKey();
-    await signEnvelope({ a: 1 });
+    await signEnvelope({ a: 1 }, API);
     await expect(createKey()).rejects.toThrow();
     await writeFile(paths().key, `${seed}x\n`);
     const error = await loadKey().catch((e: Error) => e);

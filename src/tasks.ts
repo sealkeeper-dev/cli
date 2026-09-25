@@ -48,17 +48,20 @@ export async function openTaskSession(
   deps: TasksDeps,
 ): Promise<TaskSession> {
   const config = await requireConfig(cmd);
-  let signer: Signer;
-  try {
-    signer = await loadSigner();
-  } catch (error) {
-    if (error instanceof KeyError) cmd.error(error.message);
-    throw error;
-  }
   const api = createApiClient({
     apiUrl: resolveApiUrl({ config: config.apiUrl }),
     fetch: deps.fetch,
   });
+  // Signed for the API this session talks to, so aud is its origin.
+  let signer: Signer;
+  try {
+    signer = await loadSigner(api.apiUrl);
+  } catch (error) {
+    if (error instanceof KeyError || error instanceof ApiError) {
+      cmd.error(error.message);
+    }
+    throw error;
+  }
   return { config, signer, api };
 }
 

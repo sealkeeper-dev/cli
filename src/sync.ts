@@ -2,7 +2,7 @@
 import { type Event, MAX_EVENTS_PER_BATCH } from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
-import { loadSigner } from './identity.js';
+import { loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import {
   CURSOR_VERSION,
@@ -113,12 +113,31 @@ async function sendRounds(
   const p = options.paths ?? paths();
   const now = options.now ?? Date.now;
   const maxWait = options.maxRateLimitWaitSec ?? MAX_RATE_LIMIT_WAIT_SEC;
-  const signer = await loadSigner(p);
   let waited = false;
 
   // until is null when the preview was empty, so there is nothing to send.
   if (options.until === null) return result;
   const until = options.until;
+
+  // Loaded once, when the first fresh event needs signing, so a run with
+  // nothing to send never reads the key. A refused apiUrl stops the sync the
+  // way a refused batch does, with the pending count.
+  let signer: Signer | undefined;
+  const loadOnce = async (): Promise<Signer> => {
+    if (signer) return signer;
+    try {
+      signer = await loadSigner(options.api.apiUrl, p);
+      return signer;
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      throw new SyncError(
+        error.code,
+        stopMessage(error),
+        await countPending(p),
+        result,
+      );
+    }
+  };
 
   for (;;) {
     if (options.deadline !== undefined && now() >= options.deadline) {
@@ -165,7 +184,8 @@ async function sendRounds(
     }
 
     const signed: string[] = [];
-    for (const { event } of fresh) signed.push(await signer.sign(event));
+    const { sign } = await loadOnce();
+    for (const { event } of fresh) signed.push(await sign(event));
     let envelopes = fitBatch(signed);
 
     // Sends one batch. A rejection at index i > 0 sends the i events before
@@ -262,8 +282,11 @@ function fitBatch(envelopes: string[]): string[] {
 
 // A 400 or 401 that names one envelope in issues[].path as
 // ['envelopes', i]. The lowest such index, or null.
+// wrong_audience never names one, and is null here too, so a misconfigured
+// apiUrl stops the sync rather than skipping every event (VOU-111).
 function rejectedIndex(error: ApiError, size: number): number | null {
   if (error.status !== 400 && error.status !== 401) return null;
+  if (error.code === 'wrong_audience') return null;
   let lowest: number | null = null;
   for (const issue of error.issues) {
     const [field, i] = issue.path;
@@ -283,6 +306,8 @@ function stopMessage(error: ApiError): string {
       return `the API does not know this agent, run ${cli('init')}`;
     case 'rate_limited':
       return 'the API is rate limiting this agent, try again later';
+    case 'wrong_audience':
+      return `the API refused events signed for another address, check apiUrl, ${error.message}`;
     default:
       return `the API refused the batch with ${error.code}, ${error.message}`;
   }

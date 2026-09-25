@@ -24,6 +24,10 @@ export function refusal(error: ApiError): string {
       return `this agent is not registered, run ${cli('init')}`;
     case 'forbidden':
       return 'the API refused, the key on this machine is not this agent';
+    // The request was signed for the apiUrl in config, and the API that
+    // answered serves another address.
+    case 'wrong_audience':
+      return `the API answers as another address, check apiUrl, ${error.message}`;
     default:
       return error.message;
   }

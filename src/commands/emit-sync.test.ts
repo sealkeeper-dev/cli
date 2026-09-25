@@ -7,6 +7,7 @@ import {
   decodeHeader,
   Event,
   publicKeyFromAgentId,
+  readAudience,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -19,6 +20,19 @@ import { createProgram } from '../program.js';
 import { EVENT_MAX_AGE_DAYS, MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
 const API_URL = 'https://api.test';
+
+// Every signed payload names the API it is for (VOU-111). The fake takes
+// aud off before it parses, and a payload without the right aud fails the
+// test that sent it.
+const audErrors: unknown[] = [];
+const unsigned = (payload: unknown) => {
+  const check = readAudience(payload, [API_URL]);
+  if (check.result !== 'match') audErrors.push(payload);
+  return check.payload;
+};
+afterEach(() => {
+  expect(audErrors.splice(0)).toEqual([]);
+});
 
 type RunResult = { code: number; out: string; err: string };
 type Reply = {
@@ -71,12 +85,16 @@ function fakeFetch(server: Server): typeof fetch {
       expect(kid).toBe(server.agentId);
       server.envelopes.push(envelope);
       if (server.verify) {
-        const { payload } = await verify(envelope, publicKeyFromAgentId(kid));
+        const payload = unsigned(
+          (await verify(envelope, publicKeyFromAgentId(kid))).payload,
+        );
         events.push(Event.parse(payload));
       } else {
         const body = envelope.split('.')[1] ?? '';
         events.push(
-          Event.parse(JSON.parse(Buffer.from(body, 'base64url').toString())),
+          Event.parse(
+            unsigned(JSON.parse(Buffer.from(body, 'base64url').toString())),
+          ),
         );
       }
     }
@@ -677,6 +695,29 @@ describe('emit and sync', () => {
       expect((await readCursor()).lastAcked).toBeNull();
     });
 
+    it.each([
+      ['no issues', undefined],
+      [
+        'an envelope issue',
+        [{ path: ['envelopes', 0], code: 'wrong_audience', message: 'x' }],
+      ],
+    ])(
+      'stops on wrong_audience with %s and skips nothing',
+      async (_, issues) => {
+        await initialise();
+        await seed(2);
+        server.reply = () => apiError(401, 'wrong_audience', issues);
+        const { code, err } = await api('sync');
+        expect(code).toBe(1);
+        expect(err).toContain('check apiUrl');
+        expect(err).toContain('2 events pending');
+        expect(err).not.toContain('skipped');
+        expect(server.batches).toHaveLength(1);
+        expect((await readCursor()).lastAcked).toBeNull();
+        expect(await countPending()).toBe(2);
+      },
+    );
+
     it('on a network error leaves the cursor and exits 1', async () => {
       await initialise();
       await seed(3);
@@ -687,6 +728,29 @@ describe('emit and sync', () => {
       expect(err).toContain('3 events pending');
       expect((await readCursor()).lastAcked).toBeNull();
       expect(await countPending()).toBe(3);
+    });
+
+    it('stops on an insecure apiUrl with the pending count', async () => {
+      await initialise();
+      vi.stubEnv('SEALKEEPER_API_URL', 'http://api.example.com');
+      await seed(2);
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toContain(
+        'refusing the SealKeeper API at http://api.example.com',
+      );
+      expect(err).toContain('2 events pending');
+      expect(server.batches).toEqual([]);
+      expect(await countPending()).toBe(2);
+    });
+
+    it('with an insecure apiUrl and nothing pending sends nothing', async () => {
+      await initialise();
+      vi.stubEnv('SEALKEEPER_API_URL', 'http://api.example.com');
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 0, duplicates 0\n');
     });
 
     it('without config exits 1', async () => {
@@ -769,7 +833,11 @@ describe('emit and sync', () => {
       const signed = server.envelopes.map((e) =>
         Buffer.from(e.split('.')[1] ?? '', 'base64url').toString(),
       );
-      expect(signed).toEqual(shown);
+      // The signed bytes are the shown line with aud, the API it is for,
+      // added as the last key.
+      expect(signed).toEqual(
+        shown.map((l) => `${l.slice(0, -1)},"aud":"${API_URL}"}`),
+      );
     });
 
     it('sync --dry-run --json prints the events as one object', async () => {
