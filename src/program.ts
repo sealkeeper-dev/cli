@@ -28,6 +28,7 @@ import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
 import { register as registerWhoami } from './commands/whoami.js';
 import { HomeMigrationError, migrateHomeFromEnv } from './home-migration.js';
+import { terminalSafe } from './output.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
@@ -89,7 +90,11 @@ export function createProgram(deps: ProgramDeps = {}): Command {
     .version(VERSION)
     .option(JSON_FLAG, JSON_HELP)
     .enablePositionalOptions()
-    .configureHelp({ visibleCommands, subcommandTerm });
+    .configureHelp({ visibleCommands, subcommandTerm })
+    // Errors carry API messages, so they get the same escaping as stdout.
+    .configureOutput({
+      writeErr: (text) => process.stderr.write(terminalSafe(text)),
+    });
 
   // preAction runs before the
   // action of whichever subcommand was picked, and only then, so --help and
