@@ -1,19 +1,20 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, dirname, sep } from 'node:path';
+import { basename, dirname } from 'node:path';
 import {
   AgentName,
+  type Level,
   type RegisterAgentRequest,
   toAgentName,
   Version,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
-import { type Input, isYes, streamInput } from '../ask.js';
+import { type Input, isYes, readYesNo, streamInput } from '../ask.js';
 import {
   installProveCommand,
   proveCommandPath,
+  refreshProveCommand,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
@@ -37,7 +38,7 @@ import {
   readConfig,
   writeConfig,
 } from '../config.js';
-import { isDirectory } from '../files.js';
+import { isDirectory, tildePath } from '../files.js';
 import {
   DeviceFlowError,
   deviceFlow,
@@ -54,6 +55,7 @@ import {
   signEnvelope,
 } from '../identity.js';
 import { cli } from '../invocation.js';
+import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
 import {
   promptStyled,
   stderr,
@@ -94,9 +96,14 @@ export const SHARED_SUMMARY = [
   'each signed with your key. Never prompts, tool inputs or outputs,',
   'file contents or model output.',
 ];
+// Said on its own, since a repeat run has no summary above it.
 export const HOOKS_INTRO =
-  'The hooks record each session and tool call as above, into a local log.';
+  'The hooks record each session and tool call, names and timings only, into a local log.';
 export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
+// Asked again after an answer that is not yes or no, up to this many
+// questions in all.
+export const HOOKS_MAX_ASKS = 3;
+export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
 // What bronze asks for. The source is SCORING.levels.bronze in
 // apps/api/src/scoring/config.ts, and a test there fails when it moves, so
@@ -220,15 +227,6 @@ type Ui = { out: Style; err: Style };
 const say = (line?: Styled) => stdoutStyled(indent(line));
 const note = (line?: Styled) => stderrStyled(indent(line));
 
-// A path under the home directory, as ~/rest.
-export function tildePath(path: string, home: string = homedir()): string {
-  if (home === '' || home === sep) return path;
-  if (path === home) return '~';
-  return path.startsWith(`${home}${sep}`)
-    ? `~${path.slice(home.length)}`
-    : path;
-}
-
 // The welcome box, on stderr with the terms and the sign in.
 function welcome(ui: Ui): void {
   const s = ui.err;
@@ -288,7 +286,7 @@ async function init(
       // path that moved. Offer them the way a fresh init does, so npx
       // sealkeeper init is always enough.
       const hooks = await offerHooks(deps, ui);
-      printNext(ui.out, hooks);
+      printNext(ui.out, hooks, await readNextState(existing, deps));
       return;
     }
   }
@@ -425,7 +423,7 @@ async function init(
   say(profileLine(s, profileUrl));
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
-  printNext(ui.out, hooks);
+  printNext(ui.out, hooks, await readNextState(config, deps));
 }
 
 // A short account of what leaves this machine, on stderr where the full
@@ -437,10 +435,87 @@ function printShared(s: Style): void {
   note(s.line`${s.dim('Full list')}  ${cli('what-is-shared')}`);
 }
 
+// What Next reads, the same numbers status shows. The verified count and
+// the level come live from the API. autoSync comes from the config.
+export type NextState = {
+  verifiedTasks: number;
+  level: Level | null;
+  autoSync: boolean;
+};
+
+// null when the API does not answer or sends no count, so Next falls back
+// to the generic steps rather than failing init.
+async function readNextState(
+  config: Config,
+  deps: InitDeps,
+): Promise<NextState | null> {
+  const live = await readLiveAgent(config, deps.fetch);
+  const verifiedTasks = live?.counts?.verifiedTasks;
+  if (verifiedTasks === undefined) return null;
+  return {
+    verifiedTasks,
+    level: live?.level ?? null,
+    autoSync: config.autoSync === true,
+  };
+}
+
 // The numbered next steps and where the other adapters are documented.
+// With the state known, only the steps that apply, in order. Hooks to
+// install, then earning verified tasks the way this machine can, then sync
+// when auto sync is off, then where the agent stands. Without it, the
+// generic steps.
+function printNext(
+  s: Style,
+  hooks: HooksResult,
+  state: NextState | null,
+): void {
+  const steps =
+    state === null ? genericSteps(s, hooks) : stateSteps(s, hooks, state);
+  say();
+  say(s.bold('Next'));
+  steps.forEach((step, i) => {
+    say(s.line`${s.gold(i + 1)}  ${step}`);
+  });
+  say();
+  say(s.line`${s.dim('Mastra or OpenClaw')}  ${s.cyan(ADAPTERS_URL)}`);
+  say();
+}
+
+export function bronzeLine(verifiedTasks: number, level: Level | null): string {
+  return atBronzeOrAbove(level)
+    ? `Level ${level}, with ${verifiedTasks} verified tasks`
+    : `${verifiedTasks} of ${BRONZE.verifiedTasks} verified tasks toward bronze`;
+}
+
+function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
+  const earn =
+    state.verifiedTasks > 0 ? 'verified tasks' : 'your first verified tasks';
+  const prove = s.bold('/sealkeeper-prove');
+  const steps: Styled[] = [];
+  if (hooks === 'not-installed') {
+    steps.push(
+      s.line`Install the Claude Code hooks with ${s.dim(INSTALL_COMMAND)}`,
+      s.line`Then in Claude Code, run ${prove} to earn ${earn}`,
+    );
+  } else if (hooks === 'installed' || hooks === 'present') {
+    steps.push(s.line`In Claude Code, run ${prove} to earn ${earn}`);
+  } else {
+    steps.push(
+      s.line`Have your agent run ${s.bold(cli('prove --json'))} to earn ${earn}`,
+    );
+  }
+  if (!state.autoSync) {
+    steps.push(
+      s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
+    );
+  }
+  steps.push(s.line`${bronzeLine(state.verifiedTasks, state.level)}`);
+  return steps;
+}
+
 // With the hooks in, the first step is the slash command in Claude Code,
 // otherwise prove from the shell.
-function printNext(s: Style, hooks: HooksResult): void {
+function genericSteps(s: Style, hooks: HooksResult): Styled[] {
   const hooksIn = hooks === 'installed' || hooks === 'present';
   const steps = [
     hooksIn
@@ -454,14 +529,7 @@ function printNext(s: Style, hooks: HooksResult): void {
       s.line`Record your Claude Code sessions with ${s.dim(INSTALL_COMMAND)}`,
     );
   }
-  say();
-  say(s.bold('Next'));
-  steps.forEach((step, i) => {
-    say(s.line`${s.gold(i + 1)}  ${step}`);
-  });
-  say();
-  say(s.line`${s.dim('Mastra or OpenClaw')}  ${s.cyan(ADAPTERS_URL)}`);
-  say();
+  return steps;
 }
 
 // Short, so a repeat init never hangs on a slow network for a question it
@@ -562,6 +630,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       const s = ui.out;
       say(s.line`${s.tick()} Hooks in ${tildePath(inUser ? user : project)}`);
     }
+    await refreshCommand(inUser ? user : project, !inUser, dirs.cwd, hook, ui);
     return 'present';
   }
   // Hooks of ours in the project settings, with an older path, are
@@ -573,10 +642,10 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   if (ui === null || input === undefined || !input.isTTY) {
     return 'not-installed';
   }
-  const e = ui.err;
-  const [question = ''] = HOOKS_QUESTION.split(' [Y/n]');
-  promptStyled(indent(e.line`${question} ${e.dim('[Y/n]')} `));
-  if (!isYesByDefault(await input.readLine())) return 'not-installed';
+  if ((await askHooks(input, ui)) !== 'yes') {
+    say(ui.out.line`${HOOKS_NOT_INSTALLED}`);
+    return 'not-installed';
+  }
   if (file === project) {
     try {
       await refuseOutsideProject(dirs.cwd, [file, proveCommandPath(file)]);
@@ -587,6 +656,48 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
     }
   }
   return (await installAt(file, hook, ui)) ? 'installed' : 'not-installed';
+}
+
+// The hooks question. Escape sequences such as arrow keys are taken out of
+// the answer. An answer that is still not yes or no asks again, up to
+// HOOKS_MAX_ASKS questions, and then counts as no.
+async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
+  const e = ui.err;
+  const [question = ''] = HOOKS_QUESTION.split(' [Y/n]');
+  for (let asked = 0; asked < HOOKS_MAX_ASKS; asked++) {
+    const again = asked === 0 ? '' : 'Please answer y or n. ';
+    promptStyled(indent(e.line`${again}${question} ${e.dim('[Y/n]')} `));
+    const answer = readYesNo(await input.readLine(), 'yes');
+    if (answer !== 'unclear') return answer;
+  }
+  return 'no';
+}
+
+// Brings /sealkeeper-prove up to date on a run that finds the hooks
+// already in, so a newer CLI's command reaches Claude Code without a
+// reinstall. Only a file of ours that differs is written. Anything that
+// goes wrong leaves the file as it was.
+async function refreshCommand(
+  file: string,
+  project: boolean,
+  cwd: string,
+  hook: string,
+  ui: Ui | null,
+): Promise<void> {
+  const commandPath = proveCommandPath(file);
+  try {
+    if (project) await refuseOutsideProject(cwd, [commandPath]);
+    if (await refreshProveCommand(commandPath, invocationOf(hook))) {
+      if (ui !== null) {
+        const s = ui.out;
+        say(
+          s.line`${s.tick()} /sealkeeper-prove updated in ${tildePath(dirname(commandPath))}`,
+        );
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+  }
 }
 
 // The same install as sealkeeper adapter claude-code install into one
@@ -638,11 +749,12 @@ async function installAt(
   return true;
 }
 
-// Enter or y or yes is yes. n, no or a closed input is no, and so is
-// anything else, so a typo never edits a settings file.
+// Enter or y or yes is yes, after escape sequences such as arrow keys are
+// taken out. n, no or a closed input is no, and so is anything else, so a
+// typo never edits a settings file. The hooks question asks again on
+// anything else, see askHooks.
 export function isYesByDefault(answer: string | null): boolean {
-  if (answer === null) return false;
-  return /^(y(es)?)?$/i.test(answer.trim());
+  return readYesNo(answer, 'yes') === 'yes';
 }
 
 // The nextSteps of a --json run. The hooks this run wrote point at the

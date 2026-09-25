@@ -369,6 +369,22 @@ describe('sealkeeper check', () => {
     );
   });
 
+  it('exits 2 naming the new address when the API answers a redirect', async () => {
+    reply = () =>
+      new Response(null, {
+        status: 301,
+        headers: {
+          Location: 'https://api.sealkeeper.run/v1/check/alice/claude-code',
+        },
+      });
+    const r = await run('check', 'alice/claude-code');
+    expect(r.code).toBe(2);
+    expect(r.err).toMatch(
+      /^the API at https:\/\/api\.test moved to https:\/\/api\.sealkeeper\.run, set apiUrl in .+config\.json to it\n$/,
+    );
+    expect(urls).toHaveLength(1);
+  });
+
   it('exits 2 without a request for a bad handle or flag', async () => {
     const handle = await run('check', 'alice');
     expect(handle.code).toBe(2);

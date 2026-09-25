@@ -1,6 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { describe, expect, it, vi } from 'vitest';
-import { ApiError, createApiClient, resolveApiUrl } from './api.js';
+import {
+  ApiError,
+  createApiClient,
+  redirectError,
+  resolveApiUrl,
+} from './api.js';
+import { paths } from './config.js';
+import { tildePath } from './files.js';
 
 const AGENT_ID = 'A'.repeat(43);
 const AGENT = {
@@ -371,7 +378,93 @@ describe('API URL', () => {
     expect(await api.registerAgent('a.b.c')).toEqual(AGENT);
     expect(fetchFn).toHaveBeenCalledWith(
       'http://localhost:8787/v1/agents',
-      expect.objectContaining({ redirect: 'error' }),
+      expect.objectContaining({ redirect: 'manual' }),
     );
+  });
+});
+
+describe('a redirect', () => {
+  const moved = (location: string | null, status = 301) =>
+    respond(
+      new Response(null, {
+        status,
+        headers: location === null ? {} : { Location: location },
+      }),
+    );
+
+  it('names both addresses and where to set the new one, and never follows it', async () => {
+    const fetchFn = moved(`https://api.sealkeeper.run/v1/agents/${AGENT_ID}`);
+    const api = createApiClient({
+      apiUrl: 'https://api.vouched.run',
+      fetch: fetchFn,
+    });
+    const error = await api.getAgent(AGENT_ID).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      status: 301,
+      code: 'redirect',
+      message: `the API at https://api.vouched.run moved to https://api.sealkeeper.run, set apiUrl in ${tildePath(paths().config)} to it`,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('says ~/.sealkeeper/config.json for the default home', () => {
+    vi.stubEnv('SEALKEEPER_HOME', '');
+    try {
+      const error = redirectError(
+        'https://api.vouched.run',
+        '/v1/tasks',
+        new Response(null, {
+          status: 308,
+          headers: { Location: 'https://api.sealkeeper.run/v1/tasks' },
+        }),
+      );
+      expect(error.message).toBe(
+        'the API at https://api.vouched.run moved to https://api.sealkeeper.run, set apiUrl in ~/.sealkeeper/config.json to it',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('names the origin when the new address has another path', async () => {
+    const api = createApiClient({
+      apiUrl: 'https://api.vouched.run',
+      fetch: moved('https://sealkeeper.run/moved'),
+    });
+    await expect(api.getWellKnown()).rejects.toMatchObject({
+      code: 'redirect',
+      message: expect.stringContaining(
+        'the API at https://api.vouched.run moved to https://sealkeeper.run, set apiUrl in',
+      ),
+    });
+  });
+
+  it('says so when the redirect has no usable address', async () => {
+    for (const location of [null, 'javascript:alert(1)']) {
+      const api = createApiClient({
+        apiUrl: 'https://api.vouched.run',
+        fetch: moved(location, 302),
+      });
+      await expect(api.getAgent(AGENT_ID)).rejects.toMatchObject({
+        status: 302,
+        code: 'redirect',
+        message: expect.stringContaining(
+          'the API at https://api.vouched.run answered with a redirect (HTTP 302) and no usable address',
+        ),
+      });
+    }
+  });
+
+  it('ends a signed write the same way, without re-sending the body', async () => {
+    const fetchFn = moved('https://api.sealkeeper.run/v1/events');
+    const api = createApiClient({
+      apiUrl: 'https://api.vouched.run',
+      fetch: fetchFn,
+    });
+    await expect(api.postEvents(['a.b.c'])).rejects.toMatchObject({
+      code: 'redirect',
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,14 +6,13 @@ import {
   DORMANCY,
   type Event,
   EventType,
-  Level,
+  type Level,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
-import { z } from 'zod';
 import { resolveApiUrl } from '../api.js';
 import {
+  claudeCodeHooksIn,
   claudeConfigDir,
-  hasHooks,
   ourCommands,
   parseHookCommand,
   settingsPath,
@@ -22,13 +21,13 @@ import { requireConfig } from '../cli-config.js';
 import {
   type Config,
   handleOf,
-  isSecureApiUrl,
   type Paths,
   paths,
   profileUrl,
 } from '../config.js';
 import { exists } from '../files.js';
 import { cli } from '../invocation.js';
+import { readLiveAgent } from '../live-agent.js';
 import {
   CursorError,
   countPending,
@@ -37,7 +36,7 @@ import {
   readDay,
 } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import { getScore, SCORE_TIMEOUT_MS, type ScoreCache } from '../score.js';
+import { getScore, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import { defaultSyncDeps } from './sync.js';
@@ -148,7 +147,7 @@ async function readStatus(
       countPending(p),
       readCursor(p),
       scorePromise,
-      liveAgent(config, deps),
+      readLiveAgent(config, deps.fetch),
       unsubmittedClaims(now, p),
     ],
   );
@@ -171,50 +170,6 @@ async function readStatus(
     scoresFetchedAt: score?.fetchedAt ?? null,
     ...(show ? { events } : {}),
   };
-}
-
-// The part of GET /v1/agents/<id> status reads. level and standing are
-// optional on the answer, since a version the scoring job has not reached
-// has neither. Read loosely here, so a field that fails to parse costs only
-// that field.
-const LiveAgent = z.object({
-  counts: z
-    .object({ verifiedTasks: z.int().min(0) })
-    .optional()
-    .catch(undefined),
-  level: Level.optional().catch(undefined),
-  standing: z
-    .object({ dormant_days: z.int().min(0).nullable() })
-    .optional()
-    .catch(undefined),
-});
-type LiveAgent = z.infer<typeof LiveAgent>;
-
-// The agent answer, with the same two second limit as the score. null when
-// the API does not answer or answers with something else.
-async function liveAgent(
-  config: Config,
-  deps: StatusDeps,
-): Promise<LiveAgent | null> {
-  const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
-  // Its own request rather than the API client, for the loose parse, with
-  // the same rules as every other request.
-  if (!isSecureApiUrl(apiUrl)) return null;
-  try {
-    const res = await deps.fetch(
-      `${apiUrl}/v1/agents/${encodeURIComponent(config.agentId)}`,
-      {
-        headers: { Accept: 'application/json' },
-        redirect: 'error',
-        signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
-      },
-    );
-    if (res.status !== 200) return null;
-    const parsed = LiveAgent.safeParse(await res.json());
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
 }
 
 // Minutes until the next wall clock quarter hour, rounded up, so 1 to 15.
@@ -261,12 +216,7 @@ async function noAdapterAndQuiet(
   now: Date,
   p: Paths = paths(),
 ): Promise<boolean> {
-  const dirs = claudeDirs(deps);
-  const installed = await Promise.all([
-    hasHooks(settingsPath('user', dirs)),
-    hasHooks(settingsPath('project', dirs)),
-  ]);
-  if (installed.some(Boolean)) return false;
+  if (await claudeCodeHooksIn(deps)) return false;
   for (let i = 0; i < QUIET_DAYS; i++) {
     const day = dayOf(new Date(now.getTime() - i * DAY_MS));
     const size = await stat(p.logFile(day)).then(
@@ -413,7 +363,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
 function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
-  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove')} to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
+  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove --claim')} to list ${n === 1 ? 'it' : 'them'} again.`;
 }
 
 function formatScore(value: number): string {

@@ -16,10 +16,15 @@ import { KeyError, loadSigner, type Signer } from './identity.js';
 import { dayOf, readDay } from './log.js';
 import { stderr, stdout } from './output.js';
 
-// What tasks pull, submit and post share. fetch is injectable so tests can
-// stand in for the API.
+// What tasks pull, submit, post and show and prove share. fetch is
+// injectable so tests can stand in for the API. isTTY says whether stdout
+// is a terminal, which prove reads to tell a person from an agent.
+// claudeDir and cwd say where prove looks for the Claude Code hooks.
 export type TasksDeps = {
   fetch: typeof fetch;
+  isTTY?: () => boolean;
+  claudeDir?: () => string;
+  cwd?: () => string;
 };
 
 export const defaultTasksDeps: TasksDeps = {

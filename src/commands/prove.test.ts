@@ -1,6 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,17 +18,20 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { appendEvent } from '../log.js';
 import { createProgram } from '../program.js';
+import { stripStyle } from '../style.js';
 import {
+  ANSWER_FILE,
   anyPosterHint,
-  closing,
   MAX_COUNT,
+  progressLine,
   relative,
-  SUBMIT_HINT,
+  submitCommand,
 } from './prove.js';
 
 const API_URL = 'https://api.test';
@@ -36,7 +46,6 @@ const loginOf = (id: string) =>
     : id === SIBLING_AGENT
       ? 'Alice'
       : 'someone';
-const PROFILE = 'https://sealkeeper.run/agents/alice/scout';
 const HOUR = 3_600_000;
 
 type RunResult = { code: number; out: string; err: string };
@@ -158,8 +167,18 @@ describe('prove', () => {
   let agentId: string;
   let api: FakeApi;
 
+  // stdout is a pipe unless a test says it is a terminal.
+  let tty = false;
+
   async function run(...args: string[]): Promise<RunResult> {
-    const program = createProgram({ tasks: { fetch: api.fetch } });
+    const program = createProgram({
+      tasks: {
+        fetch: api.fetch,
+        isTTY: () => tty,
+        claudeDir: () => join(home, 'claude'),
+        cwd: () => join(home, 'project'),
+      },
+    });
     throwOnExit(program);
     let out = '';
     let err = '';
@@ -208,6 +227,10 @@ describe('prove', () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-prove-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
     vi.stubEnv('SEALKEEPER_API_URL', '');
+    // The plain form of the terminal output.
+    vi.stubEnv('FORCE_COLOR', '');
+    vi.stubEnv('NO_COLOR', '');
+    tty = false;
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -226,34 +249,217 @@ describe('prove', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('claims five by default and prints one block per task', async () => {
+  // The ids prove --json printed, in order.
+  function jsonIds(out: string): string[] {
+    return (JSON.parse(out) as { id: string }[]).map((t) => t.id);
+  }
+
+  // Own agent answer with the given verified count and level.
+  function standing(verifiedTasks: number, level: string): void {
+    api.agents.set(agentId, {
+      id: agentId,
+      name: 'scout',
+      version: '1.0.0',
+      operator: { login: 'alice' },
+      createdAt: '2026-09-22T00:00:00.000Z',
+      counts: { verifiedTasks },
+      level,
+    });
+  }
+
+  async function withHooks(): Promise<void> {
+    const dir = join(home, 'claude');
+    await mkdir(dir, { recursive: true });
+    await writeFile(
+      join(dir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          Stop: [
+            {
+              hooks: [
+                {
+                  type: 'command',
+                  command: hookCommand(
+                    '/usr/local/bin/node',
+                    '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
+                  ),
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+  }
+
+  describe('in a terminal', () => {
+    beforeEach(() => {
+      tty = true;
+    });
+
+    it('claims nothing and explains how the agent earns verified tasks', async () => {
+      seedTasks(3);
+      standing(8, 'none');
+      await withHooks();
+      const { code, out, err } = await run('prove');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(api.claimed).toEqual([]);
+      expect(api.requests).toEqual([`GET /v1/agents/${agentId}`]);
+      expect(out).toBe(
+        [
+          '',
+          '  ◉ SealKeeper prove   alice/scout',
+          '',
+          '  Your agent earns verified tasks by solving small checks,',
+          '  like deduplicating lines or reading a JSON value.',
+          "  The server verifies each answer. You don't solve them yourself.",
+          '',
+          '  Claude Code    run /sealkeeper-prove in a session',
+          '  Other agents   have the agent run npx sealkeeper prove --json',
+          '',
+          '  8 verified so far. Bronze needs 25 over 3 days.',
+          '',
+          '',
+        ].join('\n'),
+      );
+      expect(await logged()).toEqual([]);
+    });
+
+    it('says to run init first when the Claude Code hooks are not installed', async () => {
+      standing(0, 'none');
+      const { out } = await run('prove');
+      expect(out).toContain(
+        '  Claude Code    run npx sealkeeper init first, so /sealkeeper-prove exists\n',
+      );
+      expect(out).toContain(
+        '  0 verified so far. Bronze needs 25 over 3 days.\n',
+      );
+    });
+
+    it('says the level instead of the bronze line at bronze or above', async () => {
+      standing(31, 'bronze');
+      expect((await run('prove')).out).toContain(
+        '  31 verified so far. Level bronze.\n',
+      );
+      expect(progressLine(90, 'gold')).toBe('90 verified so far. Level gold.');
+    });
+
+    it('still explains when the API does not answer', async () => {
+      api.fetch = (async () => {
+        throw new TypeError('fetch failed');
+      }) as typeof fetch;
+      const { code, out } = await run('prove');
+      expect(code).toBe(0);
+      expect(out).toContain('  Bronze needs 25 verified tasks over 3 days.\n');
+    });
+
+    it('names the new API address on a redirect and still explains', async () => {
+      const fetchFn = vi.fn(
+        async (_input: string | URL | Request, _init?: RequestInit) =>
+          new Response(null, {
+            status: 301,
+            headers: {
+              Location: `https://api.sealkeeper.run/v1/agents/${agentId}`,
+            },
+          }),
+      );
+      api.fetch = fetchFn as unknown as typeof fetch;
+      const { code, out, err } = await run('prove');
+      expect(code).toBe(0);
+      expect(err).toBe(
+        `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
+      );
+      expect(out).toContain('  Bronze needs 25 verified tasks over 3 days.\n');
+      // One read, never followed and no claim.
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+    });
+
+    it('colours the mark gold with FORCE_COLOR', async () => {
+      vi.stubEnv('FORCE_COLOR', '1');
+      const { out } = await run('prove');
+      expect(out).toContain('\u001b[38;2;212;160;23m◉\u001b[39m');
+      expect(stripStyle(out)).toContain('◉ SealKeeper prove   alice/scout');
+    });
+
+    it('with --claim claims and prints one short line per task', async () => {
+      const tasks = seedTasks(3);
+      const { code, out, err } = await run('prove', '--claim', '--count', '2');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(api.claimed).toEqual(tasks.slice(0, 2).map((t) => t.id));
+      expect(out).toBe(
+        [
+          ` 1  json_extract  ${tasks[0]?.id.slice(0, 8)}  expires in 47 hours`,
+          ` 2  json_extract  ${tasks[1]?.id.slice(0, 8)}  expires in 47 hours`,
+          '',
+          "See a task's spec and submit line with npx sealkeeper tasks show <id>.",
+          '',
+        ].join('\n'),
+      );
+      const claims = (await logged()).filter((e) => e.type === 'task.claimed');
+      expect(claims).toHaveLength(2);
+    });
+
+    it('with --claim says so and exits 0 when there is no open task', async () => {
+      api.add({ posterAgentId: agentId });
+      const { code, out, err } = await run('prove', '--claim');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(out).toBe(
+        'no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n',
+      );
+      expect(api.claimed).toEqual([]);
+    });
+
+    it('with --claim says how to claim other agents tasks when no seed task is open', async () => {
+      api.add({ posterAgentId: OTHER_AGENT });
+      const { code, out } = await run('prove', '--claim');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual([]);
+      expect(out).toContain(anyPosterHint(1));
+      expect(anyPosterHint(1)).toBe(
+        '1 open task posted by other agents skipped. Their specs are untrusted, run npx sealkeeper prove --any-poster to claim them too.',
+      );
+    });
+
+    it('with --json claims and prints JSON even in a terminal', async () => {
+      const tasks = seedTasks(2);
+      const { code, out } = await run('prove', '--json');
+      expect(code).toBe(0);
+      expect(jsonIds(out)).toEqual(tasks.map((t) => t.id));
+    });
+
+    it('gives the init hint without a config and sends nothing', async () => {
+      await rm(paths().config);
+      const { code, out, err } = await run('prove');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe('not initialised, run npx sealkeeper init\n');
+      expect(api.requests).toEqual([]);
+    });
+  });
+
+  it('claims five by default when stdout is not a terminal and prints only JSON', async () => {
     const tasks = seedTasks(7);
     const { code, out, err } = await run('prove');
     expect(code).toBe(0);
     expect(err).toBe('');
     expect(api.claimed).toEqual(tasks.slice(0, 5).map((t) => t.id));
-
+    expect(out.endsWith('\n')).toBe(true);
+    expect(out.trimEnd().split('\n')).toHaveLength(1);
     const first = tasks[0] as TaskResponse;
-    const block = [
-      `Task 1 of 5. id ${first.id}. type json_extract. expires in 47 hours.`,
-      'Spec:',
-      '  {',
-      '    "instruction": "Return the value at orders[0].id.",',
-      '    "input": "{\\"orders\\":[{\\"id\\":1}]}",',
-      '    "output": "The number only."',
-      '  }',
-      'Submit with:',
-      `  npx sealkeeper tasks submit ${first.id} --file <path you choose>`,
-      `  npx sealkeeper tasks submit ${first.id} --text <answer>`,
-      '',
-      `Task 2 of 5. id ${tasks[1]?.id}. type json_extract. expires in 47 hours.`,
-    ].join('\n');
-    expect(out.startsWith(block)).toBe(true);
-    expect(out).toContain(`Task 5 of 5. id ${tasks[4]?.id}.`);
-    expect(out.endsWith(`\n\n${closing(PROFILE)}\n`)).toBe(true);
-    expect(closing(PROFILE)).toBe(
-      `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run npx sealkeeper status to watch the verified count. Your profile is ${PROFILE}.`,
-    );
+    const body = JSON.parse(out);
+    expect(body).toHaveLength(5);
+    expect(body[0]).toEqual({
+      id: first.id,
+      type: 'json_extract',
+      expires_at: first.expiresAt,
+      spec: first.spec,
+      submit: `npx sealkeeper tasks submit ${first.id} --file ${ANSWER_FILE}`,
+    });
+    expect(submitCommand(first.id)).toBe(body[0].submit);
 
     const claims = (await logged()).filter((e) => e.type === 'task.claimed');
     expect(claims.map((e) => e.payload)).toEqual(
@@ -263,20 +469,39 @@ describe('prove', () => {
     );
   });
 
-  it('prints bare submit lines when run through the /sealkeeper-prove shell function', async () => {
-    // The function sets SEALKEEPER_INVOCATION=sealkeeper, so the lines
+  it('prints the schema for a schema task', async () => {
+    const jsonSchema = {
+      type: 'object',
+      properties: { a: { type: 'integer' } },
+      required: ['a'],
+      additionalProperties: false,
+    };
+    const task = api.add({
+      taskType: 'json_shape',
+      verification: { kind: 'schema', jsonSchema },
+    });
+    const [entry] = JSON.parse((await run('prove', '--count', '1')).out);
+    expect(entry).toEqual({
+      id: task.id,
+      type: 'json_shape',
+      expires_at: task.expiresAt,
+      spec: task.spec,
+      schema: jsonSchema,
+      submit: submitCommand(task.id),
+    });
+  });
+
+  it('prints bare submit commands when run through the /sealkeeper-prove shell function', async () => {
+    // The function sets SEALKEEPER_INVOCATION=sealkeeper, so the commands
     // the agent runs go back through that function and its pinned CLI.
     vi.stubEnv('SEALKEEPER_INVOCATION', 'sealkeeper');
     resetInvocation();
     try {
       const [task] = seedTasks(1);
-      const { code, out } = await run('prove', '--count', '1');
+      const { code, out } = await run('prove', '--json', '--count', '1');
       expect(code).toBe(0);
-      expect(out).toContain(
-        `\n  sealkeeper tasks submit ${task?.id} --file <path you choose>\n`,
-      );
-      expect(out).toContain(
-        `\n  sealkeeper tasks submit ${task?.id} --text <answer>\n`,
+      expect(JSON.parse(out)[0].submit).toBe(
+        `sealkeeper tasks submit ${task?.id} --file <answer file>`,
       );
       expect(out).not.toContain('npx sealkeeper');
     } finally {
@@ -317,20 +542,21 @@ describe('prove', () => {
     });
     const seed = api.add({ postedAt: at(1) });
 
-    const { code, out } = await run('prove', '--count', '3');
+    const { code, out, err } = await run('prove', '--count', '3');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([seed.id]);
-    expect(out).not.toContain(anyPosterHint(2));
+    expect(jsonIds(out)).toEqual([seed.id]);
+    expect(err).not.toContain(anyPosterHint(2));
   });
 
-  it('says how to claim other agents tasks when no seed task is open', async () => {
+  it('says on stderr how to claim other agents tasks when no seed task is open', async () => {
     api.add({ posterAgentId: OTHER_AGENT });
-    const { code, out } = await run('prove');
+    const { code, out, err } = await run('prove');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([]);
-    expect(out).toContain(anyPosterHint(1));
-    expect(anyPosterHint(1)).toBe(
-      '1 open task posted by other agents skipped. Their specs are untrusted, run npx sealkeeper prove --any-poster to claim them too.',
+    expect(JSON.parse(out)).toEqual([]);
+    expect(err).toBe(
+      `no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n${anyPosterHint(1)}\n`,
     );
   });
 
@@ -429,7 +655,10 @@ describe('prove', () => {
     const { code, out } = await run('prove', '--count', '1');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([task.id]);
-    expect(out).toContain(`Task 1 of 1. id ${task.id}. type csv_normalise.`);
+    expect(JSON.parse(out)[0]).toMatchObject({
+      id: task.id,
+      type: 'csv_normalise',
+    });
   });
 
   it('moves past a lost race and stops at the claim cap with what it has', async () => {
@@ -439,7 +668,7 @@ describe('prove', () => {
     const { code, out, err } = await run('prove', '--count', '3');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([tasks[1]?.id]);
-    expect(out).toContain(`Task 1 of 1. id ${tasks[1]?.id}.`);
+    expect(jsonIds(out)).toEqual([tasks[1]?.id]);
     expect(err).toBe(
       'An agent can hold at most 10 claimed tasks. Submit the tasks below first.\n',
     );
@@ -469,17 +698,13 @@ describe('prove', () => {
     const { code, out, err } = await run('prove', '--count', '2');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([]);
-    expect(out).toContain(`Task 1 of 2. id ${held[0]?.id}.`);
-    expect(out).toContain(`Task 2 of 2. id ${held[1]?.id}.`);
-    expect(out).not.toContain(held[2]?.id);
+    expect(jsonIds(out)).toEqual([held[0]?.id, held[1]?.id]);
     expect(err).toBe(
       'An agent can hold at most 10 claimed tasks. Submit the tasks below first.\n',
     );
 
-    const json = JSON.parse((await run('prove', '--count', '5', '--json')).out);
-    expect(json.tasks.map((t: { id: string }) => t.id)).toEqual(
-      held.map((t) => t.id),
-    );
+    const all = await run('prove', '--count', '5', '--json');
+    expect(jsonIds(all.out)).toEqual(held.map((t) => t.id));
   });
 
   it('says none could be listed when the claim cap is hit and the server lists none', async () => {
@@ -487,11 +712,10 @@ describe('prove', () => {
     api.claims.set(task?.id ?? '', 'claim_cap');
     const { code, out, err } = await run('prove');
     expect(code).toBe(0);
-    expect(out).toBe('');
-    expect(err).toContain(
-      'An agent can hold at most 10 claimed tasks. This agent holds the maximum and none of them could be listed.',
+    expect(JSON.parse(out)).toEqual([]);
+    expect(err).toBe(
+      'An agent can hold at most 10 claimed tasks. This agent holds the maximum and none of them could be listed.\n',
     );
-    expect(err).not.toContain('Submit the tasks below first');
   });
 
   it('prints tasks it already holds first, without claiming them again', async () => {
@@ -515,9 +739,7 @@ describe('prove', () => {
     const { code, out } = await run('prove', '--count', '2');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([open[0]?.id]);
-    expect(out).toContain(`Task 1 of 2. id ${held.id}.`);
-    expect(out).toContain(`Task 2 of 2. id ${open[0]?.id}.`);
-    expect(out).not.toContain(done.id);
+    expect(jsonIds(out)).toEqual([held.id, open[0]?.id]);
   });
 
   it('caps --count at the maximum and rejects a count that is not a number', async () => {
@@ -525,7 +747,7 @@ describe('prove', () => {
     const { code, out } = await run('prove', '--count', '50');
     expect(code).toBe(0);
     expect(api.claimed).toHaveLength(MAX_COUNT);
-    expect(out).toContain(`Task ${MAX_COUNT} of ${MAX_COUNT}.`);
+    expect(jsonIds(out)).toHaveLength(MAX_COUNT);
 
     for (const bad of ['0', '-1', 'two', '2.5']) {
       const result = await run('prove', '--count', bad);
@@ -534,61 +756,15 @@ describe('prove', () => {
     }
   });
 
-  it('prints one JSON object with --json', async () => {
-    const tasks = seedTasks(3);
-    const { code, out } = await run('prove', '--count', '2', '--json');
-    expect(code).toBe(0);
-    const body = JSON.parse(out);
-    expect(Object.keys(body)).toEqual(['tasks', 'submitHint']);
-    expect(body.submitHint).toBe(SUBMIT_HINT);
-    expect(body.tasks).toEqual(
-      tasks.slice(0, 2).map((t) => ({
-        id: t.id,
-        taskType: 'json_extract',
-        state: 'claimed',
-        verification: t.verification,
-        expiresAt: t.expiresAt,
-        spec: t.spec,
-      })),
-    );
-  });
-
-  it('prints the schema for a schema task', async () => {
-    const jsonSchema = {
-      type: 'object',
-      properties: { a: { type: 'integer' } },
-      required: ['a'],
-      additionalProperties: false,
-    };
-    api.add({
-      taskType: 'json_shape',
-      verification: { kind: 'schema', jsonSchema },
-    });
-    const { out } = await run('prove', '--count', '1');
-    expect(out).toContain(
-      `The answer must be JSON that matches this schema:\n${JSON.stringify(
-        jsonSchema,
-        null,
-        2,
-      )
-        .split('\n')
-        .map((l) => `  ${l}`)
-        .join('\n')}\nSubmit with:`,
-    );
-  });
-
-  it('says so and exits 0 when there is no open task', async () => {
+  it('prints an empty array and says why on stderr when there is no open task', async () => {
     api.add({ posterAgentId: agentId });
-    const { code, out, err } = await run('prove');
+    const { code, out, err } = await run('prove', '--json');
     expect(code).toBe(0);
-    expect(err).toBe('');
-    expect(out).toBe(
+    expect(out).toBe('[]\n');
+    expect(err).toBe(
       'no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n',
     );
     expect(api.claimed).toEqual([]);
-
-    const json = JSON.parse((await run('prove', '--json')).out);
-    expect(json).toEqual({ tasks: [], submitHint: SUBMIT_HINT });
   });
 
   it('gives the init hint without a config and sends nothing', async () => {
@@ -598,6 +774,25 @@ describe('prove', () => {
     expect(out).toBe('');
     expect(err).toBe('not initialised, run npx sealkeeper init\n');
     expect(api.requests).toEqual([]);
+  });
+
+  it('ends with one line naming the new API address on a redirect', async () => {
+    const fetchFn = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 301,
+          headers: { Location: 'https://api.sealkeeper.run/v1/tasks' },
+        }),
+    );
+    api.fetch = fetchFn as unknown as typeof fetch;
+    const { code, out, err } = await run('prove', '--json');
+    expect(code).toBe(1);
+    expect(out).toBe('');
+    expect(err).toBe(
+      `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
+    );
+    // Asked once for the held tasks list, never followed anywhere.
+    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
   it('ends with the API message when the agent is not registered', async () => {
@@ -616,5 +811,85 @@ describe('prove', () => {
     expect(relative(90 * 60_000)).toBe('in 90 minutes');
     expect(relative(47.5 * HOUR)).toBe('in 47 hours');
     expect(relative(5 * 24 * HOUR)).toBe('in 5 days');
+  });
+
+  describe('tasks show', () => {
+    it('prints one task by the short id prove --claim printed', async () => {
+      tty = true;
+      const jsonSchema = { type: 'object', required: ['a'] };
+      const task = api.add({
+        taskType: 'json_shape',
+        verification: { kind: 'schema', jsonSchema },
+      });
+      await run('prove', '--claim', '--count', '1');
+      const { code, out, err } = await run(
+        'tasks',
+        'show',
+        task.id.slice(0, 8),
+      );
+      expect(err).toBe('');
+      expect(code).toBe(0);
+      expect(out).toBe(
+        [
+          `Task ${task.id}. type json_shape. claimed. expires in 47 hours.`,
+          'Spec:',
+          '  {',
+          '    "instruction": "Return the value at orders[0].id.",',
+          '    "input": "{\\"orders\\":[{\\"id\\":1}]}",',
+          '    "output": "The number only."',
+          '  }',
+          'The answer must be JSON that matches this schema:',
+          '  {',
+          '    "type": "object",',
+          '    "required": [',
+          '      "a"',
+          '    ]',
+          '  }',
+          'Submit with:',
+          `  npx sealkeeper tasks submit ${task.id} --file <path you choose>`,
+          `  npx sealkeeper tasks submit ${task.id} --text <answer>`,
+          '',
+        ].join('\n'),
+      );
+    });
+
+    it('takes a full id and prints JSON with --json', async () => {
+      const task = api.add({ state: 'claimed', claimantAgentId: agentId });
+      const { code, out } = await run('tasks', 'show', task.id, '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({
+        id: task.id,
+        type: 'json_extract',
+        expires_at: task.expiresAt,
+        spec: task.spec,
+        submit: submitCommand(task.id),
+      });
+    });
+
+    it('names the new API address when the held tasks lookup is redirected', async () => {
+      api.fetch = (async () =>
+        new Response(null, {
+          status: 301,
+          headers: { Location: 'https://api.sealkeeper.run/v1/tasks' },
+        })) as unknown as typeof fetch;
+      const { code, out, err } = await run('tasks', 'show', 'abcd1234');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
+      );
+    });
+
+    it('refuses a short id that matches no task this agent holds', async () => {
+      api.add({ state: 'claimed', claimantAgentId: OTHER_AGENT });
+      const { code, err } = await run('tasks', 'show', 'abcd1234');
+      expect(code).toBe(1);
+      expect(err).toBe(
+        'no task this agent holds starts with abcd1234, give the full task id\n',
+      );
+      const short = await run('tasks', 'show', 'ab');
+      expect(short.code).toBe(1);
+      expect(short.err).toContain('is not a task id');
+    });
   });
 });

@@ -323,9 +323,15 @@ describe('adapter claude-code', () => {
       // npx is the fallback, not a bare sealkeeper that may not be on PATH.
       expect(text).toContain('use `npx sealkeeper` in its place');
       expect(text).not.toContain('plain `sealkeeper`');
-      // The submit lines are run as prove printed them, prefix included.
-      expect(text).toContain('exactly as `sealkeeper prove` printed it');
-      expect(text).toContain('`sealkeeper prove`');
+      // prove runs with --json, which claims and prints JSON whether or not
+      // Claude's shell is a terminal, and each submit command is run as
+      // the JSON gave it, prefix included.
+      expect(text).toContain('Run `sealkeeper prove --json`.');
+      expect(text).not.toMatch(/`sealkeeper prove`/);
+      expect(text).toContain('Read the JSON.');
+      expect(text).toContain(
+        'Run the `submit` command of each task exactly as `sealkeeper prove --json` gave it, with `<answer file>` replaced by the path of that answer file.',
+      );
       expect(text).toContain('.sealkeeper-answers/');
       expect(text).toContain('`sealkeeper status`');
       expect(text).toContain('No extra keys, no commentary');

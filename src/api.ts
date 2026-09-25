@@ -1,8 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { ListTasksQuery, WELL_KNOWN_PATH } from '@sealkeeper/schema';
 import type { z } from 'zod';
-import { DEFAULT_API_URL, INSECURE_API_URL, isSecureApiUrl } from './config.js';
+import {
+  DEFAULT_API_URL,
+  INSECURE_API_URL,
+  isSecureApiUrl,
+  paths,
+} from './config.js';
 import { readEnv } from './env.js';
+import { tildePath } from './files.js';
 import {
   AgentResponse,
   CredentialResponse,
@@ -109,8 +115,9 @@ export function createApiClient(options: {
               },
         body: body === undefined ? undefined : JSON.stringify(body),
         // A redirect would re-send a signed body, or the GitHub token at
-        // registration, to wherever the server points.
-        redirect: 'error',
+        // registration, to wherever the server points. manual hands the
+        // redirect back unfollowed, so the new address can be named.
+        redirect: 'manual',
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
@@ -120,6 +127,7 @@ export function createApiClient(options: {
         `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
       );
     }
+    if (isRedirect(res.status)) throw redirectError(apiUrl, path, res);
     let json: unknown;
     try {
       json = await res.json();
@@ -289,4 +297,47 @@ export function createApiClient(options: {
 function retryAfter(value: string | null | undefined): number | null {
   if (!value || !/^\d+$/.test(value.trim())) return null;
   return Number(value.trim());
+}
+
+export const isRedirect = (status: number): boolean =>
+  status >= 300 && status < 400;
+
+// A redirect is never followed. It usually means the API moved, as when
+// api.vouched.run became api.sealkeeper.run, so the error names the old
+// address and the new one from the Location header and says where to set
+// it. path is the part of the request after the API URL. When the new
+// address ends with the same path, the API URL is what is left, otherwise
+// the origin of the new address.
+export function redirectError(
+  apiUrl: string,
+  path: string,
+  res: Pick<Response, 'status' | 'headers'>,
+): ApiError {
+  const config = tildePath(paths().config);
+  const target = movedTo(apiUrl, path, res.headers.get('Location'));
+  const message =
+    target === null
+      ? `the API at ${apiUrl} answered with a redirect (HTTP ${res.status}) and no usable address, check apiUrl in ${config}`
+      : `the API at ${apiUrl} moved to ${target}, set apiUrl in ${config} to it`;
+  return new ApiError(res.status, 'redirect', message);
+}
+
+function movedTo(
+  apiUrl: string,
+  path: string,
+  location: string | null,
+): string | null {
+  if (!location) return null;
+  let url: URL;
+  try {
+    url = new URL(location, `${apiUrl}${path}`);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  const full = url.href;
+  if (path !== '' && full.endsWith(path)) {
+    return full.slice(0, full.length - path.length).replace(/\/+$/, '');
+  }
+  return url.origin;
 }

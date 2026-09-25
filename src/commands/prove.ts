@@ -1,30 +1,46 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { ClaimTaskRequest } from '@sealkeeper/schema';
+import { ClaimTaskRequest, type Level } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
-import { profileUrl } from '../config.js';
+import { claudeCodeHooksIn } from '../claude-code-settings.js';
+import { requireConfig } from '../cli-config.js';
+import { handleOf } from '../config.js';
 import { cli } from '../invocation.js';
-import { stderr, stdout, wantsJson } from '../output.js';
+import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
+import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
 import type { AgentResponse, TaskResponse } from '../responses.js';
+import { createStyle, indent, type Styled } from '../style.js';
 import {
   defaultTasksDeps,
   failOnApiError,
   openTaskSession,
   recordEvent,
   type TasksDeps,
-  taskSummary,
   unsubmittedClaims,
 } from '../tasks.js';
+import { BRONZE } from './init.js';
 import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 
-// sealkeeper prove. The path from init to a verified record. It claims a few
-// open seed tasks, which the server checks on submit with no counterparty,
-// and prints each one in a fixed shape an agent can act on without guessing.
+// sealkeeper prove. The path from init to a verified record, for two
+// readers.
+//
+// A person in a terminal gets a short explanation and claims nothing. The
+// tasks are for their agent to solve, so a terminal run says how to hand
+// the job over, /sealkeeper-prove in Claude Code or prove --json for any
+// other agent, and how far the agent has come.
+//
+// An agent, meaning --json or a stdout that is not a terminal, gets the
+// claims. prove claims a few open seed tasks, which the server checks on
+// submit with no counterparty, and prints one JSON array with what to solve
+// and the exact submit command for each. --claim in a terminal claims too
+// and prints one short line per task, and tasks show prints one in full.
+//
 // Tasks other agents posted are claimed only with --any-poster. Their specs
 // are written by strangers and an agent solving them may be told to do
-// anything, so solving them is something the operator opts into. Tasks this agent already claimed and has not submitted
-// come first and count toward the number, so running prove again shows
-// them again instead of claiming past the server's cap.
+// anything, so solving them is something the operator opts into. Tasks this
+// agent already claimed and has not submitted come first and count toward
+// the number, so running prove again shows them again instead of claiming
+// past the server's cap.
 
 const DEFAULT_COUNT = 5;
 export const MAX_COUNT = 10;
@@ -35,8 +51,18 @@ const EXTRA_CLAIM_ATTEMPTS = 5;
 // At most this many posters are looked up to find the seed agent.
 const MAX_POSTER_LOOKUPS = 10;
 const LIST_LIMIT = 100;
+// How much of a task id the --claim lines show. tasks show takes it back.
+export const SHORT_ID_LENGTH = 8;
 
-export const SUBMIT_HINT = `${cli('tasks submit')} <task id> --file <path you choose>, or --text <answer> for a short answer`;
+// The placeholder in the submit command of prove --json.
+export const ANSWER_FILE = '<answer file>';
+
+export const submitCommand = (taskId: string): string =>
+  `${cli(`tasks submit ${taskId}`)} --file ${ANSWER_FILE}`;
+
+type ProveOptions = { count: number; anyPoster?: boolean; claim?: boolean };
+
+const stdoutIsTTY = () => process.stdout.isTTY === true;
 
 export function register(
   parent: Command,
@@ -44,7 +70,9 @@ export function register(
 ): Command {
   return parent
     .command('prove')
-    .description('Claim open tasks and print what to solve and how to submit')
+    .description(
+      'Explain how your agent earns verified tasks, or claim them with --json',
+    )
     .option(
       '--count <n>',
       `how many tasks, 1 to ${MAX_COUNT}`,
@@ -55,106 +83,44 @@ export function register(
       '--any-poster',
       'also claim tasks other agents posted, whose specs are untrusted',
     )
+    .option('--claim', 'in a terminal, claim tasks and list them in short')
     .action(async function (
       this: Command,
-      options: { count: number; anyPoster?: boolean },
+      options: ProveOptions,
     ): Promise<void> {
-      const { config, signer, api } = await openTaskSession(this, deps);
-      const want = options.count;
-      const now = Date.now();
-
-      const tasks = await heldTasks(api, signer.agentId, want, now);
-      let capped = false;
-      let skipped = 0;
-
-      if (tasks.length < want) {
-        let open: TaskResponse[];
-        try {
-          open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
-        } catch (error) {
-          failOnApiError(this, error);
-        }
-        const posters = new PosterLookup(api);
-        const all = await ranked(
-          posters,
-          open.filter((task) => task.posterAgentId !== signer.agentId),
-        );
-        const candidates = options.anyPoster
-          ? all.map(({ task }) => task)
-          : all.filter(({ seed }) => seed).map(({ task }) => task);
-        skipped = all.length - candidates.length;
-        let failures = 0;
-        for (const task of candidates) {
-          if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
-          // A task posted by another agent of the same operator never
-          // counts toward the record, so it is not worth a claim. Seed
-          // tasks are the exception. The seed agent is registered under
-          // the SealKeeper operator's own account, and its tasks count for
-          // every agent, so a poster with operatedByVouched is never the
-          // same operator.
-          if (await posters.sameOperator(task, config.operatorLogin)) continue;
-          try {
-            const envelope = await signer.sign(
-              ClaimTaskRequest.parse({ taskId: task.id }),
-            );
-            const claimed = await api.claimTask(task.id, envelope);
-            tasks.push(claimed);
-            await recordEvent({
-              type: 'task.claimed',
-              payload: { task_id: claimed.id, task_type: claimed.taskType },
-            });
-          } catch (error) {
-            if (error instanceof ApiError && isGone(error)) {
-              failures += 1;
-              continue;
-            }
-            // The server caps how many tasks one agent holds. The local log
-            // may not know every claim (another machine, a fresh home), so
-            // ask the server which tasks this agent holds and print those.
-            if (error instanceof ApiError && error.code === 'claim_cap') {
-              capped = true;
-              await addServerHeld(api, signer.agentId, tasks, want, now);
-              stderr(
-                tasks.length > 0
-                  ? `${error.message}. Submit the tasks below first.`
-                  : `${error.message}. This agent holds the maximum and none of them could be listed.`,
-              );
-              break;
-            }
-            failOnApiError(this, error);
-          }
-        }
+      const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
+      if (!json && !options.claim) {
+        await explain(this, deps);
+        return;
       }
 
-      if (wantsJson(this)) {
-        stdout(
-          JSON.stringify({
-            tasks: tasks.map(taskSummary),
-            submitHint: SUBMIT_HINT,
-          }),
-        );
+      const { tasks, capped, skipped } = await claim(this, deps, options);
+      const now = Date.now();
+
+      if (json) {
+        // stdout is the array and nothing else. What an agent may want to
+        // know besides goes to stderr.
+        stdout(JSON.stringify(tasks.map(proveEntry)));
+        if (tasks.length === 0 && !capped) {
+          stderr(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
+          if (skipped > 0) stderr(anyPosterHint(skipped));
+        }
         return;
       }
       // At the cap with nothing to list, stderr already said why. Saying no
       // open tasks exist as well would be wrong.
       if (tasks.length === 0 && capped) return;
       if (tasks.length === 0) {
-        stdout(
-          `${NOTHING_AVAILABLE}. New seed tasks are posted every 15 minutes, try again later.`,
-        );
+        stdout(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
         if (skipped > 0) stdout(anyPosterHint(skipped));
         return;
       }
-      tasks.forEach((task, i) => {
-        if (i > 0) stdout('');
-        for (const line of taskBlock(task, i + 1, tasks.length, now)) {
-          stdout(line);
-        }
-      });
-      stdout('');
-      stdout(closing(profileUrl(config)));
+      for (const line of claimLines(tasks, now)) stdout(line);
     });
 }
+
+const TRY_LATER =
+  'New seed tasks are posted every 15 minutes, try again later.';
 
 function parseCount(value: string): number {
   const n = Number(value);
@@ -166,6 +132,167 @@ function parseCount(value: string): number {
   // Asking for more than the cap gets the cap, not an error.
   return Math.min(n, MAX_COUNT);
 }
+
+// The terminal run. Claims nothing and sends nothing but the read of the
+// verified count, the same one status shows.
+async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
+  const config = await requireConfig(cmd);
+  const [live, hooks] = await Promise.all([
+    readLiveAgent(config, deps.fetch),
+    claudeCodeHooksIn(deps),
+  ]);
+  const s = createStyle(process.stdout);
+  const say = (line?: Styled) => stdoutStyled(indent(line));
+  const slash = s.bold('/sealkeeper-prove');
+  say();
+  say(
+    s.line`${s.gold('◉')} ${s.bold('SealKeeper prove')}   ${handleOf(config)}`,
+  );
+  say();
+  for (const text of EXPLAIN) say(s.line`${text}`);
+  say();
+  say(
+    hooks
+      ? s.line`${s.dim('Claude Code')}    run ${slash} in a session`
+      : s.line`${s.dim('Claude Code')}    run ${s.bold(cli('init'))} first, so ${slash} exists`,
+  );
+  say(
+    s.line`${s.dim('Other agents')}   have the agent run ${s.bold(cli('prove --json'))}`,
+  );
+  say();
+  say(
+    s.line`${progressLine(live?.counts?.verifiedTasks ?? null, live?.level ?? null)}`,
+  );
+  say();
+}
+
+export const EXPLAIN = [
+  'Your agent earns verified tasks by solving small checks,',
+  'like deduplicating lines or reading a JSON value.',
+  "The server verifies each answer. You don't solve them yourself.",
+];
+
+// How far the agent has come. Without a count, as when the API did not
+// answer, only what bronze needs.
+export function progressLine(
+  verifiedTasks: number | null,
+  level: Level | null,
+): string {
+  if (verifiedTasks === null) {
+    return `Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days.`;
+  }
+  if (atBronzeOrAbove(level)) {
+    return `${verifiedTasks} verified so far. Level ${level}.`;
+  }
+  return `${verifiedTasks} verified so far. Bronze needs ${BRONZE.verifiedTasks} over ${BRONZE.historyDays} days.`;
+}
+
+// Claims up to options.count tasks, held ones first. capped when the
+// server's claim cap stopped it, skipped the open tasks left out because
+// other agents posted them.
+async function claim(
+  cmd: Command,
+  deps: TasksDeps,
+  options: ProveOptions,
+): Promise<{ tasks: TaskResponse[]; capped: boolean; skipped: number }> {
+  const { config, signer, api } = await openTaskSession(cmd, deps);
+  const want = options.count;
+  const now = Date.now();
+
+  const tasks = await heldTasks(api, signer.agentId, want, now);
+  let capped = false;
+  let skipped = 0;
+  if (tasks.length >= want) return { tasks, capped, skipped };
+
+  let open: TaskResponse[];
+  try {
+    open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
+  } catch (error) {
+    failOnApiError(cmd, error);
+  }
+  const posters = new PosterLookup(api);
+  const all = await ranked(
+    posters,
+    open.filter((task) => task.posterAgentId !== signer.agentId),
+  );
+  const candidates = options.anyPoster
+    ? all.map(({ task }) => task)
+    : all.filter(({ seed }) => seed).map(({ task }) => task);
+  skipped = all.length - candidates.length;
+  let failures = 0;
+  for (const task of candidates) {
+    if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+    // A task posted by another agent of the same operator never counts
+    // toward the record, so it is not worth a claim. Seed tasks are the
+    // exception. The seed agent is registered under the SealKeeper
+    // operator's own account, and its tasks count for every agent, so a
+    // poster with operatedByVouched is never the same operator.
+    if (await posters.sameOperator(task, config.operatorLogin)) continue;
+    try {
+      const envelope = await signer.sign(
+        ClaimTaskRequest.parse({ taskId: task.id }),
+      );
+      const claimed = await api.claimTask(task.id, envelope);
+      tasks.push(claimed);
+      await recordEvent({
+        type: 'task.claimed',
+        payload: { task_id: claimed.id, task_type: claimed.taskType },
+      });
+    } catch (error) {
+      if (error instanceof ApiError && isGone(error)) {
+        failures += 1;
+        continue;
+      }
+      // The server caps how many tasks one agent holds. The local log may
+      // not know every claim (another machine, a fresh home), so ask the
+      // server which tasks this agent holds and print those.
+      if (error instanceof ApiError && error.code === 'claim_cap') {
+        capped = true;
+        await addServerHeld(api, signer.agentId, tasks, want, now);
+        stderr(
+          tasks.length > 0
+            ? `${error.message}. Submit the tasks below first.`
+            : `${error.message}. This agent holds the maximum and none of them could be listed.`,
+        );
+        break;
+      }
+      failOnApiError(cmd, error);
+    }
+  }
+  return { tasks, capped, skipped };
+}
+
+// One task as prove --json prints it. schema only when the answer must
+// match one. submit is the exact command, with the answer file to fill in.
+export function proveEntry(task: TaskResponse) {
+  return {
+    id: task.id,
+    type: task.taskType,
+    expires_at: task.expiresAt,
+    spec: task.spec,
+    ...(task.verification.kind === 'schema'
+      ? { schema: task.verification.jsonSchema }
+      : {}),
+    submit: submitCommand(task.id),
+  };
+}
+
+// The --claim lines. Number, type, short id and expiry, one task a line,
+// then how to see one in full.
+export function claimLines(tasks: TaskResponse[], now: number): string[] {
+  const width = Math.max(...tasks.map((task) => task.taskType.length));
+  const lines = tasks.map(
+    (task, i) =>
+      `${String(i + 1).padStart(2)}  ${task.taskType.padEnd(width)}  ${shortId(task.id)}  expires ${relative(Date.parse(task.expiresAt) - now)}`,
+  );
+  lines.push(
+    '',
+    `See a task's spec and submit line with ${cli('tasks show <id>')}.`,
+  );
+  return lines;
+}
+
+export const shortId = (id: string): string => id.slice(0, SHORT_ID_LENGTH);
 
 // Tasks this agent claimed in the local log, not submitted, and still
 // claimed by it on the server. A lookup that fails skips that task.
@@ -194,6 +321,16 @@ async function heldTasks(
   return held;
 }
 
+// The claimed tasks the server says this agent holds, which include claims
+// made on another machine. Throws what the API client throws.
+export async function serverHeld(
+  api: ApiClient,
+  agentId: string,
+): Promise<TaskResponse[]> {
+  const claimed = await api.listTasks({ state: 'claimed', limit: LIST_LIMIT });
+  return claimed.filter((task) => task.claimantAgentId === agentId);
+}
+
 // Claimed tasks the server says this agent holds, added to tasks up to want.
 // A failed lookup adds nothing, the caller still prints what it has.
 async function addServerHeld(
@@ -205,18 +342,14 @@ async function addServerHeld(
 ): Promise<void> {
   let claimed: TaskResponse[];
   try {
-    claimed = await api.listTasks({ state: 'claimed', limit: LIST_LIMIT });
+    claimed = await serverHeld(api, agentId);
   } catch {
     return;
   }
   const have = new Set(tasks.map((task) => task.id));
   for (const task of claimed) {
     if (tasks.length >= want) break;
-    if (
-      task.claimantAgentId === agentId &&
-      Date.parse(task.expiresAt) > now &&
-      !have.has(task.id)
-    ) {
+    if (Date.parse(task.expiresAt) > now && !have.has(task.id)) {
       tasks.push(task);
       have.add(task.id);
     }
@@ -289,21 +422,18 @@ async function ranked(
     .map((task) => ({ task, seed: seed.has(task.posterAgentId) }));
 }
 
-function taskBlock(
-  task: TaskResponse,
-  n: number,
-  total: number,
-  now: number,
-): string[] {
+// One task in full, as tasks show prints it. The spec, the schema when
+// there is one and the two ways to submit.
+export function taskDetail(task: TaskResponse, now: number): string[] {
   const lines = [
-    `Task ${n} of ${total}. id ${task.id}. type ${task.taskType}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
+    `Task ${task.id}. type ${task.taskType}. ${task.state}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
     'Spec:',
-    indent(JSON.stringify(task.spec, null, 2)),
+    indentText(JSON.stringify(task.spec, null, 2)),
   ];
   if (task.verification.kind === 'schema') {
     lines.push(
       'The answer must be JSON that matches this schema:',
-      indent(JSON.stringify(task.verification.jsonSchema, null, 2)),
+      indentText(JSON.stringify(task.verification.jsonSchema, null, 2)),
     );
   }
   lines.push(
@@ -317,11 +447,7 @@ function taskBlock(
   return lines;
 }
 
-export function closing(profile: string): string {
-  return `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run ${cli('status')} to watch the verified count. Your profile is ${profile}.`;
-}
-
-function indent(text: string): string {
+function indentText(text: string): string {
   return text
     .split('\n')
     .map((line) => `  ${line}`)

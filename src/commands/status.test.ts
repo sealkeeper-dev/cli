@@ -237,6 +237,21 @@ describe('status', () => {
     expect(lines).toContain('  competence:lint 0.50');
   });
 
+  it('names the new API address once when the API answers a redirect', async () => {
+    const moved = (async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      return new Response(null, {
+        status: 301,
+        headers: { Location: `https://api.sealkeeper.run${url.pathname}` },
+      });
+    }) as typeof fetch;
+    const { code, out, err } = await run(moved, 'status');
+    expect(code).toBe(0);
+    expect(out).toContain('verified tasks    -\n');
+    const line = `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it`;
+    expect(err.split(line)).toHaveLength(2);
+  });
+
   it('still exits 0 quickly when offline, with every score a dash', async () => {
     await seedMixedLog();
     const { code, out, ms } = await run(offline, 'status');
@@ -276,7 +291,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(out).toContain('verified tasks    0\n');
       expect(out).toContain(
-        '2 claimed tasks are not submitted yet. Run npx sealkeeper prove to print them again with the submit lines.\n',
+        '2 claimed tasks are not submitted yet. Run npx sealkeeper prove --claim to list them again.\n',
       );
       const json = JSON.parse(
         (await run(scoreFetch([], 0), 'status', '--json')).out,
@@ -311,7 +326,7 @@ describe('status', () => {
     it('uses one line for a single unsubmitted claim', async () => {
       await claimOnly();
       expect((await run(scoreFetch([], 0), 'status')).out).toContain(
-        '1 claimed task is not submitted yet. Run npx sealkeeper prove to print it again with the submit lines.\n',
+        '1 claimed task is not submitted yet. Run npx sealkeeper prove --claim to list it again.\n',
       );
     });
   });

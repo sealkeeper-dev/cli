@@ -8,7 +8,7 @@ import {
   GithubLogin,
   type Level,
 } from '@sealkeeper/schema';
-import { ApiError, resolveApiUrl } from './api.js';
+import { ApiError, redirectError, resolveApiUrl } from './api.js';
 import { INSECURE_API_URL, isSecureApiUrl, paths } from './config.js';
 import {
   AgentRenamedResponse,
@@ -114,7 +114,8 @@ export async function fetchCheck(
   try {
     res = await fetchFn(url, {
       headers: { Accept: 'application/json' },
-      redirect: 'error',
+      // Never followed. A redirect ends the check with the new address.
+      redirect: 'manual',
       signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {
@@ -123,6 +124,9 @@ export async function fetchCheck(
       'network_error',
       `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
     );
+  }
+  if (res.status >= 300 && res.status < 400) {
+    throw redirectError(apiUrl, url.slice(apiUrl.length), res);
   }
   let json: unknown;
   try {

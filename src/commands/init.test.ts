@@ -17,10 +17,11 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Input } from '../ask.js';
+import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
 import { proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import { paths, readConfig, writeConfig } from '../config.js';
+import { tildePath } from '../files.js';
 import {
   ACCESS_TOKEN_URL,
   CODE_EXPIRED,
@@ -36,8 +37,11 @@ import { INSTALL_COMMAND } from './adapter.js';
 import {
   ADAPTERS_URL,
   BRONZE,
+  bronzeLine,
   CONSENT,
   HOOKS_INTRO,
+  HOOKS_MAX_ASKS,
+  HOOKS_NOT_INSTALLED,
   HOOKS_QUESTION,
   isYesByDefault,
   NEXT_HOOKS,
@@ -48,7 +52,6 @@ import {
   SHARED_SUMMARY,
   TAGLINE,
   TERMS,
-  tildePath,
   versionQuestion,
 } from './init.js';
 
@@ -89,7 +92,22 @@ type World = {
   versionRefusal?: { status: number; code: string; retryAfter?: string };
   // The user code GitHub sends. ABCD-1234 when not set.
   userCode?: string;
+  // The verified count and level GET /v1/agents/:id answers with, for
+  // Next. Needs serverVersion set, else the route fails.
+  live?: { verifiedTasks: number; level: string };
+  // When set, GET /v1/agents/:id answers a redirect to this address.
+  agentMovedTo?: string;
 };
+
+// A terminal that answers with each line in turn, then closes.
+function answeringEach(lines: string[]): Input & { reads: number } {
+  const input = {
+    isTTY: true,
+    reads: 0,
+    readLine: async () => lines[input.reads++] ?? null,
+  };
+  return input;
+}
 
 // A terminal, or a pipe when isTTY is false, that answers with the given
 // line and records how often it was read.
@@ -161,6 +179,14 @@ function fakeFetch(world: World): typeof fetch {
     }
     const agentRoute =
       /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
+    if (agentRoute && world.agentMovedTo !== undefined && !init.method) {
+      return new Response(null, {
+        status: 301,
+        headers: {
+          Location: `${world.agentMovedTo}/v1/agents/${agentRoute[1]}`,
+        },
+      });
+    }
     if (agentRoute && world.serverVersion !== undefined) {
       if (init.method === 'PATCH' && world.versionRefusal !== undefined) {
         const { status, code, retryAfter } = world.versionRefusal;
@@ -189,6 +215,12 @@ function fakeFetch(world: World): typeof fetch {
         version: world.serverVersion,
         operator: { login: 'alice' },
         createdAt: '2026-09-23T10:00:00.000Z',
+        ...(world.live === undefined
+          ? {}
+          : {
+              counts: { verifiedTasks: world.live.verifiedTasks },
+              level: world.live.level,
+            }),
       });
     }
     throw new TypeError('fetch failed');
@@ -553,7 +585,10 @@ describe('sealkeeper init', () => {
     );
     expect(result.err).not.toContain(TERMS);
     expect(result.out).not.toContain('operatorLogin');
-    expect(world.fetchUrls).toEqual([]);
+    // Only the read of the verified count for Next. No sign in.
+    expect(world.fetchUrls).toEqual([
+      `${API_URL}/v1/agents/${(await loadKey(paths(home)))?.agentId}`,
+    ]);
     expect(await readFile(paths(home).key, 'utf8')).toBe(keyBefore);
     expect((await stat(paths(home).key)).mtimeMs).toBe(keyStat.mtimeMs);
   });
@@ -680,7 +715,9 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
-      expect(world.fetchUrls).toEqual([]);
+      // One read, for Next. The version is not looked up.
+      expect(world.fetchUrls).toHaveLength(1);
+      expect(world.versionChanges).toEqual([]);
     });
 
     it('goes on to the hooks offer when SealKeeper refuses the move', async () => {
@@ -1015,6 +1052,229 @@ describe('sealkeeper init', () => {
         expect(isYesByDefault(no), String(no)).toBe(false);
       }
     });
+
+    // What a terminal sent for down, down, up, up, then y. The screen
+    // showed ^[[B^[[B^[[A^[[Ay.
+    const ARROWS_THEN_Y = '\u001b[B\u001b[B\u001b[A\u001b[Ay';
+    const AS_SHOWN = '^[[B^[[B^[[A^[[Ay';
+
+    it('takes arrow keys out of the answer, so arrows then y is yes', async () => {
+      await withClaudeCode();
+      const stdin = answering(ARROWS_THEN_Y);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(1);
+      expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
+      expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain('Stop');
+      expect(result.all).not.toContain(HOOKS_NOT_INSTALLED);
+    });
+
+    it('reads the answer as the screen showed it as yes too', () => {
+      expect(cleanAnswer(ARROWS_THEN_Y)).toBe('y');
+      expect(cleanAnswer(AS_SHOWN)).toBe('y');
+      expect(readYesNo(ARROWS_THEN_Y, 'yes')).toBe('yes');
+      expect(readYesNo(AS_SHOWN, 'yes')).toBe('yes');
+      expect(isYesByDefault(AS_SHOWN)).toBe(true);
+      // SS3 arrows, as some terminals send them, a one byte CSI and other
+      // control characters.
+      expect(cleanAnswer('\u001bOA\u001bOBn')).toBe('n');
+      expect(cleanAnswer('\u009b1;5Cyes\u0007\r')).toBe('yes');
+      expect(readYesNo('\u001b[A', 'yes')).toBe('yes');
+      expect(readYesNo('\u001b[Bnope', 'yes')).toBe('unclear');
+      expect(readYesNo(null, 'yes')).toBe('no');
+      expect(isYes(ARROWS_THEN_Y)).toBe(true);
+    });
+
+    it('asks again on an unclear answer and installs on a later y', async () => {
+      await withClaudeCode();
+      const stdin = answeringEach(['maybe', 'y']);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(2);
+      expect(result.err).toContain(
+        '  Please answer y or n. Install them now? [Y/n] ',
+      );
+      expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
+    });
+
+    it('counts as no after three unclear answers and says so with the command', async () => {
+      await withClaudeCode();
+      const stdin = answeringEach(['what', '\u001b[Bx', 'nope', 'y']);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(HOOKS_MAX_ASKS);
+      expect(HOOKS_MAX_ASKS).toBe(3);
+      expect(result.out).toContain(`  ${HOOKS_NOT_INSTALLED}\n`);
+      expect(HOOKS_NOT_INSTALLED).toBe(
+        'Hooks not installed. Run npx sealkeeper adapter claude-code install to install them later.',
+      );
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('says in one line that a declined answer left the hooks out', async () => {
+      await withClaudeCode();
+      world.stdin = answering('n');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(
+        result.out.split('\n').filter((l) => l.includes('Hooks not installed')),
+      ).toEqual([`  ${HOOKS_NOT_INSTALLED}`]);
+    });
+
+    it('brings an outdated /sealkeeper-prove up to date on a repeat run', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      await writeFile(
+        command,
+        '---\ndescription: old\nmanaged-by: sealkeeper\n---\nRun `sealkeeper prove`.\n',
+      );
+      world = newWorld();
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
+      expect(result.out).toContain(
+        `  ✓ /sealkeeper-prove updated in ${dirname(command)}\n`,
+      );
+      // Current already, so a third run says nothing about it.
+      world = newWorld();
+      world.stdin = answering('');
+      expect((await run(world, 'init')).out).not.toContain('updated');
+    });
+
+    it('leaves a /sealkeeper-prove it did not write alone on a repeat run', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      await writeFile(command, 'my own command\n');
+      world = newWorld();
+      world.stdin = answering('');
+      expect((await run(world, 'init')).code).toBe(0);
+      expect(await readFile(command, 'utf8')).toBe('my own command\n');
+    });
+  });
+
+  describe('Next from the state', () => {
+    const claudeDir = () => join(home, 'claude');
+    const next = (out: string) =>
+      out
+        .split('\n')
+        .filter((l) => /^ {2}\d {2}/.test(l))
+        .map((l) => l.slice(2));
+
+    async function withClaudeCode(): Promise<void> {
+      await mkdir(claudeDir(), { recursive: true });
+      await writeFile(join(claudeDir(), 'settings.json'), '{}\n');
+    }
+
+    beforeEach(() => {
+      world.serverVersion = '0.1.0';
+    });
+
+    it('starts with the hooks when they are not installed', async () => {
+      await withClaudeCode();
+      world.live = { verifiedTasks: 0, level: 'none' };
+      world.stdin = answering('n');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(next(result.out)).toEqual([
+        `1  Install the Claude Code hooks with ${INSTALL_COMMAND}`,
+        '2  Then in Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '3  Review and send what was recorded   npx sealkeeper sync',
+        '4  0 of 25 verified tasks toward bronze',
+      ]);
+    });
+
+    it('with the hooks and nothing verified, says your first', async () => {
+      await withClaudeCode();
+      world.live = { verifiedTasks: 0, level: 'none' };
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  0 of 25 verified tasks toward bronze',
+      ]);
+    });
+
+    it('with the hooks, 8 verified and auto sync on, as on a repeat run', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const config = await readConfig(paths(home));
+      if (config === null) throw new Error('no config');
+      await writeConfig({ ...config, autoSync: true }, paths(home));
+      world = newWorld();
+      world.serverVersion = '0.1.0';
+      world.live = { verifiedTasks: 8, level: 'none' };
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
+        '2  8 of 25 verified tasks toward bronze',
+      ]);
+    });
+
+    it('at bronze, says the level', async () => {
+      await withClaudeCode();
+      world.live = { verifiedTasks: 30, level: 'bronze' };
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  Level bronze, with 30 verified tasks',
+      ]);
+      expect(bronzeLine(55, 'silver')).toBe(
+        'Level silver, with 55 verified tasks',
+      );
+    });
+
+    it('without Claude Code, has the agent run prove --json', async () => {
+      world.live = { verifiedTasks: 2, level: 'none' };
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(next(result.out)).toEqual([
+        '1  Have your agent run npx sealkeeper prove --json to earn verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  2 of 25 verified tasks toward bronze',
+      ]);
+    });
+
+    it('names the new API address once and falls back when the API moved', async () => {
+      await withClaudeCode();
+      world.serverVersion = undefined;
+      world.agentMovedTo = 'https://api.sealkeeper.run';
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      const moved = `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it`;
+      expect(result.err.split(moved)).toHaveLength(2);
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+      ]);
+    });
+
+    it('falls back to the generic steps when the API does not answer', async () => {
+      await withClaudeCode();
+      world.serverVersion = undefined;
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+      ]);
+    });
   });
 
   describe('layout', () => {
@@ -1060,7 +1320,7 @@ describe('sealkeeper init', () => {
           Full list  npx sealkeeper what-is-shared
 
           Claude Code
-          The hooks record each session and tool call as above, into a local log.
+          The hooks record each session and tool call, names and timings only, into a local log.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
           ✓ /sealkeeper-prove in <home>/claude/commands
 
@@ -1096,7 +1356,7 @@ describe('sealkeeper init', () => {
             Profile  https://sealkeeper.run/agents/alice/scout
 
           Claude Code
-          The hooks record each session and tool call as above, into a local log.
+          The hooks record each session and tool call, names and timings only, into a local log.
           ✓ Hooks in <home>/claude/settings.json
 
           Next

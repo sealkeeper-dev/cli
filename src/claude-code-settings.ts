@@ -238,6 +238,24 @@ export async function hasHooks(
   return commands.includes(current);
 }
 
+// Whether the Claude Code user or project settings hold hooks of ours, from
+// any path. The /sealkeeper-prove command is written with them.
+export async function claudeCodeHooksIn(dirs: {
+  claudeDir?: () => string;
+  cwd?: () => string;
+}): Promise<boolean> {
+  const where = {
+    home: '',
+    cwd: (dirs.cwd ?? (() => process.cwd()))(),
+    claudeDir: (dirs.claudeDir ?? claudeConfigDir)(),
+  };
+  const found = await Promise.all([
+    hasHooks(settingsPath('user', where)),
+    hasHooks(settingsPath('project', where)),
+  ]);
+  return found.some(Boolean);
+}
+
 // The commands of our hooks in the file, each once. A missing or unreadable
 // file, or one that is not valid JSON, has none.
 export async function ourCommands(file: string): Promise<string[]> {

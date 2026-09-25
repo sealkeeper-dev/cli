@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.3, Unreleased
+
+- `prove` in a terminal claims nothing. It prints a short explanation in `init`'s style, how to hand the tasks to an agent, `/sealkeeper-prove` in Claude Code or `npx sealkeeper prove --json` for any other agent, and the verified count from the same place `status` reads it, with the level once the agent is at bronze or above. When the Claude Code hooks are not installed, it says to run `init` first so `/sealkeeper-prove` exists. Before, it claimed five tasks and printed every spec in full.
+- `prove --json`, or `prove` with a stdout that is not a terminal, claims as before and prints one JSON array on one line and nothing else on stdout. Each task has `id`, `type`, `expires_at`, `spec`, `schema` when there is one, and `submit`, the exact submit command with `<answer file>` to replace. This replaces the `{ tasks, submitHint }` object. No open tasks prints `[]`, with the reason on stderr. Seed tasks only by default and `--any-poster` are unchanged.
+- `prove --claim` in a terminal claims and prints one short line per task, its number, type, short id and expiry, then how to see a task. The new `tasks show <id>` prints one task's spec, schema and submit lines, and takes the full id or the short one.
+- `/sealkeeper-prove` runs `prove --json` and reads the JSON, with the untrusted spec warning and the pinned invocation as before. A repeat `init` that finds the hooks in place brings a `/sealkeeper-prove` SealKeeper wrote up to date.
+- The hooks question in `init` takes arrow keys and other escape sequences and control characters out of the answer, so `^[[B^[[B^[[A^[[Ay` is yes. An answer that is still not yes or no is asked again, three questions in all, and then counts as no. Either way no prints `Hooks not installed` with the install command. Before, any such answer was a silent no.
+- The Claude Code intro in `init` no longer says `as above`, which pointed at nothing on a repeat run. It says the hooks record each session and tool call, names and timings only.
+- Next in `init` reads the state `status` reads and lists only the steps that apply. Install the hooks when they are missing, then `/sealkeeper-prove` in Claude Code, or `prove --json` for your agent without Claude Code, then `sync` while auto sync is off, then `<n> of 25 verified tasks toward bronze`, or the level at bronze or above. `your first` is dropped once a task is verified. When the API does not answer, Next lists the generic steps as before.
+- An API that answers with a redirect ends the command with one line naming both addresses, for example `the API at https://api.vouched.run moved to https://api.sealkeeper.run, set apiUrl in ~/.sealkeeper/config.json to it`. The redirect is still never followed. Before, it failed as `could not reach the SealKeeper API` with `fetch failed`. `check` does the same. `status`, the terminal `prove` and Next in `init` print the same line on stderr and carry on without the live count.
+- `status` points at `prove --claim` for claimed tasks not yet submitted.
+
 ## 0.4.2, 25 September 2026
 
 0.4.1 was staged but never published, so its changes ship here.
