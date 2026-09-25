@@ -38,7 +38,7 @@ import {
 const hex = (text: string) =>
   Uint8Array.from(text.match(/../g) ?? [], (b) => Number.parseInt(b, 16));
 
-// Copied from packages/schema/src/agent-id.test.ts. RFC 8032 section 7.1 tests
+// Copied from the agent id tests in @sealkeeper/schema. RFC 8032 section 7.1 tests
 // 1 and 2. The CLI and the API must agree on these ids.
 const VECTORS = [
   {

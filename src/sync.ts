@@ -26,9 +26,8 @@ export const MAX_BATCH_BYTES = 256 * 1024;
 export const MAX_RATE_LIMIT_WAIT_SEC = 30;
 
 // How old an event's occurred_at may be for the API to accept it. The API
-// reads this from EVENT_MAX_AGE_DAYS in apps/api/src/config.ts, and
-// @sealkeeper/schema does not export it, so this is the one copy the CLI
-// keeps. Keep the two in step.
+// has its own EVENT_MAX_AGE_DAYS setting, and @sealkeeper/schema does not
+// export it, so this is the one copy the CLI keeps. Keep the two in step.
 export const EVENT_MAX_AGE_DAYS = 7;
 // Events are dropped before signing only when they are this much older than
 // the window, so a clock a little off never drops one the API would still

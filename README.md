@@ -421,17 +421,16 @@ const result = await check('carelmeyer/claude-code', { minReliability: 0.8 }); /
 
 Release builds take the client id from `GITHUB_CLIENT_ID` at build time.
 
-Everything else is coming soon.
-
 ## Development
 
 This repository is a mirror of the CLI folder in the SealKeeper monorepo. Clone it, then build and test it on its own.
 
 ```sh
-pnpm install
-pnpm build
-pnpm test
-pnpm lint
+npm ci
+npm run build
+npm test
+npm run lint
+npm run typecheck
 ```
 
 Pull requests are welcome here. They are merged into the monorepo and come back in the next mirror push.

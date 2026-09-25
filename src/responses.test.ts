@@ -269,7 +269,7 @@ describe('response schemas parse loosely', () => {
     expect(CredentialResponse.safeParse({ payload }).success).toBe(false);
   });
 
-  // The fields the API added with the SEAL routes (VOU-73). CLI 0.3.0 must
+  // The fields the API added with the SEAL routes. CLI 0.3.0 must
   // read every answer that carries them.
   describe('fields added with the SEAL routes', () => {
     const counts = { events: 1, verified_tasks: 2, seed_tasks: 2 };
