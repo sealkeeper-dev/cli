@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   agentIdFromPublicKey,
   base64urlEncode,
@@ -113,7 +113,17 @@ describe('identity', () => {
     expect(second.agentId).not.toBe(first.agentId);
     expect((await loadKey())?.agentId).toBe(second.agentId);
     expect((await stat(paths().key)).mode & 0o777).toBe(0o600);
-    expect(await readdir(home)).toEqual(['key']);
+
+    // The replaced key is kept, readable only by the owner, and still loads.
+    const backup = second.backup ?? '';
+    expect(backup).toMatch(/\/key\.[0-9T-]+Z\.bak$/);
+    expect((await readdir(home)).sort()).toEqual(
+      ['key', basename(backup)].sort(),
+    );
+    expect((await stat(backup)).mode & 0o777).toBe(0o600);
+    expect((await loadKey({ ...paths(), key: backup }))?.agentId).toBe(
+      first.agentId,
+    );
   });
 
   it('returns null when there is no key', async () => {

@@ -249,7 +249,11 @@ async function init(
   // config, and a plain init picks up from there.
   let agentId: string;
   if (options.force) {
-    agentId = (await createKey({ force: true }, p)).agentId;
+    const created = await createKey({ force: true }, p);
+    agentId = created.agentId;
+    if (created.backup !== undefined) {
+      stderr(`the old key is kept at ${created.backup}`);
+    }
     await rm(p.config, { force: true });
   } else {
     agentId = ((await loadKey(p)) ?? (await createKey({}, p))).agentId;

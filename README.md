@@ -119,7 +119,7 @@ The GitHub token is sent once, inside the signed registration, and is never writ
 | `--name <name>` | the current directory name, lowercased with runs of other characters turned into one hyphen |
 | `--version <version>` | `0.1.0` |
 | `--api-url <url>` | `SEALKEEPER_API_URL`, then the existing config, then `https://api.sealkeeper.run` |
-| `--force` | regenerate the key and register again |
+| `--force` | regenerate the key and register again, keeping the old key as `key.<time>.bak` |
 
 After registering, `init` prints what leaves this machine (see above) on stderr and sends no events. Automatic sync starts off.
 
