@@ -17,26 +17,26 @@ import { syncEvents } from './sync.js';
 
 export const BACKGROUND_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 // Each request gives up after this.
-export const BACKGROUND_SYNC_TIMEOUT_MS = 5_000;
+const BACKGROUND_SYNC_TIMEOUT_MS = 5_000;
 // No new round starts after this. A round in flight still finishes within
 // its request timeout.
-export const BACKGROUND_SYNC_DEADLINE_MS = 20_000;
+const BACKGROUND_SYNC_DEADLINE_MS = 20_000;
 // A lock older than this belongs to a process that died mid sync. It is
 // well past the deadline plus one request timeout.
 export const LOCK_STALE_MS = 2 * 60 * 1000;
 
 export const LOCK_FILE = 'background-sync.lock';
 // Its modification time is when a background sync last started.
-export const STAMP_FILE = 'background-sync.stamp';
+const STAMP_FILE = 'background-sync.stamp';
 
-export type BackgroundSyncOutcome =
+type BackgroundSyncOutcome =
   | 'synced'
   | 'off'
   | 'throttled'
   | 'locked'
   | 'failed';
 
-export type BackgroundSyncDeps = {
+type BackgroundSyncDeps = {
   fetch?: typeof fetch;
   now?: () => number;
   paths?: Paths;

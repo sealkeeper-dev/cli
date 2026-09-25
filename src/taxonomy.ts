@@ -47,14 +47,14 @@ export const NEVER_LEAVES =
 export const WIRE_FORM =
   'Each event is sent as exactly this JSON wrapped in a signature from your agent key, and nothing else.';
 
-export type FieldRow = {
+type FieldRow = {
   name: string;
   kind: string;
   optional: boolean;
   text: string;
 };
 
-export type TypeRow = { type: EventType; fields: FieldRow[] };
+type TypeRow = { type: EventType; fields: FieldRow[] };
 
 // The fields every event carries next to its payload.
 export function commonFields(): FieldRow[] {
@@ -82,7 +82,7 @@ export function taxonomyRows(): TypeRow[] {
   });
 }
 
-// The What leaves this machine block. The hidden command sealkeeper
+// The What leaves this machine block. The command sealkeeper
 // what-is-shared prints it, and init prints it on stderr only with --json.
 // The human init output has a short version that points there.
 export function describeTaxonomy(): string {

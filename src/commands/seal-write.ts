@@ -7,7 +7,7 @@ import { stdout, wantsJson } from '../output.js';
 import type { SealDeps } from './seal.js';
 import { NO_SEAL } from './seal-show.js';
 
-export const SEAL_FILE = 'seal.txt';
+const SEAL_FILE = 'seal.txt';
 
 // Public, like the card, so whatever serves it can read it.
 const SEAL_FILE_MODE = 0o644;

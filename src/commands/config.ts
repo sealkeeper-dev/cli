@@ -1,12 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
+import { requireConfig } from '../cli-config.js';
 import { writeConfig } from '../config.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
-import { AUTO_SYNC_ON, loadConfig } from './sync.js';
-import { NOT_INITIALISED } from './whoami.js';
+import { AUTO_SYNC_ON } from './sync.js';
 
-export const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
+const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
 // Local settings in config.json. Only auto-sync can be changed here, the
 // identity fields come from init.
@@ -19,8 +19,7 @@ export function register(parent: Command): Command {
     .command('show')
     .description('Print config.json, including whether auto-sync is on')
     .action(async function (this: Command): Promise<void> {
-      const current = await loadConfig(this);
-      if (current === null) this.error(NOT_INITIALISED);
+      const current = await requireConfig(this);
       // autoSync is unset until the first confirmed sync. Either way only
       // true sends on its own, so show and --json always say on or off.
       const shown = { ...current, autoSync: current.autoSync === true };
@@ -47,8 +46,7 @@ export function register(parent: Command): Command {
       if (state !== 'on' && state !== 'off') {
         this.error('auto-sync takes on or off');
       }
-      const current = await loadConfig(this);
-      if (current === null) this.error(NOT_INITIALISED);
+      const current = await requireConfig(this);
       const autoSync = state === 'on';
       await writeConfig({ ...current, autoSync });
       if (wantsJson(this)) {

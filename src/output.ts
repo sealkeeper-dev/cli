@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Command } from 'commander';
 import type { Styled } from './style.js';
 
@@ -24,7 +25,17 @@ export function stdout(text: string): void {
   process.stdout.write(`${terminalSafe(text)}\n`);
 }
 
+// The library entries run inside someone else's agent, whose stderr is not
+// ours to write to. Work started inside quietly, including async work it
+// kicks off, drops the warnings stderr would print. The CLI never uses it.
+const quiet = new AsyncLocalStorage<true>();
+
+export function quietly<T>(fn: () => T): T {
+  return quiet.run(true, fn);
+}
+
 export function stderr(text: string): void {
+  if (quiet.getStore()) return;
   process.stderr.write(`${terminalSafe(text)}\n`);
 }
 
@@ -37,6 +48,7 @@ export function stdoutStyled(line: Styled): void {
 }
 
 export function stderrStyled(line: Styled): void {
+  if (quiet.getStore()) return;
   process.stderr.write(`${line.text}\n`);
 }
 

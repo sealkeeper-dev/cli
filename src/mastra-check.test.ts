@@ -1,24 +1,37 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // check and assertTrusted from sealkeeper/mastra, with a mocked fetch.
 import type { SealCheckResponse } from '@sealkeeper/schema';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertTrusted, check, SealKeeperCheckError } from './mastra.js';
+import { type SealFixture, sealFixture } from './test-seal.js';
+
+const ID = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
+let fixture: SealFixture;
+// A passing answer carries a SEAL signed with the key the fake API
+// publishes. A failing one is never verified.
+let signed = '';
+beforeAll(async () => {
+  fixture = await sealFixture();
+  signed = await fixture.seal(ID);
+});
 
 const answer = (ok: boolean): SealCheckResponse => ({
   ok,
-  id: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo',
+  id: ID,
   handle: 'alice/claude-code',
   checks: [
     { name: 'minVerified', required: 5, actual: ok ? 7 : 2, ok },
     { name: 'maxIncidents', required: 0, actual: 0, ok: true },
   ],
-  credential: 'eyJh.eyJi.c2ln',
-  seal: 'eyJh.eyJi.c2ln',
+  credential: ok ? signed : 'eyJh.eyJi.c2ln',
+  seal: ok ? signed : 'eyJh.eyJi.c2ln',
 });
 
 function fakeFetch(res: () => Response) {
   const urls: string[] = [];
   const fn = vi.fn(async (input: string | URL | Request) => {
+    const keys = fixture.keysFor(String(input));
+    if (keys) return keys;
     urls.push(String(input));
     return res();
   }) as unknown as typeof fetch;

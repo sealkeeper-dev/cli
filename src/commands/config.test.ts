@@ -123,10 +123,10 @@ describe('config', () => {
 });
 
 describe('what-is-shared', () => {
-  it('prints the same block as init and is hidden from help', async () => {
+  it('prints the same block as init and is listed in help', async () => {
     const { code, out } = await run('what-is-shared');
     expect(code).toBe(0);
     expect(out).toBe(`${describeTaxonomy()}\n`);
-    expect(createProgram().helpInformation()).not.toContain('what-is-shared');
+    expect(createProgram().helpInformation()).toMatch(/^ {2}what-is-shared\b/m);
   });
 });

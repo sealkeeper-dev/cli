@@ -1,17 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import {
-  mkdir,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ConfigError, type Paths, paths, readConfig } from './config.js';
 import { type EmitInput, emit } from './emit.js';
+import { readIfExists } from './files.js';
 import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
 import { stderr } from './output.js';
@@ -26,7 +19,7 @@ export { toolNameOf } from './names.js';
 
 // Only the SessionEnd hook tries a sync, only once autoSync is on, and never
 // for longer than this per request. Every other hook only appends.
-export const HOOK_SYNC_TIMEOUT_MS = 2_000;
+const HOOK_SYNC_TIMEOUT_MS = 2_000;
 
 // Markers older than this belong to sessions or tool calls that never ended.
 export const STALE_MARKER_MS = 24 * 60 * 60 * 1000;
@@ -42,14 +35,14 @@ const TOOL_MARKER_PREFIX = 'tool.';
 // so a later SessionStart for the same id does not count a second session.
 const ENDED_MARKER_PREFIX = 'ended.';
 
-export type HookInput = {
+type HookInput = {
   event: string;
   sessionId: string | null;
   toolName: string | null;
   toolUseId: string | null;
 };
 
-export type HookDeps = {
+type HookDeps = {
   fetch: typeof fetch;
   sleep: (ms: number) => Promise<void>;
   now?: () => Date;
@@ -205,13 +198,8 @@ async function takeMarker(p: Paths, name: string): Promise<Date | null> {
   return new Date(text.trim());
 }
 
-async function readMarker(p: Paths, name: string): Promise<string | null> {
-  try {
-    return await readFile(join(p.sessions, name), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+function readMarker(p: Paths, name: string): Promise<string | null> {
+  return readIfExists(join(p.sessions, name));
 }
 
 async function exists(p: Paths, name: string): Promise<boolean> {

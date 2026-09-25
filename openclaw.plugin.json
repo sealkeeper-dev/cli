@@ -1,0 +1,11 @@
+{
+  "id": "sealkeeper",
+  "name": "SealKeeper",
+  "description": "Records session, tool call and usage metadata in the local SealKeeper log.",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

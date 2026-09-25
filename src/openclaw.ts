@@ -8,18 +8,18 @@
 // throws into the agent, and the agent never waits on a sync.
 //
 // OpenClaw is typed by shape only, so this file imports nothing from it. The
-// hook names and fields were read from OpenClaw's source (src/plugins/
-// hook-types.ts and the plugin loader) at openclaw/openclaw main 7180278 on
-// 23 September 2026, not from a running Gateway. Confirm against a live
-// Gateway before launch. Types are in types/openclaw.d.ts, which
-// openclaw-types.test.ts keeps in step.
+// hook names and fields match OpenClaw's source (src/plugins/hook-types.ts
+// and the plugin loader) at openclaw/openclaw main cbcd4df, version
+// 2026.9.6, where the built plugin was also run through OpenClaw's own
+// registration and hook runner. It has not yet run inside a live Gateway.
+// Types are in types/openclaw.d.ts, which openclaw-types.test.ts keeps in
+// step.
 import { EventPayload } from '@sealkeeper/schema';
-import { kickBackgroundSync } from './background-sync.js';
-import { type EmitInput, emit } from './lib.js';
+import { clampMs, safeEmit } from './adapter-core.js';
+import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
-const MAX_MS = EventPayload['tool.call'].shape.duration_ms.maxValue ?? 0;
 const NAME = EventPayload['session.start'].shape.session_id;
 
 // Open sessions, tool calls and runs are held in memory until they end. A
@@ -45,22 +45,6 @@ export type SealKeeperOpenClawPlugin = {
   description: string;
   register: (api: OpenClawPluginApiLike) => void;
 };
-
-// Appends one event, then starts a background sync without waiting for
-// it. Never throws.
-async function safeEmit(input: EmitInput): Promise<void> {
-  try {
-    await emit(input);
-  } catch {
-    // Telemetry must never break the agent.
-    return;
-  }
-  kickBackgroundSync();
-}
-
-function clampMs(ms: number): number {
-  return Math.min(Math.max(Math.round(ms), 0), MAX_MS);
-}
 
 function since(start: number): number {
   return clampMs(performance.now() - start);
@@ -145,8 +129,9 @@ function register(api: OpenClawPluginApiLike): void {
     }
   };
 
-  // A resumed session fires session_start again with the same id. It stays
-  // one session.
+  // A resumed or reset session gets a new id from OpenClaw, so it is a new
+  // session here too. A session_start repeated for an id already open is
+  // ignored, so it stays one session.
   on('session_start', (event, ctx) => {
     const id = idOf(field(event, 'sessionId') ?? field(ctx, 'sessionId'));
     if (id === null || sessions.has(id)) return null;

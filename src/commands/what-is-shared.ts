@@ -4,10 +4,10 @@ import { stdout } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
 // Prints the full What leaves this machine block. init prints a short
-// version and points here. Hidden from help, named in the README.
+// version and points here.
 export function register(parent: Command): Command {
   return parent
-    .command('what-is-shared', { hidden: true })
+    .command('what-is-shared')
     .description('Print what leaves this machine')
     .action(() => {
       stdout(describeTaxonomy());

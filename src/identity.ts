@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { link, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { link, open, rename, rm, stat } from 'node:fs/promises';
 import { getPublicKeyAsync } from '@noble/ed25519';
 import {
   type AgentId,
@@ -11,6 +11,7 @@ import {
   sign,
 } from '@sealkeeper/schema';
 import { ensureHome, type Paths, paths } from './config.js';
+import { readIfExists } from './files.js';
 import { cli } from './invocation.js';
 import { stderr } from './output.js';
 
@@ -24,12 +25,12 @@ export class KeyError extends Error {
 
 export const NO_KEY = `no key found, run ${cli('init')}`;
 
-export type Identity = {
+type Identity = {
   agentId: AgentId;
   publicKey: Uint8Array;
 };
 
-export type LoadedKey = Identity & {
+type LoadedKey = Identity & {
   privateKey: Uint8Array;
 };
 
@@ -94,13 +95,8 @@ async function backupKey(p: Paths): Promise<string | undefined> {
 // one base64url line holding a 32 byte seed. Prints one warning line on stderr
 // when group or others have any permission on the file.
 export async function loadKey(p: Paths = paths()): Promise<LoadedKey | null> {
-  let raw: string;
-  try {
-    raw = await readFile(p.key, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+  const raw = await readIfExists(p.key);
+  if (raw === null) return null;
 
   const mode = (await stat(p.key)).mode & 0o777;
   if ((mode & 0o077) !== 0) {

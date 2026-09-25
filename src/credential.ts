@@ -1,5 +1,4 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { readFile } from 'node:fs/promises';
 import {
   base64urlDecode,
   decodeHeader,
@@ -10,6 +9,7 @@ import {
 import { z } from 'zod';
 import { type ApiClient, ApiError } from './api.js';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
+import { readIfExists } from './files.js';
 import { stderr } from './output.js';
 import { CredentialPayload } from './responses.js';
 
@@ -20,7 +20,7 @@ import { CredentialPayload } from './responses.js';
 // already made public.
 
 // A cached SEAL is reused while it has more than this left.
-export const REFRESH_MARGIN_SEC = 2 * 3600;
+const REFRESH_MARGIN_SEC = 2 * 3600;
 
 // The cache keeps the SEAL as seal and as credential, the same string, so
 // an older CLI that reads only credential still finds it. It reads either.
@@ -41,7 +41,7 @@ export class CredentialError extends Error {
   override name = 'CredentialError';
 }
 
-export type GetCredentialOptions = {
+type GetCredentialOptions = {
   api: ApiClient;
   agentId: string;
   force?: boolean;
@@ -170,13 +170,8 @@ async function readCache(
   agentId: string,
   nowSec: number,
 ): Promise<Credential | null> {
-  let raw: string;
-  try {
-    raw = await readFile(p.credential, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+  const raw = await readIfExists(p.credential);
+  if (raw === null) return null;
   let json: unknown;
   try {
     json = JSON.parse(raw);

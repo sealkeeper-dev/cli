@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs';
 import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, sep } from 'node:path';
 import { writeFileAtomic } from './config.js';
 
 // Adds and removes the SealKeeper hooks in a Claude Code settings file. Hooks
@@ -11,7 +11,7 @@ import { writeFileAtomic } from './config.js';
 // not ours are never changed.
 
 // What follows the CLI invocation in every hook command we write.
-export const HOOK_ARGS = 'hook claude-code';
+const HOOK_ARGS = 'hook claude-code';
 export const HOOK_EVENTS = [
   'SessionStart',
   'SessionEnd',
@@ -152,6 +152,37 @@ export type InstallResult = {
   added: string[];
   updated: string[];
 };
+
+// A cloned repo can make .claude, its settings.json or its commands folder a
+// symlink to anywhere on the machine. Project scope is only ever written
+// inside the project, so each path must resolve there. User scope follows
+// links on purpose, for settings kept in a dotfiles repo.
+export async function refuseOutsideProject(
+  cwd: string,
+  paths: string[],
+): Promise<void> {
+  const root = await realpath(cwd).catch(() => cwd);
+  for (const path of paths) {
+    const real = await resolveExisting(path);
+    if (real !== root && !real.startsWith(`${root}${sep}`)) {
+      throw new SettingsError(
+        `refusing to write ${path}, it resolves to ${real}, outside the project`,
+      );
+    }
+  }
+}
+
+// The real path of the nearest part of path that exists, with the rest
+// appended, so a link anywhere along it is followed.
+async function resolveExisting(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const parent = dirname(path);
+    if (parent === path) return path;
+    return join(await resolveExisting(parent), basename(path));
+  }
+}
 
 // Adds one hook entry per event that has none of ours yet, and rewrites
 // any of ours whose command differs from command, in place. Entries that

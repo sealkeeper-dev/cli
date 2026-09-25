@@ -3,16 +3,17 @@ import type { Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from '../api.js';
+import { loadConfig } from '../cli-config.js';
 import { DEFAULT_AGENT_VERSION } from '../config.js';
 import { type EmitInput, emit } from '../emit.js';
 import { cli } from '../invocation.js';
 import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { pendingText, SyncError, syncEvents } from '../sync.js';
-import { defaultSyncDeps, loadConfig, type SyncDeps } from './sync.js';
+import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 // emit never waits long on the network. The hook that called it is waiting.
-export const EMIT_SYNC_TIMEOUT_MS = 2_000;
+const EMIT_SYNC_TIMEOUT_MS = 2_000;
 
 type EmitOptions = {
   type: string;

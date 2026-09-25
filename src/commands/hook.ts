@@ -8,14 +8,14 @@ import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 // Claude Code writes the payload and closes stdin at once. Past this, or past
 // MAX_STDIN_BYTES, the hook gives up and does nothing.
-export const STDIN_TIMEOUT_MS = 1_000;
-export const MAX_STDIN_BYTES = 64 * 1024 * 1024;
+const STDIN_TIMEOUT_MS = 1_000;
+const MAX_STDIN_BYTES = 64 * 1024 * 1024;
 
 export type HookCommandDeps = SyncDeps & {
   readStdin: () => Promise<string | null>;
 };
 
-export const defaultHookDeps: HookCommandDeps = {
+const defaultHookDeps: HookCommandDeps = {
   ...defaultSyncDeps,
   readStdin: () => readStdin(process.stdin),
 };

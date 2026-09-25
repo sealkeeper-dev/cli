@@ -21,8 +21,8 @@ import { stderr } from './output.js';
 // a hook or an adapter's background sync calls it.
 
 // The API caps a batch at 500 events and the request body at 256 KB.
-export const MAX_BATCH_EVENTS = MAX_EVENTS_PER_BATCH;
-export const MAX_BATCH_BYTES = 256 * 1024;
+const MAX_BATCH_EVENTS = MAX_EVENTS_PER_BATCH;
+const MAX_BATCH_BYTES = 256 * 1024;
 export const MAX_RATE_LIMIT_WAIT_SEC = 30;
 
 // How old an event's occurred_at may be for the API to accept it. The API
@@ -33,10 +33,10 @@ export const EVENT_MAX_AGE_DAYS = 7;
 // the window, so a clock a little off never drops one the API would still
 // take. One that falls between the two is sent and, if the API rejects it,
 // skipped by the per event fallback below.
-export const STALE_MARGIN_MS = 3600 * 1000;
+const STALE_MARGIN_MS = 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
 
-export type SyncResult = {
+type SyncResult = {
   accepted: number;
   duplicates: number;
   // Events the API rejected one by one and the cursor moved past.
@@ -60,7 +60,7 @@ export class SyncError extends Error {
   }
 }
 
-export type SyncOptions = {
+type SyncOptions = {
   api: ApiClient;
   sleep: (ms: number) => Promise<void>;
   // Longest Retry-After sync waits for, once per run. 0 means never wait.

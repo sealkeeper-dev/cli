@@ -18,13 +18,16 @@ import {
   parseHookCommand,
   settingsPath,
 } from '../claude-code-settings.js';
+import { requireConfig } from '../cli-config.js';
 import {
   type Config,
   handleOf,
+  isSecureApiUrl,
   type Paths,
   paths,
   profileUrl,
 } from '../config.js';
+import { exists } from '../files.js';
 import { cli } from '../invocation.js';
 import {
   CursorError,
@@ -37,8 +40,7 @@ import { stderr, stdout, wantsJson } from '../output.js';
 import { getScore, SCORE_TIMEOUT_MS, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
-import { defaultSyncDeps, loadConfig } from './sync.js';
-import { NOT_INITIALISED } from './whoami.js';
+import { defaultSyncDeps } from './sync.js';
 
 // A local dashboard of today's activity. Everything but the score comes from
 // files under the SealKeeper home, so it works offline. The score comes from the
@@ -59,7 +61,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
 const SCORING_EVERY_MS = 15 * 60 * 1000;
 
-export type Status = {
+type Status = {
   agentId: string;
   // login/name, from config.
   handle: string;
@@ -106,8 +108,7 @@ export function register(
       this: Command,
       options: { show?: boolean },
     ): Promise<void> {
-      const config = await loadConfig(this);
-      if (config === null) this.error(NOT_INITIALISED);
+      const config = await requireConfig(this);
 
       let status: Status;
       try {
@@ -125,7 +126,7 @@ export function register(
     });
 }
 
-export async function readStatus(
+async function readStatus(
   config: Config,
   deps: StatusDeps,
   now: Date,
@@ -196,11 +197,15 @@ async function liveAgent(
   deps: StatusDeps,
 ): Promise<LiveAgent | null> {
   const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
+  // Its own request rather than the API client, for the loose parse, with
+  // the same rules as every other request.
+  if (!isSecureApiUrl(apiUrl)) return null;
   try {
     const res = await deps.fetch(
       `${apiUrl}/v1/agents/${encodeURIComponent(config.agentId)}`,
       {
         headers: { Accept: 'application/json' },
+        redirect: 'error',
         signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
       },
     );
@@ -229,7 +234,7 @@ function claudeDirs(deps: StatusDeps) {
 // True when a hook of ours in the user or project settings runs a node
 // binary or a sealkeeper script that is not there any more, as happens once
 // the npx cache is cleared.
-export async function hooksGone(deps: StatusDeps): Promise<boolean> {
+async function hooksGone(deps: StatusDeps): Promise<boolean> {
   const dirs = claudeDirs(deps);
   const commands = (
     await Promise.all([
@@ -247,18 +252,11 @@ export async function hooksGone(deps: StatusDeps): Promise<boolean> {
   return false;
 }
 
-async function exists(path: string): Promise<boolean> {
-  return stat(path).then(
-    () => true,
-    () => false,
-  );
-}
-
 // True when neither Claude Code settings file holds our hooks and the log
 // has no event in the last seven UTC days, today included. The CLI cannot see
 // the Mastra or OpenClaw adapters, which live in other code, but they write
 // to the same log, so an agent using them is never quiet for long.
-export async function noAdapterAndQuiet(
+async function noAdapterAndQuiet(
   deps: StatusDeps,
   now: Date,
   p: Paths = paths(),
@@ -412,7 +410,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
 
 // Only while nothing is verified yet, so it points at the one thing left to
 // do. The count comes from the local log, so some may have expired.
-export function unsubmittedHint(status: Status): string | null {
+function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
   return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove')} to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;

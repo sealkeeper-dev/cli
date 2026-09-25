@@ -168,7 +168,8 @@ describe('hook claude-code', () => {
     const program = createProgram();
     const help = program.helpInformation();
     expect(help).not.toMatch(/^ {2}hook\b/m);
-    expect(help).toMatch(/^ {2}adapter claude-code\b/m);
+    expect(help).toMatch(/^ {2}adapter claude-code install\b/m);
+    expect(help).toMatch(/^ {2}adapter claude-code uninstall\b/m);
   });
 
   it('SessionStart emits session.start and records the start time', async () => {

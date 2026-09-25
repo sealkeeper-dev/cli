@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   promptStyled,
+  quietly,
+  stderr,
   stderrStyled,
   stdout,
   stdoutStyled,
@@ -78,5 +80,29 @@ describe('styled writers', () => {
     const out = capture(process.stdout);
     stdout(String(s.bold('x')));
     expect(out.text).toBe('\\u001b[1mx\\u001b[22m\n');
+  });
+});
+
+describe('quietly', () => {
+  it('drops stderr inside the scope, including work it starts, and only there', async () => {
+    const write = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    try {
+      let later: Promise<void> = Promise.resolve();
+      quietly(() => {
+        stderr('now');
+        stderrStyled(createStyle({ isTTY: false }, { env: {} }).bold('styled'));
+        later = new Promise<void>((resolve) => setTimeout(resolve, 1)).then(
+          () => stderr('later'),
+        );
+      });
+      await later;
+      expect(write).not.toHaveBeenCalled();
+      stderr('outside');
+      expect(write).toHaveBeenCalledWith('outside\n');
+    } finally {
+      write.mockRestore();
+    }
   });
 });

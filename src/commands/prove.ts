@@ -26,7 +26,7 @@ import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 // come first and count toward the number, so running prove again shows
 // them again instead of claiming past the server's cap.
 
-export const DEFAULT_COUNT = 5;
+const DEFAULT_COUNT = 5;
 export const MAX_COUNT = 10;
 
 // Beyond the tasks wanted, how many claims may lose a race or hit an expiry
@@ -289,7 +289,7 @@ async function ranked(
     .map((task) => ({ task, seed: seed.has(task.posterAgentId) }));
 }
 
-export function taskBlock(
+function taskBlock(
   task: TaskResponse,
   n: number,
   total: number,

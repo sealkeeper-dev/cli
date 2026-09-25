@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { rm, stat } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, sep } from 'node:path';
 import {
@@ -22,6 +22,7 @@ import {
   installHooks,
   invocationOf,
   isNpxCopy,
+  refuseOutsideProject,
   SettingsError,
   settingsPath,
 } from '../claude-code-settings.js';
@@ -36,6 +37,7 @@ import {
   readConfig,
   writeConfig,
 } from '../config.js';
+import { isDirectory } from '../files.js';
 import {
   DeviceFlowError,
   deviceFlow,
@@ -77,7 +79,6 @@ import { printIdentity } from './whoami.js';
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
 export const CONSENT =
   'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
-export { DEFAULT_AGENT_VERSION } from '../config.js';
 
 // The human output. The welcome box, then the terms, the sign in, the
 // registration, what leaves this machine, the Claude Code hooks and what to
@@ -576,6 +577,15 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const [question = ''] = HOOKS_QUESTION.split(' [Y/n]');
   promptStyled(indent(e.line`${question} ${e.dim('[Y/n]')} `));
   if (!isYesByDefault(await input.readLine())) return 'not-installed';
+  if (file === project) {
+    try {
+      await refuseOutsideProject(dirs.cwd, [file, proveCommandPath(file)]);
+    } catch (error) {
+      if (!(error instanceof SettingsError)) throw error;
+      note(ui.err.line`${error.message}`);
+      return 'not-installed';
+    }
+  }
   return (await installAt(file, hook, ui)) ? 'installed' : 'not-installed';
 }
 
@@ -633,14 +643,6 @@ async function installAt(
 export function isYesByDefault(answer: string | null): boolean {
   if (answer === null) return false;
   return /^(y(es)?)?$/i.test(answer.trim());
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 // The nextSteps of a --json run. The hooks this run wrote point at the

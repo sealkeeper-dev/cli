@@ -13,7 +13,7 @@ import { stderr } from './output.js';
 // that arrives late still lands after the cursor. Each line is
 // {v: 1, ...event}. Nothing here signs, sends or deletes anything.
 
-export const LOG_LINE_VERSION = 1;
+const LOG_LINE_VERSION = 1;
 export const CURSOR_VERSION = 1;
 
 const Day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -29,7 +29,7 @@ export type LogPosition = z.infer<typeof LogPosition>;
 
 // lastSyncAt is when sync last had a batch accepted. It is optional so a
 // cursor written before it existed still parses.
-export const Cursor = z.strictObject({
+const Cursor = z.strictObject({
   v: z.literal(CURSOR_VERSION),
   lastAcked: LogPosition.nullable(),
   lastSyncAt: z.iso.datetime({ offset: true }).optional(),
@@ -40,7 +40,7 @@ export class CursorError extends Error {
   override name = 'CursorError';
 }
 
-export type Pending = {
+type Pending = {
   events: Event[];
   // The position of each event in events, so a caller can ack part of them.
   positions: LogPosition[];

@@ -13,7 +13,7 @@ import { stderr } from './output.js';
 export const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
-export const CLIENT_ID_ENV = 'SEALKEEPER_GITHUB_CLIENT_ID';
+const CLIENT_ID_ENV = 'SEALKEEPER_GITHUB_CLIENT_ID';
 export const MISSING_CLIENT_ID = `missing GitHub OAuth client id, set ${CLIENT_ID_ENV}`;
 export const CODE_EXPIRED = `the GitHub code expired, run ${cli('init')} again`;
 export const ACCESS_DENIED = 'GitHub authorisation was denied';
@@ -45,7 +45,7 @@ export type Sleep = (ms: number) => Promise<void>;
 export const sleep: Sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-export type DeviceFlowOptions = {
+type DeviceFlowOptions = {
   clientId: string;
   fetch?: typeof fetch;
   sleep?: Sleep;

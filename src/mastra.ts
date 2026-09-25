@@ -12,21 +12,21 @@
 // throws unless every check passes. check() returns the answer instead.
 import { randomUUID } from 'node:crypto';
 import { EventPayload } from '@sealkeeper/schema';
-import { kickBackgroundSync } from './background-sync.js';
+import { clampMs, safeEmit } from './adapter-core.js';
 import {
   type CheckOptions,
   type CheckThresholds,
   describeCheck,
   fetchCheck,
 } from './check.js';
-import { type EmitInput, emit } from './lib.js';
+import type { EmitInput } from './lib.js';
+import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
 export type { Check, CheckOptions, CheckResponse, CheckThresholds };
 
 // Limits come from the schema, so this file keeps no copy of them.
 const TOOL_CALL = EventPayload['tool.call'].shape;
-const MAX_MS = TOOL_CALL.duration_ms.maxValue ?? 0;
 
 // Anything with an id and, usually, an execute. What createTool returns fits.
 export type MastraToolLike = {
@@ -42,20 +42,8 @@ export type SealKeeperSession = {
   end: () => Promise<void>;
 };
 
-// Appends one event, then starts a background sync without waiting for
-// it. Never throws.
-async function safeEmit(input: EmitInput): Promise<void> {
-  try {
-    await emit(input);
-  } catch {
-    // Telemetry must never break the agent.
-    return;
-  }
-  kickBackgroundSync();
-}
-
 function elapsed(start: number): number {
-  return Math.min(Math.max(Math.round(performance.now() - start), 0), MAX_MS);
+  return clampMs(performance.now() - start);
 }
 
 function errorClass(error: unknown): string {
@@ -203,7 +191,7 @@ export function check(
   thresholds?: CheckThresholds,
   options?: CheckOptions,
 ): Promise<CheckResponse> {
-  return fetchCheck(handle, thresholds, options);
+  return quietly(() => fetchCheck(handle, thresholds, options));
 }
 
 // Thrown by assertTrusted. failed lists the checks that did not pass.

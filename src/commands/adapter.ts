@@ -13,6 +13,7 @@ import {
   type InstallResult,
   installHooks,
   invocationOf,
+  refuseOutsideProject,
   type Scope,
   SettingsError,
   settingsPath,
@@ -32,7 +33,7 @@ export type AdapterDeps = {
   claudeDir?: () => string;
 };
 
-export const defaultAdapterDeps: AdapterDeps = {
+const defaultAdapterDeps: AdapterDeps = {
   home: homedir,
   cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),
@@ -68,9 +69,10 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
+      const commandPath = proveCommandPath(file);
+      await guardProject(this, options.scope, deps, [file, commandPath]);
       const hook = deps.hookCommand();
       const result = await orExit(this, () => installHooks(file, hook));
-      const commandPath = proveCommandPath(file);
       const command = await orExit(this, () =>
         installProveCommand(commandPath, invocationOf(hook)),
       );
@@ -95,10 +97,11 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
+      const commandPath = proveCommandPath(file);
+      await guardProject(this, options.scope, deps, [file, commandPath]);
       const removed = await orExit(this, () =>
         uninstallHooks(file, deps.hookCommand()),
       );
-      const commandPath = proveCommandPath(file);
       const commandRemoved = await orExit(this, () =>
         uninstallProveCommand(commandPath),
       );
@@ -159,6 +162,16 @@ function pathFor(scope: Scope, deps: AdapterDeps): string {
     cwd: deps.cwd(),
     claudeDir: deps.claudeDir?.(),
   });
+}
+
+async function guardProject(
+  cmd: Command,
+  scope: Scope,
+  deps: AdapterDeps,
+  paths: string[],
+): Promise<void> {
+  if (scope !== 'project') return;
+  await orExit(cmd, () => refuseOutsideProject(deps.cwd(), paths));
 }
 
 async function orExit<T>(cmd: Command, work: () => Promise<T>): Promise<T> {

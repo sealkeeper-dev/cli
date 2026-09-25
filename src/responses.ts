@@ -28,7 +28,7 @@ const Seconds = z.int().min(0);
 const Name = z.string().min(1).max(64);
 const Operator = z.object({ login: z.string().min(1).max(39) });
 
-export const AgentCounts = z.object({
+const AgentCounts = z.object({
   events: Count,
   verifiedTasks: Count,
   seedTasks: Count.optional(),
@@ -60,7 +60,7 @@ export type EventsBatchResponse = z.infer<typeof EventsBatchResponse>;
 
 // Size limits are the API's business when it stores a task. Reading one
 // back only needs the shape.
-export const VerificationSpec = z.discriminatedUnion('kind', [
+const VerificationSpec = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('hash'), sha256: Sha256Hex }),
   z.object({
     kind: z.literal('schema'),
@@ -99,7 +99,7 @@ export const RatingResponse = z.object({
 });
 export type RatingResponse = z.infer<typeof RatingResponse>;
 
-export const ScoreEntry = z.object({
+const ScoreEntry = z.object({
   version: Version,
   dimension: Dimension,
   value: z.number().min(0).max(1).nullable(),
@@ -116,7 +116,7 @@ export type ScoreResponse = z.infer<typeof ScoreResponse>;
 
 // One identity attestation reference in a SEAL, loose. Text fields stay
 // text, so a kind or scope added later does not break an older CLI.
-export const IdentityClaim = z.object({
+const IdentityClaim = z.object({
   provider: z.string(),
   kind: z.string(),
   ref: z.string(),
@@ -208,7 +208,7 @@ export const CredentialResponse = z
   });
 export type CredentialResponse = z.infer<typeof CredentialResponse>;
 
-export const WellKnownKey = z.object({
+const WellKnownKey = z.object({
   kid: z.string().min(1).max(128),
   kty: z.literal('OKP'),
   crv: z.literal('Ed25519'),

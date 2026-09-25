@@ -23,7 +23,6 @@ import { SealClaims, WellKnown } from './responses.js';
 
 // The path the keys are served at, from the schema, so the CLI, the API and
 // the web never name different ones.
-export { WELL_KNOWN_PATH };
 // Cached keys are fetched again once they are older than this, or sooner
 // when a SEAL names a kid they do not have.
 export const KEYS_MAX_AGE_MS = 24 * 3600 * 1000;
@@ -256,7 +255,7 @@ const CachedKeys = z.object({
   wellKnown: WellKnown,
 });
 
-export type LoadKeysOptions = {
+type LoadKeysOptions = {
   apiUrl: string;
   fetch: typeof fetch;
   paths: Paths;

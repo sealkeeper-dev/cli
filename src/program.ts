@@ -31,24 +31,27 @@ import { terminalSafe } from './output.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
-// Root help lists leaf commands with their full path ("card show", not "card")
-// so `sealkeeper --help` is the whole map of the CLI.
+// Root help lists leaf commands with their full path ("card show", not "card",
+// and "adapter claude-code install") so `sealkeeper --help` is the whole map
+// of the CLI.
 function visibleCommands(this: Help, cmd: Command): Command[] {
   const direct = Help.prototype.visibleCommands.call(this, cmd);
   if (cmd.parent) return direct;
-  return direct.flatMap((sub) =>
+  const leaves = (sub: Command): Command[] =>
     sub.commands.length === 0
       ? [sub]
       : Help.prototype.visibleCommands
           .call(this, sub)
-          .filter((leaf) => leaf.name() !== 'help'),
-  );
+          .filter((leaf) => leaf.name() !== 'help')
+          .flatMap(leaves);
+  return direct.flatMap(leaves);
 }
 
 function subcommandTerm(this: Help, cmd: Command): string {
   const term = Help.prototype.subcommandTerm.call(this, cmd);
-  const group = cmd.parent?.parent ? cmd.parent.name() : null;
-  return group ? `${group} ${term}` : term;
+  const groups: string[] = [];
+  for (let c = cmd.parent; c?.parent; c = c.parent) groups.unshift(c.name());
+  return [...groups, term].join(' ');
 }
 
 const JSON_FLAG = '--json';
@@ -64,7 +67,7 @@ function addJsonFlag(cmd: Command): void {
   for (const sub of cmd.commands) addJsonFlag(sub);
 }
 
-export type ProgramDeps = {
+type ProgramDeps = {
   init?: InitDeps;
   // Used by emit, sync and status. claudeDir and cwd only matter to status.
   sync?: SyncDeps & Omit<StatusDeps, 'fetch'>;

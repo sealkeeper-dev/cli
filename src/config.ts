@@ -1,17 +1,18 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { AgentId, agentHandle } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { readEnv } from './env.js';
+import { readIfExists } from './files.js';
 
 export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
-export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
+const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
 // The API gets the GitHub token at registration and every signed request, so
 // it must be https. Plain http is allowed only to this machine, for a local
 // API during development.
@@ -73,7 +74,7 @@ export const Config = z
   })
   .strict();
 export type Config = z.infer<typeof Config>;
-export type ConfigInput = z.input<typeof Config>;
+type ConfigInput = z.input<typeof Config>;
 
 export class ConfigError extends Error {
   override name = 'ConfigError';
@@ -95,7 +96,7 @@ export type Paths = {
   logFile(day: string): string;
 };
 
-export const HOME_DIR_NAME = '.sealkeeper';
+const HOME_DIR_NAME = '.sealkeeper';
 
 // SEALKEEPER_HOME wins so tests and multiple agents on one machine can each
 // have their own directory. The default is ~/.sealkeeper.
@@ -130,13 +131,8 @@ export async function ensureHome(p: Paths = paths()): Promise<void> {
 // Returns null when there is no config yet. Throws ConfigError when the file
 // exists but is not valid JSON or does not match the schema.
 export async function readConfig(p: Paths = paths()): Promise<Config | null> {
-  let raw: string;
-  try {
-    raw = await readFile(p.config, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
+  const raw = await readIfExists(p.config);
+  if (raw === null) return null;
 
   let json: unknown;
   try {

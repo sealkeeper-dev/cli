@@ -1,8 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { access, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command } from 'commander';
 import { type Paths, paths, readConfig } from '../config.js';
+import { exists } from '../files.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
@@ -11,7 +12,7 @@ import { stdout, wantsJson } from '../output.js';
 // --yes are both given. There is no prompt, the --yes flag is the
 // confirmation.
 
-export const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
+const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
 type LogoutOptions = {
   deleteKey?: boolean;
@@ -114,13 +115,4 @@ async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
     await rm(target, { force: true });
   }
   return removed;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
 }

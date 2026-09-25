@@ -9,13 +9,15 @@ import {
   type Level,
 } from '@sealkeeper/schema';
 import { ApiError, resolveApiUrl } from './api.js';
-import { INSECURE_API_URL, isSecureApiUrl } from './config.js';
+import { INSECURE_API_URL, isSecureApiUrl, paths } from './config.js';
 import {
   AgentRenamedResponse,
   type Check,
   CheckResponse,
   ErrorResponse,
+  type WellKnown,
 } from './responses.js';
+import { checkSeal, loadKeys, sealKid } from './seal.js';
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -39,7 +41,7 @@ export type CheckOptions = {
 
 // Splits login/name and checks both parts. Throws an ApiError with code
 // invalid_handle, before anything is sent.
-export function parseHandle(handle: string): { login: string; name: string } {
+function parseHandle(handle: string): { login: string; name: string } {
   const [login, name, ...rest] = handle.split('/');
   if (
     rest.length > 0 ||
@@ -60,13 +62,11 @@ export function parseHandle(handle: string): { login: string; name: string } {
 // code invalid_threshold instead of reaching the network. The CLI passes
 // its flags as the text that was typed, so an empty flag is refused rather
 // than read as 0.
-export type RawThresholds = {
+type RawThresholds = {
   [K in keyof CheckThresholds]?: string | undefined;
 };
 
-export function checkSearch(
-  thresholds: CheckThresholds | RawThresholds,
-): string {
+function checkSearch(thresholds: CheckThresholds | RawThresholds): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(thresholds)) {
     if (value !== undefined) search.set(key, String(value));
@@ -87,7 +87,8 @@ export function checkSearch(
 
 // Fetches the check and parses the answer. Throws ApiError for anything but
 // a 200 that parses. A renamed handle is code renamed with a message naming
-// the handle the agent has now.
+// the handle the agent has now. A passing answer is trusted only once its
+// SEAL is checked, see trustedPass.
 export async function fetchCheck(
   handle: string,
   thresholds: CheckThresholds | RawThresholds = {},
@@ -132,7 +133,10 @@ export async function fetchCheck(
 
   if (res.status === 200) {
     const parsed = CheckResponse.safeParse(json);
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      await trustedPass(parsed.data, `${login}/${name}`, apiUrl, fetchFn);
+      return parsed.data;
+    }
   }
   const renamed = AgentRenamedResponse.safeParse(json);
   if (res.status === 404 && renamed.success) {
@@ -157,6 +161,44 @@ export async function fetchCheck(
     'bad_response',
     `the SealKeeper API returned an unexpected response (HTTP ${res.status})`,
   );
+}
+
+// A pass that callers act on, as assertTrusted does, needs more than the
+// API's ok. The answer must be about the handle asked for, and its SEAL
+// must verify against the SealKeeper keys, be current and name that agent.
+// Throws ApiError with code seal_invalid when any of that fails. A failing
+// answer needs no proof and is returned as it is.
+async function trustedPass(
+  result: CheckResponse,
+  handle: string,
+  apiUrl: string,
+  fetchFn: typeof fetch,
+): Promise<void> {
+  const invalid = (why: string) =>
+    new ApiError(0, 'seal_invalid', `not trusting ${handle}, ${why}`);
+  if (result.handle.toLowerCase() !== handle.toLowerCase()) {
+    throw invalid(`the API answered for ${result.handle}`);
+  }
+  if (!result.ok) return;
+  const jws = result.seal ?? '';
+  const nowMs = Date.now();
+  let keys: WellKnown;
+  try {
+    keys = await loadKeys({
+      apiUrl,
+      fetch: fetchFn,
+      paths: paths(),
+      nowMs,
+      kid: sealKid(jws) ?? '',
+    });
+  } catch (error) {
+    throw invalid((error as Error).message);
+  }
+  const seal = await checkSeal(jws, keys, nowMs);
+  if (!seal.valid) throw invalid(`its SEAL is ${seal.reason}`);
+  if ((seal.payload as { sub?: unknown }).sub !== result.id) {
+    throw invalid('its SEAL names another agent');
+  }
 }
 
 // One line per check, in plain words. "ok" or "FAIL" first. A check this

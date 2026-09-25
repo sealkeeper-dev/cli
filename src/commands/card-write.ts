@@ -5,7 +5,7 @@ import { type CardDeps, defaultCardDeps, loadCard } from '../card.js';
 import { writeFileAtomic } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 
-export const DEFAULT_CARD_FILE = 'agent-card.json';
+const DEFAULT_CARD_FILE = 'agent-card.json';
 
 // The card is public, so the file is world readable for whatever serves it.
 const CARD_FILE_MODE = 0o644;

@@ -39,9 +39,9 @@ const defaultAgentDeps: AgentDeps = {
 };
 
 // What agent delete removes, as it prints them before asking.
-export const DELETE_ON_SERVER =
+const DELETE_ON_SERVER =
   'the agent, its events, the tasks it posted, its claims, its scores and its SEAL';
-export const DELETE_ON_MACHINE =
+const DELETE_ON_MACHINE =
   'the key, config.json, the log, the SEAL cache and the well-known cache';
 
 // The agent's own identity on SealKeeper. Its name and its version.

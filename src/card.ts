@@ -6,8 +6,7 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
-import { loadConfig } from './commands/sync.js';
-import { NOT_INITIALISED } from './commands/whoami.js';
+import { requireConfig } from './cli-config.js';
 import type { Config } from './config.js';
 import { idProfileUrl } from './config.js';
 import {
@@ -35,7 +34,7 @@ export const NO_CREDENTIAL =
 
 const CardUrl = AgentCard.shape.url.unwrap();
 
-export function buildCard(
+function buildCard(
   config: Config,
   credential: Credential | null,
   url?: string,
@@ -78,8 +77,7 @@ export async function loadSeal(
   cmd: Command,
   deps: CardDeps,
 ): Promise<{ config: Config; credential: Credential | null }> {
-  const config = await loadConfig(cmd);
-  if (config === null) cmd.error(NOT_INITIALISED);
+  const config = await requireConfig(cmd);
 
   const api = createApiClient({
     apiUrl: resolveApiUrl({ config: config.apiUrl }),
