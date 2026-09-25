@@ -26,15 +26,15 @@
   "exports": {
     ".": {
       "types": "./types/lib.d.ts",
-      "import": "./dist/lib.js"
+      "default": "./dist/lib.js"
     },
     "./mastra": {
       "types": "./types/mastra.d.ts",
-      "import": "./dist/mastra.js"
+      "default": "./dist/mastra.js"
     },
     "./openclaw": {
       "types": "./types/openclaw.d.ts",
-      "import": "./dist/openclaw.js"
+      "default": "./dist/openclaw.js"
     },
     "./package.json": "./package.json"
   },
