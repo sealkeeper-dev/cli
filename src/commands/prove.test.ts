@@ -43,6 +43,8 @@ class FakeApi {
   claimed: string[] = [];
   errors: string[] = [];
   requests: string[] = [];
+  // Agent answers sent as they are, in place of the made up ones below.
+  agents = new Map<string, Record<string, unknown>>();
 
   constructor(readonly agentId: string) {}
 
@@ -87,6 +89,8 @@ class FakeApi {
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
     if (method === 'GET' && agent) {
       const id = agent[1] ?? '';
+      const recorded = this.agents.get(id);
+      if (recorded) return Response.json(recorded);
       return Response.json({
         id,
         name: id === SEED_AGENT ? 'sealkeeper-seed' : 'other',
@@ -299,6 +303,77 @@ describe('prove', () => {
     const { code } = await run('prove', '--count', '2');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([theirs.id]);
+  });
+
+  it('claims seed tasks when the seed agent belongs to the same operator', async () => {
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    const ownSeed = `${'Q'.repeat(42)}A`;
+    api.agents.set(ownSeed, {
+      id: ownSeed,
+      name: 'sealkeeper-seed',
+      version: '1.0.0',
+      operator: { login: 'CarelMeyer' },
+      createdAt: '2026-09-23T09:44:36.047Z',
+      operatedByVouched: true,
+    });
+    const seed = api.add({ posterAgentId: ownSeed, postedAt: at(9) });
+    const stated = api.add({ posterAgentId: ownSeed, postedAt: at(8) });
+    Object.assign(stated, { posterOperator: { login: 'carelmeyer' } });
+    const sibling = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(7) });
+    const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
+
+    const { code } = await run('prove', '--count', '4');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([seed.id, stated.id, foreign.id]);
+    expect(api.claimed).not.toContain(sibling.id);
+    // One lookup per poster answers both the seed and the operator question.
+    for (const poster of [ownSeed, SIBLING_AGENT, OTHER_AGENT]) {
+      expect(
+        api.requests.filter((r) => r === `GET /v1/agents/${poster}`),
+      ).toHaveLength(1);
+    }
+  });
+
+  it('claims a task from the live seed agent run under the operator login', async () => {
+    // Recorded from GET /v1/tasks?state=open and GET /v1/agents/:id on
+    // api.sealkeeper.run, 25 September 2026. Times are moved to now so the
+    // task is still open.
+    const seedAgent = 'fYSHyfojPAeQbYaDOMm3UPw7t4u2Ur2sMabDzrVrFT8';
+    api.agents.set(seedAgent, {
+      id: seedAgent,
+      name: 'sealkeeper-seed',
+      version: '1.0.0',
+      operator: { login: 'carelmeyer' },
+      createdAt: '2026-09-23T09:44:36.047Z',
+      operatedByVouched: true,
+      handle: 'carelmeyer/sealkeeper-seed',
+      previousName: 'vouched-seed',
+      lastSeenAt: null,
+      level: 'none',
+    });
+    const task = api.add({
+      id: 'e3a1a475-ae0c-4ad5-995b-e92f17055ea6',
+      posterAgentId: seedAgent,
+      taskType: 'csv_normalise',
+      spec: {
+        input:
+          '  NaME  ,  CiTy,AgE\n Chen , Accra  ,  39 \n Amara , Berlin  ,83\n  Tariq  ,  Oslo,84  \nJonas , Cairo  ,63  ',
+        output:
+          'Trim spaces around every field. Lowercase the header fields and keep the header row first. Sort the data rows by their first field in ascending code point order. Join fields with a comma and rows with a line feed, and end with exactly one line feed. No field contains a comma or a quote.',
+        instruction:
+          'Normalise the CSV in input. The first line is the header row.',
+      },
+      verification: {
+        kind: 'hash',
+        sha256:
+          '041e8c01ad5a354797249fe6d8e0667bc06632dc4704a071ce810cf5b4cf4d01',
+      },
+    });
+
+    const { code, out } = await run('prove', '--count', '1');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([task.id]);
+    expect(out).toContain(`Task 1 of 1. id ${task.id}. type csv_normalise.`);
   });
 
   it('moves past a lost race and stops at the claim cap with what it has', async () => {

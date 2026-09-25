@@ -76,7 +76,11 @@ export function register(
         for (const task of candidates) {
           if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
           // A task posted by another agent of the same operator never
-          // counts toward the record, so it is not worth a claim.
+          // counts toward the record, so it is not worth a claim. Seed
+          // tasks are the exception. The seed agent is registered under
+          // the SealKeeper operator's own account, and its tasks count for
+          // every agent, so a poster with operatedByVouched is never the
+          // same operator.
           if (await posters.sameOperator(task, config.operatorLogin)) continue;
           try {
             const envelope = await signer.sign(
@@ -226,15 +230,20 @@ class PosterLookup {
     return this.agents.get(agentId) ?? null;
   }
 
-  // True when the task was posted by an agent of the operator named. The
-  // operator on the task is used when the API sends one, else the poster is
-  // looked up. When neither says, the task is kept, since the server has
-  // the last word anyway.
+  // True when the task was posted by an agent of the operator named and
+  // not by the seed agent. The operator on the task is used when the API
+  // sends one, else the poster is looked up. When neither says, the task is
+  // kept, since the server has the last word anyway. A poster is looked up
+  // only when the login matches, and through the same cache ranked uses,
+  // so each poster costs at most one request for both questions.
   async sameOperator(task: TaskResponse, login: string): Promise<boolean> {
     const own = login.toLowerCase();
     const onTask = task.posterOperator?.login;
-    if (onTask !== undefined) return onTask.toLowerCase() === own;
+    if (onTask !== undefined && onTask.toLowerCase() !== own) return false;
     const poster = await this.get(task.posterAgentId);
+    // Seed tasks count whoever runs the seed agent.
+    if (poster?.operatedByVouched) return false;
+    if (onTask !== undefined) return true;
     return poster?.operator.login.toLowerCase() === own;
   }
 }

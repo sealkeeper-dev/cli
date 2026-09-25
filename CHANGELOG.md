@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1, Unreleased
+
+- `prove` claims seed tasks again when the seed agent belongs to the same operator. The seed agent is the exception to the same operator rule, so a poster the API marks `operatedByVouched` is never skipped. Before, an operator whose account also runs the seed agent got `no open tasks available` while seed tasks were open.
+
 ## 0.4.0, 24 September 2026
 
 Vouched is now SealKeeper.
