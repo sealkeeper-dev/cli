@@ -202,7 +202,7 @@ export function createApiClient(options: {
       if (!agent.success) throw toError(status, undefined);
       return agent.data;
     },
-    // The public agent answer, with live counts and operatedByVouched.
+    // The public agent answer, with live counts and operatedBySealKeeper.
     async getAgent(agentId) {
       const { status, json, headers } = await request(
         `/v1/agents/${encodeURIComponent(agentId)}`,

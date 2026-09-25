@@ -113,6 +113,7 @@ class FakeApi {
         version: '1.0.0',
         operator: { login: loginOf(id) },
         createdAt: '2026-09-22T00:00:00.000Z',
+        operatedBySealKeeper: id === SEED_AGENT,
         operatedByVouched: id === SEED_AGENT,
       });
     }
@@ -596,7 +597,7 @@ describe('prove', () => {
       version: '1.0.0',
       operator: { login: 'Alice' },
       createdAt: '2026-09-23T09:44:36.047Z',
-      operatedByVouched: true,
+      operatedBySealKeeper: true,
     });
     const seed = api.add({ posterAgentId: ownSeed, postedAt: at(9) });
     const stated = api.add({ posterAgentId: ownSeed, postedAt: at(8) });
@@ -614,6 +615,27 @@ describe('prove', () => {
         api.requests.filter((r) => r === `GET /v1/agents/${poster}`),
       ).toHaveLength(1);
     }
+  });
+
+  it('prefers operatedBySealKeeper over the old name on a poster', async () => {
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    const own = `${'R'.repeat(42)}A`;
+    api.agents.set(own, {
+      id: own,
+      name: 'helper',
+      version: '1.0.0',
+      operator: { login: 'alice' },
+      createdAt: '2026-09-23T09:44:36.047Z',
+      operatedBySealKeeper: false,
+      operatedByVouched: true,
+    });
+    const mine = api.add({ posterAgentId: own, postedAt: at(9) });
+    const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
+
+    const { code } = await run('prove', '--count', '2', '--any-poster');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([foreign.id]);
+    expect(api.claimed).not.toContain(mine.id);
   });
 
   it('claims a task from the live seed agent run under the operator login', async () => {

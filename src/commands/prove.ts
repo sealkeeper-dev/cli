@@ -8,7 +8,11 @@ import { handleOf } from '../config.js';
 import { cli } from '../invocation.js';
 import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
 import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
-import type { AgentResponse, TaskResponse } from '../responses.js';
+import {
+  type AgentResponse,
+  runBySealKeeper,
+  type TaskResponse,
+} from '../responses.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import {
   defaultTasksDeps,
@@ -226,7 +230,7 @@ async function claim(
     // toward the record, so it is not worth a claim. Seed tasks are the
     // exception. The seed agent is registered under the SealKeeper
     // operator's own account, and its tasks count for every agent, so a
-    // poster with operatedByVouched is never the same operator.
+    // poster SealKeeper runs is never the same operator.
     if (await posters.sameOperator(task, config.operatorLogin)) continue;
     try {
       const envelope = await signer.sign(
@@ -387,7 +391,7 @@ class PosterLookup {
     if (onTask !== undefined && onTask.toLowerCase() !== own) return false;
     const poster = await this.get(task.posterAgentId);
     // Seed tasks count whoever runs the seed agent.
-    if (poster?.operatedByVouched) return false;
+    if (poster && runBySealKeeper(poster)) return false;
     if (onTask !== undefined) return true;
     return poster?.operator.login.toLowerCase() === own;
   }
@@ -400,7 +404,8 @@ export function anyPosterHint(n: number): string {
 
 // Seed tasks first, then other tasks the server checks on submit, then
 // counterparty tasks. Oldest first within each. The seed agent is found by
-// asking the API about the posters, since only it knows operatedByVouched.
+// asking the API about the posters, since only it knows which one
+// SealKeeper runs.
 async function ranked(
   posters: PosterLookup,
   open: TaskResponse[],
@@ -408,7 +413,8 @@ async function ranked(
   const seed = new Set<string>();
   const ids = [...new Set(open.map((task) => task.posterAgentId))];
   for (const poster of ids.slice(0, MAX_POSTER_LOOKUPS)) {
-    if ((await posters.get(poster))?.operatedByVouched) seed.add(poster);
+    const agent = await posters.get(poster);
+    if (agent && runBySealKeeper(agent)) seed.add(poster);
   }
   const rank = (task: TaskResponse) => {
     if (seed.has(task.posterAgentId)) return 0;

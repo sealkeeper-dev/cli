@@ -44,6 +44,9 @@ export const AgentResponse = z.object({
   version: Version,
   operator: Operator,
   createdAt: Timestamp,
+  operatedBySealKeeper: z.boolean().optional(),
+  // The old name, still sent by the API beside the new one. Read when the
+  // new one is missing, which an API from before VOU-118 does.
   operatedByVouched: z.boolean().optional(),
   handle: AgentHandle.optional(),
   previousName: Name.nullable().optional(),
@@ -51,6 +54,14 @@ export const AgentResponse = z.object({
   lastSeenAt: Timestamp.nullable().optional(),
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
+
+// True for an agent SealKeeper runs itself, such as the seed agent. Prefers
+// the new field and falls back to the old one.
+export function runBySealKeeper(
+  agent: Pick<AgentResponse, 'operatedBySealKeeper' | 'operatedByVouched'>,
+): boolean {
+  return agent.operatedBySealKeeper ?? agent.operatedByVouched ?? false;
+}
 
 export const EventsBatchResponse = z.object({
   accepted: Count,

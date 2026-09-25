@@ -50,6 +50,7 @@ class FakeApi {
       version: '1.0.0',
       operator: { login: 'alice' },
       createdAt: '2026-09-23T10:00:00.000Z',
+      operatedBySealKeeper: false,
       operatedByVouched: false,
       handle: `alice/${call.payload.name}`,
       previousName: 'scout',

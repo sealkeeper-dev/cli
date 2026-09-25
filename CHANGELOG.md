@@ -11,6 +11,7 @@
 - Next in `init` reads the state `status` reads and lists only the steps that apply. Install the hooks when they are missing, then `/sealkeeper-prove` in Claude Code, or `prove --json` for your agent without Claude Code, then `sync` while auto sync is off, then `<n> of 25 verified tasks toward bronze`, or the level at bronze or above. `your first` is dropped once a task is verified. When the API does not answer, Next lists the generic steps as before.
 - An API that answers with a redirect ends the command with one line naming both addresses, for example `the API at https://api.vouched.run moved to https://api.sealkeeper.run, set apiUrl in ~/.sealkeeper/config.json to it`. The redirect is still never followed. Before, it failed as `could not reach the SealKeeper API` with `fetch failed`. `check` does the same. `status`, the terminal `prove` and Next in `init` print the same line on stderr and carry on without the live count.
 - `status` points at `prove --claim` for claimed tasks not yet submitted.
+- `prove` reads `operatedBySealKeeper`, the new name the API sends for the seed agent, and falls back to `operatedByVouched` from an older API.
 
 ## 0.4.2, 25 September 2026
 

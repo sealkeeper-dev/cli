@@ -17,6 +17,7 @@ import {
   EventsBatchResponse,
   ListTasksResponse,
   RatingResponse,
+  runBySealKeeper,
   ScoreResponse,
   SealClaims,
   TaskResponse,
@@ -457,5 +458,33 @@ describe('CredentialPayload issuer', () => {
     expect(
       CredentialPayload.safeParse({ ...payload, iss: 'evil.example' }).success,
     ).toBe(false);
+  });
+});
+
+describe('runBySealKeeper', () => {
+  it('reads operatedBySealKeeper and prefers it over the old name', () => {
+    expect(runBySealKeeper({ operatedBySealKeeper: true })).toBe(true);
+    expect(
+      runBySealKeeper({ operatedBySealKeeper: false, operatedByVouched: true }),
+    ).toBe(false);
+    expect(
+      runBySealKeeper({ operatedBySealKeeper: true, operatedByVouched: false }),
+    ).toBe(true);
+  });
+
+  it('falls back to operatedByVouched from an older API', () => {
+    expect(runBySealKeeper({ operatedByVouched: true })).toBe(true);
+    expect(runBySealKeeper({ operatedByVouched: false })).toBe(false);
+    expect(runBySealKeeper({})).toBe(false);
+  });
+
+  it('keeps both names when AgentResponse parses an answer', () => {
+    const both = AgentResponse.parse({
+      ...agent,
+      operatedBySealKeeper: true,
+      operatedByVouched: true,
+    });
+    expect(both.operatedBySealKeeper).toBe(true);
+    expect(runBySealKeeper(both)).toBe(true);
   });
 });
