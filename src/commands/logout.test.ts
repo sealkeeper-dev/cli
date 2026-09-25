@@ -107,6 +107,7 @@ describe('logout', () => {
       'logged out, removed cursor.json, credential.json, score.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
+    expect(out).toContain('run npx sealkeeper init to sign in again');
   });
 
   it('--delete-key without --yes deletes nothing and exits 1', async () => {
@@ -116,7 +117,9 @@ describe('logout', () => {
     expect(out).toBe('');
     expect(err).toContain(`--delete-key would delete the key at ${p.key}`);
     expect(err).toContain(agentId);
-    expect(err).toContain('Nothing was deleted');
+    expect(err).toContain(
+      'Nothing was deleted. Run npx sealkeeper logout --delete-key --yes to go ahead.',
+    );
     for (const file of [...SESSION(), p.key]) {
       expect(await exists(file)).toBe(true);
     }

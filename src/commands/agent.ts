@@ -17,6 +17,7 @@ import {
   profileUrl,
   writeConfig,
 } from '../config.js';
+import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import {
@@ -189,7 +190,7 @@ export function register(
         const input = (deps.stdin ?? noInput)();
         if (!input.isTTY) {
           this.error(
-            `nothing deleted. There is no terminal to ask, so run sealkeeper agent delete --yes to delete ${handle}`,
+            `nothing deleted. There is no terminal to ask, so run ${cli('agent delete --yes')} to delete ${handle}`,
           );
         }
         process.stderr.write(`Delete ${handle}? Type the name to confirm: `);

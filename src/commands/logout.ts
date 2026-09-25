@@ -3,6 +3,7 @@ import { access, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { Command } from 'commander';
 import { type Paths, paths, readConfig } from '../config.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
 // Removes the local session. config.json, cursor.json, credential.json and
@@ -66,7 +67,7 @@ export function register(parent: Command): Command {
           [
             `--delete-key would delete the key at ${p.key} along with the local session.`,
             `The identity of ${identity} would be gone for good and its track record could not be extended.`,
-            'Nothing was deleted. Run sealkeeper logout --delete-key --yes to go ahead.',
+            `Nothing was deleted. Run ${cli('logout --delete-key --yes')} to go ahead.`,
           ].join('\n'),
         );
       }
@@ -90,7 +91,7 @@ export function register(parent: Command): Command {
         );
       } else {
         stdout(
-          `kept the key at ${p.key} and the log at ${p.log}, run sealkeeper init to sign in again`,
+          `kept the key at ${p.key} and the log at ${p.log}, run ${cli('init')} to sign in again`,
         );
       }
     });

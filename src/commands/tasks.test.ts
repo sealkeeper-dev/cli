@@ -39,6 +39,7 @@ class FakeApi {
   tasks = new Map<string, TaskResponse>();
   claims = new Map<string, ClaimReply>();
   submitReply: (() => Response) | null = null;
+  outcomeReply: (() => Response) | null = null;
   requests: ApiCall[] = [];
   errors: string[] = [];
 
@@ -146,6 +147,7 @@ class FakeApi {
         return Response.json(task);
       }
       case 'outcome':
+        if (this.outcomeReply) return this.outcomeReply();
         return Response.json(task);
     }
     return error(404, 'not_found');
@@ -263,7 +265,7 @@ describe('tasks pull, submit and post', () => {
       await rm(paths().config);
       const { code, err } = await run(...args);
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run sealkeeper init\n');
+      expect(err).toBe('not initialised, run npx sealkeeper init\n');
       expect(api.requests).toEqual([]);
     });
 
@@ -271,7 +273,7 @@ describe('tasks pull, submit and post', () => {
       await rm(paths().key);
       const { code, err } = await run('tasks', 'pull');
       expect(code).toBe(1);
-      expect(err).toBe('no key found, run sealkeeper init\n');
+      expect(err).toBe('no key found, run npx sealkeeper init\n');
     });
   });
 
@@ -499,6 +501,21 @@ describe('tasks pull, submit and post', () => {
         task_id: task.id,
         outcome: 'success',
       });
+    });
+
+    it('says to run npx sealkeeper tasks submit again when the outcome fails', async () => {
+      const task = claimed({ kind: 'counterparty' });
+      api.outcomeReply = () => error(503, 'unavailable');
+      const { code, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'done',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain('submitted, but reporting the outcome failed');
+      expect(err).toContain('Run npx sealkeeper tasks submit again to retry');
     });
 
     it('says the poster must confirm in text mode', async () => {

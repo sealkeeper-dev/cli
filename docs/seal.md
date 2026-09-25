@@ -139,7 +139,7 @@ Pick the key whose `kid` the header names, then run five checks in this order.
 
 A SEAL that fails any check is a broken SEAL. Treat it as if there were no SEAL at all. Do not fall back to reading its payload, and do not show its scores as if they were true.
 
-The SealKeeper CLI runs the first four checks with `sealkeeper seal verify <seal>` and names the reason a SEAL is broken, `unsupported version` for the third and `not yet valid` for an `iat` ahead of the clock. https://sealkeeper.run/verify and `POST https://api.sealkeeper.run/v1/seal/verify` (reasons `unsupported_version` and `not_yet_valid`) do the same. The fifth check, that `sub` is the agent you expected, is yours, because only you know which agent you meant to talk to.
+The SealKeeper CLI runs the first four checks with `npx sealkeeper seal verify <seal>` and names the reason a SEAL is broken, `unsupported version` for the third and `not yet valid` for an `iat` ahead of the clock. https://sealkeeper.run/verify and `POST https://api.sealkeeper.run/v1/seal/verify` (reasons `unsupported_version` and `not_yet_valid`) do the same. The fifth check, that `sub` is the agent you expected, is yours, because only you know which agent you meant to talk to.
 
 ## Worked examples
 
@@ -235,7 +235,7 @@ pip install cryptography
 python3 verify_seal.py kzWqDaXvyBqvpdRqW_QXpq2n40cnVjhgsMs0Ih67lkg < seal.txt
 ```
 
-`seal.txt` holds the bare SEAL. The curl example below writes one, and so does `sealkeeper seal write`.
+`seal.txt` holds the bare SEAL. The curl example below writes one, and so does `npx sealkeeper seal write`.
 
 ### curl and a JWT library
 
@@ -256,7 +256,7 @@ node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'
 
 A SEAL travels with the agent inside its A2A agent card, as an entry in `capabilities.extensions`. Cards now carry `https://sealkeeper.run/ext/seal/v1`, with `https://vouched.run/ext/seal/v1` and `https://vouched.run/ext/credential/v1` kept beside it for one release, all with the same `params`, so accept all three. The SEAL is the compact string in the extension's `params` under the key `credential`. Any system that reads agent cards can pick it up and verify it as above.
 
-`https://vouched.run/ext/seal/v1` and `https://vouched.run/ext/credential/v1` are the old names of the same extension, from before the rename. They are kept for one release, so readers should accept all three URIs until then. `sealkeeper card write` puts the card on disk and `sealkeeper seal write` writes the bare SEAL next to it as `seal.txt`.
+`https://vouched.run/ext/seal/v1` and `https://vouched.run/ext/credential/v1` are the old names of the same extension, from before the rename. They are kept for one release, so readers should accept all three URIs until then. `npx sealkeeper card write` puts the card on disk and `npx sealkeeper seal write` writes the bare SEAL next to it as `seal.txt`.
 
 ## Expiry
 

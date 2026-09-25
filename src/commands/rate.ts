@@ -8,6 +8,7 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import {
   defaultTasksDeps,
@@ -116,7 +117,7 @@ function refusal(error: ApiError, agentId: string): string {
         ? 'too many ratings, try again later'
         : `too many ratings, try again in ${error.retryAfterSec} seconds`;
     case 'unknown_agent':
-      return 'this agent is not registered, run sealkeeper init';
+      return `this agent is not registered, run ${cli('init')}`;
     default:
       return error.message;
   }

@@ -353,7 +353,9 @@ describe('hook claude-code', () => {
       vi.restoreAllMocks();
     }
     expect(out).toBe('');
-    expect(err).toBe('sealkeeper: sync did not finish, run sealkeeper sync\n');
+    expect(err).toBe(
+      'sealkeeper: sync did not finish, run npx sealkeeper sync\n',
+    );
     expect((await logged()).map((e) => e.type)).toEqual([
       'session.start',
       'session.end',

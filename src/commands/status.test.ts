@@ -228,7 +228,7 @@ describe('status', () => {
     expect(lines).toContain('pending           4');
     expect(lines).toContain(`last sync         ${LAST_SYNC}`);
     expect(lines).toContain(
-      'auto-sync         off, run sealkeeper sync to review and send',
+      'auto-sync         off, run npx sealkeeper sync to review and send',
     );
     expect(out).not.toContain('"event_id"');
     expect(lines).toContain('  reliability     0.82');
@@ -277,7 +277,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(out).toContain('verified tasks    0\n');
       expect(out).toContain(
-        '2 claimed tasks are not submitted yet. Run sealkeeper prove to print them again with the submit lines.\n',
+        '2 claimed tasks are not submitted yet. Run npx sealkeeper prove to print them again with the submit lines.\n',
       );
       const json = JSON.parse(
         (await run(scoreFetch([], 0), 'status', '--json')).out,
@@ -312,7 +312,7 @@ describe('status', () => {
     it('uses one line for a single unsubmitted claim', async () => {
       await claimOnly();
       expect((await run(scoreFetch([], 0), 'status')).out).toContain(
-        '1 claimed task is not submitted yet. Run sealkeeper prove to print it again with the submit lines.\n',
+        '1 claimed task is not submitted yet. Run npx sealkeeper prove to print it again with the submit lines.\n',
       );
     });
   });
@@ -516,7 +516,7 @@ describe('status', () => {
     const { code, out, err } = await run(offline, 'status');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run sealkeeper init\n');
+    expect(err).toBe('not initialised, run npx sealkeeper init\n');
   });
   describe('adapter warning', () => {
     const DAY_MS = 24 * 60 * 60 * 1000;
@@ -557,7 +557,7 @@ describe('status', () => {
 
     it('warns once on stderr with no hooks and nothing in 7 days', async () => {
       expect(NO_ADAPTER).toBe(
-        'No adapter installed and nothing recorded in 7 days. Run sealkeeper adapter claude-code install.',
+        'No adapter installed and nothing recorded in 7 days. Run npx sealkeeper adapter claude-code install.',
       );
       await eventDaysAgo(8);
       const { code, out, err } = await run(offline, 'status');
@@ -630,7 +630,7 @@ describe('status', () => {
       const { code, out, err } = await run(offline, 'status');
       expect(code).toBe(0);
       expect(HOOKS_MISSING).toBe(
-        'The Claude Code hooks point at a sealkeeper that is no longer there. Run sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.',
+        'The Claude Code hooks point at a sealkeeper that is no longer there. Run npx sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.',
       );
       expect(err).toBe(`${HOOKS_MISSING}\n`);
       expect(out).not.toContain(HOOKS_MISSING);

@@ -51,6 +51,7 @@ import {
   loadSigner,
   signEnvelope,
 } from '../identity.js';
+import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import { describeTaxonomy } from '../taxonomy.js';
@@ -68,8 +69,7 @@ import {
 import { printIdentity } from './whoami.js';
 
 export const ALREADY_INITIALISED = 'already initialised';
-export const NOTHING_SENT =
-  'No events have been sent yet. Run sealkeeper sync to review them and send.';
+export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
 export const CONSENT =
   'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
@@ -79,12 +79,11 @@ export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
 // SealKeeper has. No is the default, since a new version starts a new record.
 export const versionQuestion = (server: string, local: string): string =>
   `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
-export const NEXT_PROVE =
-  'Run sealkeeper prove to earn your first verified tasks';
-export const NEXT_WHAT_IS_SHARED =
-  'Run sealkeeper what-is-shared to see exactly what leaves this machine';
+export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
+export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
-export const NEXT_NPX = `Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then ${INSTALL_COMMAND}.`;
+export const NEXT_NPX =
+  'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.';
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
 // without a network or real waits. stdin answers the hooks question, which is
@@ -133,14 +132,14 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
   operator_cap_reached: (m) =>
     `registration refused, your GitHub account has reached its agent limit (${m})`,
   conflict: () =>
-    'this key is already registered by another operator, run sealkeeper init --force to create a new key',
+    `this key is already registered by another operator, run ${cli('init --force')} to create a new key`,
   // The API's message names the handle and a free name, as in
   // carelmeyer/claude-code is taken, try claude-code-2.
   name_taken: (m) => m,
   invalid_signature: () =>
-    'the API rejected the registration signature, check the key file or run sealkeeper init --force',
+    `the API rejected the registration signature, check the key file or run ${cli('init --force')}`,
   github_token_rejected: () =>
-    'the API could not verify your GitHub login, run sealkeeper init again',
+    `the API could not verify your GitHub login, run ${cli('init')} again`,
   network_error: (m) => m,
   bad_response: (m) => m,
 };
@@ -356,7 +355,7 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
   process.stderr.write(`\n${versionQuestion(server, config.version)}`);
   if (!isYes(await input.readLine())) {
     stdout(
-      `SealKeeper stays on ${server}. Run sealkeeper agent version ${config.version} to move it later.`,
+      `SealKeeper stays on ${server}. Run ${cli(`agent version ${config.version}`)} to move it later.`,
     );
     return;
   }
@@ -377,7 +376,7 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
     }
     const reason = error instanceof ApiError ? refusal(error) : error.message;
     stderr(
-      `version not moved, ${reason}. Run sealkeeper agent version ${config.version} to try again.`,
+      `version not moved, ${reason}. Run ${cli(`agent version ${config.version}`)} to try again.`,
     );
     return;
   }

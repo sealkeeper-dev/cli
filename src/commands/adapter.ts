@@ -19,6 +19,7 @@ import {
   settingsPath,
   uninstallHooks,
 } from '../claude-code-settings.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
 // Installs and removes framework hooks that call sealkeeper. The home and
@@ -41,7 +42,7 @@ export const defaultAdapterDeps: AdapterDeps = {
 
 // The command that installs the Claude Code hooks, printed wherever
 // sealkeeper suggests it.
-export const INSTALL_COMMAND = 'sealkeeper adapter claude-code install';
+export const INSTALL_COMMAND = cli('adapter claude-code install');
 
 type ScopeOptions = { scope: Scope };
 

@@ -3,6 +3,7 @@ import { ClaimTaskRequest } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
 import { profileUrl } from '../config.js';
+import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import type { AgentResponse, TaskResponse } from '../responses.js';
 import {
@@ -33,8 +34,7 @@ const EXTRA_CLAIM_ATTEMPTS = 5;
 const MAX_POSTER_LOOKUPS = 10;
 const LIST_LIMIT = 100;
 
-export const SUBMIT_HINT =
-  'sealkeeper tasks submit <task id> --file <path you choose>, or --text <answer> for a short answer';
+export const SUBMIT_HINT = `${cli('tasks submit')} <task id> --file <path you choose>, or --text <answer> for a short answer`;
 
 export function register(
   parent: Command,
@@ -289,8 +289,8 @@ export function taskBlock(
   }
   lines.push(
     'Submit with:',
-    `  sealkeeper tasks submit ${task.id} --file <path you choose>`,
-    `  sealkeeper tasks submit ${task.id} --text <answer>`,
+    `  ${cli(`tasks submit ${task.id}`)} --file <path you choose>`,
+    `  ${cli(`tasks submit ${task.id}`)} --text <answer>`,
   );
   if (task.verification.kind === 'counterparty') {
     lines.push('The poster confirms this one, so it verifies once they agree.');
@@ -299,7 +299,7 @@ export function taskBlock(
 }
 
 export function closing(profile: string): string {
-  return `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run sealkeeper status to watch the verified count. Your profile is ${profile}.`;
+  return `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run ${cli('status')} to watch the verified count. Your profile is ${profile}.`;
 }
 
 function indent(text: string): string {

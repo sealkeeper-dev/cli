@@ -8,6 +8,7 @@ import {
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import {
   defaultTasksDeps,
@@ -117,7 +118,7 @@ export function register(
         } catch (error) {
           if (error instanceof ApiError) {
             this.error(
-              `submitted, but reporting the outcome failed: ${error.message}. Run sealkeeper tasks submit again to retry`,
+              `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('tasks submit')} again to retry`,
             );
           }
           throw error;

@@ -21,6 +21,8 @@ export default defineConfig({
     __GITHUB_CLIENT_ID__: JSON.stringify(''),
   },
   test: {
-    env: { HOME: home },
+    // SEALKEEPER_INVOCATION is cleared so printed commands take the npx form
+    // whatever the shell running the tests has set.
+    env: { HOME: home, SEALKEEPER_INVOCATION: '' },
   },
 });

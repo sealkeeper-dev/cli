@@ -464,8 +464,17 @@ describe('adapter claude-code', () => {
       expect(text).not.toContain('<!--');
       // The exact invocation, and a line that makes sealkeeper mean it.
       expect(text).toContain(`\n${INVOCATION}\n`);
-      expect(text).toContain(`\nsealkeeper() { ${INVOCATION} "$@"; }\n`);
-      expect(text).toContain('plain `sealkeeper` works too');
+      // The function marks its runs, so prove prints bare sealkeeper submit
+      // lines that come back through the same pinned CLI.
+      expect(text).toContain(
+        `\nsealkeeper() { SEALKEEPER_INVOCATION=sealkeeper ${INVOCATION} "$@"; }\n`,
+      );
+      expect(text).toContain('runs through the line above');
+      // npx is the fallback, not a bare sealkeeper that may not be on PATH.
+      expect(text).toContain('use `npx sealkeeper` in its place');
+      expect(text).not.toContain('plain `sealkeeper`');
+      // The submit lines are run as prove printed them, prefix included.
+      expect(text).toContain('exactly as `sealkeeper prove` printed it');
       expect(text).toContain('`sealkeeper prove`');
       expect(text).toContain('.sealkeeper-answers/');
       expect(text).toContain('`sealkeeper status`');
@@ -528,7 +537,7 @@ describe('adapter claude-code', () => {
 
     it('the shell function never calls itself for plain sealkeeper', () => {
       expect(shellFunction('sealkeeper')).toBe(
-        'sealkeeper() { command sealkeeper "$@"; }',
+        'sealkeeper() { SEALKEEPER_INVOCATION=sealkeeper command sealkeeper "$@"; }',
       );
     });
 

@@ -427,15 +427,15 @@ describe('sealkeeper init', () => {
     ],
     [
       apiError(409, 'conflict', 'This key is registered to another operator'),
-      'this key is already registered by another operator, run sealkeeper init --force to create a new key',
+      'this key is already registered by another operator, run npx sealkeeper init --force to create a new key',
     ],
     [
       apiError(401, 'invalid_signature', 'bad signature'),
-      'the API rejected the registration signature, check the key file or run sealkeeper init --force',
+      'the API rejected the registration signature, check the key file or run npx sealkeeper init --force',
     ],
     [
       apiError(401, 'github_token_rejected', 'GitHub rejected the token'),
-      'the API could not verify your GitHub login, run sealkeeper init again',
+      'the API could not verify your GitHub login, run npx sealkeeper init again',
     ],
     [
       apiError(400, 'key_mismatch', 'publicKey must equal the kid'),
@@ -594,7 +594,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(world.versionChanges).toEqual([]);
       expect(result.out).toContain(
-        'SealKeeper stays on 0.1.0. Run sealkeeper agent version 2.0.0 to move it later.',
+        'SealKeeper stays on 0.1.0. Run npx sealkeeper agent version 2.0.0 to move it later.',
       );
     });
 
@@ -634,7 +634,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(result.err).toContain(versionQuestion('0.1.0', '2.0.0'));
       expect(result.err).toContain(
-        'version not moved, too many requests, try again in 3600 seconds. Run sealkeeper agent version 2.0.0 to try again.',
+        'version not moved, too many requests, try again in 3600 seconds. Run npx sealkeeper agent version 2.0.0 to try again.',
       );
       expect(result.out).not.toContain('registration failed');
       expect(result.out).not.toContain('moved SealKeeper');
@@ -951,7 +951,7 @@ describe('sealkeeper init', () => {
         ),
       ).toBe(true);
       expect(NEXT_HOOKS).toBe(
-        'Run sealkeeper adapter claude-code install to record your Claude Code sessions',
+        'Run npx sealkeeper adapter claude-code install to record your Claude Code sessions',
       );
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
       expect(

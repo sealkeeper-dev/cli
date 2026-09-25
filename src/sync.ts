@@ -3,6 +3,7 @@ import { type Event, MAX_EVENTS_PER_BATCH } from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
 import { loadSigner } from './identity.js';
+import { cli } from './invocation.js';
 import {
   CURSOR_VERSION,
   countPending,
@@ -280,7 +281,7 @@ function stopMessage(error: ApiError): string {
     case 'bad_response':
       return error.message;
     case 'unknown_agent':
-      return 'the API does not know this agent, run sealkeeper init';
+      return `the API does not know this agent, run ${cli('init')}`;
     case 'rate_limited':
       return 'the API is rate limiting this agent, try again later';
     default:

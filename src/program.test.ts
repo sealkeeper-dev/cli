@@ -111,7 +111,7 @@ describe('sealkeeper cli', () => {
     const { code, out, err } = await run('whoami');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run sealkeeper init\n');
+    expect(err).toBe('not initialised, run npx sealkeeper init\n');
   });
 
   it('whoami prints the identity from config', async () => {

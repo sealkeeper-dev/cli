@@ -383,7 +383,7 @@ describe('card show and card write', () => {
     const { code, out, err } = await run(fetchFn, ...args);
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run sealkeeper init\n');
+    expect(err).toBe('not initialised, run npx sealkeeper init\n');
     expect(server.requests).toEqual([]);
   });
 

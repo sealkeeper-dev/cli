@@ -13,6 +13,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
+import { resetInvocation } from '../invocation.js';
 import { appendEvent } from '../log.js';
 import { createProgram } from '../program.js';
 import { closing, MAX_COUNT, relative, SUBMIT_HINT } from './prove.js';
@@ -236,8 +237,8 @@ describe('prove', () => {
       '    "output": "The number only."',
       '  }',
       'Submit with:',
-      `  sealkeeper tasks submit ${first.id} --file <path you choose>`,
-      `  sealkeeper tasks submit ${first.id} --text <answer>`,
+      `  npx sealkeeper tasks submit ${first.id} --file <path you choose>`,
+      `  npx sealkeeper tasks submit ${first.id} --text <answer>`,
       '',
       `Task 2 of 5. id ${tasks[1]?.id}. type json_extract. expires in 47 hours.`,
     ].join('\n');
@@ -245,7 +246,7 @@ describe('prove', () => {
     expect(out).toContain(`Task 5 of 5. id ${tasks[4]?.id}.`);
     expect(out.endsWith(`\n\n${closing(PROFILE)}\n`)).toBe(true);
     expect(closing(PROFILE)).toBe(
-      `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run sealkeeper status to watch the verified count. Your profile is ${PROFILE}.`,
+      `Solve each task, write the answer to a file and run the submit line. Seed tasks are verified by the server within 15 minutes of submission. Run npx sealkeeper status to watch the verified count. Your profile is ${PROFILE}.`,
     );
 
     const claims = (await logged()).filter((e) => e.type === 'task.claimed');
@@ -254,6 +255,28 @@ describe('prove', () => {
         .slice(0, 5)
         .map((t) => ({ task_id: t.id, task_type: 'json_extract' })),
     );
+  });
+
+  it('prints bare submit lines when run through the /sealkeeper-prove shell function', async () => {
+    // The function sets SEALKEEPER_INVOCATION=sealkeeper, so the lines
+    // the agent runs go back through that function and its pinned CLI.
+    vi.stubEnv('SEALKEEPER_INVOCATION', 'sealkeeper');
+    resetInvocation();
+    try {
+      const [task] = seedTasks(1);
+      const { code, out } = await run('prove', '--count', '1');
+      expect(code).toBe(0);
+      expect(out).toContain(
+        `\n  sealkeeper tasks submit ${task?.id} --file <path you choose>\n`,
+      );
+      expect(out).toContain(
+        `\n  sealkeeper tasks submit ${task?.id} --text <answer>\n`,
+      );
+      expect(out).not.toContain('npx sealkeeper');
+    } finally {
+      vi.unstubAllEnvs();
+      resetInvocation();
+    }
   });
 
   it('prefers seed tasks, then tasks the server checks, then counterparty', async () => {
@@ -540,7 +563,7 @@ describe('prove', () => {
     const { code, out, err } = await run('prove');
     expect(code).toBe(1);
     expect(out).toBe('');
-    expect(err).toBe('not initialised, run sealkeeper init\n');
+    expect(err).toBe('not initialised, run npx sealkeeper init\n');
     expect(api.requests).toEqual([]);
   });
 

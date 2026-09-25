@@ -237,7 +237,7 @@ describe('sealkeeper agent delete', () => {
     expect(code).toBe(1);
     expect(out).toContain('handle           carelmeyer/app');
     expect(err).toContain(
-      'nothing deleted. There is no terminal to ask, so run sealkeeper agent delete --yes to delete carelmeyer/app',
+      'nothing deleted. There is no terminal to ask, so run npx sealkeeper agent delete --yes to delete carelmeyer/app',
     );
     expect(input.asked).toBe(0);
     expect(api.calls).toEqual([]);
@@ -306,7 +306,7 @@ describe('sealkeeper agent delete', () => {
     await rm(join(home, 'config.json'));
     const { code, err } = await run('agent', 'delete', '--yes');
     expect(code).toBe(1);
-    expect(err).toContain('not initialised, run sealkeeper init');
+    expect(err).toContain('not initialised, run npx sealkeeper init');
     expect(api.calls).toEqual([]);
   });
 });

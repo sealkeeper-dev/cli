@@ -281,7 +281,7 @@ describe('sealkeeper seal', () => {
       await rm(paths().config);
       const { code, err } = await run(fetchFn, 'seal', 'show');
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run sealkeeper init\n');
+      expect(err).toBe('not initialised, run npx sealkeeper init\n');
     });
 
     it('seal write writes seal.txt with the SEAL and a newline', async () => {

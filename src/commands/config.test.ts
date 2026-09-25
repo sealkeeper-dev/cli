@@ -74,13 +74,13 @@ describe('config', () => {
     const on = await run('config', 'auto-sync', 'on');
     expect(on.code).toBe(0);
     expect(on.out).toContain('automatic sync is on');
-    expect(on.out).toContain('sealkeeper config auto-sync off');
+    expect(on.out).toContain('npx sealkeeper config auto-sync off');
     expect((await readConfig())?.autoSync).toBe(true);
     expect((await run('config', 'show')).out).toContain('autoSync       on\n');
 
     const off = await run('config', 'auto-sync', 'off');
     expect(off.code).toBe(0);
-    expect(off.out).toContain('sealkeeper sync --dry-run');
+    expect(off.out).toContain('npx sealkeeper sync --dry-run');
     expect((await readConfig())?.autoSync).toBe(false);
     expect((await run('config', 'show')).out).toContain('autoSync       off\n');
   });
@@ -117,7 +117,7 @@ describe('config', () => {
     ]) {
       const { code, err } = await run(...args);
       expect(code).toBe(1);
-      expect(err).toBe('not initialised, run sealkeeper init\n');
+      expect(err).toBe('not initialised, run npx sealkeeper init\n');
     }
   });
 });

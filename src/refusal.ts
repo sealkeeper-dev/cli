@@ -1,5 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import type { ApiError } from './api.js';
+import { cli } from './invocation.js';
 
 // One line per refusal. The API message is the fallback for codes this
 // version does not know.
@@ -20,7 +21,7 @@ export function refusal(error: ApiError): string {
         ? 'too many requests, try again later'
         : `too many requests, try again in ${error.retryAfterSec} seconds`;
     case 'unknown_agent':
-      return 'this agent is not registered, run sealkeeper init';
+      return `this agent is not registered, run ${cli('init')}`;
     case 'forbidden':
       return 'the API refused, the key on this machine is not this agent';
     default:

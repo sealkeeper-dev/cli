@@ -180,7 +180,7 @@ describe('sealkeeper agent rename', () => {
     await rm(join(home, 'config.json'));
     const { code, err } = await run('agent', 'rename', 'ranger');
     expect(code).toBe(1);
-    expect(err).toContain('not initialised, run sealkeeper init');
+    expect(err).toContain('not initialised, run npx sealkeeper init');
     expect(api.calls).toEqual([]);
   });
 });

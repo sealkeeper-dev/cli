@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from '../api.js';
 import { DEFAULT_AGENT_VERSION } from '../config.js';
 import { type EmitInput, emit } from '../emit.js';
+import { cli } from '../invocation.js';
 import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { pendingText, SyncError, syncEvents } from '../sync.js';
@@ -63,7 +64,7 @@ export function register(
 
       if (config === null) {
         stderr(
-          'not initialised, the event is kept in the local log, run sealkeeper init to send it',
+          `not initialised, the event is kept in the local log, run ${cli('init')} to send it`,
         );
         return;
       }
@@ -79,7 +80,7 @@ export function register(
           pending === null
             ? 'events'
             : `${pending} event${pending === 1 ? '' : 's'}`;
-        stderr(`${count} waiting, run sealkeeper sync to review and send`);
+        stderr(`${count} waiting, run ${cli('sync')} to review and send`);
         return;
       }
 
@@ -101,7 +102,7 @@ export function register(
             ? error.pending
             : await countPending().catch(() => null);
         const count = pending === null ? 'events' : pendingText(pending);
-        stderr(`warning: sync did not finish, ${count}, run sealkeeper sync`);
+        stderr(`warning: sync did not finish, ${count}, run ${cli('sync')}`);
       }
     });
 }

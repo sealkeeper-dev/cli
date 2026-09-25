@@ -11,6 +11,7 @@ import {
   sign,
 } from '@sealkeeper/schema';
 import { ensureHome, type Paths, paths } from './config.js';
+import { cli } from './invocation.js';
 import { stderr } from './output.js';
 
 // The key file holds the 32 byte Ed25519 private seed as one base64url line.
@@ -21,7 +22,7 @@ export class KeyError extends Error {
   override name = 'KeyError';
 }
 
-export const NO_KEY = 'no key found, run sealkeeper init';
+export const NO_KEY = `no key found, run ${cli('init')}`;
 
 export type Identity = {
   agentId: AgentId;

@@ -265,7 +265,7 @@ describe('sealkeeper rate', () => {
       '3',
     );
     expect(code).toBe(1);
-    expect(err).toBe('not initialised, run sealkeeper init\n');
+    expect(err).toBe('not initialised, run npx sealkeeper init\n');
     expect(api.calls).toEqual([]);
   });
 });

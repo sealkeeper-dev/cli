@@ -7,9 +7,10 @@ import {
   profileUrl,
   readConfig,
 } from '../config.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
-export const NOT_INITIALISED = 'not initialised, run sealkeeper init';
+export const NOT_INITIALISED = `not initialised, run ${cli('init')}`;
 
 export function register(parent: Command): Command {
   return parent

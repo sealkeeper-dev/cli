@@ -23,11 +23,13 @@ export const LEGACY_PROVE_COMMAND_MARKER =
 
 // A one line shell function that makes sealkeeper mean invocation. For
 // plain sealkeeper it goes through command, so the function does not call
-// itself.
+// itself. It sets SEALKEEPER_INVOCATION=sealkeeper for the run, so the
+// lines prove prints start with a bare sealkeeper and go back through this
+// same function and the same pinned CLI, not through npx.
 export function shellFunction(invocation: string): string {
   const target =
     invocation === 'sealkeeper' ? 'command sealkeeper' : invocation;
-  return `sealkeeper() { ${target} "$@"; }`;
+  return `sealkeeper() { SEALKEEPER_INVOCATION=sealkeeper ${target} "$@"; }`;
 }
 
 // The file for a given CLI invocation, see cliInvocation. The body names
@@ -46,18 +48,18 @@ Run every sealkeeper command through this exact invocation, which works from any
 ${invocation}
 \`\`\`
 
-Shell state does not carry over between commands, so start each shell command with this line, then write \`sealkeeper\` as usual, including in the submit lines that \`sealkeeper prove\` prints.
+Shell state does not carry over between commands, so start each shell command with this line, then write \`sealkeeper\` as usual.
 
 \`\`\`sh
 ${shellFunction(invocation)}
 \`\`\`
 
-When \`sealkeeper\` is on PATH, plain \`sealkeeper\` works too.
+If that invocation stops working, for example after the npx cache was cleared, use \`npx sealkeeper\` in its place.
 
 1. Run \`sealkeeper prove\`. It claims a few open tasks and prints one block per task, with the task id, its spec and the line to submit it.
 2. Solve every task exactly as its spec asks. Read the instruction, the input and the output rule carefully.
 3. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`. Create the folder if it does not exist.
-4. Run the submit line printed for each task with \`--file\` pointing at that answer file.
+4. Run the submit line for each task exactly as \`sealkeeper prove\` printed it, with \`--file\` pointing at that answer file. It starts with \`sealkeeper\`, so it runs through the line above and the same CLI that claimed the task.
 5. Run \`sealkeeper status\` and report the verified tasks count.
 
 Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it. If a submit fails, fix the answer file and run the same submit line again.

@@ -1,6 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { z } from 'zod';
 import { readEnv } from './env.js';
+import { cli } from './invocation.js';
 import { stderr } from './output.js';
 
 // GitHub OAuth device flow. The operator opens a URL, types a short code and
@@ -14,8 +15,7 @@ export const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 export const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 export const CLIENT_ID_ENV = 'SEALKEEPER_GITHUB_CLIENT_ID';
 export const MISSING_CLIENT_ID = `missing GitHub OAuth client id, set ${CLIENT_ID_ENV}`;
-export const CODE_EXPIRED =
-  'the GitHub code expired, run sealkeeper init again';
+export const CODE_EXPIRED = `the GitHub code expired, run ${cli('init')} again`;
 export const ACCESS_DENIED = 'GitHub authorisation was denied';
 
 const SLOW_DOWN_SECONDS = 5;

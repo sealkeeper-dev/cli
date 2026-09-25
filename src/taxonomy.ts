@@ -6,6 +6,7 @@ import {
   type EventPayload as Payload,
 } from '@sealkeeper/schema';
 import type { z } from 'zod';
+import { cli } from './invocation.js';
 
 // What leaves this machine, in plain words. The types and fields come from
 // the taxonomy schemas in @sealkeeper/schema, so this text cannot drift from
@@ -21,7 +22,7 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
   event_id: 'a random id made on this machine for this event',
   type: 'the event type',
   occurred_at: 'when it happened',
-  version: 'the agent version you set with sealkeeper init',
+  version: `the agent version you set with ${cli('init')}`,
   session_id: 'the id your agent framework gives the session',
   duration_ms: 'how long it took in milliseconds',
   tool: 'the tool name, for example Bash or Read',

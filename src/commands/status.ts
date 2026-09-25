@@ -26,6 +26,7 @@ import {
   paths,
   profileUrl,
 } from '../config.js';
+import { cli } from '../invocation.js';
 import {
   CursorError,
   countPending,
@@ -53,10 +54,8 @@ export type StatusDeps = {
 };
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
-export const HOOKS_MISSING =
-  'The Claude Code hooks point at a sealkeeper that is no longer there. Run sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.';
-export const HOOKS_OLD_PACKAGE =
-  'The Claude Code hooks still run the old vouched package, which records to the old directory. Run sealkeeper init or sealkeeper adapter claude-code install to replace them.';
+export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${cli('adapter claude-code install')} again, or npm i -g sealkeeper for a stable path.`;
+export const HOOKS_OLD_PACKAGE = `The Claude Code hooks still run the old vouched package, which records to the old directory. Run ${cli('init')} or ${cli('adapter claude-code install')} to replace them.`;
 const QUIET_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
@@ -376,7 +375,7 @@ function printStatus(status: Status): void {
     ['last sync', status.lastSyncAt ?? 'never'],
     [
       'auto-sync',
-      status.autoSync ? 'on' : 'off, run sealkeeper sync to review and send',
+      status.autoSync ? 'on' : `off, run ${cli('sync')} to review and send`,
     ],
     ['scores', status.scoresFetchedAt ? `as of ${status.scoresFetchedAt}` : ''],
   ]);
@@ -437,7 +436,7 @@ export function dormancyLine(dormantDays: number | null): string | null {
 export function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
-  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run sealkeeper prove to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
+  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove')} to print ${n === 1 ? 'it' : 'them'} again with the submit lines.`;
 }
 
 function formatScore(value: number): string {

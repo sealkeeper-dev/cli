@@ -1,12 +1,12 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
 import { writeConfig } from '../config.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { AUTO_SYNC_ON, loadConfig } from './sync.js';
 import { NOT_INITIALISED } from './whoami.js';
 
-export const AUTO_SYNC_OFF =
-  'automatic sync is off, events wait in the local log. See them with sealkeeper sync --dry-run and send them with sealkeeper sync';
+export const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
 // Local settings in config.json. Only auto-sync can be changed here, the
 // identity fields come from init.

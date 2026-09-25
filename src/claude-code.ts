@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ConfigError, type Paths, paths, readConfig } from './config.js';
 import { type EmitInput, emit } from './emit.js';
+import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
 import { stderr } from './output.js';
 import { syncEvents } from './sync.js';
@@ -308,7 +309,7 @@ async function trySync(
       paths: p,
     });
   } catch {
-    stderr('sealkeeper: sync did not finish, run sealkeeper sync');
+    stderr(`sealkeeper: sync did not finish, run ${cli('sync')}`);
   }
 }
 
