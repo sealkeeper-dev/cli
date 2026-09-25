@@ -273,6 +273,7 @@ async function removeLocal(p: Paths): Promise<void> {
     p.wellKnown,
     p.score,
     p.inbox,
+    p.postPrompt,
     p.cursor,
     p.sessions,
     p.log,

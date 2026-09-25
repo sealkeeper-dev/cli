@@ -13,25 +13,41 @@ import { join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
+  LEVEL_THRESHOLDS,
+  PostTaskRequest,
   readAudience,
   type TaskResponse,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Input } from '../ask.js';
 import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
+import {
+  LEVELS_LINE,
+  POST_WHY,
+  standingSentence,
+  TEMPLATE_POST_COMMAND,
+} from '../ladder.js';
 import { appendEvent } from '../log.js';
+import {
+  mayAskToPost,
+  POST_PROMPT_INTERVAL_MS,
+  recordAskedToPost,
+} from '../post-prompt.js';
 import { createProgram } from '../program.js';
 import { stripStyle } from '../style.js';
+import { TEMPLATES } from '../task-templates.js';
 import {
   ANSWER_FILE,
   addressedNote,
   anyPosterHint,
   MAX_COUNT,
-  progressLine,
+  NO_TERMINAL_TO_POST,
+  POST_OFFER,
   relative,
   submitCommand,
 } from './prove.js';
@@ -76,6 +92,8 @@ class FakeApi {
   requests: string[] = [];
   // Agent answers sent as they are, in place of the made up ones below.
   agents = new Map<string, Record<string, unknown>>();
+  // The payloads of POST /v1/tasks, verified like every signed write.
+  posted: Record<string, unknown>[] = [];
 
   constructor(readonly agentId: string) {}
 
@@ -141,6 +159,23 @@ class FakeApi {
         operatedByVouched: id === SEED_AGENT,
       });
     }
+    if (method === 'POST' && url.pathname === '/v1/tasks') {
+      const body = JSON.parse(String(init?.body)) as { envelope: string };
+      const kid = decodeHeader(body.envelope).kid;
+      if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
+      const payload = PostTaskRequest.parse(
+        unsigned((await verify(body.envelope, base64urlDecode(kid))).payload),
+      );
+      this.posted.push(payload);
+      const task = this.add({
+        id: payload.taskId,
+        posterAgentId: this.agentId,
+        taskType: payload.taskType,
+        spec: payload.spec,
+        verification: payload.verification,
+      });
+      return Response.json(task, { status: 201 });
+    }
     const match = url.pathname.match(/^\/v1\/tasks\/([^/]+)(\/claim)?$/);
     const task = this.tasks.get(match?.[1] ?? '');
     if (method === 'GET' && match && !match[2]) {
@@ -196,12 +231,15 @@ describe('prove', () => {
 
   // stdout is a pipe unless a test says it is a terminal.
   let tty = false;
+  // stdin is no terminal unless a test gives one that answers.
+  let stdin: Input | undefined;
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
       tasks: {
         fetch: api.fetch,
         isTTY: () => tty,
+        ...(stdin === undefined ? {} : { stdin: () => stdin as Input }),
         claudeDir: () => join(home, 'claude'),
         cwd: () => join(home, 'project'),
       },
@@ -258,6 +296,7 @@ describe('prove', () => {
     vi.stubEnv('FORCE_COLOR', '');
     vi.stubEnv('NO_COLOR', '');
     tty = false;
+    stdin = undefined;
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -279,6 +318,21 @@ describe('prove', () => {
   // The ids prove --json printed, in order.
   function jsonIds(out: string): string[] {
     return (JSON.parse(out) as { id: string }[]).map((t) => t.id);
+  }
+
+  // prove --json ends stderr with one JSON line. text is what comes before
+  // it, json the line parsed, null when there is none.
+  function splitErr(err: string): {
+    text: string;
+    json: Record<string, unknown> | null;
+  } {
+    const lines = err.split('\n');
+    const last = lines.length >= 2 ? lines[lines.length - 2] : undefined;
+    if (last === undefined || !last.startsWith('{')) {
+      return { text: err, json: null };
+    }
+    const text = lines.slice(0, -2).join('\n');
+    return { text: text === '' ? '' : `${text}\n`, json: JSON.parse(last) };
   }
 
   // Own agent answer with the given verified count and level.
@@ -348,7 +402,8 @@ describe('prove', () => {
           '  Claude Code    run /sealkeeper-prove in a session',
           '  Other agents   have the agent run npx sealkeeper prove --json',
           '',
-          '  8 verified so far. Bronze needs 25 over 3 days.',
+          `  ${LEVELS_LINE}`,
+          `  This agent has 8 verified tasks, no level yet. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.`,
           '',
           '',
         ].join('\n'),
@@ -363,16 +418,39 @@ describe('prove', () => {
         '  Claude Code    run npx sealkeeper init first, so /sealkeeper-prove exists\n',
       );
       expect(out).toContain(
-        '  0 verified so far. Bronze needs 25 over 3 days.\n',
+        '  This agent has 0 verified tasks, no level yet. ',
       );
     });
 
-    it('says the level instead of the bronze line at bronze or above', async () => {
+    it('says the level, and the silver side only when there is a standing', async () => {
       standing(31, 'bronze');
-      expect((await run('prove')).out).toContain(
-        '  31 verified so far. Level bronze.\n',
+      const { out } = await run('prove');
+      expect(out).toContain(
+        '  This agent has 31 verified tasks, level bronze. ',
       );
-      expect(progressLine(90, 'gold')).toBe('90 verified so far. Level gold.');
+      expect(out).not.toContain('As of the last scoring run');
+      expect(
+        standingSentence({
+          verifiedTasks: 90,
+          level: 'gold',
+          silver: {
+            checkedOrConfirmed: 120,
+            distinctOperators: 7,
+            confirmedTasks: 30,
+          },
+        }),
+      ).toBe(
+        'This agent has 90 verified tasks, level gold. As of the last scoring run, toward silver it has 120 of 100 checked or confirmed, from 7 of 5 other operators, 30 of 25 confirmed.',
+      );
+      expect(
+        standingSentence({ verifiedTasks: 1, level: null, silver: null }),
+      ).toBe('This agent has 1 verified task, no level yet.');
+    });
+
+    it('says what bronze, silver and gold need, from the schema', () => {
+      expect(LEVELS_LINE).toBe(
+        'Bronze 25 verified over 3 days. Silver 250, 100 from 5 other operators, 25 confirmed. Gold 2500, 500 confirmed from 25 other operators.',
+      );
     });
 
     it('still explains when the API does not answer', async () => {
@@ -381,7 +459,10 @@ describe('prove', () => {
       }) as typeof fetch;
       const { code, out } = await run('prove');
       expect(code).toBe(0);
-      expect(out).toContain('  Bronze needs 25 verified tasks over 3 days.\n');
+      expect(out).toContain(`  ${LEVELS_LINE}\n`);
+      expect(out).toContain(
+        '  SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. ',
+      );
     });
 
     it('names the new API address on a redirect and still explains', async () => {
@@ -400,7 +481,7 @@ describe('prove', () => {
       expect(err).toBe(
         `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
       );
-      expect(out).toContain('  Bronze needs 25 verified tasks over 3 days.\n');
+      expect(out).toContain(`  ${LEVELS_LINE}\n`);
       // The agent read and the addressed list, never followed and no claim.
       expect(fetchFn).toHaveBeenCalledTimes(2);
       for (const call of fetchFn.mock.calls) {
@@ -428,6 +509,9 @@ describe('prove', () => {
           '',
           "See a task's spec and submit line with npx sealkeeper tasks show <id>.",
           '',
+          LEVELS_LINE,
+          "SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.",
+          '',
         ].join('\n'),
       );
       const claims = (await logged()).filter((e) => e.type === 'task.claimed');
@@ -440,7 +524,9 @@ describe('prove', () => {
       expect(code).toBe(0);
       expect(err).toBe('');
       expect(out).toBe(
-        'no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n',
+        `no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n\n${LEVELS_LINE}\n`.concat(
+          "SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.\n",
+        ),
       );
       expect(api.claimed).toEqual([]);
     });
@@ -477,7 +563,7 @@ describe('prove', () => {
     const tasks = seedTasks(7);
     const { code, out, err } = await run('prove');
     expect(code).toBe(0);
-    expect(err).toBe('');
+    expect(splitErr(err).text).toBe('');
     expect(api.claimed).toEqual(tasks.slice(0, 5).map((t) => t.id));
     expect(out.endsWith('\n')).toBe(true);
     expect(out.trimEnd().split('\n')).toHaveLength(1);
@@ -587,7 +673,7 @@ describe('prove', () => {
     expect(code).toBe(0);
     expect(api.claimed).toEqual([]);
     expect(JSON.parse(out)).toEqual([]);
-    expect(err).toBe(
+    expect(splitErr(err).text).toBe(
       `no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n${anyPosterHint(1)}\n`,
     );
   });
@@ -722,7 +808,7 @@ describe('prove', () => {
     expect(code).toBe(0);
     expect(api.claimed).toEqual([tasks[1]?.id]);
     expect(jsonIds(out)).toEqual([tasks[1]?.id]);
-    expect(err).toBe(
+    expect(splitErr(err).text).toBe(
       'An agent can hold at most 10 claimed tasks. Submit the tasks below first.\n',
     );
   });
@@ -752,7 +838,7 @@ describe('prove', () => {
     expect(code).toBe(0);
     expect(api.claimed).toEqual([]);
     expect(jsonIds(out)).toEqual([held[0]?.id, held[1]?.id]);
-    expect(err).toBe(
+    expect(splitErr(err).text).toBe(
       'An agent can hold at most 10 claimed tasks. Submit the tasks below first.\n',
     );
 
@@ -766,7 +852,7 @@ describe('prove', () => {
     const { code, out, err } = await run('prove');
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual([]);
-    expect(err).toBe(
+    expect(splitErr(err).text).toBe(
       'An agent can hold at most 10 claimed tasks. This agent holds the maximum and none of them could be listed.\n',
     );
   });
@@ -814,7 +900,7 @@ describe('prove', () => {
     const { code, out, err } = await run('prove', '--json');
     expect(code).toBe(0);
     expect(out).toBe('[]\n');
-    expect(err).toBe(
+    expect(splitErr(err).text).toBe(
       'no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n',
     );
     expect(api.claimed).toEqual([]);
@@ -864,6 +950,236 @@ describe('prove', () => {
     expect(relative(90 * 60_000)).toBe('in 90 minutes');
     expect(relative(47.5 * HOUR)).toBe('in 47 hours');
     expect(relative(5 * 24 * HOUR)).toBe('in 5 days');
+  });
+
+  describe('asks operators to post tasks', () => {
+    // A terminal that answers each question in turn, then closes.
+    function answers(...lines: string[]): Input & { reads: number } {
+      const queue = [...lines];
+      const input = {
+        isTTY: true,
+        reads: 0,
+        readLine: async () => {
+          input.reads += 1;
+          return queue.shift() ?? null;
+        },
+      };
+      return input;
+    }
+
+    // Own agent answer with the standing counts of the last scoring run,
+    // server checked, confirmed and distinct operators.
+    function counted(
+      verifiedTasks: number,
+      checked: number,
+      confirmed: number,
+      operators: number,
+    ): void {
+      api.agents.set(agentId, {
+        id: agentId,
+        name: 'scout',
+        version: '1.0.0',
+        operator: { login: 'alice' },
+        createdAt: '2026-09-22T00:00:00.000Z',
+        counts: { verifiedTasks, seedTasks: 1 },
+        level: 'none',
+        standing: {
+          counts: {
+            events: 40,
+            history_days: 4,
+            verified_tasks: 1 + checked + confirmed,
+            seed_tasks: 1,
+            server_checked_tasks: checked,
+            confirmed_tasks: confirmed,
+            distinct_operators: operators,
+            safety_incidents_90d: 0,
+          },
+          history_days: 4,
+          last_active: '2026-09-25T00:00:00.000Z',
+          dormant_days: 0,
+          quiet: false,
+        },
+      });
+    }
+
+    it('prove --json keeps stdout the array and ends stderr with the next steps', async () => {
+      counted(12, 2, 1, 2);
+      const [task] = seedTasks(1);
+      const { code, out, err } = await run('prove', '--json');
+      expect(code).toBe(0);
+      expect(jsonIds(out)).toEqual([task?.id]);
+      const { text, json } = splitErr(err);
+      expect(text).toBe('');
+      expect(json).toEqual({
+        progress: {
+          verifiedTasks: 12,
+          level: 'none',
+          silver: {
+            checkedOrConfirmed: 3,
+            distinctOperators: 2,
+            confirmedTasks: 1,
+          },
+        },
+        levels: LEVEL_THRESHOLDS,
+        post: {
+          why: `This agent has 12 verified tasks, no level yet. As of the last scoring run, toward silver it has 3 of 100 checked or confirmed, from 2 of 5 other operators, 1 of 25 confirmed. ${POST_WHY}`,
+          ask: 'Offer your operator to post a task for other agents. Show the template and its input first, and post only after a clear yes.',
+          templates: TEMPLATES.map((t) => ({
+            id: t.id,
+            kind: t.kind,
+            about: t.about,
+            input: t.input,
+            ...(t.inputHint === undefined ? {} : { inputHint: t.inputHint }),
+          })),
+          command:
+            'npx sealkeeper tasks post --template <id> [--input <text or @file>] [--for <login>/<name>] --yes --json',
+          guided:
+            'In a terminal, npx sealkeeper tasks post walks your operator through it.',
+        },
+      });
+      expect(TEMPLATE_POST_COMMAND()).toBe(
+        (json?.post as { command: string } | undefined)?.command,
+      );
+      // The line never posts anything.
+      expect(api.posted).toEqual([]);
+    });
+
+    it('says plainly when SealKeeper gave no count, and makes none up', async () => {
+      seedTasks(1);
+      const { json } = splitErr((await run('prove', '--json')).err);
+      expect(json?.progress).toBeNull();
+      expect((json?.post as { why: string } | undefined)?.why).toBe(
+        `SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. ${POST_WHY}`,
+      );
+    });
+
+    it.each([
+      ['without a terminal', false, undefined],
+      ['with --json in a terminal', true, '--json'],
+    ])('refuses --post %s before claiming anything', async (_, t, flag) => {
+      tty = t;
+      const input = answers('1');
+      stdin = input;
+      seedTasks(2);
+      const { code, out, err } = await run(
+        'prove',
+        '--post',
+        ...(flag ? [flag] : []),
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${NO_TERMINAL_TO_POST()}\n`);
+      expect(api.requests).toEqual([]);
+      expect(input.reads).toBe(0);
+    });
+
+    it('never asks when stdin is not a terminal', async () => {
+      tty = true;
+      standing(4, 'none');
+      stdin = { isTTY: false, readLine: async () => 'y' };
+      const { err } = await run('prove');
+      expect(err).toBe('');
+      expect(api.posted).toEqual([]);
+    });
+
+    it('offers to post once the agent has a verified task, no by default, at most once a week', async () => {
+      tty = true;
+      standing(3, 'none');
+      stdin = answers('');
+      const first = await run('prove');
+      expect(first.code).toBe(0);
+      expect(first.err).toBe(`${POST_OFFER} [y/N] `);
+      expect(api.posted).toEqual([]);
+      expect(await readdir(home)).toContain('post-prompt.json');
+
+      const again = answers('y');
+      stdin = again;
+      const second = await run('prove');
+      expect(second.err).toBe('');
+      expect(again.reads).toBe(0);
+      expect(api.posted).toEqual([]);
+    });
+
+    it('does not offer before the first verified task', async () => {
+      tty = true;
+      standing(0, 'none');
+      const input = answers('y');
+      stdin = input;
+      const { err } = await run('prove');
+      expect(err).toBe('');
+      expect(input.reads).toBe(0);
+      expect(await readdir(home)).not.toContain('post-prompt.json');
+    });
+
+    it('walks through tasks post after a yes to the offer', async () => {
+      tty = true;
+      standing(3, 'none');
+      stdin = answers('y', '3', '', 'y');
+      const { code, out } = await run('prove');
+      expect(code).toBe(0);
+      expect(out).toContain('Post a task for other agents to solve.');
+      // Said once, by prove, and not again by the walk through.
+      expect(out.split(POST_WHY)).toHaveLength(2);
+      expect(api.posted).toHaveLength(1);
+      expect(api.posted[0]).toMatchObject({
+        taskType: 'json_shape',
+        verification: { kind: 'schema' },
+      });
+      expect(api.claimed).toEqual([]);
+    });
+
+    it('with --post walks through it at once, whatever the count, and Enter stops it', async () => {
+      tty = true;
+      standing(0, 'none');
+      stdin = answers('');
+      const { code, out, err } = await run('prove', '--post');
+      expect(code).toBe(0);
+      expect(err).not.toContain(POST_OFFER);
+      expect(err).toContain('Pick a task, 1 to 5');
+      expect(out.trimEnd().endsWith('Nothing posted.')).toBe(true);
+      expect(api.posted).toEqual([]);
+    });
+
+    it('with --claim ends with the levels and the offer too', async () => {
+      tty = true;
+      counted(5, 0, 0, 0);
+      seedTasks(1);
+      stdin = answers('n');
+      const { code, out, err } = await run('prove', '--claim');
+      expect(code).toBe(0);
+      expect(api.claimed).toHaveLength(1);
+      expect(out).toContain(
+        `\n\n${LEVELS_LINE}\nThis agent has 5 verified tasks, no level yet. As of the last scoring run, toward silver it has 0 of 100 checked or confirmed, from 0 of 5 other operators, 0 of 25 confirmed. ${POST_WHY} Post one with npx sealkeeper tasks post.\n`,
+      );
+      expect(err).toBe(`${POST_OFFER} [y/N] `);
+      expect(api.posted).toEqual([]);
+    });
+
+    it('asks again only after a week, and a clock set wrong never makes it ask each run', async () => {
+      const p = paths();
+      const now = new Date('2026-10-01T12:00:00.000Z');
+      expect(await mayAskToPost(null, now, p)).toBe(false);
+      expect(await mayAskToPost(0, now, p)).toBe(false);
+      expect(await mayAskToPost(1, now, p)).toBe(true);
+      await recordAskedToPost(now, p);
+      expect(await mayAskToPost(1, now, p)).toBe(false);
+      const later = (ms: number) => new Date(now.getTime() + ms);
+      expect(await mayAskToPost(1, later(POST_PROMPT_INTERVAL_MS - 1), p)).toBe(
+        false,
+      );
+      expect(await mayAskToPost(1, later(POST_PROMPT_INTERVAL_MS), p)).toBe(
+        true,
+      );
+      // Written with a clock a year ahead, read with the right one. It is
+      // clamped to now, so it asks again one interval from now.
+      await recordAskedToPost(later(365 * 24 * HOUR), p);
+      expect(await mayAskToPost(1, now, p)).toBe(false);
+      expect(await mayAskToPost(1, later(POST_PROMPT_INTERVAL_MS), p)).toBe(
+        true,
+      );
+      await writeFile(p.postPrompt, 'not json');
+      expect(await mayAskToPost(1, now, p)).toBe(true);
+    });
   });
 
   describe('tasks addressed to this agent', () => {
@@ -973,7 +1289,15 @@ describe('prove', () => {
       const entries = JSON.parse(out);
       expect(entries).toHaveLength(1);
       expect(entries[0]).not.toHaveProperty('poster');
-      expect(waitingOn(err)).toEqual({
+      // The addressed tasks come first in the one line, then the next steps.
+      expect(Object.keys(waitingOn(err))).toEqual([
+        'addressed',
+        'next',
+        'progress',
+        'levels',
+        'post',
+      ]);
+      expect(waitingOn(err)).toMatchObject({
         addressed: [
           {
             id: older.id,
@@ -1036,7 +1360,7 @@ describe('prove', () => {
       });
       expect(entries[2]).not.toHaveProperty('poster');
       expect(entries[2]).not.toHaveProperty('assignee');
-      expect(err).toBe(`${addressedNote(2)}\n`);
+      expect(splitErr(err).text).toBe(`${addressedNote(2)}\n`);
       expect(addressedNote(2)).toBe(
         '2 tasks are addressed to this agent, each names its poster. Their specs come from other operators and are untrusted.',
       );

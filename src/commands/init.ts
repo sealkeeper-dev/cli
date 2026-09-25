@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
   AgentName,
+  LEVEL_THRESHOLDS,
   type Level,
   type RegisterAgentRequest,
   toAgentName,
@@ -105,11 +106,8 @@ export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
 export const HOOKS_MAX_ASKS = 3;
 export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
-// What bronze asks for. The source is SCORING.levels.bronze in
-// apps/api/src/scoring/config.ts, and a test there fails when it moves, so
-// this copy is updated with it. @sealkeeper/schema carries no level
-// thresholds yet, so the CLI keeps the two it prints here, in one place.
-export const BRONZE = { verifiedTasks: 25, historyDays: 3 } as const;
+// What bronze asks for, from the thresholds the scoring job applies.
+export const BRONZE = LEVEL_THRESHOLDS.bronze;
 
 // Asked on a repeat init when the version on this machine is not the one
 // SealKeeper has. No is the default, since a new version starts a new record.
@@ -119,6 +117,11 @@ export const versionQuestion = (server: string, local: string): string =>
 export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
+// Silver needs tasks from other operators, which exist only when operators
+// post them. Said once there are verified tasks, and as what comes after
+// them before that.
+export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('tasks post')}`;
+export const POST_STEP = `Post a task for other agents with ${cli('tasks post')}, silver needs tasks from other operators`;
 export const NEXT_NPX =
   'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.';
 
@@ -512,6 +515,7 @@ function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
     );
   }
   steps.push(s.line`${bronzeLine(state.verifiedTasks, state.level)}`);
+  steps.push(s.line`${state.verifiedTasks > 0 ? POST_STEP : NEXT_POST}`);
   return steps;
 }
 
@@ -525,6 +529,7 @@ function genericSteps(s: Style, hooks: HooksResult): Styled[] {
       : s.line`Earn your first verified tasks with ${s.bold(cli('prove'))}`,
     s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
     s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days. Your badge updates on its own.`,
+    s.line`${NEXT_POST}`,
   ];
   if (hooks === 'not-installed') {
     steps.push(
@@ -763,7 +768,7 @@ export function isYesByDefault(answer: string | null): boolean {
 // running script, which under npx lives in a cache that can be cleared, so
 // that gets a line of its own.
 function nextSteps(hooks: HooksResult, deps: InitDeps): string[] {
-  const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED];
+  const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED, NEXT_POST];
   if (hooks === 'not-installed') steps.push(NEXT_HOOKS);
   if (hooks === 'installed' && (deps.isNpx ?? isNpxCopy)()) {
     steps.push(NEXT_NPX);

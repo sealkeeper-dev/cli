@@ -8,7 +8,7 @@ import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
 // Removes the local session. config.json, cursor.json, credential.json,
-// score.json and inbox.json go. The log stays, and so does the key unless
+// score.json, inbox.json and post-prompt.json go. The log stays, and so does the key unless
 // --delete-key and --yes are both given. There is no prompt, the --yes flag
 // is the confirmation.
 
@@ -107,6 +107,7 @@ async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
     p.credential,
     p.score,
     p.inbox,
+    p.postPrompt,
     ...(deleteKey ? [p.key] : []),
     p.config,
   ];

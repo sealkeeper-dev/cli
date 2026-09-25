@@ -92,6 +92,8 @@ export type Paths = {
   score: string;
   // How many tasks wait for this agent, a fifteen minute cache like score.
   inbox: string;
+  // When prove last offered to post a task, so it asks at most once a week.
+  postPrompt: string;
   // Start time markers for hook adapters, one small file per session or tool
   // call, so a later hook can compute a duration.
   sessions: string;
@@ -119,6 +121,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),
     inbox: join(home, 'inbox.json'),
+    postPrompt: join(home, 'post-prompt.json'),
     sessions: join(home, 'sessions'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };

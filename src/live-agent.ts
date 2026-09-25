@@ -21,7 +21,19 @@ export const LiveAgent = z.object({
     .catch(undefined),
   level: Level.optional().catch(undefined),
   standing: z
-    .object({ dormant_days: z.int().min(0).nullable() })
+    .object({
+      dormant_days: z.int().min(0).nullable(),
+      // The scoring window's evidence counts, as of the last run. prove
+      // reads the ones silver needs.
+      counts: z
+        .object({
+          server_checked_tasks: z.int().min(0),
+          confirmed_tasks: z.int().min(0),
+          distinct_operators: z.int().min(0),
+        })
+        .optional()
+        .catch(undefined),
+    })
     .optional()
     .catch(undefined),
 });

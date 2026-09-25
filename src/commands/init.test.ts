@@ -47,6 +47,7 @@ import {
   isYesByDefault,
   NEXT_HOOKS,
   NEXT_NPX,
+  NEXT_POST,
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
   NOTHING_SENT,
@@ -359,6 +360,7 @@ describe('sealkeeper init', () => {
         '  1  Earn your first verified tasks with npx sealkeeper prove',
         '  2  Review and send what was recorded   npx sealkeeper sync',
         '  3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+        '  4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
         '',
         '  Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters',
         '',
@@ -834,7 +836,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(result.err).toContain(`  Claude Code\n  ${HOOKS_INTRO}\n`);
       expect(result.out).toContain(
-        `  4  Record your Claude Code sessions with ${INSTALL_COMMAND}\n`,
+        `  5  Record your Claude Code sessions with ${INSTALL_COMMAND}\n`,
       );
     });
 
@@ -997,7 +999,8 @@ describe('sealkeeper init', () => {
           '  1  Earn your first verified tasks with npx sealkeeper prove',
           '  2  Review and send what was recorded   npx sealkeeper sync',
           `  3  Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days. Your badge updates on its own.`,
-          '  4  Record your Claude Code sessions with npx sealkeeper adapter claude-code install',
+          `  4  ${NEXT_POST}`,
+          '  5  Record your Claude Code sessions with npx sealkeeper adapter claude-code install',
         ].join('\n'),
       );
       expect(result.out).not.toContain('✓ Hooks');
@@ -1036,16 +1039,24 @@ describe('sealkeeper init', () => {
       expect(printed.nextSteps).toEqual([
         NEXT_PROVE,
         NEXT_WHAT_IS_SHARED,
+        NEXT_POST,
         NEXT_HOOKS,
       ]);
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
-    it('with --json and no Claude Code lists two next steps', async () => {
+    it('with --json and no Claude Code lists three next steps', async () => {
       const result = await run(world, 'init', '--name', 'scout', '--json');
       expect(result.code).toBe(0);
       const printed = JSON.parse(result.out) as { nextSteps: string[] };
-      expect(printed.nextSteps).toEqual([NEXT_PROVE, NEXT_WHAT_IS_SHARED]);
+      expect(printed.nextSteps).toEqual([
+        NEXT_PROVE,
+        NEXT_WHAT_IS_SHARED,
+        NEXT_POST,
+      ]);
+      expect(NEXT_POST).toBe(
+        'After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
+      );
     });
 
     it('does not ask when the hooks are already there', async () => {
@@ -1218,6 +1229,7 @@ describe('sealkeeper init', () => {
         '2  Then in Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '3  Review and send what was recorded   npx sealkeeper sync',
         '4  0 of 25 verified tasks toward bronze',
+        '5  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
 
@@ -1230,6 +1242,7 @@ describe('sealkeeper init', () => {
         '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  0 of 25 verified tasks toward bronze',
+        '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
 
@@ -1249,6 +1262,7 @@ describe('sealkeeper init', () => {
       expect(next(result.out)).toEqual([
         '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
         '2  8 of 25 verified tasks toward bronze',
+        '3  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
       ]);
     });
 
@@ -1261,6 +1275,7 @@ describe('sealkeeper init', () => {
         '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Level bronze, with 30 verified tasks',
+        '4  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
       ]);
       expect(bronzeLine(55, 'silver')).toBe(
         'Level silver, with 55 verified tasks',
@@ -1274,6 +1289,7 @@ describe('sealkeeper init', () => {
         '1  Have your agent run npx sealkeeper prove --json to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  2 of 25 verified tasks toward bronze',
+        '4  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
       ]);
     });
 
@@ -1290,6 +1306,7 @@ describe('sealkeeper init', () => {
         '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+        '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
 
@@ -1303,6 +1320,7 @@ describe('sealkeeper init', () => {
         '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+        '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
   });
@@ -1358,6 +1376,7 @@ describe('sealkeeper init', () => {
           1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
           3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.
+          4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
 
           Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
 
@@ -1393,6 +1412,7 @@ describe('sealkeeper init', () => {
           1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
           3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.
+          4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
 
           Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
 

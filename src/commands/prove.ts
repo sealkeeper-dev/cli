@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { ClaimTaskRequest, type Level } from '@sealkeeper/schema';
+import { ClaimTaskRequest } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
 import {
   type ApiClient,
@@ -7,13 +7,28 @@ import {
   createApiClient,
   resolveApiUrl,
 } from '../api.js';
+import { type Input, readYesNo } from '../ask.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
 import { requireConfig } from '../cli-config.js';
 import { type Config, handleOf } from '../config.js';
 import { clearInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
-import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
-import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
+import {
+  ladderLines,
+  type Progress,
+  postNext,
+  progressOf,
+  TEMPLATE_POST_COMMAND,
+} from '../ladder.js';
+import { readLiveAgent } from '../live-agent.js';
+import {
+  promptStyled,
+  stderr,
+  stdout,
+  stdoutStyled,
+  wantsJson,
+} from '../output.js';
+import { mayAskToPost, recordAskedToPost } from '../post-prompt.js';
 import {
   type AgentResponse,
   agentHandle,
@@ -30,7 +45,7 @@ import {
   type TasksDeps,
   unsubmittedClaims,
 } from '../tasks.js';
-import { BRONZE } from './init.js';
+import { guidedPost } from './tasks-post.js';
 import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 
 // sealkeeper prove. The path from init to a verified record, for two
@@ -59,6 +74,15 @@ import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 // poster's handle, and --json lists them on stderr as one JSON object.
 // --addressed claims them before seed tasks. Their specs are as untrusted
 // as any other operator's, so the operator decides.
+//
+// After the claims every run says what bronze, silver and gold need, where
+// the agent stands and that tasks from other operators, which silver and
+// gold need, only exist when operators post them. --json puts the same
+// into the one JSON line on stderr, so an agent can offer to post. In a
+// terminal, --post then walks the operator through tasks post, and without
+// it prove offers that walk once the agent has a verified task, at most
+// once a week (post-prompt.ts). The offer defaults to no. Without a
+// terminal to ask in, prove never posts.
 
 const DEFAULT_COUNT = 5;
 export const MAX_COUNT = 10;
@@ -88,6 +112,7 @@ type ProveOptions = {
   anyPoster?: boolean;
   claim?: boolean;
   addressed?: boolean;
+  post?: boolean;
 };
 
 // A task addressed to this agent with its poster's handle.
@@ -119,35 +144,52 @@ export function register(
       '--addressed',
       'also claim the tasks addressed to this agent, first, whose specs are untrusted',
     )
+    .option(
+      '--post',
+      'in a terminal, then walk through posting a task for other agents',
+    )
     .action(async function (
       this: Command,
       options: ProveOptions,
     ): Promise<void> {
       const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
+      const input = (deps.stdin ?? noInput)();
+      // Refused before anything is claimed or sent.
+      if (options.post && (json || !input.isTTY)) {
+        this.error(NO_TERMINAL_TO_POST());
+      }
       if (!json && !options.claim && !options.addressed) {
-        await explain(this, deps);
+        const progress = await explain(this, deps);
+        await offerToPost(this, deps, input, progress, options.post === true);
         return;
       }
 
-      const { tasks, capped, skipped, posters, waiting, waitingTotal } =
+      const { config, tasks, capped, skipped, posters, waiting, waitingTotal } =
         await claim(this, deps, options, json);
       const now = Date.now();
 
       if (json) {
         // stdout is the array and nothing else. What an agent may want to
-        // know besides goes to stderr, the addressed tasks that wait as one
-        // JSON object on a line of its own.
+        // know besides goes to stderr, last of all one JSON object on a
+        // line of its own. The addressed tasks that wait, when there are
+        // any, and always where the agent stands and how to post a task.
         stdout(
           JSON.stringify(
             tasks.map((task) => proveEntry(task, posters.get(task.id))),
           ),
         );
         if (posters.size > 0) stderr(addressedNote(posters.size));
-        if (waiting.length > 0) stderr(JSON.stringify(waitingEntry(waiting)));
         if (tasks.length === 0 && !capped) {
           stderr(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
           if (skipped > 0) stderr(anyPosterHint(skipped));
         }
+        const progress = progressOf(await readLiveAgent(config, deps.fetch));
+        stderr(
+          JSON.stringify({
+            ...(waiting.length > 0 ? waitingEntry(waiting) : {}),
+            ...postNext(progress),
+          }),
+        );
         return;
       }
       const tail =
@@ -156,19 +198,57 @@ export function register(
           : [];
       // At the cap with nothing to list, stderr already said why. Saying no
       // open tasks exist as well would be wrong.
+      let lines: string[];
       if (tasks.length === 0 && capped) {
-        for (const line of tail) stdout(line);
-        return;
+        lines = tail;
+      } else if (tasks.length === 0) {
+        lines = [
+          `${NOTHING_AVAILABLE}. ${TRY_LATER}`,
+          ...(skipped > 0 ? [anyPosterHint(skipped)] : []),
+          ...tail,
+        ];
+      } else {
+        lines = [...claimLines(tasks, now, posters), ...tail];
       }
-      if (tasks.length === 0) {
-        stdout(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
-        if (skipped > 0) stdout(anyPosterHint(skipped));
-        for (const line of tail) stdout(line);
-        return;
-      }
-      for (const line of claimLines(tasks, now, posters)) stdout(line);
-      for (const line of tail) stdout(line);
+      for (const line of lines) stdout(line);
+      const progress = progressOf(await readLiveAgent(config, deps.fetch));
+      stdout('');
+      for (const line of ladderLines(progress)) stdout(line);
+      await offerToPost(this, deps, input, progress, options.post === true);
     });
+}
+
+// Said when --post has no terminal to ask in.
+export const NO_TERMINAL_TO_POST = (): string =>
+  `prove --post needs a terminal to ask in, nothing was claimed or posted. An agent posts with ${TEMPLATE_POST_COMMAND()} once its operator says yes`;
+
+export const POST_OFFER = 'Post a task for other agents now?';
+
+function noInput(): Input {
+  return { isTTY: false, readLine: async () => null };
+}
+
+// The walk through tasks post, at the end of a terminal run. With --post
+// always. Otherwise offered, no by default, when the rule in
+// post-prompt.ts allows, and never without a terminal to ask in.
+async function offerToPost(
+  cmd: Command,
+  deps: TasksDeps,
+  input: Input,
+  progress: Progress | null,
+  post: boolean,
+): Promise<void> {
+  if (post) {
+    await guidedPost(cmd, deps, input, {}, false);
+    return;
+  }
+  if (!input.isTTY) return;
+  if (!(await mayAskToPost(progress?.verifiedTasks ?? null))) return;
+  await recordAskedToPost();
+  promptStyled(createStyle(process.stderr).line`${POST_OFFER} [y/N] `);
+  // Anything but a clear yes is no, so Enter skips it.
+  if (readYesNo(await input.readLine(), 'no') !== 'yes') return;
+  await guidedPost(cmd, deps, input, {}, false);
 }
 
 const TRY_LATER =
@@ -187,7 +267,11 @@ function parseCount(value: string): number {
 
 // The terminal run. Claims nothing and sends nothing but reads, the
 // verified count status shows and the tasks addressed to this agent.
-async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
+// Returns where the agent stands, null when the API did not say.
+async function explain(
+  cmd: Command,
+  deps: TasksDeps,
+): Promise<Progress | null> {
   const config = await requireConfig(cmd);
   const [live, hooks, addressed] = await Promise.all([
     readLiveAgent(config, deps.fetch),
@@ -221,10 +305,10 @@ async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
     s.line`${s.dim('Other agents')}   have the agent run ${s.bold(cli('prove --json'))}`,
   );
   say();
-  say(
-    s.line`${progressLine(live?.counts?.verifiedTasks ?? null, live?.level ?? null)}`,
-  );
+  const progress = progressOf(live);
+  for (const line of ladderLines(progress)) say(s.line`${line}`);
   say();
+  return progress;
 }
 
 // What to run to claim the addressed tasks, once the operator agrees.
@@ -346,21 +430,6 @@ export const EXPLAIN = [
   "The server verifies each answer. You don't solve them yourself.",
 ];
 
-// How far the agent has come. Without a count, as when the API did not
-// answer, only what bronze needs.
-export function progressLine(
-  verifiedTasks: number | null,
-  level: Level | null,
-): string {
-  if (verifiedTasks === null) {
-    return `Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days.`;
-  }
-  if (atBronzeOrAbove(level)) {
-    return `${verifiedTasks} verified so far. Level ${level}.`;
-  }
-  return `${verifiedTasks} verified so far. Bronze needs ${BRONZE.verifiedTasks} over ${BRONZE.historyDays} days.`;
-}
-
 // Claims up to options.count tasks, held ones first, then open tasks.
 // With --addressed it first claims up to options.count tasks addressed to
 // this agent on top of the held ones, since an agent that just ran prove
@@ -377,6 +446,7 @@ async function claim(
   options: ProveOptions,
   json: boolean,
 ): Promise<{
+  config: Config;
   tasks: TaskResponse[];
   capped: boolean;
   skipped: number;
@@ -416,6 +486,7 @@ async function claim(
       named.slice(0, held.length).map(({ task, poster }) => [task.id, poster]),
     );
     return {
+      config,
       tasks,
       capped,
       skipped,

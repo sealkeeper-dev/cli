@@ -1,6 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -36,8 +43,14 @@ import {
 import {
   assigneeCap,
   assigneeOperatorCap,
+  KEY_IN_TASK,
+  NO_OPTIONS_JSON,
+  NO_TERMINAL,
+  NOT_POSTED,
+  NOTHING_POSTED,
   noAssignee,
   sameOperator,
+  templateNeedsYes,
 } from './tasks-post.js';
 import {
   MAX_CLAIM_ATTEMPTS,
@@ -302,11 +315,16 @@ describe('tasks pull, submit and post', () => {
   let api: FakeApi;
   // What tasks outcome reads its answer from. Unset is no terminal.
   let stdin: Input | undefined;
+  // Whether stdout is a terminal, for the guided tasks post.
+  let stdoutTTY = false;
+  // Files a test wrote next to the home, removed after it.
+  let onCleanup: string[] = [];
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
       tasks: {
         fetch: api.fetch,
+        isTTY: () => stdoutTTY,
         ...(stdin === undefined ? {} : { stdin: () => stdin as Input }),
       },
     });
@@ -362,9 +380,12 @@ describe('tasks pull, submit and post', () => {
     });
     api = new FakeApi(agentId);
     stdin = undefined;
+    stdoutTTY = false;
+    onCleanup = [];
   });
 
   afterEach(async () => {
+    for (const file of onCleanup) await rm(file, { force: true });
     expect(api.errors).toEqual([]);
     vi.unstubAllEnvs();
     await rm(home, { recursive: true, force: true });
@@ -725,8 +746,10 @@ describe('tasks pull, submit and post', () => {
     });
 
     it('posts a schema task with the schema and spec read from files', async () => {
-      const schemaFile = join(home, 'schema.json');
-      const specFile = join(home, 'spec.json');
+      // Outside the SealKeeper home, which tasks post never reads from.
+      const schemaFile = `${home}-schema.json`;
+      const specFile = `${home}-spec.json`;
+      onCleanup.push(schemaFile, specFile);
       await writeFile(schemaFile, '{"type":"object","required":["title"]}');
       await writeFile(specFile, '{"source":"https://example.com"}');
       const { code, out } = await run(
@@ -772,6 +795,390 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(err).toContain(message);
       expect(api.requests).toEqual([]);
+    });
+  });
+
+  describe('post from a template or the guided flow', () => {
+    // A terminal that answers each question in turn, then closes.
+    function answers(...lines: string[]): Input & { reads: number } {
+      const queue = [...lines];
+      const input = {
+        isTTY: true,
+        reads: 0,
+        readLine: async () => {
+          input.reads += 1;
+          return queue.shift() ?? null;
+        },
+      };
+      return input;
+    }
+
+    it('refuses no options without a terminal and sends nothing', async () => {
+      const { code, err } = await run('tasks', 'post');
+      expect(code).toBe(1);
+      expect(err).toBe(`${NO_TERMINAL}\n`);
+      expect(NO_TERMINAL).toBe(
+        'nothing posted. Give --type, --spec and --verify, or --template <id> with --yes. In a terminal, npx sealkeeper tasks post with no options walks you through it',
+      );
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses no options with --json even in a terminal', async () => {
+      stdoutTTY = true;
+      stdin = answers('1');
+      const { code, err } = await run('tasks', 'post', '--json');
+      expect(code).toBe(1);
+      expect(err).toBe(`${NO_OPTIONS_JSON}\n`);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses --yes without --template', async () => {
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+        '--yes',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain('--yes goes with --template');
+      expect(api.requests).toEqual([]);
+    });
+
+    it.each([
+      [
+        '--input',
+        (key: string) => [
+          '--template',
+          'summarise',
+          '--input',
+          `@${key}`,
+          '--yes',
+        ],
+      ],
+      [
+        '--spec',
+        (key: string) => [
+          '--type',
+          'x',
+          '--spec',
+          `@${key}`,
+          '--verify',
+          'counterparty',
+        ],
+      ],
+      [
+        '--verify schema:',
+        (key: string) => [
+          '--type',
+          'x',
+          '--spec',
+          '{}',
+          '--verify',
+          `schema:@${key}`,
+        ],
+      ],
+    ])('never reads a %s file inside the SealKeeper home', async (_, args) => {
+      const key = paths(home).key;
+      const { code, err } = await run('tasks', 'post', ...args(key));
+      expect(code).toBe(1);
+      expect(err).toContain(`refusing to read ${key}`);
+      expect(err).toContain("which holds this agent's private key");
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses a task that holds the private key, as input text, a file or a spec', async () => {
+      const seed = (await readFile(paths(home).key, 'utf8')).trim();
+      const file = `${home}-leak.txt`;
+      onCleanup.push(file);
+      await writeFile(file, `${'word '.repeat(45)}${seed}`);
+      for (const args of [
+        [
+          '--template',
+          'answer_question',
+          '--input',
+          `What is ${seed}?`,
+          '--yes',
+        ],
+        ['--template', 'summarise', '--input', `@${file}`, '--yes'],
+        [
+          '--type',
+          'x',
+          '--spec',
+          JSON.stringify({ input: seed }),
+          '--verify',
+          'counterparty',
+        ],
+      ]) {
+        const { code, err } = await run('tasks', 'post', ...args);
+        expect(code, args.join(' ')).toBe(1);
+        expect(err).toContain(KEY_IN_TASK);
+      }
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses a key split across lines or spaced out, and warns about a loose key file once', async () => {
+      const key = paths(home).key;
+      const seed = (await readFile(key, 'utf8')).trim();
+      const half = Math.floor(seed.length / 2);
+      const split = `${seed.slice(0, half)}\n${seed.slice(half)}`;
+      const spaced = seed.replace(/(.{8})/g, '$1 ');
+      const file = `${home}-split.txt`;
+      onCleanup.push(file);
+      await writeFile(file, `${'word '.repeat(45)}\n${split}\n`);
+      await chmod(key, 0o644);
+      let errs = '';
+      for (const args of [
+        ['--template', 'summarise', '--input', `@${file}`, '--yes'],
+        [
+          '--template',
+          'answer_question',
+          '--input',
+          `Is ${spaced} a key?`,
+          '--yes',
+        ],
+        [
+          '--type',
+          'x',
+          '--spec',
+          JSON.stringify({ input: { lines: [`key ${split}`] } }),
+          '--verify',
+          'counterparty',
+        ],
+      ]) {
+        const { code, err } = await run('tasks', 'post', ...args);
+        expect(code, args.join(' ')).toBe(1);
+        expect(err).toContain(KEY_IN_TASK);
+        errs += err;
+      }
+      // The key is loaded once, however many times it is checked, so its
+      // loose mode is warned about once.
+      expect(errs.split('warning: key file')).toHaveLength(2);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses the key in guided input and asks again', async () => {
+      stdoutTTY = true;
+      const seed = (await readFile(paths(home).key, 'utf8')).trim();
+      stdin = answers('answer_question', `What is ${seed} for?`, '');
+      const { code, out } = await run('tasks', 'post');
+      expect(code).toBe(0);
+      expect(out).toContain(KEY_IN_TASK);
+      expect(out.trimEnd().endsWith(NOTHING_POSTED)).toBe(true);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('with --json and a terminal, shows the task on stderr and keeps stdout empty on no', async () => {
+      stdin = answers('n');
+      const { code, out, err } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'json_shape',
+        '--json',
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toContain('type     json_shape');
+      expect(err.trimEnd().endsWith(NOT_POSTED)).toBe(true);
+      expect(api.posts()).toEqual([]);
+    });
+
+    it('checks --for against its own operator before the guided walk asks anything', async () => {
+      stdoutTTY = true;
+      const input = answers('1', '', 'y');
+      stdin = input;
+      const { code, err } = await run('tasks', 'post', '--for', 'alice/other');
+      expect(code).toBe(1);
+      expect(err).toContain(sameOperator('alice/other'));
+      expect(input.reads).toBe(0);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('still names a missing option when some are given', async () => {
+      const { code, err } = await run('tasks', 'post', '--type', 'summarise');
+      expect(code).toBe(1);
+      expect(err).toContain("required option '--spec <json>' not specified");
+      expect(api.requests).toEqual([]);
+    });
+
+    it.each([
+      [['--template', 'nope', '--yes'], 'no template nope, pick one of'],
+      [
+        ['--template', 'line_sort', '--type', 'x', '--yes'],
+        '--template replaces --type',
+      ],
+      [['--input', 'x', '--type', 'x'], '--input goes with --template'],
+      [
+        ['--template', 'json_shape', '--input', 'x', '--yes'],
+        'json_shape takes no --input',
+      ],
+      [['--template', 'summarise', '--yes'], 'summarise needs --input'],
+      [
+        ['--template', 'text_dedupe', '--input', 'a', '--yes'],
+        '--input does not fit text_dedupe, no line repeats',
+      ],
+      [
+        ['--template', 'summarise', '--input', '@/no/such/file', '--yes'],
+        'could not read the input file /no/such/file',
+      ],
+    ])('refuses %j before sending', async (args, message) => {
+      const { code, err } = await run('tasks', 'post', ...args);
+      expect(code).toBe(1);
+      expect(err).toContain(message);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('refuses a template without --yes and without a terminal, before anything else', async () => {
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'summarise',
+        '--input',
+        '@/no/such/file',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${templateNeedsYes('summarise')}\n`);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('posts a drawn hash template with --yes and the sha256 of its answer', async () => {
+      const { code, out } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'text_dedupe',
+        '--yes',
+        '--json',
+      );
+      expect(code).toBe(0);
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload.taskType).toBe('text_dedupe');
+      const input = String(payload.spec.input);
+      const answer = `${[...new Set(input.split('\n'))].join('\n')}\n`;
+      expect(payload.verification).toEqual({
+        kind: 'hash',
+        sha256: sha256(answer),
+      });
+      // The answer itself never leaves the machine.
+      expect(JSON.stringify(api.posts()[0]?.payload)).not.toContain(
+        JSON.stringify(answer),
+      );
+      expect(JSON.parse(out)).toMatchObject({ id: payload.taskId });
+    });
+
+    it('posts a counterparty template from an input file, addressed with --for', async () => {
+      const file = `${home}-text.txt`;
+      onCleanup.push(file);
+      const text = 'The harbor opens at dawn and closes at dusk. '.repeat(6);
+      await writeFile(file, `${text}\n`);
+      const { code, out } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'summarise',
+        '--input',
+        `@${file}`,
+        '--for',
+        'bob/writer',
+        '--yes',
+      );
+      expect(code).toBe(0);
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload).toMatchObject({
+        taskType: 'summarise',
+        verification: { kind: 'counterparty' },
+        assignee: 'bob/writer',
+      });
+      expect(payload.spec.input).toBe(text);
+      expect(out).toContain('for      bob/writer');
+      expect(out).toContain('You judge the result.');
+    });
+
+    it('with a terminal and no --yes, shows the task and posts nothing on no', async () => {
+      stdin = answers('n');
+      const { code, out, err } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'json_shape',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`Post it? [y/N] ${NOT_POSTED}\n`);
+      expect(out).toContain('type     json_shape');
+      expect(out).toContain(
+        'check    schema, SealKeeper checks the answer on submit',
+      );
+      expect(out).toContain('The spec is public on sealkeeper.run');
+      expect(out).not.toContain(NOTHING_POSTED);
+      expect(api.posts()).toEqual([]);
+    });
+
+    it('with a terminal and no --yes, posts on y', async () => {
+      stdin = answers('y');
+      const { code } = await run('tasks', 'post', '--template', 'line_sort');
+      expect(code).toBe(0);
+      expect(api.posts()).toHaveLength(1);
+    });
+
+    it('walks through a post in a terminal and posts only on yes', async () => {
+      stdoutTTY = true;
+      stdin = answers('2', '', 'bob/writer', 'y');
+      const { code, out, err } = await run('tasks', 'post');
+      expect(code).toBe(0);
+      expect(out).toContain(
+        ' 2  line_sort        hash          Sort the lines of a text. SealKeeper checks the answer.',
+      );
+      expect(err).toContain('Pick a task, 1 to 5, or press Enter to stop: ');
+      expect(err).toContain('Post it? [y/N] ');
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload.taskType).toBe('line_sort');
+      expect(payload.assignee).toBe('bob/writer');
+      expect(out).toContain('for      bob/writer');
+      expect(out).toContain('state    open');
+    });
+
+    it('takes a template by id and its input as text, asking again after a misfit', async () => {
+      stdoutTTY = true;
+      stdin = answers(
+        'answer_question',
+        'Why?',
+        'What is the capital of Norway?',
+        'alice/other',
+        '',
+        'y',
+      );
+      const { code, out } = await run('tasks', 'post');
+      expect(code).toBe(0);
+      expect(out).toContain(
+        'That input does not fit, the question has fewer than 3 words, too short to answer.',
+      );
+      expect(out).toContain(
+        'alice/other is an agent of your own operator, and tasks between your own agents never count.',
+      );
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload.spec.input).toBe('What is the capital of Norway?');
+      expect(payload).not.toHaveProperty('assignee');
+    });
+
+    it.each([
+      [['']],
+      [['1', '', '', '']],
+      [['1', '', '', 'maybe', 'maybe', 'maybe']],
+      [['4', '']],
+      [[]],
+    ])('posts nothing unless the last answer is yes, %j', async (lines) => {
+      stdoutTTY = true;
+      stdin = answers(...lines);
+      const { code, out } = await run('tasks', 'post');
+      expect(code).toBe(0);
+      expect(out.trimEnd().endsWith(NOTHING_POSTED)).toBe(true);
+      expect(api.posts()).toEqual([]);
     });
   });
 
