@@ -4,6 +4,7 @@
 // in types/lib.d.ts, which lib-types.test.ts keeps in step with this file.
 import type { EmitInput } from './emit.js';
 import { emit as emitTo } from './emit.js';
+import { quietly } from './output.js';
 
 export type { EmitInput } from './emit.js';
 
@@ -12,6 +13,7 @@ export type { EmitInput } from './emit.js';
 // sync, which shows the events and asks before the first send, or let the
 // next sealkeeper emit send it once automatic sync is on. The wrapper keeps
 // the paths argument of the internal emit out of the published signature.
+// It never prints, since it runs inside the caller's process.
 export function emit(input: EmitInput) {
-  return emitTo(input);
+  return quietly(() => emitTo(input));
 }

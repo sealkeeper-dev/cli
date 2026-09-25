@@ -1,4 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Command } from 'commander';
 
 // Control characters other than tab and line feed, DEL, the C1 controls and
@@ -23,7 +24,17 @@ export function stdout(text: string): void {
   process.stdout.write(`${terminalSafe(text)}\n`);
 }
 
+// The library entries run inside someone else's agent, whose stderr is not
+// ours to write to. Work started inside quietly, including async work it
+// kicks off, drops the warnings stderr would print. The CLI never uses it.
+const quiet = new AsyncLocalStorage<true>();
+
+export function quietly<T>(fn: () => T): T {
+  return quiet.run(true, fn);
+}
+
 export function stderr(text: string): void {
+  if (quiet.getStore()) return;
   process.stderr.write(`${terminalSafe(text)}\n`);
 }
 

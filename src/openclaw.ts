@@ -14,12 +14,11 @@
 // Gateway before launch. Types are in types/openclaw.d.ts, which
 // openclaw-types.test.ts keeps in step.
 import { EventPayload } from '@sealkeeper/schema';
-import { kickBackgroundSync } from './background-sync.js';
-import { type EmitInput, emit } from './lib.js';
+import { clampMs, safeEmit } from './adapter-core.js';
+import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
-const MAX_MS = EventPayload['tool.call'].shape.duration_ms.maxValue ?? 0;
 const NAME = EventPayload['session.start'].shape.session_id;
 
 // Open sessions, tool calls and runs are held in memory until they end. A
@@ -45,22 +44,6 @@ export type SealKeeperOpenClawPlugin = {
   description: string;
   register: (api: OpenClawPluginApiLike) => void;
 };
-
-// Appends one event, then starts a background sync without waiting for
-// it. Never throws.
-async function safeEmit(input: EmitInput): Promise<void> {
-  try {
-    await emit(input);
-  } catch {
-    // Telemetry must never break the agent.
-    return;
-  }
-  kickBackgroundSync();
-}
-
-function clampMs(ms: number): number {
-  return Math.min(Math.max(Math.round(ms), 0), MAX_MS);
-}
 
 function since(start: number): number {
   return clampMs(performance.now() - start);
