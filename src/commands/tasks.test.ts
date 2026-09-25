@@ -412,7 +412,8 @@ describe('tasks pull, submit and post', () => {
 
     it('submits a matching hash from a file and prints verified', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('the answer\n') });
-      const file = join(home, 'answer.txt');
+      // Outside the SealKeeper home, which submit refuses to read from.
+      const file = `${home}-answer.txt`;
       await writeFile(file, 'the answer\n');
       const { code, out } = await run(
         'tasks',
@@ -420,7 +421,7 @@ describe('tasks pull, submit and post', () => {
         task.id,
         '--file',
         file,
-      );
+      ).finally(() => rm(file, { force: true }));
       expect(code).toBe(0);
       expect(out).toContain('state  verified');
       expect(api.posts()).toHaveLength(1);
@@ -523,6 +524,38 @@ describe('tasks pull, submit and post', () => {
       const { out } = await run('tasks', 'submit', task.id, '--text', 'done');
       expect(out).toContain('state  submitted');
       expect(out).toContain(AWAITING_POSTER);
+    });
+
+    it('refuses a file inside the SealKeeper home without sending it', async () => {
+      const task = claimed({ kind: 'counterparty' });
+      const { code, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--file',
+        paths(home).key,
+      );
+      expect(code).toBe(1);
+      expect(err).toContain('refusing to submit');
+      expect(err).toContain("holds this agent's private key");
+      expect(api.posts()).toEqual([]);
+    });
+
+    it('refuses an answer that contains the private key', async () => {
+      const task = claimed({ kind: 'counterparty' });
+      const seed = (await readFile(paths(home).key, 'utf8')).trim();
+      const answer = `${home}-answer.txt`;
+      await writeFile(answer, `here it is: ${seed}`);
+      const { code, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--file',
+        answer,
+      ).finally(() => rm(answer, { force: true }));
+      expect(code).toBe(1);
+      expect(err).toContain("the answer contains this agent's private key");
+      expect(api.posts()).toEqual([]);
     });
 
     it('needs exactly one of --file and --text', async () => {
