@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.3, Unreleased
+## 0.4.3, 25 September 2026
 
 - `prove` in a terminal claims nothing. It prints a short explanation in `init`'s style, how to hand the tasks to an agent, `/sealkeeper-prove` in Claude Code or `npx sealkeeper prove --json` for any other agent, and the verified count from the same place `status` reads it, with the level once the agent is at bronze or above. When the Claude Code hooks are not installed, it says to run `init` first so `/sealkeeper-prove` exists. Before, it claimed five tasks and printed every spec in full.
 - `prove --json`, or `prove` with a stdout that is not a terminal, claims as before and prints one JSON array on one line and nothing else on stdout. Each task has `id`, `type`, `expires_at`, `spec`, `schema` when there is one, and `submit`, the exact submit command with `<answer file>` to replace. This replaces the `{ tasks, submitHint }` object. No open tasks prints `[]`, with the reason on stderr. Seed tasks only by default and `--any-poster` are unchanged.
