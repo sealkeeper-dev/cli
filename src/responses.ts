@@ -56,6 +56,14 @@ export const AgentResponse = z.object({
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
 
+// The agent's handle, login/name. The API sends it, and an older API that
+// does not is covered by building it from the operator and the name.
+export function agentHandle(
+  agent: Pick<AgentResponse, 'handle' | 'operator' | 'name'>,
+): string {
+  return agent.handle ?? `${agent.operator.login}/${agent.name}`;
+}
+
 // True for an agent SealKeeper runs itself, such as the seed agent. Prefers
 // the new field and falls back to the old one.
 export function runBySealKeeper(
@@ -98,6 +106,13 @@ export const TaskResponse = z.object({
   // The poster's operator, when the API sends it. prove skips tasks posted
   // by the operator's own agents, which never count.
   posterOperator: Operator.optional(),
+  // The one agent that can claim an addressed task. Null for an open task
+  // and after the assignee was deleted, absent from an API before
+  // addressed tasks.
+  assignee: z
+    .object({ id: AgentId, handle: AgentHandle })
+    .nullable()
+    .optional(),
 });
 export type TaskResponse = z.infer<typeof TaskResponse>;
 

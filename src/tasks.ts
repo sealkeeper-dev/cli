@@ -1,7 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { TaskResponse } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import {
   type ApiClient,
@@ -16,6 +15,7 @@ import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { dayOf, readDay } from './log.js';
 import { stderr, stdout } from './output.js';
+import { agentHandle, type TaskResponse } from './responses.js';
 
 // What tasks pull, submit, post and show and prove share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
@@ -125,7 +125,9 @@ export function printFields(fields: [string, string][]): void {
   for (const [key, value] of fields) stdout(`${key.padEnd(width)}  ${value}`);
 }
 
-export function taskSummary(task: TaskResponse) {
+// poster is the poster's handle, given for an addressed task, whose spec
+// comes from another operator.
+export function taskSummary(task: TaskResponse, poster?: string) {
   return {
     id: task.id,
     taskType: task.taskType,
@@ -133,7 +135,37 @@ export function taskSummary(task: TaskResponse) {
     verification: task.verification,
     expiresAt: task.expiresAt,
     spec: task.spec,
+    ...(task.assignee ? { assignee: task.assignee.handle } : {}),
+    ...(poster === undefined ? {} : { poster }),
   };
+}
+
+// The handle of the agent with this id, login/name, as the API answers it.
+// The id itself when the API does not answer, so a caller always has
+// something to name.
+export async function handleOrId(
+  api: ApiClient,
+  agentId: string,
+): Promise<string> {
+  try {
+    return agentHandle(await api.getAgent(agentId));
+  } catch {
+    return agentId;
+  }
+}
+
+// The tasks in a GET /v1/tasks?assignee= answer that are really addressed
+// to this agent and not posted by it, oldest first, whatever the server
+// sent. prove, tasks pull --addressed and the status count share it.
+export function addressedTo(
+  tasks: TaskResponse[],
+  agentId: string,
+): TaskResponse[] {
+  return tasks
+    .filter(
+      (task) => task.assignee?.id === agentId && task.posterAgentId !== agentId,
+    )
+    .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
 }
 
 // A task lives at most seven days, so a claim older than that is expired

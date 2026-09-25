@@ -7,10 +7,10 @@ import { exists } from '../files.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 
-// Removes the local session. config.json, cursor.json, credential.json and
-// score.json go. The log stays, and so does the key unless --delete-key and
-// --yes are both given. There is no prompt, the --yes flag is the
-// confirmation.
+// Removes the local session. config.json, cursor.json, credential.json,
+// score.json and inbox.json go. The log stays, and so does the key unless
+// --delete-key and --yes are both given. There is no prompt, the --yes flag
+// is the confirmation.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -106,6 +106,7 @@ async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
     p.cursor,
     p.credential,
     p.score,
+    p.inbox,
     ...(deleteKey ? [p.key] : []),
     p.config,
   ];

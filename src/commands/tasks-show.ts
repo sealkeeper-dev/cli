@@ -1,9 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import type { TaskResponse } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
 import { requireConfig } from '../cli-config.js';
 import { stdout, wantsJson } from '../output.js';
+import type { TaskResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   failOnApiError,

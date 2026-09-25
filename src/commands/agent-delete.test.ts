@@ -163,6 +163,7 @@ describe('sealkeeper agent delete', () => {
       p.wellKnown,
       p.cursor,
       p.score,
+      p.inbox,
       p.sessions,
     ];
   };
@@ -191,7 +192,7 @@ describe('sealkeeper agent delete', () => {
     await writeFile(p.logFile('2026-09-24'), '{}\n');
     await mkdir(p.sessions, { recursive: true });
     await writeFile(join(p.sessions, 's1'), '1');
-    for (const f of [p.credential, p.wellKnown, p.cursor, p.score]) {
+    for (const f of [p.credential, p.wellKnown, p.cursor, p.score, p.inbox]) {
       await writeFile(f, '{}');
     }
     api = new FakeApi(agentId);

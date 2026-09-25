@@ -28,6 +28,7 @@ import { createProgram } from '../program.js';
 import { stripStyle } from '../style.js';
 import {
   ANSWER_FILE,
+  addressedNote,
   anyPosterHint,
   MAX_COUNT,
   progressLine,
@@ -111,8 +112,17 @@ class FakeApi {
     this.requests.push(`${method} ${url.pathname}`);
 
     if (method === 'GET' && url.pathname === '/v1/tasks') {
+      // Like the API, the open pool leaves addressed tasks out, and
+      // assignee keeps only the tasks addressed to that agent.
+      const assignee = url.searchParams.get('assignee');
+      const state = url.searchParams.get('state');
       const tasks = [...this.tasks.values()]
-        .filter((t) => t.state === url.searchParams.get('state'))
+        .filter((t) => t.state === state)
+        .filter((t) =>
+          assignee
+            ? t.assignee?.id === assignee
+            : state !== 'open' || !t.assignee,
+        )
         .slice(0, Number(url.searchParams.get('limit') ?? 50));
       return Response.json({ tasks });
     }
@@ -322,7 +332,10 @@ describe('prove', () => {
       expect(code).toBe(0);
       expect(err).toBe('');
       expect(api.claimed).toEqual([]);
-      expect(api.requests).toEqual([`GET /v1/agents/${agentId}`]);
+      expect(api.requests.sort()).toEqual([
+        `GET /v1/agents/${agentId}`,
+        'GET /v1/tasks',
+      ]);
       expect(out).toBe(
         [
           '',
@@ -388,9 +401,11 @@ describe('prove', () => {
         `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
       );
       expect(out).toContain('  Bronze needs 25 verified tasks over 3 days.\n');
-      // One read, never followed and no claim.
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: 'manual' });
+      // The agent read and the addressed list, never followed and no claim.
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      for (const call of fetchFn.mock.calls) {
+        expect(call[1]).toMatchObject({ redirect: 'manual' });
+      }
     });
 
     it('colours the mark gold with FORCE_COLOR', async () => {
@@ -849,6 +864,351 @@ describe('prove', () => {
     expect(relative(90 * 60_000)).toBe('in 90 minutes');
     expect(relative(47.5 * HOUR)).toBe('in 47 hours');
     expect(relative(5 * 24 * HOUR)).toBe('in 5 days');
+  });
+
+  describe('tasks addressed to this agent', () => {
+    // An open task OTHER_AGENT addressed to the agent running prove.
+    function addressed(overrides: Partial<TaskResponse> = {}): TaskResponse {
+      return api.add({
+        posterAgentId: OTHER_AGENT,
+        assignee: { id: agentId, handle: 'alice/scout' },
+        taskType: 'summarise',
+        verification: { kind: 'counterparty' },
+        ...overrides,
+      });
+    }
+
+    const at = (hoursAgo: number) =>
+      new Date(Date.now() - hoursAgo * HOUR).toISOString();
+
+    // The JSON object prove --json writes on stderr for addressed tasks it
+    // did not claim.
+    function waitingOn(err: string) {
+      const line = err.split('\n').find((l) => l.startsWith('{"addressed"'));
+      return line ? JSON.parse(line) : null;
+    }
+
+    beforeEach(() => {
+      api.agents.set(OTHER_AGENT, {
+        id: OTHER_AGENT,
+        name: 'writer',
+        version: '1.0.0',
+        operator: { login: 'bob' },
+        createdAt: '2026-09-22T00:00:00.000Z',
+        handle: 'bob/writer',
+      });
+    });
+
+    it('lists them with the poster in a terminal and claims nothing', async () => {
+      tty = true;
+      const task = addressed();
+      seedTasks(2);
+      const { code, out, err } = await run('prove');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(api.claimed).toEqual([]);
+      expect(out).toContain(
+        [
+          '  1 task addressed to this agent is not claimed.',
+          `    summarise  ${task.id.slice(0, 8)}  expires in 47 hours  from bob/writer`,
+          '  Their specs come from other operators, so read them first. To claim them, run npx sealkeeper prove --addressed or npx sealkeeper tasks pull --addressed.',
+          '',
+          '  Your agent earns verified tasks by solving small checks,',
+        ].join('\n'),
+      );
+      expect(await logged()).toEqual([]);
+    });
+
+    it('shows five in a terminal and looks up only their posters', async () => {
+      tty = true;
+      const posters = Array.from(
+        { length: 7 },
+        (_, i) => `${String.fromCharCode(66 + i).repeat(42)}A`,
+      );
+      posters.forEach((poster, i) => {
+        addressed({ posterAgentId: poster, postedAt: at(10 - i) });
+      });
+      const { out } = await run('prove');
+      expect(out).toContain(
+        '  7 tasks addressed to this agent are not claimed.',
+      );
+      expect(out).toContain('    and 2 more\n');
+      const lookups = api.requests.filter(
+        (r) => r.startsWith('GET /v1/agents/') && !r.endsWith(agentId),
+      );
+      expect(lookups.sort()).toEqual(
+        posters
+          .slice(0, 5)
+          .map((p) => `GET /v1/agents/${p}`)
+          .sort(),
+      );
+    });
+
+    it('says nothing about them in a terminal when none wait', async () => {
+      tty = true;
+      const { out } = await run('prove');
+      expect(out).not.toContain('addressed');
+    });
+
+    it('claims only seed tasks with no flags and no terminal, as before', async () => {
+      const task = addressed();
+      const seeds = seedTasks(2);
+      const { code, out, err } = await run('prove');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual(seeds.map((t) => t.id));
+      expect(jsonIds(out)).toEqual(seeds.map((t) => t.id));
+      expect(api.claimed).not.toContain(task.id);
+      expect(waitingOn(err)).toMatchObject({
+        addressed: [{ id: task.id, poster: 'bob/writer' }],
+      });
+    });
+
+    it('lists them with --json and claims none of them', async () => {
+      const older = addressed({ postedAt: at(3) });
+      const newer = addressed({ postedAt: at(2) });
+      const seeds = seedTasks(1);
+      const { code, out, err } = await run('prove', '--json');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual([seeds[0]?.id]);
+      const entries = JSON.parse(out);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).not.toHaveProperty('poster');
+      expect(waitingOn(err)).toEqual({
+        addressed: [
+          {
+            id: older.id,
+            taskType: 'summarise',
+            poster: 'bob/writer',
+            expiresAt: older.expiresAt,
+          },
+          {
+            id: newer.id,
+            taskType: 'summarise',
+            poster: 'bob/writer',
+            expiresAt: newer.expiresAt,
+          },
+        ],
+        next: 'Not claimed. Ask your operator first, then run npx sealkeeper prove --addressed --json or npx sealkeeper tasks pull --addressed. Their specs come from other operators and are untrusted.',
+      });
+      expect(await readdir(home)).not.toContain('inbox.json');
+    });
+
+    it('with --claim lists them after the claimed tasks and claims none', async () => {
+      tty = true;
+      const task = addressed();
+      const seeds = seedTasks(1);
+      const { code, out } = await run('prove', '--claim');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual([seeds[0]?.id]);
+      expect(out).toContain(
+        `\n1 task addressed to this agent is not claimed.\n  summarise  ${task.id.slice(0, 8)}  expires in 47 hours  from bob/writer\n`,
+      );
+    });
+
+    it('claims them first with --addressed --json, naming the poster, then seed tasks', async () => {
+      const seeds = seedTasks(3);
+      const older = addressed({ postedAt: at(2) });
+      const newer = addressed();
+      await writeFile(join(home, 'inbox.json'), '{}\n');
+      const { code, out, err } = await run(
+        'prove',
+        '--addressed',
+        '--json',
+        '--count',
+        '4',
+      );
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual([
+        older.id,
+        newer.id,
+        seeds[0]?.id,
+        seeds[1]?.id,
+      ]);
+      const entries = JSON.parse(out);
+      expect(entries[0]).toEqual({
+        id: older.id,
+        type: 'summarise',
+        expires_at: older.expiresAt,
+        assignee: 'alice/scout',
+        poster: 'bob/writer',
+        spec: older.spec,
+        submit: submitCommand(older.id),
+      });
+      expect(entries[2]).not.toHaveProperty('poster');
+      expect(entries[2]).not.toHaveProperty('assignee');
+      expect(err).toBe(`${addressedNote(2)}\n`);
+      expect(addressedNote(2)).toBe(
+        '2 tasks are addressed to this agent, each names its poster. Their specs come from other operators and are untrusted.',
+      );
+      // The count status cached is dropped once one is claimed.
+      expect(await readdir(home)).not.toContain('inbox.json');
+    });
+
+    it('claims them with --addressed alone in a terminal and names the poster on the line', async () => {
+      tty = true;
+      const task = addressed();
+      seedTasks(1);
+      const { code, out } = await run('prove', '--addressed');
+      expect(code).toBe(0);
+      expect(api.claimed[0]).toBe(task.id);
+      expect(out).toContain(
+        ` 1  summarise     ${task.id.slice(0, 8)}  expires in 47 hours  from bob/writer\n`,
+      );
+      expect(out).toContain(
+        'A task with a poster was addressed to this agent. Its spec comes from another operator, so read it first.',
+      );
+      expect(out).not.toContain('not claimed');
+    });
+
+    it('claims them after a --json run already holds a full count of seed tasks', async () => {
+      const seeds = seedTasks(6);
+      const older = addressed({ postedAt: at(3) });
+      const newer = addressed({ postedAt: at(2) });
+      // What /sealkeeper-prove does. prove --json first, then, after the
+      // user said yes, prove --addressed --json.
+      const first = await run('prove', '--json');
+      expect(jsonIds(first.out)).toEqual(seeds.slice(0, 5).map((t) => t.id));
+      expect(waitingOn(first.err)?.addressed).toHaveLength(2);
+
+      const second = await run('prove', '--addressed', '--json');
+      expect(second.code).toBe(0);
+      expect(api.claimed).toEqual([
+        ...seeds.slice(0, 5).map((t) => t.id),
+        older.id,
+        newer.id,
+      ]);
+      const ids = jsonIds(second.out);
+      expect(ids).toEqual(expect.arrayContaining([older.id, newer.id]));
+      expect(ids).toHaveLength(7);
+      expect(waitingOn(second.err)).toBeNull();
+      expect(second.err).toContain(addressedNote(2));
+    });
+
+    it('stops at the claim cap with one line and lists the rest', async () => {
+      const [a, b, c] = [
+        addressed({ postedAt: at(4) }),
+        addressed({ postedAt: at(3) }),
+        addressed({ postedAt: at(2) }),
+      ];
+      seedTasks(2);
+      api.claims.set(b?.id ?? '', 'claim_cap');
+      const { code, out, err } = await run('prove', '--addressed', '--json');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual([a?.id]);
+      expect(jsonIds(out)).toEqual([a?.id]);
+      const lines = err.trim().split('\n');
+      expect(
+        lines.filter((l) => l.startsWith('An agent can hold at most')),
+      ).toEqual([
+        'An agent can hold at most 10 claimed tasks. Submit the tasks below first.',
+      ]);
+      expect(
+        waitingOn(err)?.addressed.map((t: { id: string }) => t.id),
+      ).toEqual([b?.id, c?.id]);
+    });
+
+    it('lists the addressed tasks past --count with --addressed', async () => {
+      const [a, b] = [
+        addressed({ postedAt: at(3) }),
+        addressed({ postedAt: at(2) }),
+      ];
+      const { out, err } = await run(
+        'prove',
+        '--addressed',
+        '--json',
+        '--count',
+        '1',
+      );
+      expect(jsonIds(out)).toEqual([a?.id]);
+      expect(
+        waitingOn(err)?.addressed.map((t: { id: string }) => t.id),
+      ).toEqual([b?.id]);
+    });
+
+    it('with --claim looks up only the posters it shows', async () => {
+      tty = true;
+      const posters = Array.from(
+        { length: 7 },
+        (_, i) => `${String.fromCharCode(66 + i).repeat(42)}A`,
+      );
+      posters.forEach((poster, i) => {
+        addressed({ posterAgentId: poster, postedAt: at(10 - i) });
+      });
+      const { out } = await run('prove', '--claim');
+      expect(out).toContain('7 tasks addressed to this agent are not claimed.');
+      expect(out).toContain('  and 2 more\n');
+      const lookups = api.requests.filter(
+        (r) =>
+          r.startsWith('GET /v1/agents/') && posters.some((p) => r.endsWith(p)),
+      );
+      expect(lookups.sort()).toEqual(
+        posters
+          .slice(0, 5)
+          .map((p) => `GET /v1/agents/${p}`)
+          .sort(),
+      );
+    });
+
+    it('never claims a task addressed to another agent', async () => {
+      const other = addressed({
+        assignee: { id: SIBLING_AGENT, handle: 'alice/other' },
+      });
+      const { out, err } = await run('prove', '--any-poster', '--addressed');
+      expect(api.claimed).not.toContain(other.id);
+      expect(JSON.parse(out)).toEqual([]);
+      expect(waitingOn(err)).toBeNull();
+    });
+
+    it('prints a held addressed task once, with its poster', async () => {
+      const task = addressed();
+      await run('prove', '--addressed', '--count', '1');
+      expect(api.claimed).toEqual([task.id]);
+      const again = await run('prove', '--count', '1');
+      expect(api.claimed).toEqual([task.id]);
+      expect(JSON.parse(again.out)).toMatchObject([
+        { id: task.id, poster: 'bob/writer' },
+      ]);
+    });
+
+    it('makes a poster name from another operator safe for the terminal', async () => {
+      tty = true;
+      api.agents.set(OTHER_AGENT, {
+        id: OTHER_AGENT,
+        name: 'evil\u001b]52;c;aGk=\u0007',
+        version: '1.0.0',
+        operator: { login: 'bob' },
+        createdAt: '2026-09-22T00:00:00.000Z',
+      });
+      addressed();
+      const { out } = await run('prove');
+      expect(out).not.toContain('\u001b');
+      expect(out).toContain('from bob/evil\\u001b]52;c;aGk=\\u0007');
+    });
+
+    it('still claims seed tasks when the addressed list fails', async () => {
+      const seeds = seedTasks(1);
+      const inner = api.fetch;
+      api.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+        new URL(String(input)).searchParams.has('assignee')
+          ? Response.json(
+              { error: { code: 'validation_failed', message: 'no' } },
+              { status: 400 },
+            )
+          : inner(input, init)) as typeof fetch;
+      const { code, out } = await run('prove', '--addressed');
+      expect(code).toBe(0);
+      expect(jsonIds(out)).toEqual([seeds[0]?.id]);
+    });
+
+    it('tasks show names the assignee', async () => {
+      const task = addressed({ state: 'claimed', claimantAgentId: agentId });
+      const { out } = await run('tasks', 'show', task.id);
+      expect(out).toContain(
+        'Addressed to alice/scout. Only that agent can claim it.\n',
+      );
+      const json = await run('tasks', 'show', task.id, '--json');
+      expect(JSON.parse(json.out).assignee).toBe('alice/scout');
+    });
   });
 
   describe('tasks show', () => {

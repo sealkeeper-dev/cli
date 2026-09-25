@@ -34,7 +34,27 @@ const offline = (async () => {
   throw new TypeError('fetch failed');
 }) as typeof fetch;
 
-type Live = { level?: string; dormantDays?: number | null };
+// addressed is how many open tasks the API lists for this agent.
+type Live = { level?: string; dormantDays?: number | null; addressed?: number };
+
+// An open task addressed to the agent, as GET /v1/tasks answers it.
+function addressedTask() {
+  return {
+    id: randomUUID(),
+    posterAgentId: `${'B'.repeat(42)}A`,
+    claimantAgentId: null,
+    assignee: { id: AGENT_ID, handle: 'alice/scout' },
+    taskType: 'summarise',
+    spec: { words: 100 },
+    verification: { kind: 'counterparty' },
+    state: 'open',
+    postedAt: '2026-09-23T08:00:00.000Z',
+    claimedAt: null,
+    submittedAt: null,
+    verifiedAt: null,
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  };
+}
 
 function agentAnswer(verifiedTasks: number, live: Live = {}) {
   return {
@@ -81,6 +101,14 @@ function scoreFetch(
     const url = String(input);
     if (url === `${API_URL}/v1/agents/${AGENT_ID}`) {
       return Response.json(agentAnswer(verifiedTasks, live));
+    }
+    if (url.startsWith(`${API_URL}/v1/tasks?`)) {
+      const query = new URL(url).searchParams;
+      expect(query.get('assignee')).toBe(AGENT_ID);
+      expect(query.get('state')).toBe('open');
+      return Response.json({
+        tasks: Array.from({ length: live.addressed ?? 0 }, addressedTask),
+      });
     }
     expect(url).toBe(`${API_URL}/v1/agents/${AGENT_ID}/score`);
     return Response.json({
@@ -428,6 +456,98 @@ describe('status', () => {
     });
   });
 
+  describe('tasks addressed to the agent', () => {
+    it('says how many wait and to run prove, when the API answers', async () => {
+      const { code, out } = await run(
+        scoreFetch([], 2, { addressed: 2 }),
+        'status',
+      );
+      expect(code).toBe(0);
+      expect(out).toContain(
+        '\n2 tasks addressed to you, run npx sealkeeper prove\n',
+      );
+      const one = await run(
+        scoreFetch([], 2, { addressed: 1 }),
+        'status',
+        '--json',
+      );
+      // The cache from the first run answers, so still 2.
+      expect(JSON.parse(one.out).addressedTasks).toBe(2);
+    });
+
+    it('says nothing when none wait', async () => {
+      const { out } = await run(scoreFetch([], 2), 'status');
+      expect(out).not.toContain('addressed to you');
+    });
+
+    it('says nothing extra offline and caches nothing', async () => {
+      const { code, out, err } = await run(offline, 'status');
+      expect(code).toBe(0);
+      expect(out).not.toContain('addressed');
+      expect(err).not.toContain('addressed');
+      const json = await run(offline, 'status', '--json');
+      expect(JSON.parse(json.out).addressedTasks).toBeNull();
+    });
+
+    it('reads the count from the cache for fifteen minutes, then asks again', async () => {
+      const calls: string[] = [];
+      const counting = (addressed: number) => {
+        const inner = scoreFetch([], 2, { addressed });
+        return (async (input: string | URL | Request) => {
+          calls.push(String(input));
+          return inner(input);
+        }) as typeof fetch;
+      };
+      await run(counting(3), 'status');
+      const asked = () => calls.filter((c) => c.includes('/v1/tasks?')).length;
+      expect(asked()).toBe(1);
+      const cached = await run(counting(1), 'status');
+      expect(asked()).toBe(1);
+      expect(cached.out).toContain('3 tasks addressed to you');
+
+      // Sixteen minutes on, the cache is stale and the API is asked.
+      const later = Date.now() + 16 * 60_000;
+      vi.useFakeTimers({ now: later, toFake: ['Date'] });
+      try {
+        const fresh = await run(counting(1), 'status');
+        expect(asked()).toBe(2);
+        expect(fresh.out).toContain('\n1 task addressed to you, run');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('ignores a cache written for another agent', async () => {
+      await writeFile(
+        paths(home).inbox,
+        `${JSON.stringify({
+          v: 1,
+          agentId: `${'B'.repeat(42)}A`,
+          fetchedAt: new Date().toISOString(),
+          count: 9,
+        })}\n`,
+      );
+      const { out } = await run(scoreFetch([], 2, { addressed: 1 }), 'status');
+      expect(out).toContain('\n1 task addressed to you, run');
+      expect(out).not.toContain('9 tasks');
+      const offlineRun = await run(offline, 'status', '--json');
+      // The cache now belongs to this agent and is fresh.
+      expect(JSON.parse(offlineRun.out).addressedTasks).toBe(1);
+    });
+
+    it('drops a stale cache when the API does not answer', async () => {
+      await run(scoreFetch([], 2, { addressed: 2 }), 'status');
+      const later = Date.now() + 16 * 60_000;
+      vi.useFakeTimers({ now: later, toFake: ['Date'] });
+      try {
+        const { out } = await run(offline, 'status');
+        expect(out).not.toContain('addressed to you');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('prints one JSON object with --json', async () => {
     await seedMixedLog();
     const { code, out } = await run(
@@ -458,6 +578,7 @@ describe('status', () => {
       level: null,
       dormantDays: null,
       unsubmittedClaims: 0,
+      addressedTasks: 0,
       nextScoringRunMinutes: expect.any(Number),
       pending: 4,
       lastSyncAt: LAST_SYNC,

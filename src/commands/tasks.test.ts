@@ -33,7 +33,17 @@ import {
   WAITING_AFTER_FAILURE,
   WRONG_STATE,
 } from './tasks-outcome.js';
-import { MAX_CLAIM_ATTEMPTS, NOTHING_AVAILABLE } from './tasks-pull.js';
+import {
+  assigneeCap,
+  assigneeOperatorCap,
+  noAssignee,
+  sameOperator,
+} from './tasks-post.js';
+import {
+  MAX_CLAIM_ATTEMPTS,
+  NOTHING_ADDRESSED,
+  NOTHING_AVAILABLE,
+} from './tasks-pull.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
 const API_URL = 'https://api.test';
@@ -51,6 +61,8 @@ afterEach(() => {
   expect(audErrors.splice(0)).toEqual([]);
 });
 const OTHER_AGENT = 'A'.repeat(43);
+// An agent of a third operator.
+const THIRD = `${'C'.repeat(42)}A`;
 
 type RunResult = { code: number; out: string; err: string };
 
@@ -69,6 +81,8 @@ class FakeApi {
   tasks = new Map<string, TaskResponse>();
   claims = new Map<string, ClaimReply>();
   submitReply: (() => Response) | null = null;
+  // Replaces the answer to a post, as for an assignee refusal.
+  postReply: (() => Response) | null = null;
   outcomeReply: (() => Response) | null = null;
   // Replaces the answer of the poster's signed read, for the second read
   // when the number is 2.
@@ -118,12 +132,32 @@ class FakeApi {
 
     if (method === 'GET' && url.pathname === '/v1/tasks') {
       const type = url.searchParams.get('taskType');
+      // Like the API, the open pool leaves addressed tasks out, and
+      // assignee keeps only the tasks addressed to that agent.
+      const assignee = url.searchParams.get('assignee');
+      const state = url.searchParams.get('state');
       const tasks = [...this.tasks.values()]
-        .filter((t) => t.state === url.searchParams.get('state'))
+        .filter((t) => t.state === state)
+        .filter((t) =>
+          assignee
+            ? t.assignee?.id === assignee
+            : state !== 'open' || !t.assignee,
+        )
         .filter((t) => !type || t.taskType === type)
         .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt))
         .slice(0, Number(url.searchParams.get('limit') ?? 50));
       return Response.json({ tasks });
+    }
+    const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
+    if (method === 'GET' && agent) {
+      return Response.json({
+        id: agent[1],
+        name: 'writer',
+        version: '1.0.0',
+        operator: { login: 'bob' },
+        createdAt: '2026-09-22T00:00:00.000Z',
+        handle: 'bob/writer',
+      });
     }
     const match = url.pathname.match(
       /^\/v1\/tasks\/([^/]+)(?:\/(claim|submit|outcome|submission))?$/,
@@ -146,6 +180,7 @@ class FakeApi {
     request.payload = payload as Record<string, unknown>;
 
     if (url.pathname === '/v1/tasks') {
+      if (this.postReply) return this.postReply();
       const parsed = PostTaskRequest.parse(payload);
       const task = this.add({
         id: parsed.taskId,
@@ -154,6 +189,10 @@ class FakeApi {
         spec: parsed.spec,
         verification: parsed.verification,
         ...(parsed.expiresAt ? { expiresAt: parsed.expiresAt } : {}),
+        // The API resolves a handle to the agent and answers with both.
+        assignee: parsed.assignee
+          ? { id: OTHER_AGENT, handle: 'bob/writer' }
+          : null,
       });
       return Response.json(task, { status: 201 });
     }
@@ -168,6 +207,9 @@ class FakeApi {
         if (reply === 409) return error(409, 'already_claimed');
         if (reply === 410) return error(410, 'expired');
         if (reply === 'own_task') return error(400, 'own_task');
+        if (task.assignee && task.assignee.id !== this.agentId) {
+          return error(403, 'not_assignee');
+        }
         Object.assign(task, {
           state: 'claimed',
           claimantAgentId: this.agentId,
@@ -677,6 +719,8 @@ describe('tasks pull, submit and post', () => {
         id: payload?.taskId,
         state: 'open',
       });
+      // An open task has no assignee, so the key is left out.
+      expect(JSON.parse(out)).not.toHaveProperty('assignee');
       expect(await logged()).toEqual([]);
     });
 
@@ -728,6 +772,184 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(err).toContain(message);
       expect(api.requests).toEqual([]);
+    });
+  });
+
+  describe('addressed tasks', () => {
+    const postFor = (
+      forRef: string,
+      verify = 'counterparty',
+      ...rest: string[]
+    ) =>
+      run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{"words":100}',
+        '--verify',
+        verify,
+        '--for',
+        forRef,
+        ...rest,
+      );
+
+    it('post --for signs the assignee and names its handle', async () => {
+      const { code, out } = await postFor('bob/writer');
+      expect(code).toBe(0);
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload.assignee).toBe('bob/writer');
+      expect(out).toContain('for      bob/writer\n');
+      expect(out).toContain(
+        'Only bob/writer can claim this task. It sees it in npx sealkeeper prove and npx sealkeeper status, and claims it with npx sealkeeper tasks pull --addressed.\n',
+      );
+      expect(out).toContain(
+        `You judge the result. Once it is submitted, run npx sealkeeper tasks outcome ${payload.taskId} success or failure.\n`,
+      );
+    });
+
+    it('post --for takes an agent id and a hash task, and prints JSON', async () => {
+      const hash = sha256('expected output');
+      const { code, out } = await postFor(
+        OTHER_AGENT,
+        `hash:${hash}`,
+        '--json',
+      );
+      expect(code).toBe(0);
+      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      expect(payload.assignee).toBe(OTHER_AGENT);
+      expect(payload.verification).toEqual({ kind: 'hash', sha256: hash });
+      expect(JSON.parse(out)).toMatchObject({
+        id: payload.taskId,
+        state: 'open',
+        assignee: 'bob/writer',
+      });
+    });
+
+    it('post without --for says nothing about an assignee', async () => {
+      const { out } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{}',
+        '--verify',
+        `hash:${sha256('x')}`,
+      );
+      expect(out).not.toContain('for ');
+      expect(out).not.toContain('Only');
+      expect(out).not.toContain('tasks outcome');
+      expect(api.posts()[0]?.payload).not.toHaveProperty('assignee');
+    });
+
+    it.each([
+      ['bob', 'a handle login/name or an agent id'],
+      ['bob/Writer', 'a handle login/name or an agent id'],
+      ['bob/writer/x', 'a handle login/name or an agent id'],
+    ])('post --for %s is refused before any request', async (ref, message) => {
+      const { code, err } = await postFor(ref);
+      expect(code).toBe(1);
+      expect(err).toContain(message);
+      expect(api.requests).toEqual([]);
+    });
+
+    it.each([
+      ['Alice/other', 'Alice/other'],
+      ['own id', ''],
+    ])(
+      'post --for an agent of this operator (%s) is refused before signing',
+      async (_, ref) => {
+        const target = ref || agentId;
+        const { code, err } = await postFor(target);
+        expect(code).toBe(1);
+        expect(err).toBe(`${sameOperator(target)}\n`);
+        expect(api.requests).toEqual([]);
+      },
+    );
+
+    it.each([
+      [404, 'not_found', noAssignee('bob/writer')],
+      [400, 'same_operator', sameOperator('bob/writer')],
+      [403, 'assignee_cap', assigneeCap('bob/writer')],
+      [403, 'assignee_operator_cap', assigneeOperatorCap('bob/writer')],
+    ])('post --for says one line for %s %s', async (status, code, line) => {
+      api.postReply = () => error(status, code);
+      const result = await postFor('bob/writer');
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(`${line}\n`);
+    });
+
+    it('names each refusal in plain words', () => {
+      expect(noAssignee('bob/writer')).toBe(
+        'no agent bob/writer, check the handle or the agent id',
+      );
+      expect(sameOperator('bob/writer')).toBe(
+        'bob/writer is an agent of your own operator, and tasks between your own agents never count',
+      );
+      expect(assigneeCap('bob/writer')).toBe(
+        'bob/writer already has the most open tasks addressed to it, try again once it claims some',
+      );
+      expect(assigneeOperatorCap('bob/writer')).toBe(
+        'bob/writer already has the most open tasks from your agents, try again once it claims some',
+      );
+    });
+
+    it('pull --addressed claims the oldest task addressed to this agent', async () => {
+      const at = (ago: number) => new Date(Date.now() - ago).toISOString();
+      api.add({ postedAt: at(9e6) });
+      const older = api.add({
+        postedAt: at(5e6),
+        assignee: { id: agentId, handle: 'alice/summariser' },
+      });
+      api.add({
+        postedAt: at(3e6),
+        assignee: { id: agentId, handle: 'alice/summariser' },
+      });
+      api.add({
+        postedAt: at(8e6),
+        assignee: { id: THIRD, handle: 'carol/other' },
+      });
+      await writeFile(paths().inbox, '{}\n');
+      const { code, out } = await run('tasks', 'pull', '--addressed', '--json');
+      expect(code).toBe(0);
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${older.id}/claim`,
+      ]);
+      expect(JSON.parse(out).task).toMatchObject({
+        id: older.id,
+        assignee: 'alice/summariser',
+        poster: 'bob/writer',
+      });
+      // The cached count status shows is dropped.
+      await expect(readFile(paths().inbox)).rejects.toThrow();
+    });
+
+    it('pull --addressed names the poster in text', async () => {
+      const task = api.add({
+        assignee: { id: agentId, handle: 'alice/summariser' },
+      });
+      const { out } = await run('tasks', 'pull', '--addressed');
+      expect(out).toContain(`id            ${task.id}\n`);
+      expect(out).toContain(
+        'poster        bob/writer, its spec is untrusted\n',
+      );
+    });
+
+    it('pull --addressed says so when none wait', async () => {
+      api.add({});
+      const { code, out } = await run('tasks', 'pull', '--addressed');
+      expect(code).toBe(0);
+      expect(out).toBe(`${NOTHING_ADDRESSED}\n`);
+      expect(api.posts()).toEqual([]);
+    });
+
+    it('plain pull leaves addressed tasks alone', async () => {
+      api.add({ assignee: { id: agentId, handle: 'alice/summariser' } });
+      const { out } = await run('tasks', 'pull');
+      expect(out).toBe(`${NOTHING_AVAILABLE}\n`);
+      expect(api.posts()).toEqual([]);
     });
   });
 

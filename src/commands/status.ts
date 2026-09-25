@@ -26,6 +26,7 @@ import {
   profileUrl,
 } from '../config.js';
 import { exists } from '../files.js';
+import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import { readLiveAgent } from '../live-agent.js';
 import {
@@ -41,9 +42,10 @@ import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import { defaultSyncDeps } from './sync.js';
 
-// A local dashboard of today's activity. Everything but the score comes from
-// files under the SealKeeper home, so it works offline. The score comes from the
-// score cache, which gives up on the network after two seconds.
+// A local dashboard of today's activity. Everything but the score and the
+// addressed task count comes from files under the SealKeeper home, so it
+// works offline. Those two come from fifteen minute caches, which give up on
+// the network after two seconds.
 
 // claudeDir and cwd say where to look for the Claude Code settings, and
 // default to CLAUDE_CONFIG_DIR or ~/.claude and the working directory.
@@ -81,6 +83,9 @@ type Status = {
   dormantDays: number | null;
   // Claimed in the local log and not submitted, over the last week.
   unsubmittedClaims: number;
+  // Open tasks addressed to this agent, from the API or a cache under
+  // fifteen minutes old. null when neither answered.
+  addressedTasks: number | null;
   // Whole minutes until the next quarter hour, when scoring runs.
   nextScoringRunMinutes: number;
   pending: number;
@@ -141,16 +146,23 @@ async function readStatus(
     now,
     paths: p,
   });
-  const [events, pending, cursor, score, live, unsubmitted] = await Promise.all(
-    [
+  const inboxPromise = getInbox({
+    agentId: config.agentId,
+    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    fetch: deps.fetch,
+    now,
+    paths: p,
+  });
+  const [events, pending, cursor, score, live, unsubmitted, inbox] =
+    await Promise.all([
       readDay(day, p),
       countPending(p),
       readCursor(p),
       scorePromise,
       readLiveAgent(config, deps.fetch),
       unsubmittedClaims(now, p),
-    ],
-  );
+      inboxPromise,
+    ]);
 
   return {
     agentId: config.agentId,
@@ -162,6 +174,7 @@ async function readStatus(
     level: live?.level ?? null,
     dormantDays: live?.standing?.dormant_days ?? null,
     unsubmittedClaims: unsubmitted.length,
+    addressedTasks: inbox?.count ?? null,
     nextScoringRunMinutes: minutesToNextScoring(now),
     pending,
     lastSyncAt: cursor.lastSyncAt ?? null,
@@ -318,6 +331,8 @@ function printStatus(status: Status): void {
   if (dormancy) stdout(dormancy);
   const hint = unsubmittedHint(status);
   if (hint) stdout(hint);
+  const addressed = addressedLine(status.addressedTasks);
+  if (addressed) stdout(addressed);
 
   if (status.events) {
     stdout('');
@@ -364,6 +379,13 @@ function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
   return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove --claim')} to list ${n === 1 ? 'it' : 'them'} again.`;
+}
+
+// Only when the API said some tasks wait. Nothing when none do or when the
+// API did not answer.
+export function addressedLine(n: number | null): string | null {
+  if (n === null || n === 0) return null;
+  return `${n} task${n === 1 ? '' : 's'} addressed to you, run ${cli('prove')}`;
 }
 
 function formatScore(value: number): string {

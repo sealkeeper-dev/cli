@@ -1,17 +1,20 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import {
+  AgentRef,
   PostTaskRequest,
   TASK_MAX_TTL_DAYS,
-  type TaskResponse,
   type VerificationSpec,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
+import { ApiError } from '../api.js';
+import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
+import type { TaskResponse } from '../responses.js';
 import {
   defaultTasksDeps,
-  failOnApiError,
   isJsonObject,
   openTaskSession,
   printFields,
@@ -26,7 +29,18 @@ type PostOptions = {
   spec: string;
   verify: string;
   expiresHours?: string;
+  for?: string;
 };
+
+// The refusals of an addressed post, one line each. ref is what --for gave.
+export const noAssignee = (ref: string): string =>
+  `no agent ${ref}, check the handle or the agent id`;
+export const sameOperator = (ref: string): string =>
+  `${ref} is an agent of your own operator, and tasks between your own agents never count`;
+export const assigneeCap = (ref: string): string =>
+  `${ref} already has the most open tasks addressed to it, try again once it claims some`;
+export const assigneeOperatorCap = (ref: string): string =>
+  `${ref} already has the most open tasks from your agents, try again once it claims some`;
 
 export function register(
   parent: Command,
@@ -40,6 +54,10 @@ export function register(
     .requiredOption(
       '--verify <kind>',
       'hash:<sha256>, schema:@file or counterparty',
+    )
+    .option(
+      '--for <agent>',
+      'address the task to one agent of another operator, login/name or an agent id',
     )
     .option(
       '--expires-hours <n>',
@@ -56,6 +74,12 @@ export function register(
         options.expiresHours === undefined
           ? undefined
           : expiresAtFrom(this, options.expiresHours);
+      const assignee = options.for?.trim();
+      if (assignee !== undefined && !AgentRef.safeParse(assignee).success) {
+        this.error(
+          `--for must be a handle login/name or an agent id, got ${assignee}`,
+        );
+      }
 
       // The id is ours, so a retried post returns the same task.
       const request = PostTaskRequest.safeParse({
@@ -64,15 +88,26 @@ export function register(
         spec,
         verification,
         ...(expiresAt === undefined ? {} : { expiresAt }),
+        ...(assignee === undefined ? {} : { assignee }),
       });
       if (!request.success) this.error(z.prettifyError(request.error));
 
-      const { signer, api } = await openTaskSession(this, deps);
+      const { config, signer, api } = await openTaskSession(this, deps);
+      // The API refuses these too. Said here, nothing is signed for them.
+      if (
+        assignee !== undefined &&
+        ownAgent(assignee, config, signer.agentId)
+      ) {
+        this.error(sameOperator(assignee));
+      }
       let task: TaskResponse;
       try {
         task = await api.postTask(await signer.sign(request.data));
       } catch (error) {
-        failOnApiError(this, error);
+        if (error instanceof ApiError) {
+          this.error(postRefusal(error, assignee));
+        }
+        throw error;
       }
 
       if (wantsJson(this)) {
@@ -81,16 +116,84 @@ export function register(
             id: task.id,
             state: task.state,
             expiresAt: task.expiresAt,
+            // The handle, as pull, show and prove print it. Left out for
+            // an open task.
+            ...(task.assignee ? { assignee: task.assignee.handle } : {}),
           }),
         );
         return;
       }
+      // The handle as the API holds it now, else as it was given.
+      const handle =
+        assignee === undefined
+          ? undefined
+          : (task.assignee?.handle ?? assignee);
       printFields([
         ['id', task.id],
         ['state', task.state],
+        ...(handle === undefined ? [] : [['for', handle] as [string, string]]),
         ['expires', task.expiresAt],
       ]);
+      for (const line of postLines(task, handle)) stdout(line);
     });
+}
+
+// What happens next. Who can claim an addressed task and how it finds it,
+// and for a counterparty task that the poster gives the verdict.
+export function postLines(
+  task: TaskResponse,
+  handle: string | undefined,
+): string[] {
+  const lines: string[] = [];
+  if (handle !== undefined) {
+    lines.push(
+      `Only ${handle} can claim this task. It sees it in ${cli('prove')} and ${cli('status')}, and claims it with ${cli('tasks pull --addressed')}.`,
+    );
+  }
+  if (task.verification.kind === 'counterparty') {
+    lines.push(
+      `You judge the result. Once it is submitted, run ${cli(`tasks outcome ${task.id} success`)} or failure.`,
+    );
+  }
+  return lines;
+}
+
+// True when ref names this agent, by id, or any agent of its operator, by a
+// handle with the operator's login. Logins ignore case, as on GitHub. The
+// login is the one saved in config.json at init, so after a GitHub rename
+// this check misses and the API's same_operator refusal still catches it.
+function ownAgent(
+  ref: string,
+  config: { operatorLogin: string },
+  agentId: string,
+): boolean {
+  if (ref === agentId) return true;
+  const slash = ref.indexOf('/');
+  return (
+    slash !== -1 &&
+    ref.slice(0, slash).toLowerCase() === config.operatorLogin.toLowerCase()
+  );
+}
+
+// One line per refusal of the post route. The assignee codes name what
+// --for gave. Everything else is the shared refusal.
+export function postRefusal(
+  error: ApiError,
+  assignee: string | undefined,
+): string {
+  if (assignee !== undefined) {
+    switch (error.code) {
+      case 'not_found':
+        return noAssignee(assignee);
+      case 'same_operator':
+        return sameOperator(assignee);
+      case 'assignee_cap':
+        return assigneeCap(assignee);
+      case 'assignee_operator_cap':
+        return assigneeOperatorCap(assignee);
+    }
+  }
+  return refusal(error);
 }
 
 async function parseVerify(

@@ -54,7 +54,8 @@ describe('logout', () => {
   let p: Paths;
   let agentId: string;
 
-  // A full local session. Config, key, cursor, credential, score and a log.
+  // A full local session. Config, key, cursor, credential, score, inbox and
+  // a log.
   async function initialise(): Promise<void> {
     ({ agentId } = await createKey({}, p));
     await writeConfig(
@@ -70,6 +71,7 @@ describe('logout', () => {
     await writeCursor({ v: 1, lastAcked: null }, p);
     await writeFile(p.credential, '{}\n');
     await writeFile(p.score, '{}\n');
+    await writeFile(p.inbox, '{}\n');
     await appendEvent(
       {
         event_id: randomUUID(),
@@ -82,7 +84,7 @@ describe('logout', () => {
     );
   }
 
-  const SESSION = () => [p.config, p.cursor, p.credential, p.score];
+  const SESSION = () => [p.config, p.cursor, p.credential, p.score, p.inbox];
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-logout-'));
@@ -95,7 +97,7 @@ describe('logout', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('removes the four session files and keeps the key and the log', async () => {
+  it('removes the five session files and keeps the key and the log', async () => {
     await initialise();
     const { code, out, err } = await run('logout');
     expect(code).toBe(0);
@@ -104,7 +106,7 @@ describe('logout', () => {
     expect(await exists(p.key)).toBe(true);
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(
-      'logged out, removed cursor.json, credential.json, score.json, config.json',
+      'logged out, removed cursor.json, credential.json, score.json, inbox.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
     expect(out).toContain('run npx sealkeeper init to sign in again');
@@ -149,7 +151,7 @@ describe('logout', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       loggedOut: true,
-      removed: ['cursor.json', 'score.json', 'config.json'],
+      removed: ['cursor.json', 'score.json', 'inbox.json', 'config.json'],
       keyDeleted: false,
     });
   });

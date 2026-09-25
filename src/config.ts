@@ -90,6 +90,8 @@ export type Paths = {
   // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
   score: string;
+  // How many tasks wait for this agent, a fifteen minute cache like score.
+  inbox: string;
   // Start time markers for hook adapters, one small file per session or tool
   // call, so a later hook can compute a duration.
   sessions: string;
@@ -116,6 +118,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     credential: join(home, 'credential.json'),
     wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),
+    inbox: join(home, 'inbox.json'),
     sessions: join(home, 'sessions'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };

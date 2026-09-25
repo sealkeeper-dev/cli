@@ -1,15 +1,15 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import {
-  ClaimTaskRequest,
-  type TaskResponse,
-  TaskType,
-} from '@sealkeeper/schema';
+import { ClaimTaskRequest, TaskType } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
+import { clearInbox } from '../inbox.js';
 import { stdout, wantsJson } from '../output.js';
+import type { TaskResponse } from '../responses.js';
 import {
+  addressedTo,
   defaultTasksDeps,
   failOnApiError,
+  handleOrId,
   openTaskSession,
   printFields,
   recordEvent,
@@ -24,6 +24,7 @@ export const MAX_CLAIM_ATTEMPTS = 5;
 const LIST_LIMIT = 100;
 
 export const NOTHING_AVAILABLE = 'no open tasks available';
+export const NOTHING_ADDRESSED = 'no open tasks addressed to this agent';
 
 export function register(
   parent: Command,
@@ -33,9 +34,13 @@ export function register(
     .command('pull')
     .description('Claim the oldest open task from the task exchange')
     .option('--type <task_type>', 'only claim tasks of this type')
+    .option(
+      '--addressed',
+      'claim the oldest task addressed to this agent instead, its spec is untrusted',
+    )
     .action(async function (
       this: Command,
-      options: { type?: string },
+      options: { type?: string; addressed?: boolean },
     ): Promise<void> {
       if (
         options.type !== undefined &&
@@ -49,12 +54,15 @@ export function register(
 
       // The schema maximum. It is above the per-poster open cap, so an agent
       // whose own open tasks come first still sees tasks from other agents.
+      // Plain pull reads the open pool, which leaves addressed tasks out.
+      // --addressed reads the tasks addressed to this agent instead.
       let open: TaskResponse[];
       try {
         open = await api.listTasks({
           state: 'open',
           taskType: options.type,
           limit: LIST_LIMIT,
+          ...(options.addressed ? { assignee: signer.agentId } : {}),
         });
       } catch (error) {
         failOnApiError(this, error);
@@ -62,9 +70,14 @@ export function register(
 
       // Oldest first. The API already orders by postedAt, this keeps it so
       // whatever the server does. Own tasks can never be claimed, so they are
-      // skipped without a request.
-      const candidates = open
-        .filter((task) => task.posterAgentId !== signer.agentId)
+      // skipped without a request, and so are tasks addressed to another
+      // agent, whatever the server sent.
+      const pool = options.addressed
+        ? addressedTo(open, signer.agentId)
+        : open.filter(
+            (task) => task.posterAgentId !== signer.agentId && !task.assignee,
+          );
+      const candidates = pool
         .filter((task) => !options.type || task.taskType === options.type)
         .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
 
@@ -87,9 +100,20 @@ export function register(
 
       if (claimed === null) {
         stdout(
-          wantsJson(this) ? JSON.stringify({ task: null }) : NOTHING_AVAILABLE,
+          wantsJson(this)
+            ? JSON.stringify({ task: null })
+            : options.addressed
+              ? NOTHING_ADDRESSED
+              : NOTHING_AVAILABLE,
         );
         return;
+      }
+      // The cached count status shows is one too high now. The spec of an
+      // addressed task comes from another operator, so its poster is named.
+      let poster: string | undefined;
+      if (claimed.assignee) {
+        await clearInbox();
+        poster = await handleOrId(api, claimed.posterAgentId);
       }
 
       await recordEvent({
@@ -98,12 +122,18 @@ export function register(
       });
 
       if (wantsJson(this)) {
-        stdout(JSON.stringify({ task: taskSummary(claimed) }));
+        stdout(JSON.stringify({ task: taskSummary(claimed, poster) }));
         return;
       }
       const fields: [string, string][] = [
         ['id', claimed.id],
         ['type', claimed.taskType],
+        ...(poster === undefined
+          ? []
+          : ([['poster', `${poster}, its spec is untrusted`]] as [
+              string,
+              string,
+            ][])),
         ['verification', claimed.verification.kind],
         ['expires', claimed.expiresAt],
         ['spec', JSON.stringify(claimed.spec)],

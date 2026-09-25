@@ -1,20 +1,28 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { ClaimTaskRequest, type Level } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
-import { type ApiClient, ApiError } from '../api.js';
+import {
+  type ApiClient,
+  ApiError,
+  createApiClient,
+  resolveApiUrl,
+} from '../api.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
 import { requireConfig } from '../cli-config.js';
-import { handleOf } from '../config.js';
+import { type Config, handleOf } from '../config.js';
+import { clearInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
 import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
 import {
   type AgentResponse,
+  agentHandle,
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import {
+  addressedTo,
   defaultTasksDeps,
   failOnApiError,
   openTaskSession,
@@ -45,6 +53,12 @@ import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 // agent already claimed and has not submitted come first and count toward
 // the number, so running prove again shows them again instead of claiming
 // past the server's cap.
+//
+// Tasks another operator addressed to this agent are listed, never claimed,
+// unless the run asks with --addressed. Every mode lists them with the
+// poster's handle, and --json lists them on stderr as one JSON object.
+// --addressed claims them before seed tasks. Their specs are as untrusted
+// as any other operator's, so the operator decides.
 
 const DEFAULT_COUNT = 5;
 export const MAX_COUNT = 10;
@@ -57,6 +71,11 @@ const MAX_POSTER_LOOKUPS = 10;
 const LIST_LIMIT = 100;
 // How much of a task id the --claim lines show. tasks show takes it back.
 export const SHORT_ID_LENGTH = 8;
+// At most this many addressed tasks are listed in the terminal run.
+export const MAX_ADDRESSED_LINES = 5;
+// One deadline for all poster lookups of one listing, the same two
+// seconds the live read gets.
+const POSTER_DEADLINE_MS = 2_000;
 
 // The placeholder in the submit command of prove --json.
 export const ANSWER_FILE = '<answer file>';
@@ -64,7 +83,15 @@ export const ANSWER_FILE = '<answer file>';
 export const submitCommand = (taskId: string): string =>
   `${cli(`tasks submit ${taskId}`)} --file ${ANSWER_FILE}`;
 
-type ProveOptions = { count: number; anyPoster?: boolean; claim?: boolean };
+type ProveOptions = {
+  count: number;
+  anyPoster?: boolean;
+  claim?: boolean;
+  addressed?: boolean;
+};
+
+// A task addressed to this agent with its poster's handle.
+type Addressed = { task: TaskResponse; poster: string };
 
 const stdoutIsTTY = () => process.stdout.isTTY === true;
 
@@ -88,38 +115,59 @@ export function register(
       'also claim tasks other agents posted, whose specs are untrusted',
     )
     .option('--claim', 'in a terminal, claim tasks and list them in short')
+    .option(
+      '--addressed',
+      'also claim the tasks addressed to this agent, first, whose specs are untrusted',
+    )
     .action(async function (
       this: Command,
       options: ProveOptions,
     ): Promise<void> {
       const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
-      if (!json && !options.claim) {
+      if (!json && !options.claim && !options.addressed) {
         await explain(this, deps);
         return;
       }
 
-      const { tasks, capped, skipped } = await claim(this, deps, options);
+      const { tasks, capped, skipped, posters, waiting, waitingTotal } =
+        await claim(this, deps, options, json);
       const now = Date.now();
 
       if (json) {
         // stdout is the array and nothing else. What an agent may want to
-        // know besides goes to stderr.
-        stdout(JSON.stringify(tasks.map(proveEntry)));
+        // know besides goes to stderr, the addressed tasks that wait as one
+        // JSON object on a line of its own.
+        stdout(
+          JSON.stringify(
+            tasks.map((task) => proveEntry(task, posters.get(task.id))),
+          ),
+        );
+        if (posters.size > 0) stderr(addressedNote(posters.size));
+        if (waiting.length > 0) stderr(JSON.stringify(waitingEntry(waiting)));
         if (tasks.length === 0 && !capped) {
           stderr(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
           if (skipped > 0) stderr(anyPosterHint(skipped));
         }
         return;
       }
+      const tail =
+        waiting.length > 0
+          ? ['', ...addressedLines(waiting, waitingTotal, now)]
+          : [];
       // At the cap with nothing to list, stderr already said why. Saying no
       // open tasks exist as well would be wrong.
-      if (tasks.length === 0 && capped) return;
+      if (tasks.length === 0 && capped) {
+        for (const line of tail) stdout(line);
+        return;
+      }
       if (tasks.length === 0) {
         stdout(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
         if (skipped > 0) stdout(anyPosterHint(skipped));
+        for (const line of tail) stdout(line);
         return;
       }
-      for (const line of claimLines(tasks, now)) stdout(line);
+      for (const line of claimLines(tasks, now, posters)) stdout(line);
+      for (const line of tail) stdout(line);
     });
 }
 
@@ -137,13 +185,14 @@ function parseCount(value: string): number {
   return Math.min(n, MAX_COUNT);
 }
 
-// The terminal run. Claims nothing and sends nothing but the read of the
-// verified count, the same one status shows.
+// The terminal run. Claims nothing and sends nothing but reads, the
+// verified count status shows and the tasks addressed to this agent.
 async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
   const config = await requireConfig(cmd);
-  const [live, hooks] = await Promise.all([
+  const [live, hooks, addressed] = await Promise.all([
     readLiveAgent(config, deps.fetch),
     claudeCodeHooksIn(deps),
+    addressedWaiting(config, deps),
   ]);
   const s = createStyle(process.stdout);
   const say = (line?: Styled) => stdoutStyled(indent(line));
@@ -153,6 +202,14 @@ async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
     s.line`${s.gold('◉')} ${s.bold('SealKeeper prove')}   ${handleOf(config)}`,
   );
   say();
+  // Tasks addressed to this agent first, listed and never claimed here.
+  // The type and the poster's handle come from other operators, and s.line
+  // makes every part safe for the terminal.
+  if (addressed.total > 0) {
+    const lines = addressedLines(addressed.shown, addressed.total, Date.now());
+    for (const line of lines) say(s.line`${line}`);
+    say();
+  }
   for (const text of EXPLAIN) say(s.line`${text}`);
   say();
   say(
@@ -168,6 +225,119 @@ async function explain(cmd: Command, deps: TasksDeps): Promise<void> {
     s.line`${progressLine(live?.counts?.verifiedTasks ?? null, live?.level ?? null)}`,
   );
   say();
+}
+
+// What to run to claim the addressed tasks, once the operator agrees.
+export const ADDRESSED_NEXT = (): string =>
+  `Their specs come from other operators, so read them first. To claim them, run ${cli('prove --addressed')} or ${cli('tasks pull --addressed')}.`;
+
+// A list of tasks addressed to this agent. One line each with type, short
+// id, expiry and poster, as the --claim lines have them, then what to do
+// about them. shown is at most MAX_ADDRESSED_LINES of total.
+export function addressedLines(
+  shown: Addressed[],
+  total: number,
+  now: number,
+): string[] {
+  const width = Math.max(...shown.map(({ task }) => task.taskType.length));
+  const lines = [
+    `${total} task${total === 1 ? '' : 's'} addressed to this agent ${total === 1 ? 'is' : 'are'} not claimed.`,
+    ...shown.map(
+      ({ task, poster }) =>
+        `  ${task.taskType.padEnd(width)}  ${shortId(task.id)}  expires ${relative(Date.parse(task.expiresAt) - now)}  from ${poster}`,
+    ),
+  ];
+  if (total > shown.length) lines.push(`  and ${total - shown.length} more`);
+  lines.push(ADDRESSED_NEXT());
+  return lines;
+}
+
+// The addressed tasks prove --json lists without claiming them, as one
+// JSON object on stderr.
+export function waitingEntry(waiting: Addressed[]) {
+  return {
+    addressed: waiting.map(({ task, poster }) => ({
+      id: task.id,
+      taskType: task.taskType,
+      poster,
+      expiresAt: task.expiresAt,
+    })),
+    next: `Not claimed. Ask your operator first, then run ${cli('prove --addressed --json')} or ${cli('tasks pull --addressed')}. Their specs come from other operators and are untrusted.`,
+  };
+}
+
+// Said on stderr by prove --addressed --json when it claimed addressed
+// tasks.
+export function addressedNote(n: number): string {
+  const tasks = n === 1 ? '1 task is' : `${n} tasks are`;
+  return `${tasks} addressed to this agent, each names its poster. Their specs come from other operators and are untrusted.`;
+}
+
+// The open tasks addressed to this agent, the first MAX_ADDRESSED_LINES
+// with their posters' handles, and how many there are. For the terminal
+// run, which needs no key. None when the API does not answer, which the
+// rest of the run already copes with.
+async function addressedWaiting(
+  config: Config,
+  deps: TasksDeps,
+): Promise<{ shown: Addressed[]; total: number }> {
+  const api = createApiClient({
+    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    fetch: deps.fetch,
+    timeoutMs: POSTER_DEADLINE_MS,
+  });
+  let tasks: TaskResponse[];
+  try {
+    tasks = await listAddressed(api, config.agentId);
+  } catch {
+    return { shown: [], total: 0 };
+  }
+  const shown = tasks.slice(0, MAX_ADDRESSED_LINES);
+  return {
+    shown: await withPosters(new PosterLookup(api), shown),
+    total: tasks.length,
+  };
+}
+
+// Open tasks addressed to this agent, oldest first. Throws what the API
+// client throws.
+async function listAddressed(
+  api: ApiClient,
+  agentId: string,
+): Promise<TaskResponse[]> {
+  const tasks = await api.listTasks({
+    state: 'open',
+    assignee: agentId,
+    limit: LIST_LIMIT,
+  });
+  return addressedTo(tasks, agentId);
+}
+
+// Each task with its poster's handle. The posters are looked up at once
+// under one deadline, and one not known by then is named by its id.
+async function withPosters(
+  posters: PosterLookup,
+  tasks: TaskResponse[],
+): Promise<Addressed[]> {
+  const found = new Map<string, string>();
+  const ids = [...new Set(tasks.map((task) => task.posterAgentId))];
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, POSTER_DEADLINE_MS);
+  });
+  await Promise.race([
+    Promise.all(
+      ids.map(async (id) => {
+        found.set(id, await posters.handle(id));
+      }),
+    ),
+    deadline,
+  ]);
+  clearTimeout(timer);
+  return tasks.map((task) => ({
+    task,
+    poster: found.get(task.posterAgentId) ?? task.posterAgentId,
+  }));
 }
 
 export const EXPLAIN = [
@@ -191,53 +361,81 @@ export function progressLine(
   return `${verifiedTasks} verified so far. Bronze needs ${BRONZE.verifiedTasks} over ${BRONZE.historyDays} days.`;
 }
 
-// Claims up to options.count tasks, held ones first. capped when the
-// server's claim cap stopped it, skipped the open tasks left out because
-// other agents posted them.
+// Claims up to options.count tasks, held ones first, then open tasks.
+// With --addressed it first claims up to options.count tasks addressed to
+// this agent on top of the held ones, since an agent that just ran prove
+// already holds a full count of seed tasks and asked for these by name.
+// The server's claim cap bounds the total. capped when that cap stopped
+// it, skipped the open tasks left out because other agents posted them.
+// posters holds the poster's handle of every addressed task claimed or
+// held, by task id. waiting is the tasks addressed to this agent that were
+// not claimed, each with its poster, all of them for JSON and at most
+// MAX_ADDRESSED_LINES otherwise, and waitingTotal how many there are.
 async function claim(
   cmd: Command,
   deps: TasksDeps,
   options: ProveOptions,
-): Promise<{ tasks: TaskResponse[]; capped: boolean; skipped: number }> {
+  json: boolean,
+): Promise<{
+  tasks: TaskResponse[];
+  capped: boolean;
+  skipped: number;
+  posters: Map<string, string>;
+  waiting: Addressed[];
+  waitingTotal: number;
+}> {
   const { config, signer, api } = await openTaskSession(cmd, deps);
   const want = options.count;
   const now = Date.now();
+  const posters = new PosterLookup(api);
+
+  // Tasks addressed to this agent. A listing that fails for any reason but
+  // a moved API counts as none, as an API from before addressed tasks
+  // answers.
+  let addressed: TaskResponse[] = [];
+  try {
+    addressed = await listAddressed(api, signer.agentId);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'redirect') {
+      failOnApiError(cmd, error);
+    }
+  }
 
   const tasks = await heldTasks(api, signer.agentId, want, now);
   let capped = false;
   let skipped = 0;
-  if (tasks.length >= want) return { tasks, capped, skipped };
-
-  let open: TaskResponse[];
-  try {
-    open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
-  } catch (error) {
-    failOnApiError(cmd, error);
-  }
-  const posters = new PosterLookup(api);
-  const all = await ranked(
-    posters,
-    open.filter((task) => task.posterAgentId !== signer.agentId),
-  );
-  const candidates = options.anyPoster
-    ? all.map(({ task }) => task)
-    : all.filter(({ seed }) => seed).map(({ task }) => task);
-  skipped = all.length - candidates.length;
   let failures = 0;
-  for (const task of candidates) {
-    if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
-    // A task posted by another agent of the same operator never counts
-    // toward the record, so it is not worth a claim. Seed tasks are the
-    // exception. The seed agent is registered under the SealKeeper
-    // operator's own account, and its tasks count for every agent, so a
-    // poster SealKeeper runs is never the same operator.
-    if (await posters.sameOperator(task, config.operatorLogin)) continue;
+  const done = async () => {
+    const have = new Set(tasks.map((task) => task.id));
+    const rest = addressed.filter((task) => !have.has(task.id));
+    const shown = json ? rest : rest.slice(0, MAX_ADDRESSED_LINES);
+    const held = tasks.filter((task) => task.assignee);
+    // One lookup, under one deadline, for every poster named below.
+    const named = await withPosters(posters, [...held, ...shown]);
+    const handles = new Map(
+      named.slice(0, held.length).map(({ task, poster }) => [task.id, poster]),
+    );
+    return {
+      tasks,
+      capped,
+      skipped,
+      posters: handles,
+      waiting: named.slice(held.length),
+      waitingTotal: rest.length,
+    };
+  };
+  // Claims one task. False when the claim cap stopped it, and then the
+  // tasks the server says this agent holds are added. The local log may
+  // not know every claim (another machine, a fresh home).
+  const claimOne = async (task: TaskResponse): Promise<boolean> => {
     try {
       const envelope = await signer.sign(
         ClaimTaskRequest.parse({ taskId: task.id }),
       );
       const claimed = await api.claimTask(task.id, envelope);
       tasks.push(claimed);
+      // The count status caches is too high now.
+      if (claimed.assignee) await clearInbox();
       await recordEvent({
         type: 'task.claimed',
         payload: { task_id: claimed.id, task_type: claimed.taskType },
@@ -245,11 +443,8 @@ async function claim(
     } catch (error) {
       if (error instanceof ApiError && isGone(error)) {
         failures += 1;
-        continue;
+        return true;
       }
-      // The server caps how many tasks one agent holds. The local log may
-      // not know every claim (another machine, a fresh home), so ask the
-      // server which tasks this agent holds and print those.
       if (error instanceof ApiError && error.code === 'claim_cap') {
         capped = true;
         await addServerHeld(api, signer.agentId, tasks, want, now);
@@ -258,21 +453,70 @@ async function claim(
             ? `${error.message}. Submit the tasks below first.`
             : `${error.message}. This agent holds the maximum and none of them could be listed.`,
         );
-        break;
+        return false;
       }
       failOnApiError(cmd, error);
     }
+    return true;
+  };
+  // Only when the run asks. The operator opts into specs another operator
+  // wrote for this agent, as with --any-poster. Counted apart from the held
+  // tasks, so seed claims from an earlier run never crowd these out.
+  if (options.addressed) {
+    const held = new Set(tasks.map((task) => task.id));
+    let claimed = 0;
+    for (const task of addressed) {
+      if (claimed >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+      if (held.has(task.id)) continue;
+      const before = tasks.length;
+      if (!(await claimOne(task))) return done();
+      if (tasks.length > before) claimed += 1;
+    }
   }
-  return { tasks, capped, skipped };
+  if (tasks.length >= want) return done();
+
+  let open: TaskResponse[];
+  try {
+    open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
+  } catch (error) {
+    failOnApiError(cmd, error);
+  }
+  // The open list leaves addressed tasks out, and this keeps it so
+  // whatever the server sends.
+  const all = await ranked(
+    posters,
+    open.filter(
+      (task) => task.posterAgentId !== signer.agentId && !task.assignee,
+    ),
+  );
+  const candidates = options.anyPoster
+    ? all.map(({ task }) => task)
+    : all.filter(({ seed }) => seed).map(({ task }) => task);
+  skipped = all.length - candidates.length;
+  for (const task of candidates) {
+    if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+    // A task posted by another agent of the same operator never counts
+    // toward the record, so it is not worth a claim. Seed tasks are the
+    // exception. The seed agent is registered under the SealKeeper
+    // operator's own account, and its tasks count for every agent, so a
+    // poster SealKeeper runs is never the same operator.
+    if (await posters.sameOperator(task, config.operatorLogin)) continue;
+    if (!(await claimOne(task))) break;
+  }
+  return done();
 }
 
 // One task as prove --json prints it. schema only when the answer must
 // match one. submit is the exact command, with the answer file to fill in.
-export function proveEntry(task: TaskResponse) {
+// An addressed task also names its assignee, and its poster when known,
+// since its spec comes from another operator.
+export function proveEntry(task: TaskResponse, poster?: string) {
   return {
     id: task.id,
     type: task.taskType,
     expires_at: task.expiresAt,
+    ...(task.assignee ? { assignee: task.assignee.handle } : {}),
+    ...(poster === undefined ? {} : { poster }),
     spec: task.spec,
     ...(task.verification.kind === 'schema'
       ? { schema: task.verification.jsonSchema }
@@ -282,17 +526,28 @@ export function proveEntry(task: TaskResponse) {
 }
 
 // The --claim lines. Number, type, short id and expiry, one task a line,
-// then how to see one in full.
-export function claimLines(tasks: TaskResponse[], now: number): string[] {
+// then how to see one in full. An addressed task names its poster, from
+// posters, by task id.
+export function claimLines(
+  tasks: TaskResponse[],
+  now: number,
+  posters: Map<string, string> = new Map(),
+): string[] {
   const width = Math.max(...tasks.map((task) => task.taskType.length));
-  const lines = tasks.map(
-    (task, i) =>
-      `${String(i + 1).padStart(2)}  ${task.taskType.padEnd(width)}  ${shortId(task.id)}  expires ${relative(Date.parse(task.expiresAt) - now)}`,
-  );
+  const lines = tasks.map((task, i) => {
+    const poster = posters.get(task.id);
+    const from = poster === undefined ? '' : `  from ${poster}`;
+    return `${String(i + 1).padStart(2)}  ${task.taskType.padEnd(width)}  ${shortId(task.id)}  expires ${relative(Date.parse(task.expiresAt) - now)}${from}`;
+  });
   lines.push(
     '',
     `See a task's spec and submit line with ${cli('tasks show <id>')}.`,
   );
+  if (posters.size > 0) {
+    lines.push(
+      'A task with a poster was addressed to this agent. Its spec comes from another operator, so read it first.',
+    );
+  }
   return lines;
 }
 
@@ -379,6 +634,12 @@ class PosterLookup {
     return this.agents.get(agentId) ?? null;
   }
 
+  // The poster's handle, login/name, or its id when the API does not say.
+  async handle(agentId: string): Promise<string> {
+    const agent = await this.get(agentId);
+    return agent === null ? agentId : agentHandle(agent);
+  }
+
   // True when the task was posted by an agent of the operator named and
   // not by the seed agent. The operator on the task is used when the API
   // sends one, else the poster is looked up. When neither says, the task is
@@ -438,6 +699,9 @@ export function taskDetail(
 ): string[] {
   const lines = [
     `Task ${task.id}. type ${task.taskType}. ${task.state}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
+    ...(task.assignee
+      ? [`Addressed to ${task.assignee.handle}. Only that agent can claim it.`]
+      : []),
     'Spec:',
     indentText(JSON.stringify(task.spec, null, 2)),
   ];

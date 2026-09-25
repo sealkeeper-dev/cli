@@ -50,6 +50,7 @@ describe('config', () => {
       cursor: '/h/cursor.json',
       credential: '/h/credential.json',
       score: '/h/score.json',
+      inbox: '/h/inbox.json',
       sessions: '/h/sessions',
     });
     expect(p.logFile('2026-09-23')).toBe('/h/log/2026-09-23.jsonl');

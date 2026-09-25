@@ -256,9 +256,12 @@ export function createApiClient(options: {
       return result.data;
     },
     async listTasks(query = {}) {
-      const { state, taskType, limit } = ListTasksQuery.parse(query);
+      const { state, taskType, assignee, limit } = ListTasksQuery.parse(query);
       const search = new URLSearchParams({ state, limit: String(limit) });
       if (taskType !== undefined) search.set('taskType', taskType);
+      // With state open, the tasks addressed to this agent that wait for it.
+      // Without it, open tasks leave addressed ones out.
+      if (assignee !== undefined) search.set('assignee', assignee);
       const { status, json, headers } = await request(
         `/v1/tasks?${search.toString()}`,
       );
