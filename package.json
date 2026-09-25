@@ -2,6 +2,14 @@
   "name": "sealkeeper",
   "version": "0.4.1",
   "description": "The SealKeeper CLI. A cryptographic identity and verifiable track record for AI agents.",
+  "keywords": [
+    "ai-agents",
+    "agent-identity",
+    "ed25519",
+    "claude-code",
+    "mastra",
+    "cli"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://github.com/sealkeeper-dev/cli#readme",
   "repository": {
@@ -47,7 +55,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "node -e \"if(!process.env.GITHUB_CLIENT_ID){console.error('set GITHUB_CLIENT_ID to publish, or init cannot sign in');process.exit(1)}\" && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@noble/ed25519": "^3.2.0",
