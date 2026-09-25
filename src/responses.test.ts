@@ -393,7 +393,7 @@ describe('response schemas parse loosely', () => {
 
   it('the API client takes an answer with keys it does not know', async () => {
     const api = createApiClient({
-      apiUrl: 'http://api.test',
+      apiUrl: 'https://api.test',
       fetch: (async () =>
         Response.json({
           ...agent,
@@ -407,7 +407,7 @@ describe('response schemas parse loosely', () => {
 
   it('the API client uses seal from the credential answer', async () => {
     const api = createApiClient({
-      apiUrl: 'http://api.test',
+      apiUrl: 'https://api.test',
       fetch: (async () =>
         Response.json({
           credential: JWS,
@@ -421,14 +421,14 @@ describe('response schemas parse loosely', () => {
   it('the API client asks for the SEAL at /seal', async () => {
     const urls: string[] = [];
     const api = createApiClient({
-      apiUrl: 'http://api.test',
+      apiUrl: 'https://api.test',
       fetch: (async (url: string) => {
         urls.push(url);
         return Response.json({ seal: JWS, payload });
       }) as unknown as typeof fetch,
     });
     const got = await api.getCredential(ID);
-    expect(urls).toEqual([`http://api.test/v1/agents/${ID}/seal`]);
+    expect(urls).toEqual([`https://api.test/v1/agents/${ID}/seal`]);
     expect(got.seal).toBe(JWS);
     expect(got.credential).toBe(JWS);
   });

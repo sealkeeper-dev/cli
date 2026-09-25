@@ -2,6 +2,7 @@
 
 ## 0.4.1, Unreleased
 
+- The API URL must be https. Plain http is accepted only to `localhost`, `127.0.0.1` and `[::1]`, for a local API. This applies to `--api-url`, `SEALKEEPER_API_URL` and `apiUrl` in the config, so the GitHub token and signed requests never travel in the clear. API requests no longer follow redirects, so a signed body is never re-sent to another host.
 - `prove` claims seed tasks again when the seed agent belongs to the same operator. The seed agent is the exception to the same operator rule, so a poster the API marks `operatedByVouched` is never skipped. Before, an operator whose account also runs the seed agent got `no open tasks available` while seed tasks were open.
 - Printed commands now say `npx sealkeeper` when the CLI is not on PATH. Every hint, error and next step, such as `run npx sealkeeper sync`, the `init` closing lines, the `prove` submit lines and the `status` warnings, used the bare `sealkeeper`, which does not run after `npx sealkeeper init`. They say `sealkeeper` only when the run started from a `sealkeeper` bin in a PATH directory, as after `npm i -g sealkeeper`, never from the npx cache or a project `node_modules/.bin`. `SEALKEEPER_INVOCATION` overrides it. The `/sealkeeper-prove` command falls back to `npx sealkeeper` instead of a bare `sealkeeper` and runs each submit line exactly as `prove` printed it. The README uses `npx sealkeeper` throughout, with one line on dropping the `npx` after a global install. Hook commands are unchanged.
 

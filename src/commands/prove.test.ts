@@ -18,7 +18,7 @@ import { appendEvent } from '../log.js';
 import { createProgram } from '../program.js';
 import { closing, MAX_COUNT, relative, SUBMIT_HINT } from './prove.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const SEED_AGENT = `${'S'.repeat(42)}A`;
 const OTHER_AGENT = `${'O'.repeat(42)}A`;
 // Another agent of the same operator as the one running prove.

@@ -9,6 +9,7 @@ import {
   type Level,
 } from '@sealkeeper/schema';
 import { ApiError, resolveApiUrl } from './api.js';
+import { INSECURE_API_URL, isSecureApiUrl } from './config.js';
 import {
   AgentRenamedResponse,
   type Check,
@@ -98,6 +99,13 @@ export async function fetchCheck(
     /\/+$/,
     '',
   );
+  if (!isSecureApiUrl(apiUrl)) {
+    throw new ApiError(
+      0,
+      'insecure_api_url',
+      `refusing the SealKeeper API at ${apiUrl}, ${INSECURE_API_URL}`,
+    );
+  }
   const fetchFn = options.fetch ?? fetch;
   const url = `${apiUrl}/v1/check/${encodeURIComponent(login)}/${encodeURIComponent(name)}${search}`;
 
@@ -105,6 +113,7 @@ export async function fetchCheck(
   try {
     res = await fetchFn(url, {
       headers: { Accept: 'application/json' },
+      redirect: 'error',
       signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
     });
   } catch (error) {

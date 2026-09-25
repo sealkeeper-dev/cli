@@ -31,6 +31,7 @@ import {
   ConfigError,
   DEFAULT_AGENT_VERSION,
   handleOf,
+  INSECURE_API_URL,
   paths,
   profileUrl as profileUrlOf,
   readConfig,
@@ -240,7 +241,7 @@ async function init(
     config: previous?.apiUrl,
   });
   if (!Config.shape.apiUrl.safeParse(apiUrl).success) {
-    cmd.error(`invalid API URL ${apiUrl}, expected an http or https URL`);
+    cmd.error(`invalid API URL ${apiUrl}, ${INSECURE_API_URL}`);
   }
 
   // With --force the old config describes the old key, so it goes as soon as

@@ -15,7 +15,7 @@ import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import { RATINGS_CLOSED } from './rate.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const OTHER_AGENT = 'A'.repeat(43);
 
 type RunResult = { code: number; out: string; err: string };

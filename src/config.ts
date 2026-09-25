@@ -17,6 +17,27 @@ export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
 // it to DEFAULT_API_URL. Any other apiUrl was chosen on purpose and stays.
 export const LEGACY_DEFAULT_API_URL = 'https://api.vouched.run';
 
+// The API gets the GitHub token at registration and every signed request, so
+// it must be https. Plain http is allowed only to this machine, for a local
+// API during development.
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+export function isSecureApiUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return (
+    parsed.protocol === 'https:' ||
+    (parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(parsed.hostname))
+  );
+}
+
+export const INSECURE_API_URL =
+  'expected an https URL, or http only to localhost';
+
 export function upgradeApiUrl(url: string): string {
   return url.replace(/\/+$/, '') === LEGACY_DEFAULT_API_URL
     ? DEFAULT_API_URL
@@ -51,6 +72,7 @@ export const Config = z
     version: z.string().min(1),
     apiUrl: z
       .url({ protocol: /^https?$/ })
+      .refine(isSecureApiUrl, INSECURE_API_URL)
       .transform(upgradeApiUrl)
       .default(DEFAULT_API_URL),
     registeredAt: z.iso.datetime({ offset: true }),

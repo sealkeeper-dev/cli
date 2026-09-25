@@ -27,7 +27,7 @@ import { KEYS_MAX_AGE_MS } from '../seal.js';
 import type { SealDeps } from './seal.js';
 import { NO_SEAL } from './seal-show.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const WELL_KNOWN = `${API_URL}/.well-known/seal.json`;
 const KID = 'sealkeeper-test-1';
 const HOUR = 3600;

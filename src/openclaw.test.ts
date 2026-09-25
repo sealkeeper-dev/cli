@@ -417,7 +417,7 @@ describe('openclaw adapter', () => {
         operatorLogin: 'carelmeyer',
         name: 'bot',
         version: '1.0.0',
-        apiUrl: 'http://api.test',
+        apiUrl: 'https://api.test',
         registeredAt: '2026-09-23T08:00:00Z',
         autoSync: true,
       });

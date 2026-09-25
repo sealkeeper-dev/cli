@@ -49,7 +49,7 @@ const HOOK_COMMAND = hookCommand(
   '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
 );
 const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 
 type RunResult = { code: number; out: string; err: string };
 
@@ -144,7 +144,7 @@ function fakeFetch(world: World): typeof fetch {
       return Response.json(reply.body, { status: reply.status });
     }
     const agentRoute =
-      /^http:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
+      /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
     if (agentRoute && world.serverVersion !== undefined) {
       if (init.method === 'PATCH' && world.versionRefusal !== undefined) {
         const { status, code, retryAfter } = world.versionRefusal;
@@ -367,7 +367,7 @@ describe('sealkeeper init', () => {
   });
 
   it('--api-url wins over SEALKEEPER_API_URL', async () => {
-    vi.stubEnv('SEALKEEPER_API_URL', 'http://unreachable.test');
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://unreachable.test');
     const result = await run(world, 'init', '--api-url', API_URL);
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
@@ -472,10 +472,10 @@ describe('sealkeeper init', () => {
   });
 
   it('reports a network error on one line', async () => {
-    const result = await run(world, 'init', '--api-url', 'http://down.test');
+    const result = await run(world, 'init', '--api-url', 'https://down.test');
     expect(result.code).toBe(1);
     expect(result.err).toMatch(
-      /\ncould not reach the SealKeeper API at http:\/\/down\.test: fetch failed\n$/,
+      /\ncould not reach the SealKeeper API at https:\/\/down\.test: fetch failed\n$/,
     );
     expect(await readConfig(paths(home))).toBeNull();
   });

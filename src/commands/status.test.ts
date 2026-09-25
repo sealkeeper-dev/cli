@@ -21,7 +21,7 @@ import {
 } from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const LAST_SYNC = '2026-09-23T09:00:00.000Z';
 
 type RunResult = { code: number; out: string; err: string; ms: number };

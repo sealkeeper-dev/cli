@@ -21,7 +21,7 @@ import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 
 type RunResult = { code: number; out: string; err: string };
 type Call = { method: string; path: string; payload?: DeleteAgentRequest };

@@ -19,7 +19,7 @@ import { createProgram } from '../program.js';
 import { MAX_CLAIM_ATTEMPTS, NOTHING_AVAILABLE } from './tasks-pull.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const OTHER_AGENT = 'A'.repeat(43);
 
 type RunResult = { code: number; out: string; err: string };

@@ -15,7 +15,7 @@ import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { appendEvent, countPending } from './log.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 
 function toolCall() {
   return {
