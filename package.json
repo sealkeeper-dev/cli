@@ -39,9 +39,15 @@
     "./package.json": "./package.json"
   },
   "types": "./types/lib.d.ts",
+  "openclaw": {
+    "extensions": [
+      "./dist/openclaw.js"
+    ]
+  },
   "files": [
     "dist",
     "types",
+    "openclaw.plugin.json",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",

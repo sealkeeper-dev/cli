@@ -20,7 +20,9 @@ const pkg = JSON.parse(
 ) as {
   version: string;
   bin: Record<string, string>;
-  exports: Record<string, { types: string; import: string }>;
+  exports: Record<string, { types: string; default: string }>;
+  files: string[];
+  openclaw: { extensions: string[] };
 };
 
 // An import or require of the module, or of any path under it, in any of
@@ -202,6 +204,28 @@ describe('cli bundle', () => {
     expect(openclaw).toContain('kickBackgroundSync');
     expect(openclaw).toMatch(/export\s*\{[^}]*\bsealKeeperPlugin\b/);
     expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
+  });
+
+  it('ships an OpenClaw plugin package that matches the built entry', async () => {
+    // What openclaw plugins install npm:sealkeeper reads: the manifest at
+    // the package root and openclaw.extensions in package.json.
+    const manifest = JSON.parse(
+      readFileSync(join(packageDir, 'openclaw.plugin.json'), 'utf8'),
+    ) as Record<string, unknown>;
+    expect(pkg.files).toContain('openclaw.plugin.json');
+    expect(pkg.openclaw.extensions).toEqual([
+      pkg.exports['./openclaw']?.default,
+    ]);
+    const mod = (await import(
+      pathToFileURL(join(outDir, 'openclaw.js')).href
+    )) as typeof import('./openclaw.js');
+    expect(manifest).toMatchObject({
+      id: mod.default.id,
+      name: mod.default.name,
+      description: mod.default.description,
+      activation: { onStartup: true },
+      configSchema: { type: 'object', additionalProperties: false },
+    });
   });
 
   it('the built OpenClaw entry records a session, a tool call and usage', async () => {

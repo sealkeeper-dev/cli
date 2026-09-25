@@ -2,6 +2,7 @@
 
 ## 0.4.1, Unreleased
 
+- The package is an OpenClaw plugin itself. It ships `openclaw.plugin.json` and `openclaw.extensions`, so `openclaw plugins install npm:sealkeeper` installs it with no wrapper folder.
 - `sealkeeper --help` lists every command, `what-is-shared` and `adapter claude-code install` and `uninstall` included.
 - Project scope installs, `adapter claude-code install --scope project`, its `uninstall` and the hooks offer in `init`, refuse a `.claude`, `settings.json` or `commands` folder that resolves outside the project. A cloned repo could link them anywhere on the machine. User scope still writes through links, for settings kept in a dotfiles repo.
 - `check`, and `check` and `assertTrusted` in the Mastra adapter, verify the SEAL of a passing answer against the SealKeeper keys and make sure it is current, names the agent and comes with the handle asked about. Before, a pass was the API's `ok` alone. Otherwise the check fails with code `seal_invalid`, exit 2 for the CLI.
