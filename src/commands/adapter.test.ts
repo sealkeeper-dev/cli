@@ -411,6 +411,35 @@ describe('adapter claude-code', () => {
     });
   });
 
+  it('refuses a project .claude that links outside the project', async () => {
+    const elsewhere = join(root, 'elsewhere');
+    await mkdir(elsewhere);
+    await writeFile(join(elsewhere, 'settings.json'), OTHER_TEXT);
+    await symlink(elsewhere, join(project, '.claude'));
+    const { code, err } = await run('install', '--scope', 'project');
+    expect(code).toBe(1);
+    expect(err).toContain(`refusing to write ${projectFile()}`);
+    expect(err).toContain('outside the project');
+    expect(await readFile(join(elsewhere, 'settings.json'), 'utf8')).toBe(
+      OTHER_TEXT,
+    );
+    const uninstall = await run('uninstall', '--scope', 'project');
+    expect(uninstall.code).toBe(1);
+  });
+
+  it('allows a project .claude that links inside the project', async () => {
+    const inside = join(project, 'config', 'claude');
+    await mkdir(inside, { recursive: true });
+    await symlink(inside, join(project, '.claude'));
+    const { code } = await run('install', '--scope', 'project');
+    expect(code).toBe(0);
+    expect(
+      Object.keys(
+        (await readJson(join(inside, 'settings.json'))).hooks as object,
+      ),
+    ).toEqual(EVENTS);
+  });
+
   it('writes through a symlinked settings file', async () => {
     await mkdir(join(home, '.claude'));
     const real = join(root, 'dotfiles-settings.json');

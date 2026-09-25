@@ -2,6 +2,7 @@
 
 ## 0.4.1, Unreleased
 
+- Project scope installs, `adapter claude-code install --scope project`, its `uninstall` and the hooks offer in `init`, refuse a `.claude`, `settings.json` or `commands` folder that resolves outside the project. A cloned repo could link them anywhere on the machine. User scope still writes through links, for settings kept in a dotfiles repo.
 - `check`, and `check` and `assertTrusted` in the Mastra adapter, verify the SEAL of a passing answer against the SealKeeper keys and make sure it is current, names the agent and comes with the handle asked about. Before, a pass was the API's `ok` alone. Otherwise the check fails with code `seal_invalid`, exit 2 for the CLI.
 - The library entries, `emit` from `sealkeeper`, the Mastra adapter and the OpenClaw plugin, never write to the host's stderr. Warnings from the log, the key file and background sync printed there before, although the adapters promised to print nothing.
 - `require('sealkeeper')`, `sealkeeper/mastra` and `sealkeeper/openclaw` work from CommonJS on Node 22.12 and newer. The package exports were import only.

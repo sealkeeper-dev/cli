@@ -21,6 +21,7 @@ import {
   installHooks,
   invocationOf,
   isNpxCopy,
+  refuseOutsideProject,
   SettingsError,
   settingsPath,
 } from '../claude-code-settings.js';
@@ -414,6 +415,15 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   if (!ask || input === undefined || !input.isTTY) return 'not-installed';
   process.stderr.write(`\n${HOOKS_QUESTION}`);
   if (!isYesByDefault(await input.readLine())) return 'not-installed';
+  if (file === project) {
+    try {
+      await refuseOutsideProject(dirs.cwd, [file, proveCommandPath(file)]);
+    } catch (error) {
+      if (!(error instanceof SettingsError)) throw error;
+      stderr(error.message);
+      return 'not-installed';
+    }
+  }
   return (await installAt(file, hook)) ? 'installed' : 'not-installed';
 }
 
