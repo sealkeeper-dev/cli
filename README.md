@@ -71,7 +71,7 @@ Only signed events of eight types, with the fields below and nothing else. Every
 | `incident` | `kind`, `detail_hash` (optional) |
 | `usage` | `tokens_in`, `tokens_out`, `latency_ms` (optional), `model` (optional) |
 
-Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@sealkeeper/schema`, which rejects any field not listed here. `npx sealkeeper init` prints the same list with a line per field, and so does `npx sealkeeper what-is-shared`. The same table with real example lines is at https://sealkeeper.run/what-is-shared.
+Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@sealkeeper/schema`, which rejects any field not listed here. `npx sealkeeper what-is-shared` prints the same list with a line per field. `npx sealkeeper init` sums it up in three lines and points there. The same table with real example lines is at https://sealkeeper.run/what-is-shared.
 
 See exactly what would be sent before anything goes.
 
@@ -104,7 +104,7 @@ The format, the keys and how to verify a SEAL in any language are in the [SEAL s
 
 ## init
 
-`npx sealkeeper init` creates an Ed25519 keypair under `~/.sealkeeper`, signs you in with GitHub through the device flow, registers the agent with the SealKeeper API and writes `config.json`. It prints the agent id, the handle and the public profile URL. A name already in use by another of your agents prints `carelmeyer/claude-code is taken, try claude-code-2` and exits 1.
+`npx sealkeeper init` creates an Ed25519 keypair under `~/.sealkeeper`, signs you in with GitHub through the device flow, registers the agent with the SealKeeper API and writes `config.json`. It prints the handle and the public profile URL. `whoami` and `status` show the agent id. A name already in use by another of your agents prints `carelmeyer/claude-code is taken, try claude-code-2` and exits 1.
 
 The GitHub token is sent once, inside the signed registration, and is never written to disk or printed.
 
@@ -115,13 +115,55 @@ The GitHub token is sent once, inside the signed registration, and is never writ
 | `--api-url <url>` | `SEALKEEPER_API_URL`, then the existing config, then `https://api.sealkeeper.run` |
 | `--force` | regenerate the key and register again, keeping the old key as `key.<time>.bak` |
 
-After registering, `init` prints what leaves this machine (see above) on stderr and sends no events. Automatic sync starts off.
+A first run in a terminal, with Claude Code set up and the hooks installed, looks like this. In a terminal the version and the tagline sit in a gold box, with colour for the ticks, the links and the numbers. Piped, or with `NO_COLOR` set or `TERM=dumb`, it is the same text with no colour and no box.
 
-When Claude Code is set up here (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set), `init` asks `Install the Claude Code hooks now? [Y/n]`. Enter or `y` runs the same install as `npx sealkeeper adapter claude-code install`. `n` leaves the settings alone. Without a terminal, or with `--json`, it does not ask. Without Claude Code it says nothing about hooks. Hooks already in the project settings (`.claude/settings.json` in the current directory) count as installed, and older ones there are updated in place, so `init` never adds a second set to the user settings.
+```
 
-`init` ends with the next steps, running `npx sealkeeper prove` and `npx sealkeeper what-is-shared`, plus `npx sealkeeper adapter claude-code install` when the hooks are not installed. When `init` ran through `npx` and installed the hooks, it adds that they point at the npx copy and that `npm i -g sealkeeper` followed by `sealkeeper adapter claude-code install` gives a stable path. With `--json` they are in `nextSteps`.
+  ◉ SealKeeper v0.4.1
 
-Running `init` again without `--force` prints the current identity and changes nothing, with one exception it asks about first. When a person can answer and the version in `config.json` is not the one SealKeeper has, it asks `SealKeeper has this agent on version 1.0.0 and this machine on 2.0.0. Move SealKeeper to 2.0.0? [y/N]`. `y` moves it the way `npx sealkeeper agent version` does. Enter or anything else leaves it and prints the command to run later. Without a terminal, with `--json` or when the API cannot be reached it does not ask.
+  Prove your agent. A signed, portable track record
+  anyone can check offline.
+
+  By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.
+
+  Sign in with GitHub
+  Open https://github.com/login/device and enter ABCD-1234
+  ✓ Signed in as carelmeyer
+
+  ✓ Registered carelmeyer/claude-code
+    Profile  https://sealkeeper.run/agents/carelmeyer/claude-code
+
+  What leaves this machine
+  Tool names, durations, outcomes, session boundaries and token counts,
+  each signed with your key. Never prompts, tool inputs or outputs,
+  file contents or model output.
+  Full list  npx sealkeeper what-is-shared
+
+  Claude Code
+  The hooks record each session and tool call as above, into a local log.
+  Install them now? [Y/n]
+  ✓ Hooks in ~/.claude/settings.json
+  ✓ /sealkeeper-prove in ~/.claude/commands
+
+  Next
+  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
+  2  Review and send what was recorded   npx sealkeeper sync
+  3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.
+
+  Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
+```
+
+The welcome box, the terms, the sign in, what leaves this machine, the Claude Code heading and the questions go to stderr. The sign in and registration results, the hooks results and the next steps go to stdout. `init` sends no events. Automatic sync starts off.
+
+The Claude Code section appears only when Claude Code is set up here (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). Enter or `y` runs the same install as `npx sealkeeper adapter claude-code install`. `n` leaves the settings alone. Without a terminal, or with `--json`, it does not ask. Hooks already in the project settings (`.claude/settings.json` in the current directory) count as installed, and older ones there are updated in place, so `init` never adds a second set to the user settings.
+
+Without the hooks, the first next step is `npx sealkeeper prove`, and when Claude Code is here but the hooks are not in, a fourth step names `npx sealkeeper adapter claude-code install`.
+
+With `--force`, a line after the welcome box names the file that keeps the old key, such as `✓ The old key is kept at ~/.sealkeeper/key.<time>.bak`.
+
+With `--json`, stdout is one object with the identity and `nextSteps`, and stderr carries the consent line, the device flow lines and the full what leaves this machine list, all as before.
+
+Running `init` again without `--force` shows the welcome box, `✓ Already set up as carelmeyer/claude-code` with the profile link, and changes nothing, with one exception it asks about first. When a person can answer and the version in `config.json` is not the one SealKeeper has, it asks `SealKeeper has this agent on version 1.0.0 and this machine on 2.0.0. Move SealKeeper to 2.0.0? [y/N]`. `y` moves it the way `npx sealkeeper agent version` does. Enter or anything else leaves it and prints the command to run later. Without a terminal, with `--json` or when the API cannot be reached it does not ask. It then offers the hooks as a first run does and ends with the same next steps. With `--json` it prints the identity object, as `whoami --json` does.
 
 ## emit
 

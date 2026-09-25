@@ -1,5 +1,6 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
+import type { Styled } from './style.js';
 
 // Control characters other than tab and line feed, DEL, the C1 controls and
 // the bidi overrides. Text from the API or from other agents' tasks reaches
@@ -25,6 +26,23 @@ export function stdout(text: string): void {
 
 export function stderr(text: string): void {
   process.stderr.write(`${terminalSafe(text)}\n`);
+}
+
+// A line built by style.ts, written as it is. Every part of it went
+// through terminalSafe when it was built, so the only escape codes left are
+// the colours style.ts added. Styled can only be made by style.ts, so raw
+// text from the API cannot reach here. Only init uses these.
+export function stdoutStyled(line: Styled): void {
+  process.stdout.write(`${line.text}\n`);
+}
+
+export function stderrStyled(line: Styled): void {
+  process.stderr.write(`${line.text}\n`);
+}
+
+// A question on stderr, with no line feed so the answer is typed after it.
+export function promptStyled(question: Styled): void {
+  process.stderr.write(question.text);
 }
 
 // --json is declared on the root program and on every leaf command, so it

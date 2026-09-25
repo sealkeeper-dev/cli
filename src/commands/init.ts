@@ -1,6 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { rm, stat } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, sep } from 'node:path';
 import {
   AgentName,
   type RegisterAgentRequest,
@@ -51,9 +52,18 @@ import {
   signEnvelope,
 } from '../identity.js';
 import { cli } from '../invocation.js';
-import { stderr, stdout, wantsJson } from '../output.js';
+import {
+  promptStyled,
+  stderr,
+  stderrStyled,
+  stdout,
+  stdoutStyled,
+  wantsJson,
+} from '../output.js';
 import { refusal } from '../refusal.js';
+import { createStyle, indent, type Style, type Styled } from '../style.js';
 import { describeTaxonomy } from '../taxonomy.js';
+import { VERSION } from '../version.js';
 import {
   changeVersion,
   inheritLine,
@@ -62,17 +72,42 @@ import {
 import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
-export const ALREADY_INITIALISED = 'already initialised';
+// NOTHING_SENT and CONSENT are what a --json run prints on stderr, next to
+// the full taxonomy block. The human output says less, see below.
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
 export const CONSENT =
   'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
 export { DEFAULT_AGENT_VERSION } from '../config.js';
 
-export const HOOKS_QUESTION = 'Install the Claude Code hooks now? [Y/n] ';
+// The human output. The welcome box, then the terms, the sign in, the
+// registration, what leaves this machine, the Claude Code hooks and what to
+// do next.
+export const TAGLINE = [
+  'Prove your agent. A signed, portable track record',
+  'anyone can check offline.',
+];
+export const TERMS =
+  'By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.';
+export const SHARED_SUMMARY = [
+  'Tool names, durations, outcomes, session boundaries and token counts,',
+  'each signed with your key. Never prompts, tool inputs or outputs,',
+  'file contents or model output.',
+];
+export const HOOKS_INTRO =
+  'The hooks record each session and tool call as above, into a local log.';
+export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
+export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
+// What bronze asks for. The source is SCORING.levels.bronze in
+// apps/api/src/scoring/config.ts, and a test there fails when it moves, so
+// this copy is updated with it. @sealkeeper/schema carries no level
+// thresholds yet, so the CLI keeps the two it prints here, in one place.
+export const BRONZE = { verifiedTasks: 25, historyDays: 3 } as const;
+
 // Asked on a repeat init when the version on this machine is not the one
 // SealKeeper has. No is the default, since a new version starts a new record.
 export const versionQuestion = (server: string, local: string): string =>
   `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
+// The next steps a --json run lists in nextSteps.
 export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
@@ -175,6 +210,43 @@ export function register(
     });
 }
 
+// The two streams init writes to, each styled or not on its own, decided
+// once per run. null for a --json run, which prints what it always has.
+type Ui = { out: Style; err: Style };
+
+// One line of the human output, two spaces in, or an empty line. Only
+// Styled lines, so every part of them was escaped when it was built.
+const say = (line?: Styled) => stdoutStyled(indent(line));
+const note = (line?: Styled) => stderrStyled(indent(line));
+
+// A path under the home directory, as ~/rest.
+export function tildePath(path: string, home: string = homedir()): string {
+  if (home === '' || home === sep) return path;
+  if (path === home) return '~';
+  return path.startsWith(`${home}${sep}`)
+    ? `~${path.slice(home.length)}`
+    : path;
+}
+
+// The welcome box, on stderr with the terms and the sign in.
+function welcome(ui: Ui): void {
+  const s = ui.err;
+  note();
+  for (const text of s.box([
+    s.line`${s.gold('◉')} ${s.bold('SealKeeper')} ${s.dim(`v${VERSION}`)}`,
+    '',
+    ...TAGLINE,
+  ])) {
+    note(text);
+  }
+}
+
+// The profile URL is built from the handle in the config file, so it is
+// escaped like any other text from outside.
+function profileLine(s: Style, url: string): Styled {
+  return s.line`  ${s.dim('Profile')}  ${s.cyan(url)}`;
+}
+
 async function init(
   cmd: Command,
   options: InitOptions,
@@ -182,6 +254,12 @@ async function init(
 ): Promise<void> {
   const json = wantsJson(cmd);
   const p = paths();
+  const ui: Ui | null = json
+    ? null
+    : {
+        out: createStyle(process.stdout),
+        err: createStyle(process.stderr),
+      };
 
   // Without --force an existing config ends the command here. With --force it
   // is read only for its apiUrl, so a re-register goes to the same API. A
@@ -195,18 +273,21 @@ async function init(
   } else {
     const existing = await readConfig(p);
     if (existing !== null) {
-      if (!json) stdout(ALREADY_INITIALISED);
-      printIdentity(existing, json);
-      if (json) return;
-      await offerVersionMove(existing, deps);
-      // Registered already, but the hooks may be missing, the bare form an
-      // older version wrote, or pointing at a path that moved. Offer them the
-      // way a fresh init does, so npx sealkeeper init is always enough.
-      const hooks = await offerHooks(deps, true);
-      if (hooks === 'installed' || hooks === 'not-installed') {
-        stdout('');
-        for (const line of nextSteps(hooks, deps)) stdout(line);
+      if (ui === null) {
+        printIdentity(existing, true);
+        return;
       }
+      const s = ui.out;
+      welcome(ui);
+      say();
+      say(s.line`${s.tick()} Already set up as ${s.bold(handleOf(existing))}`);
+      say(profileLine(s, profileUrlOf(existing)));
+      await offerVersionMove(existing, deps, ui);
+      // Registered already, but the hooks may be missing or pointing at a
+      // path that moved. Offer them the way a fresh init does, so npx
+      // sealkeeper init is always enough.
+      const hooks = await offerHooks(deps, ui);
+      printNext(ui.out, hooks);
       return;
     }
   }
@@ -239,13 +320,16 @@ async function init(
 
   // With --force the old config describes the old key, so it goes as soon as
   // the new key exists. A failed registration then leaves a key and no
-  // config, and a plain init picks up from there.
+  // config, and a plain init picks up from there. The old key is kept in a
+  // backup file, named below.
   let agentId: string;
+  let backup: string | undefined;
   if (options.force) {
     const created = await createKey({ force: true }, p);
     agentId = created.agentId;
-    if (created.backup !== undefined) {
-      stderr(`the old key is kept at ${created.backup}`);
+    backup = created.backup;
+    if (backup !== undefined && ui === null) {
+      stderr(`the old key is kept at ${backup}`);
     }
     await rm(p.config, { force: true });
   } else {
@@ -253,11 +337,30 @@ async function init(
   }
 
   // On stderr with the device flow prompts, so --json output stays one object.
-  stderr(CONSENT);
+  let prompt: ((url: string, code: string) => void) | undefined;
+  if (ui === null) {
+    stderr(CONSENT);
+  } else {
+    const s = ui.err;
+    welcome(ui);
+    if (backup !== undefined) {
+      note();
+      note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
+    }
+    note();
+    note(s.dim(TERMS));
+    note();
+    note(s.bold('Sign in with GitHub'));
+    // The URL and the code come from GitHub, so the style functions escape
+    // them like any other text from outside.
+    prompt = (url, code) =>
+      note(s.line`Open ${s.cyan(url)} and enter ${s.bold(s.gold(code))}`);
+  }
   const githubToken = await deviceFlow({
     clientId,
     fetch: deps.fetch,
     sleep: deps.sleep,
+    prompt,
   });
 
   const request: RegisterAgentRequest = {
@@ -291,15 +394,8 @@ async function init(
 
   const handle = handleOf(config);
   const profileUrl = profileUrlOf(config);
-  // On stderr, so --json output stays one object.
-  const printShared = () => {
-    stderr('');
-    stderr(describeTaxonomy());
-    stderr('');
-    stderr(NOTHING_SENT);
-  };
-  if (json) {
-    const hooks = await offerHooks(deps, false);
+  if (ui === null) {
+    const hooks = await offerHooks(deps, null);
     stdout(
       JSON.stringify({
         agentId: config.agentId,
@@ -312,17 +408,59 @@ async function init(
         nextSteps: nextSteps(hooks, deps),
       }),
     );
-    printShared();
+    // On stderr, so --json output stays one object.
+    stderr('');
+    stderr(describeTaxonomy());
+    stderr('');
+    stderr(NOTHING_SENT);
     return;
   }
-  stdout(`registered agent ${config.agentId}`);
-  stdout(`operator ${config.operatorLogin}`);
-  stdout(`handle ${handle}`);
-  stdout(`profile ${profileUrl}`);
-  printShared();
-  const hooks = await offerHooks(deps, true);
-  stdout('');
-  for (const line of nextSteps(hooks, deps)) stdout(line);
+  // The login comes back with the registration, so the sign in is confirmed
+  // here, beside it.
+  const s = ui.out;
+  say(s.line`${s.tick()} Signed in as ${s.bold(config.operatorLogin)}`);
+  say();
+  say(s.line`${s.tick()} Registered ${s.bold(handle)}`);
+  say(profileLine(s, profileUrl));
+  printShared(ui.err);
+  const hooks = await offerHooks(deps, ui);
+  printNext(ui.out, hooks);
+}
+
+// A short account of what leaves this machine, on stderr where the full
+// taxonomy block used to be. what-is-shared prints the full list.
+function printShared(s: Style): void {
+  note();
+  note(s.bold('What leaves this machine'));
+  for (const text of SHARED_SUMMARY) note(s.line`${text}`);
+  note(s.line`${s.dim('Full list')}  ${cli('what-is-shared')}`);
+}
+
+// The numbered next steps and where the other adapters are documented.
+// With the hooks in, the first step is the slash command in Claude Code,
+// otherwise prove from the shell.
+function printNext(s: Style, hooks: HooksResult): void {
+  const hooksIn = hooks === 'installed' || hooks === 'present';
+  const steps = [
+    hooksIn
+      ? s.line`In Claude Code, run ${s.bold('/sealkeeper-prove')} to earn your first verified tasks`
+      : s.line`Earn your first verified tasks with ${s.bold(cli('prove'))}`,
+    s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
+    s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days. Your badge updates on its own.`,
+  ];
+  if (hooks === 'not-installed') {
+    steps.push(
+      s.line`Record your Claude Code sessions with ${s.dim(INSTALL_COMMAND)}`,
+    );
+  }
+  say();
+  say(s.bold('Next'));
+  steps.forEach((step, i) => {
+    say(s.line`${s.gold(i + 1)}  ${step}`);
+  });
+  say();
+  say(s.line`${s.dim('Mastra or OpenClaw')}  ${s.cyan(ADAPTERS_URL)}`);
+  say();
 }
 
 // Short, so a repeat init never hangs on a slow network for a question it
@@ -334,7 +472,11 @@ const VERSION_CHECK_TIMEOUT_MS = 10_000;
 // has, and offers to move SealKeeper to it. Nothing is asked without a
 // terminal, and an API that cannot be reached skips the question quietly,
 // since registration is already done.
-async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
+async function offerVersionMove(
+  config: Config,
+  deps: InitDeps,
+  ui: Ui,
+): Promise<void> {
   const input = deps.stdin?.();
   if (input === undefined || !input.isTTY) return;
   const api = createApiClient({
@@ -350,10 +492,13 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
     throw error;
   }
   if (server === config.version) return;
-  process.stderr.write(`\n${versionQuestion(server, config.version)}`);
+  const e = ui.err;
+  const o = ui.out;
+  // The server version comes from the API, so it is escaped with the rest.
+  promptStyled(e.line`\n${indent(versionQuestion(server, config.version))}`);
   if (!isYes(await input.readLine())) {
-    stdout(
-      `SealKeeper stays on ${server}. Run ${cli(`agent version ${config.version}`)} to move it later.`,
+    say(
+      o.line`SealKeeper stays on ${server}. Run ${cli(`agent version ${config.version}`)} to move it later.`,
     );
     return;
   }
@@ -373,13 +518,15 @@ async function offerVersionMove(config: Config, deps: InitDeps): Promise<void> {
       throw error;
     }
     const reason = error instanceof ApiError ? refusal(error) : error.message;
-    stderr(
-      `version not moved, ${reason}. Run ${cli(`agent version ${config.version}`)} to try again.`,
+    note(
+      e.line`version not moved, ${reason}. Run ${cli(`agent version ${config.version}`)} to try again.`,
     );
     return;
   }
-  stdout(`moved SealKeeper from version ${change.previous} to ${change.next}`);
-  stdout(inheritLine(change.previous, change.next));
+  say(
+    o.line`${o.tick()} moved SealKeeper from version ${change.previous} to ${change.next}`,
+  );
+  say(o.line`${inheritLine(change.previous, change.next)}`);
 }
 
 // What init did about the Claude Code hooks. none means there is no Claude
@@ -392,17 +539,28 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // sealkeeper adapter claude-code install, the /sealkeeper-prove command
 // included.
 // Hooks already there, in the user or the project settings, count as
-// installed and nothing is asked.
-async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
+// installed and nothing is asked. A --json run, ui null, never asks and
+// prints the install lines the way adapter claude-code install does.
+async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
+  if (ui !== null) {
+    note();
+    note(ui.err.bold('Claude Code'));
+    note(ui.err.line`${HOOKS_INTRO}`);
+  }
   const dirs = { home: '', cwd: (deps.cwd ?? process.cwd)(), claudeDir: dir };
   const user = settingsPath('user', dirs);
   const project = settingsPath('project', dirs);
   const hook = (deps.hookCommand ?? hookCommand)();
   // Only hooks that run this very command count. A path that moved is
   // offered the install again, which rewrites our entries in place.
-  if ((await hasHooks(user, hook)) || (await hasHooks(project, hook))) {
+  const inUser = await hasHooks(user, hook);
+  if (inUser || (await hasHooks(project, hook))) {
+    if (ui !== null) {
+      const s = ui.out;
+      say(s.line`${s.tick()} Hooks in ${tildePath(inUser ? user : project)}`);
+    }
     return 'present';
   }
   // Hooks of ours in the project settings, with an older path, are
@@ -411,24 +569,40 @@ async function offerHooks(deps: InitDeps, ask: boolean): Promise<HooksResult> {
   const file = (await hasHooks(project)) ? project : user;
 
   const input = deps.stdin?.();
-  if (!ask || input === undefined || !input.isTTY) return 'not-installed';
-  process.stderr.write(`\n${HOOKS_QUESTION}`);
+  if (ui === null || input === undefined || !input.isTTY) {
+    return 'not-installed';
+  }
+  const e = ui.err;
+  const [question = ''] = HOOKS_QUESTION.split(' [Y/n]');
+  promptStyled(indent(e.line`${question} ${e.dim('[Y/n]')} `));
   if (!isYesByDefault(await input.readLine())) return 'not-installed';
-  return (await installAt(file, hook)) ? 'installed' : 'not-installed';
+  return (await installAt(file, hook, ui)) ? 'installed' : 'not-installed';
 }
 
 // The same install as sealkeeper adapter claude-code install into one
 // settings file, the hooks and then the /sealkeeper-prove command. false
-// when the settings file could not be changed.
-async function installAt(file: string, hook: string): Promise<boolean> {
+// when the settings file could not be changed. A --json run, ui null,
+// prints the lines adapter claude-code install prints.
+async function installAt(
+  file: string,
+  hook: string,
+  ui: Ui | null,
+): Promise<boolean> {
+  const warn = (message: string) =>
+    ui === null ? stderr(message) : note(ui.err.line`${message}`);
   try {
     const result = await installHooks(file, hook);
-    for (const line of hooksLines(result, file)) stdout(line);
+    if (ui === null) {
+      for (const text of hooksLines(result, file)) stdout(text);
+    } else {
+      const s = ui.out;
+      say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
+    }
   } catch (error) {
     // Registration already worked, so a settings file we will not touch
     // only means the hooks wait for a later install.
     if (error instanceof SettingsError) {
-      stderr(error.message);
+      warn(error.message);
       return false;
     }
     throw error;
@@ -436,11 +610,20 @@ async function installAt(file: string, hook: string): Promise<boolean> {
   const commandPath = proveCommandPath(file);
   try {
     const command = await installProveCommand(commandPath, invocationOf(hook));
-    stdout(commandLine(command, commandPath));
+    if (ui === null) {
+      stdout(commandLine(command, commandPath));
+    } else {
+      const s = ui.out;
+      say(
+        command === 'kept'
+          ? s.line`Left ${tildePath(commandPath)} alone, SealKeeper did not write it`
+          : s.line`${s.tick()} /sealkeeper-prove in ${tildePath(dirname(commandPath))}`,
+      );
+    }
   } catch (error) {
     // The hooks are in, so this is only a warning.
     if (!(error instanceof SettingsError)) throw error;
-    stderr(error.message);
+    warn(error.message);
   }
   return true;
 }
@@ -460,8 +643,9 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-// The hooks this run wrote point at the running script, which under npx
-// lives in a cache that can be cleared, so that gets a line of its own.
+// The nextSteps of a --json run. The hooks this run wrote point at the
+// running script, which under npx lives in a cache that can be cleared, so
+// that gets a line of its own.
 function nextSteps(hooks: HooksResult, deps: InitDeps): string[] {
   const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED];
   if (hooks === 'not-installed') steps.push(NEXT_HOOKS);

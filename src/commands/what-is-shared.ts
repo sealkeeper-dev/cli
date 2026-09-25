@@ -3,8 +3,8 @@ import type { Command } from 'commander';
 import { stdout } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
-// Prints the What leaves this machine block that init ends with, so it can
-// be read again at any time. Hidden from help, named in the README.
+// Prints the full What leaves this machine block. init prints a short
+// version and points here. Hidden from help, named in the README.
 export function register(parent: Command): Command {
   return parent
     .command('what-is-shared', { hidden: true })

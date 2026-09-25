@@ -50,6 +50,9 @@ export type DeviceFlowOptions = {
   fetch?: typeof fetch;
   sleep?: Sleep;
   out?: (line: string) => void;
+  // Shows the URL and the code. Without it the two plain lines below go to
+  // out, which is what --json runs print.
+  prompt?: (url: string, code: string) => void;
 };
 
 const DeviceCodeResponse = z.object({
@@ -114,8 +117,12 @@ export async function deviceFlow(options: DeviceFlowOptions): Promise<string> {
   }
   const { device_code, user_code, verification_uri, expires_in } = code.data;
 
-  out(`Open ${verification_uri}`);
-  out(`Enter code ${user_code}`);
+  if (options.prompt) {
+    options.prompt(verification_uri, user_code);
+  } else {
+    out(`Open ${verification_uri}`);
+    out(`Enter code ${user_code}`);
+  }
 
   let intervalSeconds = code.data.interval;
   let waitedSeconds = 0;

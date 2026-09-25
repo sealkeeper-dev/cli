@@ -8,7 +8,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
@@ -29,10 +29,15 @@ import {
 } from '../github-device.js';
 import { loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
+import { stripStyle } from '../style.js';
 import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
+import { VERSION } from '../version.js';
+import { INSTALL_COMMAND } from './adapter.js';
 import {
-  ALREADY_INITIALISED,
+  ADAPTERS_URL,
+  BRONZE,
   CONSENT,
+  HOOKS_INTRO,
   HOOKS_QUESTION,
   isYesByDefault,
   NEXT_HOOKS,
@@ -40,6 +45,10 @@ import {
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
   NOTHING_SENT,
+  SHARED_SUMMARY,
+  TAGLINE,
+  TERMS,
+  tildePath,
   versionQuestion,
 } from './init.js';
 
@@ -54,7 +63,9 @@ const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
 const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
 const API_URL = 'https://api.test';
 
-type RunResult = { code: number; out: string; err: string };
+// all is stdout and stderr in the order they were written, as a terminal
+// shows them.
+type RunResult = { code: number; out: string; err: string; all: string };
 
 type ApiReply = { status: number; body: unknown };
 
@@ -76,6 +87,8 @@ type World = {
   versionChanges: Record<string, unknown>[];
   // When set, a PATCH gets this refusal and nothing moves.
   versionRefusal?: { status: number; code: string; retryAfter?: string };
+  // The user code GitHub sends. ABCD-1234 when not set.
+  userCode?: string;
 };
 
 // A terminal, or a pipe when isTTY is false, that answers with the given
@@ -126,7 +139,7 @@ function fakeFetch(world: World): typeof fetch {
     if (url === DEVICE_CODE_URL) {
       return Response.json({
         device_code: 'dev-123',
-        user_code: 'ABCD-1234',
+        user_code: world.userCode ?? 'ABCD-1234',
         verification_uri: 'https://github.com/login/device',
         expires_in: 900,
         interval: 5,
@@ -198,20 +211,23 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
   throwOnExit(program);
   let out = '';
   let err = '';
+  let all = '';
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
     out += String(chunk);
+    all += String(chunk);
     return true;
   });
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
     err += String(chunk);
+    all += String(chunk);
     return true;
   });
   try {
     await program.parseAsync(args, { from: 'user' });
-    return { code: 0, out, err };
+    return { code: 0, out, err, all };
   } catch (error) {
     if (error instanceof CommanderError)
-      return { code: error.exitCode, out, err };
+      return { code: error.exitCode, out, err, all };
     throw error;
   } finally {
     vi.mocked(process.stdout.write).mockRestore();
@@ -259,6 +275,9 @@ describe('sealkeeper init', () => {
     vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     // Never the real ~/.claude. Tests that want Claude Code create it.
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
+    // The plain form unless a test asks for styling.
+    vi.stubEnv('FORCE_COLOR', '');
+    vi.stubEnv('NO_COLOR', '');
     world = newWorld();
   });
 
@@ -277,18 +296,25 @@ describe('sealkeeper init', () => {
 
     expect(result.out).toBe(
       [
-        `registered agent ${agentId}`,
-        'operator carelmeyer',
-        'handle carelmeyer/scout',
-        'profile https://sealkeeper.run/agents/carelmeyer/scout',
+        '  ✓ Signed in as carelmeyer',
         '',
-        NEXT_PROVE,
-        NEXT_WHAT_IS_SHARED,
+        '  ✓ Registered carelmeyer/scout',
+        '    Profile  https://sealkeeper.run/agents/carelmeyer/scout',
+        '',
+        '  Next',
+        '  1  Earn your first verified tasks with npx sealkeeper prove',
+        '  2  Review and send what was recorded   npx sealkeeper sync',
+        '  3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.',
+        '',
+        '  Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters',
+        '',
         '',
       ].join('\n'),
     );
-    expect(result.err).toContain('Open https://github.com/login/device');
-    expect(result.err).toContain('Enter code ABCD-1234');
+    expect(result.out).not.toContain(agentId);
+    expect(result.err).toContain(
+      '  Open https://github.com/login/device and enter ABCD-1234\n',
+    );
     expect(world.sleeps).toEqual([5000, 5000]);
 
     expect(world.registrations).toEqual([
@@ -314,41 +340,61 @@ describe('sealkeeper init', () => {
   it('names the terms and the privacy policy on stderr before the device flow', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
-    expect(CONSENT).toBe(
-      'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.',
+    expect(TERMS).toBe(
+      'By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.',
     );
     const lines = result.err.split('\n');
-    const consent = lines.indexOf(CONSENT);
+    const consent = lines.indexOf(`  ${TERMS}`);
     const device = lines.findIndex((l) =>
       l.includes('Open https://github.com/login/device'),
     );
     expect(consent).toBeGreaterThanOrEqual(0);
     expect(device).toBeGreaterThan(consent);
-    expect(result.out).not.toContain(CONSENT);
+    expect(result.out).not.toContain(TERMS);
+    expect(result.err).not.toContain(CONSENT);
   });
 
   it('with --json keeps the consent line off stdout', async () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
+    expect(CONSENT).toBe(
+      'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.',
+    );
     expect(result.err).toContain(CONSENT);
   });
 
-  it('ends with what leaves this machine on stderr and sends no events', async () => {
+  it('says in short what leaves this machine on stderr and sends no events', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
-    expect(result.err).toContain('What leaves this machine');
+    expect(result.err).toContain(
+      [
+        '  What leaves this machine',
+        ...SHARED_SUMMARY.map((l) => `  ${l}`),
+        '  Full list  npx sealkeeper what-is-shared',
+      ].join('\n'),
+    );
+    // The full block is for what-is-shared now.
+    expect(result.err).not.toContain(describeTaxonomy());
+    expect(result.err).not.toContain(NOTHING_SENT);
+    expect(result.out).not.toContain('What leaves');
+    expect(world.fetchUrls.filter((u) => u.endsWith('/v1/events'))).toEqual([]);
+  });
+
+  it('with --json still prints the full block on stderr, as before', async () => {
+    const result = await run(world, 'init', '--name', 'scout', '--json');
+    expect(result.code).toBe(0);
     for (const type of EventType.options) {
       expect(result.err).toMatch(
         new RegExp(`^${type.replace('.', '\\.')}$`, 'm'),
       );
     }
-    expect(result.err).toContain(NEVER_LEAVES);
     expect(
       result.err.endsWith(`${describeTaxonomy()}\n\n${NOTHING_SENT}\n`),
     ).toBe(true);
-    expect(result.out).not.toContain('What leaves');
-    expect(world.fetchUrls.filter((u) => u.endsWith('/v1/events'))).toEqual([]);
+    expect(result.err).toContain('Open https://github.com/login/device\n');
+    expect(result.err).toContain('Enter code ABCD-1234\n');
+    expect(result.err).not.toContain('SealKeeper v');
   });
 
   it('with --json keeps stdout one object and still prints the block on stderr', async () => {
@@ -471,7 +517,7 @@ describe('sealkeeper init', () => {
     const result = await run(world, 'init').finally(() => cwd.mockRestore());
     expect(result.code).toBe(0);
     expect(world.registrations[0]?.name).toBe('my-project-v2');
-    expect(result.out).toContain('handle carelmeyer/my-project-v2');
+    expect(result.out).toContain('Registered carelmeyer/my-project-v2');
   });
 
   it('reports a network error on one line', async () => {
@@ -493,7 +539,7 @@ describe('sealkeeper init', () => {
     expect(await readFile(paths(home).key, 'utf8')).toBe(first);
   });
 
-  it('a second init without --force says already initialised and leaves the key', async () => {
+  it('a second init without --force says already set up and leaves the key', async () => {
     expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     const keyBefore = await readFile(paths(home).key, 'utf8');
     const keyStat = await stat(paths(home).key);
@@ -501,10 +547,12 @@ describe('sealkeeper init', () => {
     world = newWorld();
     const result = await run(world, 'init');
     expect(result.code).toBe(0);
-    expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
-    expect(result.err).not.toContain(CONSENT);
-    expect(result.out).toContain('operatorLogin  carelmeyer');
-    expect(result.out).toContain('name           scout');
+    expect(result.out).toContain('  ✓ Already set up as carelmeyer/scout\n');
+    expect(result.out).toContain(
+      '    Profile  https://sealkeeper.run/agents/carelmeyer/scout\n',
+    );
+    expect(result.err).not.toContain(TERMS);
+    expect(result.out).not.toContain('operatorLogin');
     expect(world.fetchUrls).toEqual([]);
     expect(await readFile(paths(home).key, 'utf8')).toBe(keyBefore);
     expect((await stat(paths(home).key)).mtimeMs).toBe(keyStat.mtimeMs);
@@ -521,7 +569,19 @@ describe('sealkeeper init', () => {
     expect(after?.agentId).not.toBe(before?.agentId);
     expect(world.registrations[0]?.publicKey).toBe(after?.agentId);
     expect((await readConfig(paths(home)))?.agentId).toBe(after?.agentId);
-    expect(result.out).toContain(`registered agent ${after?.agentId}`);
+    expect(result.out).toContain('Registered carelmeyer/');
+    expect(result.err).toMatch(
+      /\n {2}✓ The old key is kept at .*key\.[^\n]*\.bak\n/,
+    );
+  });
+
+  it('--force with --json names the kept key on stderr as before', async () => {
+    expect((await run(world, 'init')).code).toBe(0);
+    world = newWorld();
+    const result = await run(world, 'init', '--force', '--json');
+    expect(result.code).toBe(0);
+    expect(result.err).toMatch(/^the old key is kept at .*\.bak$/m);
+    expect(JSON.parse(result.out)).toMatchObject({ name: expect.any(String) });
   });
 
   it('--force re-registers against the API URL in the existing config', async () => {
@@ -654,7 +714,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
-      expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
+      expect(result.out).toContain('Already set up as carelmeyer/scout');
     });
   });
 
@@ -692,11 +752,12 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect((world.stdin as Input & { reads: number }).reads).toBe(0);
-      expect(result.out).not.toContain('hook');
+      expect(result.all).not.toContain('hook');
+      expect(result.all).not.toContain('Claude Code');
       expect(result.err).not.toContain(HOOKS_QUESTION);
-      expect(
-        result.out.endsWith(`${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n`),
-      ).toBe(true);
+      expect(result.out).toContain(
+        '  1  Earn your first verified tasks with npx sealkeeper prove\n',
+      );
     });
 
     it('honours CLAUDE_CONFIG_DIR when looking for Claude Code', async () => {
@@ -704,7 +765,10 @@ describe('sealkeeper init', () => {
       await mkdir(join(home, 'elsewhere'));
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(result.out).toContain(NEXT_HOOKS);
+      expect(result.err).toContain(`  Claude Code\n  ${HOOKS_INTRO}\n`);
+      expect(result.out).toContain(
+        `  4  Record your Claude Code sessions with ${INSTALL_COMMAND}\n`,
+      );
     });
 
     it('offers the hooks again on a repeat init when a hook has a stale path', async () => {
@@ -725,11 +789,13 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
-      expect(result.out.split('\n')[0]).toBe(ALREADY_INITIALISED);
+      expect(result.out).toContain('Already set up as carelmeyer/scout');
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(HOOKS_QUESTION);
-      expect(result.out).toContain('updated sealkeeper hooks for Stop');
-      expect(result.out).toContain(NEXT_PROVE);
+      expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
+      expect(result.out).toContain(
+        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks\n',
+      );
       const after = await readFile(settingsFile(), 'utf8');
       expect(after).not.toContain(STALE_SCRIPT);
       expect(after).toContain('hook claude-code');
@@ -755,7 +821,8 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
       expect(result.err).not.toContain(HOOKS_QUESTION);
-      expect(result.out).not.toContain(NEXT_HOOKS);
+      expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
+      expect(result.out).not.toContain(INSTALL_COMMAND);
       // No second set in the user settings.
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
@@ -781,7 +848,7 @@ describe('sealkeeper init', () => {
       world.stdin = answering('');
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(result.out).toContain('updated sealkeeper hooks for Stop');
+      expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       const after = await readFile(projectFile, 'utf8');
       expect(after).not.toContain(STALE_SCRIPT);
       expect(after).toContain(JSON.stringify(HOOK_COMMAND).slice(1, -1));
@@ -808,13 +875,11 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(1);
       expect(result.err).toContain(HOOKS_QUESTION);
+      expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
+      expect(result.out).not.toContain(INSTALL_COMMAND);
       expect(result.out).toContain(
-        `added sealkeeper hooks for SessionStart, SessionEnd, PreToolUse, PostToolUse, Stop to ${settingsFile()}`,
+        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks\n',
       );
-      expect(result.out).not.toContain(NEXT_HOOKS);
-      expect(
-        result.out.endsWith(`\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n`),
-      ).toBe(true);
       const after = await readFile(settingsFile(), 'utf8');
       expect(hooksIn(after)).toEqual([
         'Stop',
@@ -826,12 +891,12 @@ describe('sealkeeper init', () => {
       expect(after).toContain('other-tool stop');
       const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
       expect(result.out).toContain(
-        `added the /sealkeeper-prove command at ${command}`,
+        `  ✓ /sealkeeper-prove in ${dirname(command)}\n`,
       );
       expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
     });
 
-    it('says the hooks point at the npx copy when run through npx', async () => {
+    it('no longer recommends a global install when run through npx', async () => {
       await withClaudeCode();
       world.stdin = answering('');
       world.npx = true;
@@ -840,11 +905,8 @@ describe('sealkeeper init', () => {
       expect(NEXT_NPX).toBe(
         'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.',
       );
-      expect(
-        result.out.endsWith(
-          `\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n${NEXT_NPX}\n`,
-        ),
-      ).toBe(true);
+      expect(result.all).not.toContain(NEXT_NPX);
+      expect(result.all).not.toContain('npm i -g');
     });
 
     it('says nothing about npx when the hooks were already there', async () => {
@@ -863,11 +925,15 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(result.err).toContain(HOOKS_QUESTION);
-      expect(
-        result.out.endsWith(
-          `\n\n${NEXT_PROVE}\n${NEXT_WHAT_IS_SHARED}\n${NEXT_HOOKS}\n`,
-        ),
-      ).toBe(true);
+      expect(result.out).toContain(
+        [
+          '  1  Earn your first verified tasks with npx sealkeeper prove',
+          '  2  Review and send what was recorded   npx sealkeeper sync',
+          `  3  Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days. Your badge updates on its own.`,
+          '  4  Record your Claude Code sessions with npx sealkeeper adapter claude-code install',
+        ].join('\n'),
+      );
+      expect(result.out).not.toContain('✓ Hooks');
       expect(NEXT_HOOKS).toBe(
         'Run npx sealkeeper adapter claude-code install to record your Claude Code sessions',
       );
@@ -887,7 +953,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
       expect(result.err).not.toContain(HOOKS_QUESTION);
-      expect(result.out).toContain(NEXT_HOOKS);
+      expect(result.out).toContain(INSTALL_COMMAND);
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
@@ -924,7 +990,8 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
-      expect(result.out).not.toContain(NEXT_HOOKS);
+      expect(result.out).not.toContain(INSTALL_COMMAND);
+      expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
     });
 
     it('refuses a settings file that is not JSON, names it and still registers', async () => {
@@ -935,7 +1002,7 @@ describe('sealkeeper init', () => {
       expect(result.err).toContain(
         `${settingsFile()} is not valid JSON, left it unchanged`,
       );
-      expect(result.out).toContain(NEXT_HOOKS);
+      expect(result.out).toContain(INSTALL_COMMAND);
       expect(await readFile(settingsFile(), 'utf8')).toBe('{ "hooks": ');
       expect(await readConfig(paths(home))).not.toBeNull();
     });
@@ -947,6 +1014,242 @@ describe('sealkeeper init', () => {
       for (const no of ['n', 'N', 'no', 'nope', 'x', null]) {
         expect(isYesByDefault(no), String(no)).toBe(false);
       }
+    });
+  });
+
+  describe('layout', () => {
+    const claudeDir = () => join(home, 'claude');
+
+    // The transcript with the temp home and the CLI version made stable.
+    function normalised(text: string): string {
+      return text.replaceAll(home, '<home>').replaceAll(VERSION, '<version>');
+    }
+
+    async function withClaudeCode(): Promise<void> {
+      await mkdir(claudeDir(), { recursive: true });
+      await writeFile(join(claudeDir(), 'settings.json'), '{}\n');
+    }
+
+    it('prints a first run with the hooks installed in plain form', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      // The answer to the question is typed by the person, so in a terminal
+      // the line ends there. The fake input echoes nothing.
+      expect(normalised(result.all)).toMatchInlineSnapshot(`
+        "
+          ◉ SealKeeper v<version>
+
+          Prove your agent. A signed, portable track record
+          anyone can check offline.
+
+          By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.
+
+          Sign in with GitHub
+          Open https://github.com/login/device and enter ABCD-1234
+          ✓ Signed in as carelmeyer
+
+          ✓ Registered carelmeyer/scout
+            Profile  https://sealkeeper.run/agents/carelmeyer/scout
+
+          What leaves this machine
+          Tool names, durations, outcomes, session boundaries and token counts,
+          each signed with your key. Never prompts, tool inputs or outputs,
+          file contents or model output.
+          Full list  npx sealkeeper what-is-shared
+
+          Claude Code
+          The hooks record each session and tool call as above, into a local log.
+          Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
+          ✓ /sealkeeper-prove in <home>/claude/commands
+
+          Next
+          1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
+          2  Review and send what was recorded   npx sealkeeper sync
+          3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.
+
+          Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
+
+        "
+      `);
+      expect(result.all).not.toContain(String.fromCharCode(27));
+      expect(result.all).not.toContain('╭');
+    });
+
+    it('prints a repeat run in plain form', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      world = newWorld();
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(normalised(result.all)).toMatchInlineSnapshot(`
+        "
+          ◉ SealKeeper v<version>
+
+          Prove your agent. A signed, portable track record
+          anyone can check offline.
+
+          ✓ Already set up as carelmeyer/scout
+            Profile  https://sealkeeper.run/agents/carelmeyer/scout
+
+          Claude Code
+          The hooks record each session and tool call as above, into a local log.
+          ✓ Hooks in <home>/claude/settings.json
+
+          Next
+          1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
+          2  Review and send what was recorded   npx sealkeeper sync
+          3  Bronze needs 25 verified tasks over 3 days. Your badge updates on its own.
+
+          Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
+
+        "
+      `);
+    });
+
+    it('prints the welcome box and colours with FORCE_COLOR', async () => {
+      vi.stubEnv('FORCE_COLOR', '1');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(String.fromCharCode(27));
+      expect(result.err).toContain('╭');
+      expect(result.err).toContain('╯');
+      expect(result.err).toContain(`v${VERSION}`);
+      const plain = stripStyle(result.all);
+      expect(plain).toContain(`│ ◉ SealKeeper v${VERSION}`);
+      for (const text of TAGLINE) expect(plain).toContain(`│ ${text}`);
+      expect(plain).toContain(
+        '  Open https://github.com/login/device and enter ABCD-1234',
+      );
+      expect(plain).toContain(`  Mastra or OpenClaw  ${ADAPTERS_URL}`);
+    });
+
+    it('with FORCE_COLOR and --json prints no escape codes and no box', async () => {
+      vi.stubEnv('FORCE_COLOR', '1');
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(result.all).not.toContain(String.fromCharCode(27));
+      expect(result.all).not.toContain('SealKeeper v');
+      expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
+    });
+
+    it('prints a Claude Code section only when the config folder exists', async () => {
+      const without = await run(world, 'init', '--name', 'scout');
+      expect(without.err).not.toContain('Claude Code');
+      await rm(paths(home).config, { force: true });
+      await withClaudeCode();
+      world = newWorld();
+      world.stdin = answering('n');
+      const withDir = await run(world, 'init', '--name', 'scout');
+      expect(withDir.err).toContain(
+        `\n  Claude Code\n  ${HOOKS_INTRO}\n  ${HOOKS_QUESTION}`,
+      );
+    });
+
+    it('starts Next with the slash command only when the hooks are in', async () => {
+      const first = (text: string) =>
+        text.split('\n').find((l) => l.startsWith('  1  '));
+      await withClaudeCode();
+      world.stdin = answering('n');
+      const declined = await run(world, 'init', '--name', 'scout');
+      expect(first(declined.out)).toBe(
+        '  1  Earn your first verified tasks with npx sealkeeper prove',
+      );
+      world = newWorld();
+      world.stdin = answering('y');
+      const installed = await run(world, 'init');
+      expect(first(installed.out)).toBe(
+        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+      );
+      expect(installed.out).not.toContain(INSTALL_COMMAND);
+    });
+
+    describe('untrusted text', () => {
+      const ESC = String.fromCharCode(27);
+      // A login with a colour code, an OSC 52 clipboard write and a bidi
+      // override, as a hostile API could send it, and a device code with
+      // a cursor move, as a hostile GitHub stand in could.
+      const LOGIN = `evil${ESC}[31m${ESC}]52;c;aGk=\u0007\u202eyx`;
+      const LOGIN_SHOWN = 'evil\\u001b[31m\\u001b]52;c;aGk=\\u0007\\u202eyx';
+      const CODE = `AB${ESC}[2J12`;
+      const CODE_SHOWN = 'AB\\u001b[2J12';
+
+      function hostile(): void {
+        world.userCode = CODE;
+        world.api = (payload) => {
+          const reply = created(payload);
+          return {
+            ...reply,
+            body: {
+              ...(reply.body as Record<string, unknown>),
+              operator: { login: LOGIN },
+            },
+          };
+        };
+      }
+
+      // Every ESC written is the start of one of our colour codes.
+      function onlyOurCodes(text: string): void {
+        const escs = text.split(ESC).length - 1;
+        const codes = text.match(new RegExp(`${ESC}\\[[0-9;]*m`, 'g')) ?? [];
+        expect(escs).toBe(codes.length);
+        expect(text).not.toContain('\u202e');
+        expect(text).not.toContain('\u0007');
+      }
+
+      it('escapes a hostile login and device code in plain form', async () => {
+        hostile();
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(result.all).not.toContain(ESC);
+        expect(result.out).toContain(`  ✓ Signed in as ${LOGIN_SHOWN}\n`);
+        expect(result.out).toContain(`  ✓ Registered ${LOGIN_SHOWN}/scout\n`);
+        expect(result.err).toContain(`and enter ${CODE_SHOWN}\n`);
+        onlyOurCodes(result.all);
+      });
+
+      it('escapes a hostile login and device code inside styled lines', async () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        hostile();
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(result.all).toContain(`${ESC}[1m${LOGIN_SHOWN}${ESC}[22m`);
+        expect(stripStyle(result.out)).toContain(
+          `  ✓ Signed in as ${LOGIN_SHOWN}\n`,
+        );
+        expect(stripStyle(result.err)).toContain(`and enter ${CODE_SHOWN}\n`);
+        onlyOurCodes(result.all);
+      });
+
+      it('escapes a hostile login from the config file on a repeat run', async () => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+        const config = await readConfig(paths(home));
+        if (config === null) throw new Error('no config');
+        await writeConfig({ ...config, operatorLogin: LOGIN }, paths(home));
+        world = newWorld();
+        const result = await run(world, 'init');
+        expect(result.code).toBe(0);
+        expect(stripStyle(result.out)).toContain(
+          `  ✓ Already set up as ${LOGIN_SHOWN}/scout\n`,
+        );
+        expect(stripStyle(result.out)).toContain(
+          `https://sealkeeper.run/agents/${LOGIN_SHOWN}`,
+        );
+        onlyOurCodes(result.all);
+      });
+    });
+
+    it('prints paths under the home directory with a tilde', () => {
+      expect(tildePath('/Users/c/.claude/settings.json', '/Users/c')).toBe(
+        '~/.claude/settings.json',
+      );
+      expect(tildePath('/Users/c', '/Users/c')).toBe('~');
+      expect(tildePath('/Users/cx/a', '/Users/c')).toBe('/Users/cx/a');
+      expect(tildePath('/tmp/a', '')).toBe('/tmp/a');
     });
   });
 });
