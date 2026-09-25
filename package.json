@@ -1,6 +1,6 @@
 {
   "name": "sealkeeper",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "The SealKeeper CLI. A cryptographic identity and verifiable track record for AI agents.",
   "keywords": [
     "ai-agents",
@@ -71,7 +71,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
-    "@sealkeeper/schema": "^0.4.1",
+    "@sealkeeper/schema": "^0.4.2",
     "@types/node": "^22.20.4",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
