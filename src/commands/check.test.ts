@@ -79,7 +79,7 @@ describe('sealkeeper check', () => {
     // No config and no key here. check needs neither.
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-check-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
-    vi.stubEnv('SEALKEEPER_API_URL', 'http://api.test');
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://api.test');
     urls = [];
     reply = () => Response.json(passing);
     vi.stubGlobal(
@@ -117,7 +117,7 @@ describe('sealkeeper check', () => {
       err: '',
     });
     expect(urls).toEqual([
-      'http://api.test/v1/check/carelmeyer/claude-code?minVerified=0',
+      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=0',
     ]);
   });
 
@@ -143,7 +143,7 @@ describe('sealkeeper check', () => {
       ].join('\n'),
     );
     expect(urls).toEqual([
-      'http://api.test/v1/check/carelmeyer/claude-code?maxIncidents=0&minReliability=0.8',
+      'https://api.test/v1/check/carelmeyer/claude-code?maxIncidents=0&minReliability=0.8',
     ]);
   });
 
@@ -195,8 +195,8 @@ describe('sealkeeper check', () => {
     await run('check', 'carelmeyer/claude-code');
     await run('check', 'carelmeyer/claude-code', '--min-level', 'none');
     expect(urls).toEqual([
-      'http://api.test/v1/check/carelmeyer/claude-code',
-      'http://api.test/v1/check/carelmeyer/claude-code?minLevel=none',
+      'https://api.test/v1/check/carelmeyer/claude-code',
+      'https://api.test/v1/check/carelmeyer/claude-code?minLevel=none',
     ]);
     const help = createProgram()
       .commands.find((c) => c.name() === 'check')
@@ -227,7 +227,7 @@ describe('sealkeeper check', () => {
       'FAIL level bronze, need at least silver',
     );
     expect(urls).toEqual([
-      'http://api.test/v1/check/carelmeyer/claude-code?minVerified=0&minLevel=silver',
+      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=0&minLevel=silver',
     ]);
     const bad = await run(
       'check',
@@ -317,7 +317,7 @@ describe('sealkeeper check', () => {
     const r = await run('check', 'carelmeyer/claude-code');
     expect(r.code).toBe(2);
     expect(r.err).toBe(
-      'could not reach the SealKeeper API at http://api.test: fetch failed\n',
+      'could not reach the SealKeeper API at https://api.test: fetch failed\n',
     );
   });
 

@@ -1,6 +1,8 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
+import { sep } from 'node:path';
 import {
+  base64urlEncode,
   SubmitTaskRequest,
   TaskOutcomeRequest,
   type TaskResponse,
@@ -8,6 +10,8 @@ import {
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
+import { paths } from '../config.js';
+import { loadKey } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import {
@@ -46,6 +50,7 @@ export function register(
       }
       const submission =
         options.text ?? (await readSubmission(this, options.file));
+      await refuseKeyMaterial(this, submission);
       const request = SubmitTaskRequest.safeParse({ taskId: id, submission });
       if (!request.success) this.error(z.prettifyError(request.error));
 
@@ -150,10 +155,30 @@ export function register(
     });
 }
 
+// Task specs come from other agents and an agent may follow what one says.
+// A spec that asks for the key file, or for the key pasted into an answer,
+// must never get it. Files under the SealKeeper home are refused outright,
+// and so is any submission that contains the private key.
 async function readSubmission(cmd: Command, file: string | undefined) {
+  const home = await realpath(paths().home).catch(() => paths().home);
+  const target = await realpath(file ?? '').catch(() => file ?? '');
+  if (target === home || target.startsWith(`${home}${sep}`)) {
+    cmd.error(
+      `refusing to submit ${file}, it is inside ${home}, which holds this agent's private key`,
+    );
+  }
   try {
     return await readFile(file ?? '', 'utf8');
   } catch (error) {
     cmd.error(`could not read ${file}: ${(error as Error).message}`);
+  }
+}
+
+async function refuseKeyMaterial(cmd: Command, submission: string) {
+  const key = await loadKey().catch(() => null);
+  if (key !== null && submission.includes(base64urlEncode(key.privateKey))) {
+    cmd.error(
+      "refusing to submit, the answer contains this agent's private key",
+    );
   }
 }

@@ -1,7 +1,7 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
 import { ListTasksQuery, WELL_KNOWN_PATH } from '@sealkeeper/schema';
 import type { z } from 'zod';
-import { DEFAULT_API_URL } from './config.js';
+import { DEFAULT_API_URL, INSECURE_API_URL, isSecureApiUrl } from './config.js';
 import { readEnv } from './env.js';
 import {
   AgentResponse,
@@ -42,8 +42,8 @@ export class ApiError extends Error {
   }
 }
 
-// An explicit flag wins, then SEALKEEPER_API_URL (or its old name for one
-// release, see env.ts), then the config, then the production default.
+// An explicit flag wins, then SEALKEEPER_API_URL, then the config, then the
+// production default.
 export function resolveApiUrl(
   sources: { flag?: string; config?: string | null },
   env: NodeJS.ProcessEnv = process.env,
@@ -89,6 +89,13 @@ export function createApiClient(options: {
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
 
   async function request(path: string, body?: unknown, method?: string) {
+    if (!isSecureApiUrl(apiUrl)) {
+      throw new ApiError(
+        0,
+        'insecure_api_url',
+        `refusing the SealKeeper API at ${apiUrl}, ${INSECURE_API_URL}`,
+      );
+    }
     let res: Response;
     try {
       res = await fetchFn(`${apiUrl}${path}`, {
@@ -101,6 +108,9 @@ export function createApiClient(options: {
                 'Content-Type': 'application/json',
               },
         body: body === undefined ? undefined : JSON.stringify(body),
+        // A redirect would re-send a signed body, or the GitHub token at
+        // registration, to wherever the server points.
+        redirect: 'error',
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {

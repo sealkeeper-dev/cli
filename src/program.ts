@@ -27,7 +27,7 @@ import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
 import { register as registerWhoami } from './commands/whoami.js';
-import { HomeMigrationError, migrateHomeFromEnv } from './home-migration.js';
+import { terminalSafe } from './output.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
@@ -89,20 +89,11 @@ export function createProgram(deps: ProgramDeps = {}): Command {
     .version(VERSION)
     .option(JSON_FLAG, JSON_HELP)
     .enablePositionalOptions()
-    .configureHelp({ visibleCommands, subcommandTerm });
-
-  // preAction runs before the
-  // action of whichever subcommand was picked, and only then, so --help and
-  // --version never touch the disk. It copies ~/.vouched to ~/.sealkeeper
-  // on the first run after the rename, before any command reads config.
-  program.hook('preAction', async (_root, actionCommand) => {
-    try {
-      await migrateHomeFromEnv();
-    } catch (error) {
-      if (!(error instanceof HomeMigrationError)) throw error;
-      actionCommand.error(error.message, { exitCode: 1 });
-    }
-  });
+    .configureHelp({ visibleCommands, subcommandTerm })
+    // Errors carry API messages, so they get the same escaping as stdout.
+    .configureOutput({
+      writeErr: (text) => process.stderr.write(terminalSafe(text)),
+    });
 
   registerInit(program, deps.init);
   registerEmit(program, deps.sync);

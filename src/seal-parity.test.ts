@@ -195,9 +195,8 @@ describe('seal verify parity with the strict parser for version 1', () => {
 });
 
 // The SEAL conformance cases from @sealkeeper/schema. The API's verifySeal
-// (apps/api/src/routes/seal-conformance.test.ts) and the web's checkSeal
-// (apps/web/lib/seal-conformance.test.ts) run the same cases and must give
-// the same answers. The CLI spells each reason with spaces and adds how
+// and the website's checkSeal run the same cases and must give the same
+// answers. The CLI spells each reason with spaces and adds how
 // long ago a SEAL expired, so it is mapped to the API's name here.
 const API_NAME: Record<string, SealBrokenReason> = {
   malformed: 'malformed',

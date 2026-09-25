@@ -36,15 +36,17 @@ export type LoadedKey = Identity & {
 // Writes a temp file with mode 600 in the home directory, then moves it into
 // place. Without force the move is a hard link, which fails when a key already
 // exists, so two concurrent runs can never both win. With force it is a rename
-// over the old key.
+// over the old key, which is first kept as key.<time>.bak, since a lost key
+// can never be recovered. backup names that file when there was an old key.
 export async function createKey(
   options: { force?: boolean } = {},
   p: Paths = paths(),
-): Promise<Identity> {
+): Promise<Identity & { backup?: string }> {
   await ensureHome(p);
   const { privateKey, publicKey, agentId } = await generateKeypair();
 
   const tmp = `${p.key}.${randomUUID()}.tmp`;
+  let backup: string | undefined;
   try {
     const file = await open(tmp, 'wx', 0o600);
     try {
@@ -55,6 +57,7 @@ export async function createKey(
       await file.close();
     }
     if (options.force) {
+      backup = await backupKey(p);
       await rename(tmp, p.key);
     } else {
       await link(tmp, p.key).catch((error: NodeJS.ErrnoException) => {
@@ -69,7 +72,22 @@ export async function createKey(
   } finally {
     await rm(tmp, { force: true });
   }
-  return { agentId, publicKey };
+  return backup === undefined
+    ? { agentId, publicKey }
+    : { agentId, publicKey, backup };
+}
+
+// A hard link to the current key under a new name, so the bytes and the 600
+// mode carry over. undefined when there is no key.
+async function backupKey(p: Paths): Promise<string | undefined> {
+  const backup = `${p.key}.${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
+  try {
+    await link(p.key, backup);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw error;
+  }
+  return backup;
 }
 
 // Returns null when there is no key file. Throws KeyError when the file is not

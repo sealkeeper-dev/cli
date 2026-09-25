@@ -21,7 +21,6 @@ import {
   invocationOf,
   isNpxCopy,
   isOurCommand,
-  LEGACY_HOOK_COMMANDS,
   ourCommands,
   parseHookCommand,
   SettingsError,
@@ -133,7 +132,6 @@ describe('Claude Code settings', () => {
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
       added: [],
       updated: [],
-      replaced: [],
     });
     expect(await readFile(file(), 'utf8')).toBe(once);
     expect((await stat(file())).mtimeMs).toBe(mtime);
@@ -222,7 +220,6 @@ describe('Claude Code settings', () => {
     expect(result).toEqual({
       added: [],
       updated: [...HOOK_EVENTS],
-      replaced: [],
     });
     const after = await readFile(file(), 'utf8');
     // The text is the old text with our command swapped, nothing else.
@@ -238,37 +235,7 @@ describe('Claude Code settings', () => {
     expect(await ourCommands(file())).toEqual([HOOK_COMMAND]);
   });
 
-  it('recognises the legacy bare and npx forms and rewrites them in place', async () => {
-    for (const legacy of LEGACY_HOOK_COMMANDS) {
-      const before = {
-        hooks: {
-          Stop: [
-            {
-              hooks: [
-                { type: 'command', command: NOTIFY },
-                { type: 'command', command: legacy, timeout: 5 },
-              ],
-            },
-          ],
-        },
-      };
-      await writeFile(file(), JSON.stringify(before, null, 2));
-      const result = await installHooks(file(), HOOK_COMMAND);
-      expect(result.updated).toEqual(['Stop']);
-      expect(result.added).toEqual(HOOK_EVENTS.filter((e) => e !== 'Stop'));
-      const after = JSON.parse(await readFile(file(), 'utf8'));
-      expect(after.hooks.Stop).toEqual([
-        {
-          hooks: [
-            { type: 'command', command: NOTIFY },
-            { type: 'command', command: HOOK_COMMAND, timeout: 5 },
-          ],
-        },
-      ]);
-    }
-  });
-
-  it('uninstall removes the absolute, legacy and current forms and nothing else', async () => {
+  it('uninstall removes the absolute and current forms and nothing else', async () => {
     const dev =
       '"/usr/bin/node" "/src/sealkeeper/packages/cli/dist/index.js" hook claude-code';
     const before = {
@@ -278,8 +245,6 @@ describe('Claude Code settings', () => {
             hooks: [
               { type: 'command', command: NOTIFY },
               { type: 'command', command: HOOK_COMMAND },
-              { type: 'command', command: LEGACY_HOOK_COMMANDS[0] },
-              { type: 'command', command: LEGACY_HOOK_COMMANDS[1] },
               { type: 'command', command: dev },
             ],
           },
@@ -287,7 +252,7 @@ describe('Claude Code settings', () => {
       },
     };
     await writeFile(file(), JSON.stringify(before, null, 2));
-    expect(await uninstallHooks(file())).toBe(3);
+    expect(await uninstallHooks(file())).toBe(1);
     expect(await uninstallHooks(file(), dev)).toBe(1);
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
       hooks: { Stop: [{ hooks: [{ type: 'command', command: NOTIFY }] }] },
@@ -429,7 +394,11 @@ describe('hookCommand', () => {
       false,
     );
     expect(isOurCommand(NOTIFY)).toBe(false);
-    expect(isOurCommand('sealkeeper hook claude-code')).toBe(true);
-    expect(isOurCommand('npx -y sealkeeper hook claude-code')).toBe(true);
+    expect(isOurCommand('vouched hook claude-code')).toBe(false);
+    expect(
+      isOurCommand(
+        '"/n" "/usr/local/lib/node_modules/vouched/dist/index.js" hook claude-code',
+      ),
+    ).toBe(false);
   });
 });

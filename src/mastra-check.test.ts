@@ -36,20 +36,20 @@ describe('mastra check', () => {
     const result = await check(
       'carelmeyer/claude-code',
       { minVerified: 5, minReliability: 0.8 },
-      { apiUrl: 'http://api.test/', fetch: fn },
+      { apiUrl: 'https://api.test/', fetch: fn },
     );
     expect(result).toEqual(answer(false));
     expect(urls).toEqual([
-      'http://api.test/v1/check/carelmeyer/claude-code?minVerified=5&minReliability=0.8',
+      'https://api.test/v1/check/carelmeyer/claude-code?minVerified=5&minReliability=0.8',
     ]);
   });
 
   it('uses SEALKEEPER_API_URL and the global fetch by default', async () => {
-    vi.stubEnv('SEALKEEPER_API_URL', 'http://env.test');
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://env.test');
     const { fn, urls } = fakeFetch(() => Response.json(answer(true)));
     vi.stubGlobal('fetch', fn);
     await check('carelmeyer/claude-code');
-    expect(urls).toEqual(['http://env.test/v1/check/carelmeyer/claude-code']);
+    expect(urls).toEqual(['https://env.test/v1/check/carelmeyer/claude-code']);
   });
 
   it('assertTrusted resolves when every check passed', async () => {
@@ -58,7 +58,7 @@ describe('mastra check', () => {
       assertTrusted(
         'carelmeyer/claude-code',
         { minVerified: 5 },
-        { apiUrl: 'http://api.test', fetch: fn },
+        { apiUrl: 'https://api.test', fetch: fn },
       ),
     ).resolves.toEqual(answer(true));
   });
@@ -68,7 +68,7 @@ describe('mastra check', () => {
     const error = await assertTrusted(
       'carelmeyer/claude-code',
       { minVerified: 5 },
-      { apiUrl: 'http://api.test', fetch: fn },
+      { apiUrl: 'https://api.test', fetch: fn },
     ).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(SealKeeperCheckError);
     const e = error as SealKeeperCheckError;
@@ -97,7 +97,7 @@ describe('mastra check', () => {
     const error = await assertTrusted(
       'carelmeyer/claude-code',
       { minLevel: 'none' },
-      { apiUrl: 'http://api.test', fetch: fn },
+      { apiUrl: 'https://api.test', fetch: fn },
     ).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(SealKeeperCheckError);
     const e = error as SealKeeperCheckError;
@@ -117,7 +117,7 @@ describe('mastra check', () => {
         { status: 404 },
       ),
     );
-    const options = { apiUrl: 'http://api.test', fetch: fn };
+    const options = { apiUrl: 'https://api.test', fetch: fn };
     await expect(check('carelmeyer/nobody', {}, options)).rejects.toMatchObject(
       { code: 'not_found', status: 404 },
     );
@@ -127,6 +127,6 @@ describe('mastra check', () => {
     await expect(
       assertTrusted('carelmeyer/x1', { minSafety: 2 }, options),
     ).rejects.toMatchObject({ code: 'invalid_threshold' });
-    expect(urls).toEqual(['http://api.test/v1/check/carelmeyer/nobody']);
+    expect(urls).toEqual(['https://api.test/v1/check/carelmeyer/nobody']);
   });
 });

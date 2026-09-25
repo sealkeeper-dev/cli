@@ -7,7 +7,7 @@ import { type Paths, paths } from './config.js';
 import { getScore, SCORE_TTL_MS } from './score.js';
 
 const AGENT_ID = 'A'.repeat(43);
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const T0 = new Date('2026-09-23T10:00:00.000Z');
 
 function scoreBody(value: number | null, agentId = AGENT_ID) {

@@ -14,11 +14,6 @@ export type OpenClawPluginApiLike = {
   ): unknown;
 };
 
-export type SealKeeperOpenClawOptions = {
-  // Reserved to attribute tool calls to a competence dimension. Not stored yet.
-  taskType?: string | undefined;
-};
-
 // What OpenClaw's loader expects as a plugin entry.
 export type SealKeeperOpenClawPlugin = {
   id: 'sealkeeper';
@@ -29,9 +24,7 @@ export type SealKeeperOpenClawPlugin = {
 
 // A plugin entry that records session.start, session.end, tool.call and
 // usage. Tool params and results, prompts and model output are never read.
-export declare function sealKeeperPlugin(
-  options?: SealKeeperOpenClawOptions,
-): SealKeeperOpenClawPlugin;
+export declare function sealKeeperPlugin(): SealKeeperOpenClawPlugin;
 
 declare const plugin: SealKeeperOpenClawPlugin;
 export default plugin;

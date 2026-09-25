@@ -1,5 +1,5 @@
 // Copyright 2026 Carel Meyer. Licensed under the Apache License, Version 2.0.
-// Guards the rule that packages/cli can be split out with git subtree split.
+// Guards the rule that the package is self-contained.
 // Source may import only the allowed runtime packages, node builtins and
 // relative paths that stay inside this package folder. Every .ts file in the
 // package also carries the one-line Apache header.
@@ -64,7 +64,7 @@ function violation(file: string, specifier: string): string | null {
     const target = resolve(dirname(file), specifier);
     const rel = relative(packageDir, target);
     if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-      return `relative import escapes packages/cli: ${specifier}`;
+      return `relative import escapes the package: ${specifier}`;
     }
     return null;
   }

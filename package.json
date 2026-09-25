@@ -2,6 +2,14 @@
   "name": "sealkeeper",
   "version": "0.4.1",
   "description": "The SealKeeper CLI. A cryptographic identity and verifiable track record for AI agents.",
+  "keywords": [
+    "ai-agents",
+    "agent-identity",
+    "ed25519",
+    "claude-code",
+    "mastra",
+    "cli"
+  ],
   "license": "Apache-2.0",
   "homepage": "https://github.com/sealkeeper-dev/cli#readme",
   "repository": {
@@ -18,15 +26,15 @@
   "exports": {
     ".": {
       "types": "./types/lib.d.ts",
-      "import": "./dist/lib.js"
+      "default": "./dist/lib.js"
     },
     "./mastra": {
       "types": "./types/mastra.d.ts",
-      "import": "./dist/mastra.js"
+      "default": "./dist/mastra.js"
     },
     "./openclaw": {
       "types": "./types/openclaw.d.ts",
-      "import": "./dist/openclaw.js"
+      "default": "./dist/openclaw.js"
     },
     "./package.json": "./package.json"
   },
@@ -47,7 +55,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "node -e \"if(!process.env.GITHUB_CLIENT_ID){console.error('set GITHUB_CLIENT_ID to publish, or init cannot sign in');process.exit(1)}\" && npm run lint && npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
     "@noble/ed25519": "^3.2.0",
@@ -57,7 +66,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@sealkeeper/schema": "^0.4.0",
-    "@types/node": "^24.13.6",
+    "@types/node": "^22.20.4",
     "tsup": "^8.5.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"

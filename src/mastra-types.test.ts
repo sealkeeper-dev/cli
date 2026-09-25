@@ -8,7 +8,6 @@ import type * as mastra from './mastra.js';
 describe('published mastra types', () => {
   it('match the source types', () => {
     expectTypeOf<published.MastraToolLike>().toEqualTypeOf<mastra.MastraToolLike>();
-    expectTypeOf<published.WithSealKeeperOptions>().toEqualTypeOf<mastra.WithSealKeeperOptions>();
     expectTypeOf<published.SealKeeperSession>().toEqualTypeOf<mastra.SealKeeperSession>();
     expectTypeOf<typeof published.withSealKeeper>().toEqualTypeOf<
       typeof mastra.withSealKeeper

@@ -22,7 +22,7 @@ import { dayOf, readCursor, readDay } from '../log.js';
 import { createProgram } from '../program.js';
 import { readStdin } from './hook.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 const SESSION = '5b0f3a52-7f4e-4d0c-9d3a-0c7f1e2a9b61';
 const CWD = '/Users/someone/project';
 

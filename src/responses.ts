@@ -189,7 +189,7 @@ export type CredentialPayload = z.infer<typeof CredentialPayload>;
 
 // GET /v1/agents/:id/seal, and /credential, its old path. Both answers
 // carry the same compact JWS as seal and as credential for one release,
-// then credential goes (VOU-77). The CLI takes seal when it is there, else
+// then credential goes. The CLI takes seal when it is there, else
 // credential, and hands on the one string under both names, so code that
 // reads either keeps working through the change.
 export const CredentialResponse = z
@@ -241,7 +241,7 @@ export const Check: z.ZodType<Check> = z.object({
 });
 
 // GET /v1/check/:login/:name. The agent's SEAL comes as seal and, for one
-// release, as credential too (VOU-77). Either is enough, and the answer
+// release, as credential too. Either is enough, and the answer
 // hands the one string on under both names, like CredentialResponse. After
 // 90 dormant days the API withholds the SEAL. Both are then null and a
 // failing check named seal, actual withheld, says why, so ok is false.

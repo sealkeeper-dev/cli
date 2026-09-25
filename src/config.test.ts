@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ConfigError,
   DEFAULT_API_URL,
+  isSecureApiUrl,
   paths,
   readConfig,
   sealkeeperHome,
@@ -121,5 +122,18 @@ describe('config', () => {
     const p = paths(root);
     await writeFile(p.config, JSON.stringify({ ...VALID, extra: true }));
     await expect(readConfig(p)).rejects.toThrow(/extra/);
+  });
+});
+
+describe('isSecureApiUrl', () => {
+  it('accepts https anywhere and http only to this machine', () => {
+    expect(isSecureApiUrl('https://api.sealkeeper.run')).toBe(true);
+    expect(isSecureApiUrl('http://localhost:8787')).toBe(true);
+    expect(isSecureApiUrl('http://127.0.0.1')).toBe(true);
+    expect(isSecureApiUrl('http://[::1]:3000')).toBe(true);
+    expect(isSecureApiUrl('http://api.sealkeeper.run')).toBe(false);
+    expect(isSecureApiUrl('http://localhost.evil.test')).toBe(false);
+    expect(isSecureApiUrl('ftp://api.test')).toBe(false);
+    expect(isSecureApiUrl('not a url')).toBe(false);
   });
 });

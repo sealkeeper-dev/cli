@@ -138,15 +138,15 @@ describe('cli bundle', () => {
     expect(pkg.bin.sealkeeper).toBe('dist/index.js');
     expect(pkg.exports['.']).toEqual({
       types: './types/lib.d.ts',
-      import: './dist/lib.js',
+      default: './dist/lib.js',
     });
     expect(pkg.exports['./mastra']).toEqual({
       types: './types/mastra.d.ts',
-      import: './dist/mastra.js',
+      default: './dist/mastra.js',
     });
     expect(pkg.exports['./openclaw']).toEqual({
       types: './types/openclaw.d.ts',
-      import: './dist/openclaw.js',
+      default: './dist/openclaw.js',
     });
   });
 

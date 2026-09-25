@@ -18,7 +18,7 @@ import { appendEvent, countPending, readCursor, readDay } from '../log.js';
 import { createProgram } from '../program.js';
 import { EVENT_MAX_AGE_DAYS, MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 
 type RunResult = { code: number; out: string; err: string };
 type Reply = {

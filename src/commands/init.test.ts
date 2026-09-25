@@ -48,8 +48,11 @@ const HOOK_COMMAND = hookCommand(
   '/usr/local/bin/node',
   '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
 );
+// A hook of ours that an earlier install wrote from another path.
+const STALE_SCRIPT = '/old/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
+const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
 const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
-const API_URL = 'http://api.test';
+const API_URL = 'https://api.test';
 
 type RunResult = { code: number; out: string; err: string };
 
@@ -144,7 +147,7 @@ function fakeFetch(world: World): typeof fetch {
       return Response.json(reply.body, { status: reply.status });
     }
     const agentRoute =
-      /^http:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
+      /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
     if (agentRoute && world.serverVersion !== undefined) {
       if (init.method === 'PATCH' && world.versionRefusal !== undefined) {
         const { status, code, retryAfter } = world.versionRefusal;
@@ -367,7 +370,7 @@ describe('sealkeeper init', () => {
   });
 
   it('--api-url wins over SEALKEEPER_API_URL', async () => {
-    vi.stubEnv('SEALKEEPER_API_URL', 'http://unreachable.test');
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://unreachable.test');
     const result = await run(world, 'init', '--api-url', API_URL);
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
@@ -472,10 +475,10 @@ describe('sealkeeper init', () => {
   });
 
   it('reports a network error on one line', async () => {
-    const result = await run(world, 'init', '--api-url', 'http://down.test');
+    const result = await run(world, 'init', '--api-url', 'https://down.test');
     expect(result.code).toBe(1);
     expect(result.err).toMatch(
-      /\ncould not reach the SealKeeper API at http:\/\/down\.test: fetch failed\n$/,
+      /\ncould not reach the SealKeeper API at https:\/\/down\.test: fetch failed\n$/,
     );
     expect(await readConfig(paths(home))).toBeNull();
   });
@@ -704,15 +707,13 @@ describe('sealkeeper init', () => {
       expect(result.out).toContain(NEXT_HOOKS);
     });
 
-    it('offers the hooks again on a repeat init when the old bare form is in place', async () => {
+    it('offers the hooks again on a repeat init when a hook has a stale path', async () => {
       await withClaudeCode(
         JSON.stringify({
           hooks: {
             Stop: [
               {
-                hooks: [
-                  { type: 'command', command: 'sealkeeper hook claude-code' },
-                ],
+                hooks: [{ type: 'command', command: STALE_HOOK }],
               },
             ],
           },
@@ -730,7 +731,7 @@ describe('sealkeeper init', () => {
       expect(result.out).toContain('updated sealkeeper hooks for Stop');
       expect(result.out).toContain(NEXT_PROVE);
       const after = await readFile(settingsFile(), 'utf8');
-      expect(after).not.toContain('"sealkeeper hook claude-code"');
+      expect(after).not.toContain(STALE_SCRIPT);
       expect(after).toContain('hook claude-code');
     });
 
@@ -771,9 +772,7 @@ describe('sealkeeper init', () => {
           hooks: {
             Stop: [
               {
-                hooks: [
-                  { type: 'command', command: 'sealkeeper hook claude-code' },
-                ],
+                hooks: [{ type: 'command', command: STALE_HOOK }],
               },
             ],
           },
@@ -784,90 +783,9 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(result.out).toContain('updated sealkeeper hooks for Stop');
       const after = await readFile(projectFile, 'utf8');
-      expect(after).not.toContain('"sealkeeper hook claude-code"');
+      expect(after).not.toContain(STALE_SCRIPT);
       expect(after).toContain(JSON.stringify(HOOK_COMMAND).slice(1, -1));
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
-    });
-
-    it('replaces the old vouched hooks in place in both scopes on a repeat init, without asking', async () => {
-      const oldHook = hookCommand(
-        '/usr/local/bin/node',
-        '/usr/local/lib/node_modules/vouched/dist/index.js',
-      );
-      const oldSettings = (command: string) =>
-        `${JSON.stringify(
-          {
-            hooks: {
-              Stop: [
-                { hooks: [{ type: 'command', command: 'other-tool stop' }] },
-                { hooks: [{ type: 'command', command }] },
-              ],
-            },
-          },
-          null,
-          2,
-        )}\n`;
-      const oldProve = '---\nmanaged-by: vouched\n---\nold body\n';
-      await withClaudeCode();
-      const project = join(home, 'project');
-      world.cwd = project;
-      world.stdin = answering('n');
-      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
-      // Then the old package's hooks and slash commands, as 0.3 left them.
-      await writeFile(settingsFile(), oldSettings(oldHook));
-      const projectFile = join(project, '.claude', 'settings.json');
-      await mkdir(join(project, '.claude', 'commands'), { recursive: true });
-      await writeFile(projectFile, oldSettings('vouched hook claude-code'));
-      await mkdir(join(claudeDir(), 'commands'), { recursive: true });
-      const oldUserProve = join(claudeDir(), 'commands', 'vouched-prove.md');
-      const oldProjectProve = join(
-        project,
-        '.claude',
-        'commands',
-        'vouched-prove.md',
-      );
-      await writeFile(oldUserProve, oldProve);
-      await writeFile(oldProjectProve, oldProve);
-
-      const stdin = answering('n');
-      world.stdin = stdin;
-      const result = await run(world, 'init');
-      expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(0);
-      expect(result.err).not.toContain(HOOKS_QUESTION);
-      for (const [file, prove] of [
-        [settingsFile(), oldUserProve],
-        [projectFile, oldProjectProve],
-      ] as const) {
-        expect(result.out).toContain(
-          `replaced the old vouched hooks for Stop in ${file} with sealkeeper hooks`,
-        );
-        expect(result.out).toContain(
-          `removed the old /vouched-prove command at ${prove}`,
-        );
-        const after = await readFile(file, 'utf8');
-        expect(after).not.toContain('vouched');
-        expect(after).toContain('other-tool stop');
-        expect(hooksIn(after)).toEqual([
-          'Stop',
-          'SessionStart',
-          'SessionEnd',
-          'PreToolUse',
-          'PostToolUse',
-        ]);
-        // The old Stop hook became the new one where it stood.
-        expect(JSON.parse(after).hooks.Stop).toEqual(
-          JSON.parse(oldSettings(HOOK_COMMAND)).hooks.Stop,
-        );
-        expect(await readIfExists(prove)).toBe('');
-        expect(
-          await readFile(join(prove, '..', 'sealkeeper-prove.md'), 'utf8'),
-        ).toBe(PROVE_COMMAND_TEXT);
-      }
-
-      // Once replaced, a further init has nothing to do.
-      const again = await run(world, 'init');
-      expect(again.out).not.toContain('replaced');
     });
 
     it('asks nothing on a repeat init when the hooks are current', async () => {
