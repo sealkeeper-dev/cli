@@ -96,9 +96,7 @@ describe('openclaw adapter', () => {
         register: expect.any(Function),
       });
       expect(typeof plugin.description).toBe('string');
-      expect(sealKeeperPlugin({ taskType: 'code_review' }).id).toBe(
-        'sealkeeper',
-      );
+      expect(sealKeeperPlugin().id).toBe('sealkeeper');
     });
 
     it('registers observation hooks only', () => {

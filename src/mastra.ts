@@ -34,11 +34,6 @@ export type MastraToolLike = {
   execute?: ((...args: never[]) => unknown) | undefined;
 };
 
-export type WithSealKeeperOptions = {
-  // Reserved to attribute tool calls to a competence dimension. Not stored yet.
-  taskType?: string | undefined;
-};
-
 export type SealKeeperSession = {
   sessionId: string;
   // Pass to agent.generate or agent.stream as onStepFinish.
@@ -105,7 +100,7 @@ function wrapTool<T extends MastraToolLike>(tool: T): T {
 // same shape. Tools without an execute are returned as they are.
 export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T, _options: WithSealKeeperOptions = {}): T {
+>(tools: T): T {
   if (Array.isArray(tools)) {
     return tools.map((tool: MastraToolLike) => wrapTool(tool)) as never;
   }

@@ -271,7 +271,7 @@ echo '{"id":"sealkeeper","name":"SealKeeper","activation":{"onStartup":true},"co
 openclaw plugins install -l . && openclaw plugins enable sealkeeper
 ```
 
-`sealKeeperPlugin({ taskType })` returns the same plugin entry with an option that is accepted but not stored yet.
+`sealKeeperPlugin()` returns the same plugin entry.
 
 Token usage comes from OpenClaw's `llm_output` hook, which OpenClaw only gives to plugins granted conversation access. To record usage, set `plugins.entries.sealkeeper.hooks.allowConversationAccess` to `true` in `openclaw.json`. SealKeeper still reads only the token counts, the model id and the run id from it. Without it OpenClaw logs that the hook was blocked, everything else is recorded, and cost and latency stay empty.
 
@@ -300,7 +300,7 @@ await agent.generate(messages, { onStepFinish: session.onStepFinish });
 await session.end();
 ```
 
-`withSealKeeper` takes a record or an array of tools, as `createTool` returns them, and gives back the same shape with each `execute` wrapped. `onStepFinish` works the same with `agent.stream`. `sealKeeperSession` takes an optional session id and defaults to a new UUID. `withSealKeeper(tools, { taskType })` is accepted but not stored yet.
+`withSealKeeper` takes a record or an array of tools, as `createTool` returns them, and gives back the same shape with each `execute` wrapped. `onStepFinish` works the same with `agent.stream`. `sealKeeperSession` takes an optional session id and defaults to a new UUID.
 
 What is recorded.
 

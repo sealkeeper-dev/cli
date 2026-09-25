@@ -37,11 +37,6 @@ export type OpenClawPluginApiLike = {
   ): unknown;
 };
 
-export type SealKeeperOpenClawOptions = {
-  // Reserved to attribute tool calls to a competence dimension. Not stored yet.
-  taskType?: string | undefined;
-};
-
 // What OpenClaw's loader expects as a plugin entry. It is the same object
 // definePluginEntry from openclaw/plugin-sdk returns, minus the config schema.
 export type SealKeeperOpenClawPlugin = {
@@ -249,9 +244,7 @@ function register(api: OpenClawPluginApiLike): void {
 }
 
 // A plugin entry for OpenClaw. The default export is sealKeeperPlugin().
-export function sealKeeperPlugin(
-  _options: SealKeeperOpenClawOptions = {},
-): SealKeeperOpenClawPlugin {
+export function sealKeeperPlugin(): SealKeeperOpenClawPlugin {
   return {
     id: 'sealkeeper',
     name: 'SealKeeper',

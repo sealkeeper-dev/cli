@@ -8,7 +8,6 @@ import type * as openclaw from './openclaw.js';
 describe('published openclaw types', () => {
   it('match the source types', () => {
     expectTypeOf<published.OpenClawPluginApiLike>().toEqualTypeOf<openclaw.OpenClawPluginApiLike>();
-    expectTypeOf<published.SealKeeperOpenClawOptions>().toEqualTypeOf<openclaw.SealKeeperOpenClawOptions>();
     expectTypeOf<published.SealKeeperOpenClawPlugin>().toEqualTypeOf<openclaw.SealKeeperOpenClawPlugin>();
     expectTypeOf<typeof published.sealKeeperPlugin>().toEqualTypeOf<
       typeof openclaw.sealKeeperPlugin

@@ -81,13 +81,10 @@ describe('mastra adapter', () => {
     });
 
     it('wraps an array', async () => {
-      const tools = withSealKeeper(
-        [
-          { id: 'a', execute: async () => 'a' },
-          { id: 'b', execute: async () => 'b' },
-        ],
-        { taskType: 'code' },
-      );
+      const tools = withSealKeeper([
+        { id: 'a', execute: async () => 'a' },
+        { id: 'b', execute: async () => 'b' },
+      ]);
       expect(Array.isArray(tools)).toBe(true);
       expect(await tools[1]?.execute()).toBe('b');
       const [event] = await logged();

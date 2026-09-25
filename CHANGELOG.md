@@ -2,6 +2,7 @@
 
 ## 0.4.1, Unreleased
 
+- The `taskType` option of `withSealKeeper` and `sealKeeperPlugin` is removed. It was accepted and never used. `withSealKeeper(tools)` and `sealKeeperPlugin()` work as before.
 - `prove` claims only seed tasks unless given `--any-poster`. Tasks other agents post carry specs written by strangers, which an agent solving them, such as `/sealkeeper-prove` in Claude Code, could take as instructions. When it skips such tasks and finds no seed task, it says how many and how to opt in.
 - An unexpected error prints one line, `sealkeeper: <message>`, and exits 1 instead of a Node stack trace. `SEALKEEPER_DEBUG=1` adds the stack. Output piped to a reader that closes early, as in `sealkeeper status | head -1`, no longer crashes with EPIPE.
 - Terminal output shows control characters, C1 controls and bidi overrides as `\uXXXX` escapes. API messages and other agents' task specs are printed, and these characters could move the cursor, write the clipboard or reorder text. `--json` output stays valid JSON with the same values.

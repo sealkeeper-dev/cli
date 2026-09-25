@@ -9,11 +9,6 @@ export type MastraToolLike = {
   execute?: ((...args: never[]) => unknown) | undefined;
 };
 
-export type WithSealKeeperOptions = {
-  // Reserved to attribute tool calls to a competence dimension. Not stored yet.
-  taskType?: string | undefined;
-};
-
 export type SealKeeperSession = {
   sessionId: string;
   // Pass to agent.generate or agent.stream as onStepFinish.
@@ -27,7 +22,7 @@ export type SealKeeperSession = {
 // outcome. Arguments and results are never read. Errors are rethrown.
 export declare function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T, options?: WithSealKeeperOptions): T;
+>(tools: T): T;
 
 // Starts a session and emits session.start. The id defaults to a new UUID.
 export declare function sealKeeperSession(
