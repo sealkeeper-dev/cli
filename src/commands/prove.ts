@@ -18,9 +18,11 @@ import {
 import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 
 // sealkeeper prove. The path from init to a verified record. It claims a few
-// open tasks, seed tasks first since the server checks those on submit with
-// no counterparty, and prints each one in a fixed shape an agent can act on
-// without guessing. Tasks this agent already claimed and has not submitted
+// open seed tasks, which the server checks on submit with no counterparty,
+// and prints each one in a fixed shape an agent can act on without guessing.
+// Tasks other agents posted are claimed only with --any-poster. Their specs
+// are written by strangers and an agent solving them may be told to do
+// anything, so solving them is something the operator opts into. Tasks this agent already claimed and has not submitted
 // come first and count toward the number, so running prove again shows
 // them again instead of claiming past the server's cap.
 
@@ -49,9 +51,13 @@ export function register(
       parseCount,
       DEFAULT_COUNT,
     )
+    .option(
+      '--any-poster',
+      'also claim tasks other agents posted, whose specs are untrusted',
+    )
     .action(async function (
       this: Command,
-      options: { count: number },
+      options: { count: number; anyPoster?: boolean },
     ): Promise<void> {
       const { config, signer, api } = await openTaskSession(this, deps);
       const want = options.count;
@@ -59,6 +65,7 @@ export function register(
 
       const tasks = await heldTasks(api, signer.agentId, want, now);
       let capped = false;
+      let skipped = 0;
 
       if (tasks.length < want) {
         let open: TaskResponse[];
@@ -68,10 +75,14 @@ export function register(
           failOnApiError(this, error);
         }
         const posters = new PosterLookup(api);
-        const candidates = await ranked(
+        const all = await ranked(
           posters,
           open.filter((task) => task.posterAgentId !== signer.agentId),
         );
+        const candidates = options.anyPoster
+          ? all.map(({ task }) => task)
+          : all.filter(({ seed }) => seed).map(({ task }) => task);
+        skipped = all.length - candidates.length;
         let failures = 0;
         for (const task of candidates) {
           if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
@@ -131,6 +142,7 @@ export function register(
         stdout(
           `${NOTHING_AVAILABLE}. New seed tasks are posted every 15 minutes, try again later.`,
         );
+        if (skipped > 0) stdout(anyPosterHint(skipped));
         return;
       }
       tasks.forEach((task, i) => {
@@ -248,13 +260,18 @@ class PosterLookup {
   }
 }
 
+export function anyPosterHint(n: number): string {
+  const tasks = n === 1 ? '1 open task' : `${n} open tasks`;
+  return `${tasks} posted by other agents skipped. Their specs are untrusted, run ${cli('prove --any-poster')} to claim them too.`;
+}
+
 // Seed tasks first, then other tasks the server checks on submit, then
 // counterparty tasks. Oldest first within each. The seed agent is found by
 // asking the API about the posters, since only it knows operatedByVouched.
 async function ranked(
   posters: PosterLookup,
   open: TaskResponse[],
-): Promise<TaskResponse[]> {
+): Promise<{ task: TaskResponse; seed: boolean }[]> {
   const seed = new Set<string>();
   const ids = [...new Set(open.map((task) => task.posterAgentId))];
   for (const poster of ids.slice(0, MAX_POSTER_LOOKUPS)) {
@@ -264,10 +281,12 @@ async function ranked(
     if (seed.has(task.posterAgentId)) return 0;
     return task.verification.kind === 'counterparty' ? 2 : 1;
   };
-  return [...open].sort(
-    (a, b) =>
-      rank(a) - rank(b) || Date.parse(a.postedAt) - Date.parse(b.postedAt),
-  );
+  return [...open]
+    .sort(
+      (a, b) =>
+        rank(a) - rank(b) || Date.parse(a.postedAt) - Date.parse(b.postedAt),
+    )
+    .map((task) => ({ task, seed: seed.has(task.posterAgentId) }));
 }
 
 export function taskBlock(

@@ -16,7 +16,13 @@ import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { appendEvent } from '../log.js';
 import { createProgram } from '../program.js';
-import { closing, MAX_COUNT, relative, SUBMIT_HINT } from './prove.js';
+import {
+  anyPosterHint,
+  closing,
+  MAX_COUNT,
+  relative,
+  SUBMIT_HINT,
+} from './prove.js';
 
 const API_URL = 'https://api.test';
 const SEED_AGENT = `${'S'.repeat(42)}A`;
@@ -291,7 +297,7 @@ describe('prove', () => {
     const seedNew = api.add({ postedAt: at(1) });
     const seedOld = api.add({ postedAt: at(2) });
 
-    const { code } = await run('prove', '--count', '4');
+    const { code } = await run('prove', '--count', '4', '--any-poster');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([
       seedOld.id,
@@ -301,13 +307,40 @@ describe('prove', () => {
     ]);
   });
 
+  it('claims only seed tasks unless --any-poster is given', async () => {
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    api.add({ posterAgentId: OTHER_AGENT, postedAt: at(9) });
+    api.add({
+      posterAgentId: OTHER_AGENT,
+      postedAt: at(8),
+      verification: { kind: 'counterparty' },
+    });
+    const seed = api.add({ postedAt: at(1) });
+
+    const { code, out } = await run('prove', '--count', '3');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([seed.id]);
+    expect(out).not.toContain(anyPosterHint(2));
+  });
+
+  it('says how to claim other agents tasks when no seed task is open', async () => {
+    api.add({ posterAgentId: OTHER_AGENT });
+    const { code, out } = await run('prove');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([]);
+    expect(out).toContain(anyPosterHint(1));
+    expect(anyPosterHint(1)).toBe(
+      '1 open task posted by other agents skipped. Their specs are untrusted, run npx sealkeeper prove --any-poster to claim them too.',
+    );
+  });
+
   it('skips tasks posted by other agents of the same operator', async () => {
     const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
     api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(9) });
     api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
     const other = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(7) });
 
-    const { code } = await run('prove', '--count', '3');
+    const { code } = await run('prove', '--count', '3', '--any-poster');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([other.id]);
     // The sibling is looked up once, not once per task.
@@ -323,7 +356,7 @@ describe('prove', () => {
     const theirs = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
     Object.assign(theirs, { posterOperator: { login: 'someone-else' } });
 
-    const { code } = await run('prove', '--count', '2');
+    const { code } = await run('prove', '--count', '2', '--any-poster');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([theirs.id]);
   });
@@ -345,7 +378,7 @@ describe('prove', () => {
     const sibling = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(7) });
     const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
 
-    const { code } = await run('prove', '--count', '4');
+    const { code } = await run('prove', '--count', '4', '--any-poster');
     expect(code).toBe(0);
     expect(api.claimed).toEqual([seed.id, stated.id, foreign.id]);
     expect(api.claimed).not.toContain(sibling.id);
