@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
 import { handleHook, parseHookInput } from '../claude-code.js';
+import type { NudgeDeps } from '../nudge.js';
 import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 // Hook entry points that agent frameworks call. Hidden from help, since
@@ -13,6 +14,8 @@ const MAX_STDIN_BYTES = 64 * 1024 * 1024;
 
 export type HookCommandDeps = SyncDeps & {
   readStdin: () => Promise<string | null>;
+  // The cached goal the session nudge reads. Tests pass their own.
+  cachedGoal?: NudgeDeps['cachedGoal'];
 };
 
 const defaultHookDeps: HookCommandDeps = {
@@ -33,12 +36,17 @@ export function register(
     .allowUnknownOption()
     .allowExcessArguments()
     .action(async () => {
-      // Always exits 0 and never writes to stdout, whatever the input.
+      // Always exits 0. stdout only ever carries the session nudge, see
+      // handleHook.
       try {
         const text = await deps.readStdin();
         const input = text === null ? null : parseHookInput(text);
         if (input === null) return;
-        await handleHook(input, { fetch: deps.fetch, sleep: deps.sleep });
+        await handleHook(input, {
+          fetch: deps.fetch,
+          sleep: deps.sleep,
+          cachedGoal: deps.cachedGoal,
+        });
       } catch {
         // handleHook reports its own failures. Nothing else should throw.
       }

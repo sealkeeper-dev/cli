@@ -15,6 +15,7 @@ import {
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  GoalResponse,
   ListTasksResponse,
   RatingResponse,
   ScoreResponse,
@@ -69,6 +70,8 @@ export type ApiClient = {
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
   getScore(agentId: string): Promise<ScoreResponse>;
+  // GET /v1/agents/:id/goal, parsed loosely with unknown keys kept.
+  getGoal(agentId: string): Promise<GoalResponse>;
   listTasks(query?: z.input<typeof ListTasksQuery>): Promise<TaskResponse[]>;
   getTask(taskId: string): Promise<TaskResponse>;
   postTask(envelope: string): Promise<TaskResponse>;
@@ -252,6 +255,15 @@ export function createApiClient(options: {
       );
       if (status !== 200) throw toError(status, json, headers);
       const result = ScoreResponse.safeParse(json);
+      if (!result.success) throw toError(status, undefined);
+      return result.data;
+    },
+    async getGoal(agentId) {
+      const { status, json, headers } = await request(
+        `/v1/agents/${encodeURIComponent(agentId)}/goal`,
+      );
+      if (status !== 200) throw toError(status, json, headers);
+      const result = GoalResponse.safeParse(json);
       if (!result.success) throw toError(status, undefined);
       return result.data;
     },

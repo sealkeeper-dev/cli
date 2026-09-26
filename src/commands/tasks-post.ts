@@ -6,6 +6,7 @@ import {
   PostTaskRequest,
   TASK_DEFAULT_TTL_HOURS,
   TASK_MAX_TTL_DAYS,
+  type TaskOrigin,
   type VerificationSpec,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
@@ -23,6 +24,7 @@ import { POST_WHY } from '../ladder.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
+import { refuseInRoutine } from '../routine.js';
 import { createStyle } from '../style.js';
 import {
   TEMPLATES,
@@ -205,6 +207,9 @@ type Draft = {
   verification: VerificationSpec;
   expiresHours?: string;
   assignee?: string;
+  // template for a task built from a template (VOU-134). Left out for a
+  // plain post, which the API reads as manual.
+  origin?: TaskOrigin;
 };
 
 // The request for a draft, validated as the API will validate it. Ends the
@@ -228,6 +233,7 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
     verification: draft.verification,
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(assignee === undefined ? {} : { assignee }),
+    ...(draft.origin === undefined ? {} : { origin: draft.origin }),
   });
   if (!request.success) cmd.error(z.prettifyError(request.error));
   return request.data;
@@ -240,6 +246,9 @@ async function postAndPrint(
   deps: TasksDeps,
   request: PostTaskRequest,
 ): Promise<void> {
+  // A routine run never posts (VOU-138). Posting asks for another
+  // operator's time, which needs the operator's own yes.
+  await refuseInRoutine(cmd, 'tasks post');
   const assignee = request.assignee;
   // Every way in ends here, so no spec, schema or input carries the key.
   await refuseKeyInTask(cmd, request);
@@ -327,6 +336,7 @@ async function templatePost(
     ...draftOf(task),
     expiresHours: options.expiresHours,
     assignee: options.for,
+    origin: 'template',
   });
   if (input !== null) {
     // The input was checked for the key as it was read, and postAndPrint
@@ -453,6 +463,7 @@ export async function guidedPost(
     ...draftOf(task),
     expiresHours: options.expiresHours,
     ...(assignee === '' ? {} : { assignee }),
+    origin: 'template',
   });
   for (const line of previewLines(template, task, request)) stdout(line);
   if ((await askYesNo(input, 'Post it?')) !== 'yes') {

@@ -94,6 +94,8 @@ class FakeApi {
   agents = new Map<string, Record<string, unknown>>();
   // The payloads of POST /v1/tasks, verified like every signed write.
   posted: Record<string, unknown>[] = [];
+  // The goal answer for the agent, 404 while null.
+  goal: Record<string, unknown> | null = null;
 
   constructor(readonly agentId: string) {}
 
@@ -143,6 +145,12 @@ class FakeApi {
         )
         .slice(0, Number(url.searchParams.get('limit') ?? 50));
       return Response.json({ tasks });
+    }
+    if (
+      method === 'GET' &&
+      url.pathname === `/v1/agents/${this.agentId}/goal`
+    ) {
+      return this.goal ? Response.json(this.goal) : error(404, 'not_found');
     }
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
     if (method === 'GET' && agent) {
@@ -206,6 +214,27 @@ class FakeApi {
     this.claimed.push(task.id);
     return Response.json(task);
   }) as typeof fetch;
+}
+
+// A goal answer as the API sends it, with the thresholds left out, which
+// prove does not read.
+function goalAnswer(
+  agentId: string,
+  level: string,
+  nextLevel: string | null,
+  actions: { code: string; count: number | null }[],
+  pending = { addressed: 0, outcomes: 0 },
+) {
+  return {
+    agentId,
+    version: '1.0.0',
+    level,
+    nextLevel,
+    thresholds: [],
+    actions,
+    pending,
+    asOf: '2026-09-25T10:15:00.000Z',
+  };
 }
 
 function error(status: number, code: string): Response {
@@ -388,6 +417,7 @@ describe('prove', () => {
       expect(api.claimed).toEqual([]);
       expect(api.requests.sort()).toEqual([
         `GET /v1/agents/${agentId}`,
+        `GET /v1/agents/${agentId}/goal`,
         'GET /v1/tasks',
       ]);
       expect(out).toBe(
@@ -449,7 +479,56 @@ describe('prove', () => {
 
     it('says what bronze, silver and gold need, from the schema', () => {
       expect(LEVELS_LINE).toBe(
-        'Bronze 25 verified over 3 days. Silver 250, 100 from 5 other operators, 25 confirmed. Gold 2500, 500 confirmed from 25 other operators.',
+        'Bronze 25 counted tasks over 3 days. Silver 200, 100 from 5 other operators, 25 confirmed. Gold 1000, 250 confirmed from 25 other operators.',
+      );
+    });
+
+    it('ends with the top two goal actions in place of the progress line', async () => {
+      standing(8, 'none');
+      await withHooks();
+      api.goal = goalAnswer(agentId, 'none', 'bronze', [
+        { code: 'claim_seed_tasks', count: 17 },
+        { code: 'history_days', count: 2 },
+        { code: 'reliability_below', count: null },
+      ]);
+      const { code, out } = await run('prove');
+      expect(code).toBe(0);
+      expect(out).toContain(
+        [
+          '  Level none. Next bronze.',
+          '  Claim 17 more seed tasks. npx sealkeeper prove',
+          '  Stay active on 2 more days. Levels need a record over time.',
+          '',
+          '',
+        ].join('\n'),
+      );
+      expect(out).not.toContain('Raise reliability');
+      expect(out).not.toContain('verified so far');
+    });
+
+    it('shows the goal at bronze and at silver', async () => {
+      api.goal = goalAnswer(agentId, 'bronze', 'silver', [
+        { code: 'confirm_outcomes', count: 1 },
+        { code: 'claim_tasks', count: 190 },
+      ]);
+      expect((await run('prove')).out).toContain(
+        [
+          '  Level bronze. Next silver.',
+          '  Report the outcome of 1 counterparty task waiting on this agent. npx sealkeeper tasks outcome <id> success',
+          "  Verify 190 more tasks posted by other operators' agents. npx sealkeeper prove --any-poster",
+        ].join('\n'),
+      );
+      api.goal = goalAnswer(agentId, 'silver', 'gold', [
+        { code: 'counterparty_tasks', count: 300 },
+        { code: 'need_operators', count: 16 },
+      ]);
+      await rm(join(home, 'goal.json'));
+      expect((await run('prove')).out).toContain(
+        [
+          '  Level silver. Next gold.',
+          '  Get 300 more counterparty tasks confirmed by other operators. npx sealkeeper prove --any-poster',
+          '  Do tasks for 16 more operators besides your own. npx sealkeeper prove --any-poster',
+        ].join('\n'),
       );
     });
 
@@ -482,8 +561,9 @@ describe('prove', () => {
         `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it\n`,
       );
       expect(out).toContain(`  ${LEVELS_LINE}\n`);
-      // The agent read and the addressed list, never followed and no claim.
-      expect(fetchFn).toHaveBeenCalledTimes(2);
+      // The agent read, the addressed list and the goal read, never followed
+      // and no claim. Only the agent read says where the API moved.
+      expect(fetchFn).toHaveBeenCalledTimes(3);
       for (const call of fetchFn.mock.calls) {
         expect(call[1]).toMatchObject({ redirect: 'manual' });
       }
@@ -585,6 +665,132 @@ describe('prove', () => {
         .slice(0, 5)
         .map((t) => ({ task_id: t.id, task_type: 'json_extract' })),
     );
+  });
+
+  describe('the daily ceiling', () => {
+    const today = (counted: number) => ({
+      day: new Date().toISOString().slice(0, 10),
+      counted,
+      ceiling: 20,
+      remaining: 20 - counted,
+    });
+
+    it('claims nothing once today counted 20, and says so, unless --anyway', async () => {
+      const tasks = seedTasks(7);
+      api.goal = {
+        ...goalAnswer(agentId, 'bronze', 'silver', []),
+        today: today(20),
+      };
+      const held = await run('prove');
+      expect(held.code).toBe(0);
+      expect(api.claimed).toEqual([]);
+      expect(JSON.parse(held.out)).toEqual([]);
+      const { text } = splitErr(held.err);
+      expect(text).toContain(
+        'Today 20 of 20 counted. More tasks today still verify but will not move your level. Nothing was claimed. Run npx sealkeeper prove --anyway to claim all the same',
+      );
+      expect(text).not.toContain('no open tasks available');
+
+      const anyway = await run('prove', '--anyway');
+      expect(anyway.code).toBe(0);
+      expect(api.claimed).toEqual(tasks.slice(0, 5).map((t) => t.id));
+    });
+
+    it('claims no more than the day can still count', async () => {
+      const tasks = seedTasks(7);
+      api.goal = {
+        ...goalAnswer(agentId, 'none', 'bronze', []),
+        today: today(18),
+      };
+      const { code } = await run('prove');
+      expect(code).toBe(0);
+      expect(api.claimed).toEqual(tasks.slice(0, 2).map((t) => t.id));
+    });
+
+    it('counts held tasks against what the day can still count', async () => {
+      const held = [0, 1].map(() =>
+        api.add({
+          state: 'claimed',
+          claimantAgentId: agentId,
+          claimedAt: new Date().toISOString(),
+        }),
+      );
+      for (const task of held) {
+        await appendEvent({
+          event_id: randomUUID(),
+          type: 'task.claimed',
+          occurred_at: new Date().toISOString(),
+          version: '1.0.0',
+          payload: { task_id: task.id, task_type: task.taskType },
+        });
+      }
+      const open = seedTasks(5);
+      api.goal = {
+        ...goalAnswer(agentId, 'none', 'bronze', []),
+        today: today(17),
+      };
+      const { code, out } = await run('prove');
+      expect(code).toBe(0);
+      // Three can still count today. Two are held, so one more is claimed.
+      expect(api.claimed).toEqual([open[0]?.id]);
+      expect(jsonIds(out)).toEqual([held[0]?.id, held[1]?.id, open[0]?.id]);
+
+      // Held tasks at or past what can count claim nothing new.
+      api.goal = {
+        ...goalAnswer(agentId, 'none', 'bronze', []),
+        today: today(19),
+      };
+      await run('prove');
+      expect(api.claimed).toEqual([open[0]?.id]);
+    });
+
+    it('puts limited on the last stderr line once the ceiling is reached', async () => {
+      seedTasks(3);
+      api.goal = {
+        ...goalAnswer(agentId, 'bronze', 'silver', []),
+        today: today(20),
+      };
+      const spent = splitErr((await run('prove', '--json')).err).json;
+      expect(spent?.limited).toEqual({ counted: 20, ceiling: 20 });
+    });
+
+    it('puts limited null on the last stderr line below the ceiling', async () => {
+      seedTasks(3);
+      api.goal = {
+        ...goalAnswer(agentId, 'none', 'bronze', []),
+        today: today(4),
+      };
+      const open = splitErr((await run('prove', '--json')).err).json;
+      expect(open).toHaveProperty('limited', null);
+    });
+
+    it('ignores a count from another UTC day and a goal it cannot read', async () => {
+      const tasks = seedTasks(7);
+      api.goal = {
+        ...goalAnswer(agentId, 'none', 'bronze', []),
+        today: { ...today(20), day: '2026-01-01' },
+      };
+      await run('prove');
+      expect(api.claimed).toEqual(tasks.slice(0, 5).map((t) => t.id));
+    });
+
+    it('says so first in a terminal once the day is spent', async () => {
+      tty = true;
+      await withHooks();
+      api.goal = {
+        ...goalAnswer(agentId, 'bronze', 'silver', [
+          { code: 'claim_tasks', count: 100 },
+        ]),
+        today: today(20),
+      };
+      const { out } = await run('prove');
+      expect(out).toContain(
+        [
+          '  Today 20 of 20 counted. More tasks today still verify but will not move your level.',
+          '  Level bronze. Next silver.',
+        ].join('\n'),
+      );
+    });
   });
 
   it('prints the schema for a schema task', async () => {
@@ -1036,6 +1242,7 @@ describe('prove', () => {
           guided:
             'In a terminal, npx sealkeeper tasks post walks your operator through it.',
         },
+        limited: null,
       });
       expect(TEMPLATE_POST_COMMAND()).toBe(
         (json?.post as { command: string } | undefined)?.command,
@@ -1250,7 +1457,10 @@ describe('prove', () => {
       );
       expect(out).toContain('    and 2 more\n');
       const lookups = api.requests.filter(
-        (r) => r.startsWith('GET /v1/agents/') && !r.endsWith(agentId),
+        (r) =>
+          r.startsWith('GET /v1/agents/') &&
+          !r.endsWith(agentId) &&
+          !r.endsWith('/goal'),
       );
       expect(lookups.sort()).toEqual(
         posters
@@ -1296,6 +1506,7 @@ describe('prove', () => {
         'progress',
         'levels',
         'post',
+        'limited',
       ]);
       expect(waitingOn(err)).toMatchObject({
         addressed: [

@@ -1,5 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { chmod, mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,8 +18,12 @@ import {
   isSecureApiUrl,
   paths,
   readConfig,
+  readNudge,
+  readRoutineConfig,
   sealkeeperHome,
   writeConfig,
+  writeNudge,
+  writeRoutineConfig,
 } from './config.js';
 
 const VALID = {
@@ -120,10 +133,147 @@ describe('config', () => {
     await expect(readConfig(p)).rejects.toThrow(/agentId/);
   });
 
-  it('rejects unknown keys', async () => {
+  it('keeps keys it does not know, and writes them back', async () => {
     const p = paths(root);
     await writeFile(p.config, JSON.stringify({ ...VALID, extra: true }));
-    await expect(readConfig(p)).rejects.toThrow(/extra/);
+    const config = await readConfig(p);
+    expect(config).toMatchObject({ extra: true });
+    if (config === null) throw new Error('no config');
+    await writeConfig({ ...config, autoSync: true }, p);
+    expect(JSON.parse(await readFile(p.config, 'utf8'))).toEqual({
+      ...VALID,
+      apiUrl: DEFAULT_API_URL,
+      extra: true,
+      autoSync: true,
+    });
+  });
+
+  // The keys CLI 0.4.4 reads config.json with, strictly. A key outside
+  // them fails every command of a copy pinned to 0.4.4, the adapters too.
+  const KEYS_0_4_4 = [
+    'agentId',
+    'operatorLogin',
+    'name',
+    'version',
+    'apiUrl',
+    'registeredAt',
+    'autoSync',
+  ];
+
+  it('moves nudge and routine out of config.json once, keeping them', async () => {
+    const p = paths(root);
+    const routine = {
+      limits: {
+        claimsPerDay: 4,
+        postsPerDay: 3,
+        confirmsPerDay: 10,
+        minutesPerRun: 15,
+        tokensPerRun: 300_000,
+      },
+      allow: ['bob'],
+    };
+    await writeFile(
+      p.config,
+      JSON.stringify({ ...VALID, nudge: true, routine }),
+    );
+    const config = await readConfig(p);
+    expect(config).not.toHaveProperty('nudge');
+    expect(config).not.toHaveProperty('routine');
+    const written = JSON.parse(await readFile(p.config, 'utf8'));
+    expect(Object.keys(written).every((k) => KEYS_0_4_4.includes(k))).toBe(
+      true,
+    );
+    expect(await readNudge(p)).toBe(true);
+    // The post limit of the first routine build is dropped on read.
+    expect(await readRoutineConfig(p)).toEqual({
+      limits: {
+        claimsPerDay: 4,
+        confirmsPerDay: 10,
+        minutesPerRun: 15,
+        tokensPerRun: 300_000,
+      },
+      allow: ['bob'],
+    });
+  });
+
+  it('never overwrites nudge.json or routine.json when moving', async () => {
+    const p = paths(root);
+    await writeNudge(false, p);
+    await writeRoutineConfig(
+      {
+        limits: {
+          claimsPerDay: 1,
+          confirmsPerDay: 1,
+          minutesPerRun: 1,
+          tokensPerRun: 1000,
+        },
+        allow: [],
+      },
+      p,
+    );
+    await writeFile(
+      p.config,
+      JSON.stringify({ ...VALID, nudge: true, routine: { allow: ['bob'] } }),
+    );
+    await readConfig(p);
+    expect(await readNudge(p)).toBe(false);
+    expect((await readRoutineConfig(p)).limits.claimsPerDay).toBe(1);
+    expect(JSON.parse(await readFile(p.config, 'utf8'))).not.toHaveProperty(
+      'nudge',
+    );
+  });
+
+  it('keeps a key in config.json when its own file cannot be written', async () => {
+    const p = paths(root);
+    // A link to nowhere, so nudge.json can be neither read nor created.
+    await symlink(join(root, 'missing', 'nudge.json'), p.nudge);
+    await writeFile(p.config, JSON.stringify({ ...VALID, nudge: true }));
+    const config = await readConfig(p);
+    expect(config).toMatchObject({ nudge: true });
+    if (config === null) throw new Error('no config');
+    await writeConfig({ ...config, autoSync: true }, p);
+    expect(JSON.parse(await readFile(p.config, 'utf8'))).toMatchObject({
+      nudge: true,
+      autoSync: true,
+    });
+  });
+
+  it('never writes nudge or routine to config.json', async () => {
+    const p = paths(root);
+    await writeConfig({ ...VALID, nudge: true, routine: {} }, p);
+    const written = JSON.parse(await readFile(p.config, 'utf8'));
+    expect(Object.keys(written).every((k) => KEYS_0_4_4.includes(k))).toBe(
+      true,
+    );
+  });
+
+  it('reads the routine defaults without routine.json and refuses a broken one', async () => {
+    const p = paths(root);
+    expect(await readRoutineConfig(p)).toEqual({
+      limits: {
+        claimsPerDay: 10,
+        confirmsPerDay: 10,
+        minutesPerRun: 15,
+        tokensPerRun: 300_000,
+      },
+      allow: [],
+    });
+    await writeFile(
+      p.routine,
+      JSON.stringify({ limits: { claimsPerDay: -1 } }),
+    );
+    await expect(readRoutineConfig(p)).rejects.toThrow(ConfigError);
+    await writeFile(p.routine, '{ nope');
+    await expect(readRoutineConfig(p)).rejects.toThrow(/not valid JSON/);
+  });
+
+  it('reads the nudge as unset when nudge.json is missing or broken', async () => {
+    const p = paths(root);
+    expect(await readNudge(p)).toBeUndefined();
+    await writeFile(p.nudge, '{ nope');
+    expect(await readNudge(p)).toBeUndefined();
+    await writeNudge(true, p);
+    expect(await readNudge(p)).toBe(true);
   });
 });
 

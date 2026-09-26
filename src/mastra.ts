@@ -4,6 +4,7 @@
 // automatic sync is on it also starts a background sync, at most once every
 // five minutes, see background-sync.ts. A failing emit or sync is swallowed
 // so it never throws into the agent, and the agent never waits on a sync.
+// sealKeeperContext gives the session nudge for the agent's instructions.
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
 //
@@ -19,7 +20,9 @@ import {
   describeCheck,
   fetchCheck,
 } from './check.js';
+import { cli } from './invocation.js';
 import type { EmitInput } from './lib.js';
+import { nudgeLines } from './nudge.js';
 import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
@@ -177,6 +180,22 @@ export function sealKeeperSession(
         payload: { session_id: sessionId, duration_ms: elapsed(start) },
       }),
   };
+}
+
+// The session nudge (VOU-137). Mastra has no hook that adds context when a
+// session starts, but an agent's instructions may be a function that
+// Mastra calls for each generate or stream. Call this from it.
+//   instructions: async () => `${base}\n${await sealKeeperContext()}`
+// Resolves with the short SealKeeper summary once the operator turned the
+// nudge on with sealkeeper config nudge on, else with ''. It reads the
+// cached goal only, so it never waits on the network, and never rejects.
+export async function sealKeeperContext(): Promise<string> {
+  try {
+    const run = `\`${cli('prove --json')}\``;
+    return (await quietly(() => nudgeLines(run))).join('\n');
+  } catch {
+    return '';
+  }
 }
 
 // GET /v1/check for handle, as in alice/claude-code. Resolves with the

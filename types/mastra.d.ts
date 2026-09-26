@@ -29,6 +29,11 @@ export declare function sealKeeperSession(
   sessionId?: string,
 ): SealKeeperSession;
 
+// The short SealKeeper summary for the agent's instructions, once the
+// operator turned the nudge on with sealkeeper config nudge on, else ''.
+// Reads the cached goal only and never rejects.
+export declare function sealKeeperContext(): Promise<string>;
+
 // Every value optional. The API defaults minVerified to 1 and maxIncidents
 // to 0. minReliability and minSafety (0 to 1) and minLevel are checked only
 // when given.

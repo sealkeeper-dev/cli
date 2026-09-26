@@ -28,15 +28,18 @@ import {
   SettingsError,
   settingsPath,
 } from '../claude-code-settings.js';
+import { installSkill, skillPath } from '../claude-code-skill.js';
 import {
   Config,
   ConfigError,
   DEFAULT_AGENT_VERSION,
   handleOf,
   INSECURE_API_URL,
+  type Paths,
   paths,
   profileUrl as profileUrlOf,
   readConfig,
+  readNudge,
   writeConfig,
 } from '../config.js';
 import { isDirectory, tildePath } from '../files.js';
@@ -57,6 +60,7 @@ import {
 } from '../identity.js';
 import { cli } from '../invocation.js';
 import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
+import { setNudge } from '../nudge.js';
 import {
   promptStyled,
   stderr,
@@ -74,7 +78,13 @@ import {
   inheritLine,
   type VersionChange,
 } from '../version-change.js';
-import { commandLine, hooksLines, INSTALL_COMMAND } from './adapter.js';
+import {
+  askNudge,
+  commandLine,
+  hooksLines,
+  INSTALL_COMMAND,
+  skillLine,
+} from './adapter.js';
 import { printIdentity } from './whoami.js';
 
 // NOTHING_SENT and CONSENT are what a --json run prints on stderr, next to
@@ -104,6 +114,9 @@ export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
 // Asked again after an answer that is not yes or no, up to this many
 // questions in all.
 export const HOOKS_MAX_ASKS = 3;
+export const NUDGE_INTRO =
+  'The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.';
+export const NUDGE_NOT_ON = `Session nudge off. Run ${cli('config nudge on')} to turn it on later.`;
 export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
 // What bronze asks for, from the thresholds the scoring job applies.
@@ -291,6 +304,7 @@ async function init(
       // path that moved. Offer them the way a fresh init does, so npx
       // sealkeeper init is always enough.
       const hooks = await offerHooks(deps, ui);
+      await offerNudge(hooks, deps, ui, p);
       printNext(ui.out, hooks, await readNextState(existing, deps));
       return;
     }
@@ -428,7 +442,28 @@ async function init(
   say(profileLine(s, profileUrl));
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
+  await offerNudge(hooks, deps, ui, p);
   printNext(ui.out, hooks, await readNextState(config, deps));
+}
+
+// Asks once whether to add the session nudge, when the hooks that print it
+// are in and a person can answer. No is the default and is kept, so a
+// repeat init does not ask again. config nudge on|off changes it later.
+async function offerNudge(
+  hooks: HooksResult,
+  deps: InitDeps,
+  ui: Ui,
+  p: Paths,
+): Promise<void> {
+  if (hooks !== 'present' && hooks !== 'installed') return;
+  if ((await readNudge(p)) !== undefined) return;
+  const input = deps.stdin?.();
+  if (input === undefined || !input.isTTY) return;
+  note(ui.err.line`${NUDGE_INTRO}`);
+  const on = await askNudge(input, indent);
+  await setNudge(on, p);
+  const s = ui.out;
+  say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
 }
 
 // A short account of what leaves this machine, on stderr where the full
@@ -692,8 +727,9 @@ async function refreshCommand(
   ui: Ui | null,
 ): Promise<void> {
   const commandPath = proveCommandPath(file);
+  const skillFile = skillPath(file);
   try {
-    if (project) await refuseOutsideProject(cwd, [commandPath]);
+    if (project) await refuseOutsideProject(cwd, [commandPath, skillFile]);
     if (await refreshProveCommand(commandPath, invocationOf(hook))) {
       if (ui !== null) {
         const s = ui.out;
@@ -701,6 +737,15 @@ async function refreshCommand(
           s.line`${s.tick()} /sealkeeper-prove updated in ${tildePath(dirname(commandPath))}`,
         );
       }
+    }
+    // The skill came with the nudge, so a copy of ours is brought up to
+    // date and one that is missing is added, like on install.
+    const skill = await installSkill(skillFile, invocationOf(hook));
+    if (skill === 'written' && ui !== null) {
+      const s = ui.out;
+      say(
+        s.line`${s.tick()} sealkeeper skill in ${tildePath(dirname(skillFile))}`,
+      );
     }
   } catch (error) {
     if (!(error instanceof SettingsError)) throw error;
@@ -750,6 +795,23 @@ async function installAt(
     }
   } catch (error) {
     // The hooks are in, so this is only a warning.
+    if (!(error instanceof SettingsError)) throw error;
+    warn(error.message);
+  }
+  const skillFile = skillPath(file);
+  try {
+    const skill = await installSkill(skillFile, invocationOf(hook));
+    if (ui === null) {
+      stdout(skillLine(skill, skillFile));
+    } else {
+      const s = ui.out;
+      say(
+        skill === 'kept'
+          ? s.line`Left ${tildePath(skillFile)} alone, SealKeeper did not write it`
+          : s.line`${s.tick()} sealkeeper skill in ${tildePath(dirname(skillFile))}`,
+      );
+    }
+  } catch (error) {
     if (!(error instanceof SettingsError)) throw error;
     warn(error.message);
   }

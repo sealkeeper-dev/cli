@@ -5,6 +5,7 @@ import { ApiError } from '../api.js';
 import { clearInbox } from '../inbox.js';
 import { stdout, wantsJson } from '../output.js';
 import type { TaskResponse } from '../responses.js';
+import { refuseInRoutine } from '../routine.js';
 import {
   addressedTo,
   defaultTasksDeps,
@@ -50,6 +51,9 @@ export function register(
           `--type must be 1 to 32 lowercase letters, digits, _ or -, got ${options.type}`,
         );
       }
+      // pull takes the oldest open task whoever posted it, which a routine
+      // run never does.
+      await refuseInRoutine(this, 'tasks pull');
       const { signer, api } = await openTaskSession(this, deps);
 
       // The schema maximum. It is above the per-poster open cap, so an agent

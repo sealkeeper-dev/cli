@@ -8,11 +8,20 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, isYes } from '../ask.js';
+import { loadRoutineConfig } from '../cli-config.js';
+import type { RoutineConfig } from '../config.js';
 import type { Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse, TaskSubmissionResponse } from '../responses.js';
+import {
+  activeRoutineRun,
+  appendRoutine,
+  budgetOf,
+  isAllowed,
+  readRoutine,
+} from '../routine.js';
 import {
   defaultTasksDeps,
   openTaskSession,
@@ -114,6 +123,7 @@ export function register(
       }
 
       const { signer, api } = await openTaskSession(this, deps);
+      const runId = await activeRoutineRun();
       // Typed on the name, so TypeScript knows a call never returns.
       const fail: (error: unknown) => never = (error) => {
         if (error instanceof ApiError) this.error(outcomeRefusal(error, id));
@@ -130,6 +140,15 @@ export function register(
       }
       const refused = localRefusal(publicTask, signer.agentId, Date.now());
       if (refused) this.error(refused);
+      if (runId !== null) {
+        const held = await routineRefusal(
+          api,
+          await loadRoutineConfig(this),
+          publicTask,
+          runId,
+        );
+        if (held) this.error(held);
+      }
 
       let read: TaskSubmissionResponse;
       try {
@@ -160,6 +179,7 @@ export function register(
         taskId: id,
         outcome,
         evidenceHash,
+        ...(runId === null ? {} : { origin: 'routine' }),
       });
       let result: TaskResponse;
       try {
@@ -171,6 +191,9 @@ export function register(
         type: 'task.outcome',
         payload: { task_id: id, outcome, evidence_hash: evidenceHash },
       });
+      if (runId !== null) {
+        await appendRoutine({ kind: 'confirm', runId, taskId: id });
+      }
 
       // Read the reports back, so what is said about agreement is what the
       // API holds. The report is in either way, so a failed read is a
@@ -231,6 +254,51 @@ function agreementLine(
   }
 }
 
+// Why a routine run may not report on this task, or null when it may
+// (VOU-138). It reports only on submissions from operators on the
+// allowlist, and no more than the day's confirmation limit. Everything else
+// waits for a person and is logged as skipped for routine status. The
+// routine can check a hash or schema task itself, and the server already
+// has, so those never reach here, localRefusal turns them away first.
+async function routineRefusal(
+  api: ApiClient,
+  routine: RoutineConfig,
+  task: TaskResponse,
+  runId: string,
+): Promise<string | null> {
+  const entries = await readRoutine();
+  const budget = budgetOf(entries, 'confirm', routine);
+  if (budget.remaining === 0) {
+    await appendRoutine({
+      kind: 'limit',
+      runId,
+      limit: 'confirmsPerDay',
+      used: budget.used,
+      cap: budget.cap,
+    });
+    return `nothing reported. The routine's daily limit of ${budget.cap} confirmations is reached`;
+  }
+  let login: string | undefined;
+  if (task.claimantAgentId !== null) {
+    try {
+      login = (await api.getAgent(task.claimantAgentId)).operator.login;
+    } catch {
+      // Unknown, so not allowed.
+    }
+  }
+  if (isAllowed(routine, login)) return null;
+  await appendRoutine({
+    kind: 'skip',
+    runId,
+    action: 'confirm',
+    taskId: task.id,
+    reason: 'claimant_not_allowed',
+    taskType: task.taskType,
+    ...(login === undefined ? {} : { operator: login }),
+  });
+  return `nothing reported. ${login ?? 'The claimant'} is not on the routine allowlist, so this outcome waits for a person`;
+}
+
 // The same checks the API runs, and expiry, done first so nothing is signed
 // for a task that cannot take this agent's verdict. Expiry blocks only a
 // task with no submission. Work submitted in time can still be judged.
@@ -253,7 +321,7 @@ export function localRefusal(
 // The poster's signed read of the task, with the submission and both
 // reports. issuedAt is signed, so a captured envelope stops working after
 // the API's window.
-async function fetchSubmission(
+export async function fetchSubmission(
   api: ApiClient,
   signer: Signer,
   id: string,

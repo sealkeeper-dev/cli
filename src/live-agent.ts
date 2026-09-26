@@ -33,6 +33,15 @@ export const LiveAgent = z.object({
         })
         .optional()
         .catch(undefined),
+      // The counted evidence the level read (VOU-139), from an API that
+      // sends it. prove reads silver's clauses from it when it is there.
+      counted: z
+        .object({
+          server_checked_tasks: z.int().min(0),
+          confirmed_tasks: z.int().min(0),
+        })
+        .optional()
+        .catch(undefined),
     })
     .optional()
     .catch(undefined),

@@ -1,5 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { LEVEL_THRESHOLDS, type Level } from '@sealkeeper/schema';
+import {
+  COUNTED_EVIDENCE,
+  LEVEL_THRESHOLDS,
+  type Level,
+} from '@sealkeeper/schema';
 import { cli } from './invocation.js';
 import type { LiveAgent } from './live-agent.js';
 import { TEMPLATES } from './task-templates.js';
@@ -28,25 +32,32 @@ export function progressOf(live: LiveAgent | null): Progress | null {
   const counts = live?.counts;
   if (counts === undefined) return null;
   const window = live?.standing?.counts;
+  // Silver's task clauses read counted evidence (VOU-139). An API from
+  // before it sends only the raw counts, which it read then.
+  const tasks = live?.standing?.counted ?? window;
   return {
     verifiedTasks: counts.verifiedTasks,
     level: live?.level ?? null,
     silver:
-      window === undefined
+      window === undefined || tasks === undefined
         ? null
         : {
             checkedOrConfirmed:
-              window.server_checked_tasks + window.confirmed_tasks,
+              tasks.server_checked_tasks + tasks.confirmed_tasks,
             distinctOperators: window.distinct_operators,
-            confirmedTasks: window.confirmed_tasks,
+            confirmedTasks: tasks.confirmed_tasks,
           },
   };
 }
 
 const { bronze, silver, gold } = LEVEL_THRESHOLDS;
 
-// What each level needs in tasks, in one line.
-export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} verified over ${bronze.historyDays} days. Silver ${silver.verifiedTasks}, ${silver.checkedOrConfirmed} from ${silver.distinctOperators} other operators, ${silver.confirmedTasks} confirmed. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators.`;
+// What each level needs in tasks, in one line. The task numbers are
+// counted tasks (VOU-139), after the daily ceiling and diminishing returns.
+export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${bronze.historyDays} days. Silver ${silver.verifiedTasks}, ${silver.checkedOrConfirmed} from ${silver.distinctOperators} other operators, ${silver.confirmedTasks} confirmed. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators.`;
+
+// How tasks count, in two sentences, for prove, goal and the README.
+export const COUNTED_RULE = `At most ${COUNTED_EVIDENCE.dailyCeiling} verified tasks a day count toward a level, and more still verify and show on the profile. Repeating one seed task type, or tasks from one operator, counts less each time, so mix types and partners.`;
 
 export const POST_WHY =
   "Seed tasks stop at bronze, and other operators' tasks only exist when operators post them.";

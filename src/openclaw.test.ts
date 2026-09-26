@@ -12,15 +12,31 @@ import { join } from 'node:path';
 import type { Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetBackgroundSyncThrottle } from './background-sync.js';
-import { writeConfig } from './config.js';
+import { paths, readConfig, writeConfig, writeNudge } from './config.js';
 import { createKey } from './identity.js';
 import { countPending } from './log.js';
+import { NUDGE_CACHE_MAX_MS } from './nudge.js';
 import plugin, {
   type OpenClawPluginApiLike,
   sealKeeperPlugin,
 } from './openclaw.js';
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
+
+// The cached goal the nudge reads. null, as offline, unless a test sets it.
+const goal = vi.hoisted(() => ({
+  current: null as unknown,
+  reads: [] as unknown[],
+}));
+vi.mock('./goal.js', () => ({
+  cachedGoal: async (options: unknown) => {
+    goal.reads.push(options);
+    return goal.current === null
+      ? null
+      : { goal: goal.current, fetchedAt: new Date().toISOString() };
+  },
+  goalActionText: () => ({ text: '', command: null }),
+}));
 
 // Stands in for the api OpenClaw passes to register. fire calls a hook the
 // way the Gateway does and waits for what the handler returns.
@@ -99,10 +115,11 @@ describe('openclaw adapter', () => {
       expect(sealKeeperPlugin().id).toBe('sealkeeper');
     });
 
-    it('registers observation hooks only', () => {
+    it('registers observation hooks, plus the nudge', () => {
       const { handlers } = registered();
       expect([...handlers.keys()].sort()).toEqual([
         'after_tool_call',
+        'before_prompt_build',
         'before_tool_call',
         'llm_output',
         'model_call_ended',
@@ -115,6 +132,64 @@ describe('openclaw adapter', () => {
       const fake = fakeApi(['llm_output']);
       expect(() => sealKeeperPlugin().register(fake.api)).not.toThrow();
       expect(fake.handlers.has('llm_output')).toBe(false);
+      await fake.fire('session_start', { sessionId: 's1' });
+      expect((await logged()).map((e) => e.type)).toEqual(['session.start']);
+    });
+  });
+
+  describe('session nudge', () => {
+    const cached = {
+      level: 'bronze',
+      nextLevel: 'silver',
+      thresholds: [
+        { name: 'verifiedTasks', current: 40, required: 100, met: false },
+        { name: 'confirmedTasks', current: 0, required: 25, met: false },
+      ],
+      pending: { addressed: 0, outcomes: 3 },
+    };
+
+    afterEach(() => {
+      goal.current = null;
+      goal.reads = [];
+    });
+
+    async function nudgeOn(on: boolean): Promise<void> {
+      const config = await readConfig(paths(home));
+      if (config) await writeNudge(on, paths(home));
+    }
+
+    it('appends the summary to the system prompt once the nudge is on', async () => {
+      await nudgeOn(true);
+      goal.current = cached;
+      const { fire } = registered();
+      const result = await fire('before_prompt_build', { prompt: 'secret' });
+      expect(result).toEqual({
+        appendSystemContext: [
+          'SealKeeper. Level bronze, 0 of 25 confirmed tasks to silver.',
+          '3 outcomes to report.',
+          '`npx sealkeeper prove --json` works on this. Run it only when the user asks for it or agrees.',
+        ].join('\n'),
+      });
+      expect(goal.reads).toMatchObject([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);
+      // It never writes to the log.
+      expect(await logged()).toEqual([]);
+    });
+
+    it('adds nothing with the nudge off or unset, offline or without a cache', async () => {
+      goal.current = cached;
+      const { fire } = registered();
+      expect(await fire('before_prompt_build', {})).toBeUndefined();
+      await nudgeOn(false);
+      expect(await fire('before_prompt_build', {})).toBeUndefined();
+      expect(goal.reads).toEqual([]);
+      await nudgeOn(true);
+      goal.current = null;
+      expect(await fire('before_prompt_build', {})).toBeUndefined();
+    });
+
+    it('keeps the other hooks when OpenClaw refuses it by policy', async () => {
+      const fake = fakeApi(['before_prompt_build']);
+      expect(() => sealKeeperPlugin().register(fake.api)).not.toThrow();
       await fake.fire('session_start', { sessionId: 's1' });
       expect((await logged()).map((e) => e.type)).toEqual(['session.start']);
     });

@@ -20,6 +20,8 @@ import {
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
+import { routinePaths } from '../routine.js';
+import { SchedulerError } from '../routine-scheduler.js';
 import {
   defaultTasksDeps,
   openTaskSession,
@@ -28,6 +30,13 @@ import {
 } from '../tasks.js';
 import { changeVersion, inheritLine } from '../version-change.js';
 import { NAME_RULES, VERSION_RULES } from './init.js';
+import {
+  defaultRoutineDeps,
+  installedJob,
+  jobLines,
+  type RoutineDeps,
+  uninstallJob,
+} from './routine.js';
 
 // agent talks to the API the same way the task commands do, so it takes the
 // same injectable fetch. delete asks on stdin, which tests replace.
@@ -42,12 +51,13 @@ const defaultAgentDeps: AgentDeps = {
 const DELETE_ON_SERVER =
   'the agent, its events, the tasks it posted, its claims, its scores and its SEAL';
 const DELETE_ON_MACHINE =
-  'the key, config.json, the log, the SEAL cache and the well-known cache';
+  'the key, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache';
 
 // The agent's own identity on SealKeeper. Its name and its version.
 export function register(
   parent: Command,
   deps: AgentDeps = defaultAgentDeps,
+  routineDeps: RoutineDeps = defaultRoutineDeps,
 ): Command {
   const agent = parent.command('agent').description('Manage this agent');
 
@@ -181,6 +191,15 @@ export function register(
         ['on SealKeeper', DELETE_ON_SERVER],
         ['on this machine', `${DELETE_ON_MACHINE}, in ${p.home}`],
       ];
+      // A daily routine job would run for an agent that is gone, so it goes
+      // too, and is named before the question.
+      const job = await installedJob(p);
+      if (job !== null) {
+        fields.push([
+          'routine job',
+          `the daily ${job.scheduler} job ${job.job}`,
+        ]);
+      }
       const width = Math.max(...fields.map(([key]) => key.length));
       for (const [key, value] of fields) {
         print(`${key.padEnd(width)}  ${value}`);
@@ -227,9 +246,30 @@ export function register(
         );
       }
 
+      let routineJob: { removed: string[]; kept: string[] } | null = null;
+      let routineJobError: string | null = null;
+      try {
+        routineJob = await uninstallJob(routineDeps, p);
+      } catch (error) {
+        if (!(error instanceof SchedulerError)) throw error;
+        routineJobError = error.message;
+        stderr(
+          `the daily routine job could not be removed: ${error.message}. Run ${cli('routine remove')} to try again`,
+        );
+      }
       await removeLocal(p);
+      if (routineJob !== null && !json) {
+        for (const line of jobLines(routineJob)) stdout(line);
+      }
       if (json) {
-        stdout(JSON.stringify({ handle, deleted: true }));
+        stdout(
+          JSON.stringify({
+            handle,
+            deleted: true,
+            routineJob,
+            ...(routineJobError === null ? {} : { routineJobError }),
+          }),
+        );
         return;
       }
       if (result === 'gone') {
@@ -274,6 +314,14 @@ async function removeLocal(p: Paths): Promise<void> {
     p.score,
     p.inbox,
     p.postPrompt,
+    p.goal,
+    p.nudge,
+    p.routine,
+    routinePaths(p).log,
+    routinePaths(p).lock,
+    routinePaths(p).claimLock,
+    routinePaths(p).out,
+    routinePaths(p).work,
     p.cursor,
     p.sessions,
     p.log,

@@ -16,8 +16,11 @@
 // step.
 import { EventPayload } from '@sealkeeper/schema';
 import { clampMs, safeEmit } from './adapter-core.js';
+import { cli } from './invocation.js';
 import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
+import { nudgeLines } from './nudge.js';
+import { quietly } from './output.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
 const NAME = EventPayload['session.start'].shape.session_id;
@@ -106,6 +109,8 @@ function register(api: OpenClawPluginApiLike): void {
     queue = queue.then(() => safeEmit(input));
     return queue;
   };
+
+  registerNudge(api);
 
   // A handler that throws when reading a hostile event is skipped quietly.
   // OpenClaw refuses some hooks by policy, llm_output without conversation
@@ -226,6 +231,38 @@ function register(api: OpenClawPluginApiLike): void {
       },
     };
   });
+}
+
+// The session nudge (VOU-137). session_start returns nothing in OpenClaw,
+// so it cannot add context. before_prompt_build runs before each run's
+// prompt is built and may return appendSystemContext, which OpenClaw
+// appends to the system prompt, where providers can cache it. OpenClaw's
+// other prompt hooks, agent_turn_prepare and the periodic
+// heartbeat_prompt_contribution, are not used. OpenClaw treats it as a prompt injection and a
+// conversation hook, so a plugin installed from npm gets it only with
+// plugins.entries.sealkeeper.hooks.allowConversationAccess true, and not
+// with hooks.allowPromptInjection false. The summary comes from the cached
+// goal only, so a prompt never waits on the network, and only once the
+// operator turned the nudge on. Anything else returns nothing, which leaves
+// the prompt as it was. The agent is told to run prove --json, which
+// claims only seed tasks.
+
+function registerNudge(api: OpenClawPluginApiLike): void {
+  try {
+    api.on('before_prompt_build', async () => {
+      try {
+        const run = `\`${cli('prove --json')}\``;
+        const lines = await quietly(() => nudgeLines(run));
+        return lines.length > 0
+          ? { appendSystemContext: lines.join('\n') }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  } catch {
+    // Refused by policy. The other hooks still work.
+  }
 }
 
 // A plugin entry for OpenClaw. The default export is sealKeeperPlugin().

@@ -26,6 +26,15 @@ import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import {
+  ALREADY_CLAIMED,
+  EXPIRED as CLAIM_EXPIRED,
+  NOT_ASSIGNEE,
+  NOT_FOUND,
+  OWN_TASK,
+  SAME_OPERATOR,
+  UNTRUSTED,
+} from './tasks-claim.js';
+import {
   ALREADY_VERIFIED,
   BOTH_FAILURE,
   CLAIMANT_REPORTS,
@@ -79,7 +88,7 @@ const THIRD = `${'C'.repeat(42)}A`;
 
 type RunResult = { code: number; out: string; err: string };
 
-type ClaimReply = 'ok' | 409 | 410 | 'own_task';
+type ClaimReply = 'ok' | 409 | 410 | 'own_task' | 'not_assignee';
 
 type ApiCall = {
   method: string;
@@ -92,6 +101,10 @@ type ApiCall = {
 // payload taskId must match the task in the path.
 class FakeApi {
   tasks = new Map<string, TaskResponse>();
+  // GET /v1/agents/:id answers, by agent id. Missing is bob/writer, or a
+  // 404 with anyAgent false.
+  agents = new Map<string, Record<string, unknown>>();
+  anyAgent = true;
   claims = new Map<string, ClaimReply>();
   submitReply: (() => Response) | null = null;
   // Replaces the answer to a post, as for an assignee refusal.
@@ -163,6 +176,9 @@ class FakeApi {
     }
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
     if (method === 'GET' && agent) {
+      const found = this.agents.get(decodeURIComponent(agent[1] ?? ''));
+      if (found) return Response.json(found);
+      if (!this.anyAgent) return error(404, 'not_found');
       return Response.json({
         id: agent[1],
         name: 'writer',
@@ -220,6 +236,7 @@ class FakeApi {
         if (reply === 409) return error(409, 'already_claimed');
         if (reply === 410) return error(410, 'expired');
         if (reply === 'own_task') return error(400, 'own_task');
+        if (reply === 'not_assignee') return error(403, 'not_assignee');
         if (task.assignee && task.assignee.id !== this.agentId) {
           return error(403, 'not_assignee');
         }
@@ -394,6 +411,7 @@ describe('tasks pull, submit and post', () => {
   describe('without setup', () => {
     it.each([
       ['tasks', 'pull'],
+      ['tasks', 'claim', randomUUID()],
       ['tasks', 'submit', randomUUID(), '--text', 'x'],
       [
         'tasks',
@@ -525,6 +543,155 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(0);
       expect(JSON.parse(out)).toEqual({ task: null });
       expect(api.posts()).toEqual([]);
+    });
+  });
+
+  describe('claim', () => {
+    const SEED_AGENT = 'Q'.repeat(43);
+    const agentAnswer = (
+      id: string,
+      login: string,
+      name: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      id,
+      name,
+      version: '1.0.0',
+      operator: { login },
+      createdAt: new Date().toISOString(),
+      handle: `${login}/${name}`,
+      ...extra,
+    });
+
+    beforeEach(() => {
+      api.agents.set(OTHER_AGENT, agentAnswer(OTHER_AGENT, 'bob', 'poster'));
+      api.agents.set(
+        SEED_AGENT,
+        agentAnswer(SEED_AGENT, 'sealkeeper', 'sealkeeper-seed', {
+          operatedBySealKeeper: true,
+        }),
+      );
+    });
+
+    it('claims exactly the task named, not the oldest of its type', async () => {
+      api.add({ postedAt: new Date(Date.now() - 9e6).toISOString() });
+      const picked = api.add({});
+      const { code, out } = await run('tasks', 'claim', picked.id, '--json');
+      expect(code).toBe(0);
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${picked.id}/claim`,
+      ]);
+      expect(api.posts()[0]?.payload).toEqual({ taskId: picked.id });
+      expect(JSON.parse(out)).toEqual({
+        task: expect.objectContaining({ id: picked.id, state: 'claimed' }),
+        already_held: false,
+        poster: {
+          agent_id: OTHER_AGENT,
+          handle: 'bob/poster',
+          seed: false,
+          same_operator: false,
+        },
+        untrusted: true,
+        submit: `npx sealkeeper tasks submit ${picked.id} --file <answer file>`,
+      });
+      expect(await logged()).toMatchObject([
+        {
+          type: 'task.claimed',
+          payload: { task_id: picked.id, task_type: 'summarise' },
+        },
+      ]);
+    });
+
+    it('prints who posted it and that the spec is untrusted', async () => {
+      const task = api.add({});
+      const { code, out } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      const lines = out.split('\n');
+      expect(lines[0]).toBe(`Claimed ${task.id}.`);
+      expect(lines[1]).toBe('Posted by bob/poster, operator bob.');
+      expect(lines[2]).toBe(UNTRUSTED);
+      expect(out).toContain('"words": 100');
+      expect(out).toContain(
+        `npx sealkeeper tasks submit ${task.id} --text <answer>`,
+      );
+    });
+
+    it('names a seed task and leaves out the untrusted line', async () => {
+      const task = api.add({
+        posterAgentId: SEED_AGENT,
+        verification: { kind: 'hash', sha256: sha256('x') },
+      });
+      const { code, out } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      expect(out).toContain(
+        'Posted by sealkeeper/sealkeeper-seed, a seed task run by SealKeeper.',
+      );
+      expect(out).not.toContain(UNTRUSTED);
+    });
+
+    it('says when the poster is an agent of the same operator', async () => {
+      api.agents.set(OTHER_AGENT, agentAnswer(OTHER_AGENT, 'Alice', 'helper'));
+      const task = api.add({});
+      const { code, out } = await run('tasks', 'claim', task.id, '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).poster.same_operator).toBe(true);
+      const text = await run('tasks', 'claim', api.add({}).id);
+      expect(text.out).toContain(SAME_OPERATOR);
+    });
+
+    it('still claims when the poster cannot be looked up', async () => {
+      api.agents.clear();
+      api.anyAgent = false;
+      const task = api.add({});
+      const { code, out } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      expect(out).toContain(
+        `Posted by agent ${OTHER_AGENT}, which the API could not name.`,
+      );
+      expect(out).toContain(UNTRUSTED);
+    });
+
+    it.each([
+      ['own_task', OWN_TASK],
+      ['not_assignee', NOT_ASSIGNEE],
+      [409, ALREADY_CLAIMED],
+      [410, CLAIM_EXPIRED],
+    ] as const)('refuses %s in one line', async (reply, message) => {
+      const task = api.add({});
+      api.claims.set(task.id, reply);
+      const { code, out, err } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${message}\n`);
+      expect(await logged()).toEqual([]);
+    });
+
+    it('refuses an unknown task in one line', async () => {
+      const { code, err } = await run('tasks', 'claim', randomUUID());
+      expect(code).toBe(1);
+      expect(err).toBe(`${NOT_FOUND}\n`);
+    });
+
+    it('prints a task this agent already holds again, without logging it twice', async () => {
+      const task = api.add({
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+      api.claims.set(task.id, 409);
+      const { code, out } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      expect(out.split('\n')[0]).toBe(`This agent already holds ${task.id}.`);
+      expect(await logged()).toEqual([]);
+    });
+
+    it('refuses anything but a full task id before any request', async () => {
+      const { code, err } = await run('tasks', 'claim', 'abcd1234');
+      expect(code).toBe(1);
+      expect(err).toBe(
+        'abcd1234 is not a task id, copy the full id from the board\n',
+      );
+      expect(api.requests).toEqual([]);
     });
   });
 
@@ -771,6 +938,8 @@ describe('tasks pull, submit and post', () => {
         jsonSchema: { type: 'object', required: ['title'] },
       });
       expect(payload.spec).toEqual({ source: 'https://example.com' });
+      // A plain post leaves origin out, which the API reads as manual.
+      expect(payload).not.toHaveProperty('origin');
       const ttl = Date.parse(payload.expiresAt ?? '') - Date.now();
       expect(ttl).toBeGreaterThan(1.9 * 3_600_000);
       expect(ttl).toBeLessThanOrEqual(2 * 3_600_000);
@@ -1059,6 +1228,8 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(0);
       const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
       expect(payload.taskType).toBe('text_dedupe');
+      // A template post says so, for the gold rule (VOU-134).
+      expect(payload.origin).toBe('template');
       const input = String(payload.spec.input);
       const answer = `${[...new Set(input.split('\n'))].join('\n')}\n`;
       expect(payload.verification).toEqual({
@@ -1163,6 +1334,7 @@ describe('tasks pull, submit and post', () => {
       );
       const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
       expect(payload.spec.input).toBe('What is the capital of Norway?');
+      expect(payload.origin).toBe('template');
       expect(payload).not.toHaveProperty('assignee');
     });
 

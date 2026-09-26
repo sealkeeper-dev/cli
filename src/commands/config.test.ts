@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readConfig, writeConfig } from '../config.js';
+import { readConfig, readNudge, writeConfig } from '../config.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
@@ -99,7 +99,33 @@ describe('config', () => {
     expect(out).toContain(`agentId        ${AGENT_ID}\n`);
     expect(out).toContain('apiUrl         https://api.sealkeeper.run\n');
     const json = JSON.parse((await run('config', 'show', '--json')).out);
-    expect(json).toEqual({ ...(await readConfig()), autoSync: false });
+    expect(json).toEqual({
+      ...(await readConfig()),
+      autoSync: false,
+      nudge: false,
+    });
+  });
+
+  it('nudge on and off round trip through nudge.json, never config.json', async () => {
+    await initialise();
+    expect(await readNudge()).toBeUndefined();
+    expect((await run('config', 'show')).out).toContain('nudge          off\n');
+
+    const on = await run('config', 'nudge', 'on');
+    expect(on.code).toBe(0);
+    expect(on.out).toContain('session nudge is on');
+    expect(await readNudge()).toBe(true);
+    expect(await readConfig()).not.toHaveProperty('nudge');
+    expect((await run('config', 'show')).out).toContain('nudge          on\n');
+
+    const off = await run('config', 'nudge', 'off', '--json');
+    expect(JSON.parse(off.out)).toEqual({ nudge: false });
+    expect(await readNudge()).toBe(false);
+
+    const bad = await run('config', 'nudge', 'maybe');
+    expect(bad.code).toBe(1);
+    expect(bad.err).toContain('nudge takes on or off');
+    expect(await readNudge()).toBe(false);
   });
 
   it('rejects a state other than on or off', async () => {

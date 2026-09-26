@@ -2,23 +2,36 @@
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createApiClient, resolveApiUrl } from './api.js';
-import { ConfigError, type Paths, paths, readConfig } from './config.js';
+import {
+  ConfigError,
+  type Paths,
+  paths,
+  readConfig,
+  readNudge,
+} from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { readIfExists } from './files.js';
+import { fetchGoal } from './goal.js';
 import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
-import { stderr } from './output.js';
+import { type NudgeDeps, nudgeLines } from './nudge.js';
+import { stderr, stdout } from './output.js';
 import { syncEvents } from './sync.js';
 
 export { toolNameOf } from './names.js';
 
 // The Claude Code hooks adapter. Claude Code runs `sealkeeper hook claude-code`
 // for each hook event with one JSON object on stdin. handleHook maps it to
-// the event taxonomy and appends to the local log. It prints nothing on
-// stdout, since Claude Code may read that, and it never throws.
+// the event taxonomy and appends to the local log. It never throws. Claude
+// Code adds what a SessionStart hook prints on stdout to the session's
+// context, so stdout carries only the session nudge (nudge.ts), and only on
+// SessionStart once the operator turned it on. Every other hook prints
+// nothing there.
 
-// Only the SessionEnd hook tries a sync, only once autoSync is on, and never
-// for longer than this per request. Every other hook only appends.
+// Only the SessionEnd hook goes to the network. It tries a sync once
+// autoSync is on, and refreshes the goal the next SessionStart summary
+// reads once the nudge is on, never for longer than this per request.
+// Every other hook only appends, and SessionStart reads only the cache.
 const HOOK_SYNC_TIMEOUT_MS = 2_000;
 
 // Markers older than this belong to sessions or tool calls that never ended.
@@ -47,7 +60,12 @@ type HookDeps = {
   sleep: (ms: number) => Promise<void>;
   now?: () => Date;
   paths?: Paths;
+  cachedGoal?: NudgeDeps['cachedGoal'];
 };
+
+// How the summary tells Claude to act on it, the slash command and the
+// sealkeeper skill both run the prove instructions.
+export const CLAUDE_CODE_RUN = '/sealkeeper-prove';
 
 // Picks the few fields the adapter uses out of the raw stdin text, or null
 // when it is not a hook payload. Only tool_name is used. tool_input and
@@ -83,6 +101,29 @@ export async function handleHook(
   deps: HookDeps,
 ): Promise<void> {
   const p = deps.paths ?? paths();
+  await logHook(input, deps, p);
+  // After the event is in the log, so the summary never holds it up or
+  // breaks it.
+  if (input.event === 'SessionStart') await printNudge(deps, p);
+}
+
+async function printNudge(deps: HookDeps, p: Paths): Promise<void> {
+  try {
+    const lines = await nudgeLines(CLAUDE_CODE_RUN, {
+      paths: p,
+      cachedGoal: deps.cachedGoal,
+    });
+    if (lines.length > 0) stdout(lines.join('\n'));
+  } catch {
+    // A closed stdout only loses the summary.
+  }
+}
+
+async function logHook(
+  input: HookInput,
+  deps: HookDeps,
+  p: Paths,
+): Promise<void> {
   const now = deps.now?.() ?? new Date();
   try {
     let config: Awaited<ReturnType<typeof readConfig>>;
@@ -137,6 +178,7 @@ export async function handleHook(
         // Nothing leaves on its own until the operator has previewed and
         // confirmed a first sync, which turns autoSync on.
         if (config.autoSync) await trySync(config.apiUrl, deps, p);
+        if ((await readNudge(p)) === true) await refreshGoal(config, deps, p);
         return;
       }
       case 'PreToolUse': {
@@ -298,6 +340,25 @@ async function trySync(
     });
   } catch {
     stderr(`sealkeeper: sync did not finish, run ${cli('sync')}`);
+  }
+}
+
+// Best effort, and silent. A goal that could not be read leaves the cache
+// as it was, and the summary uses it while it is under a day old.
+async function refreshGoal(
+  config: { agentId: string; apiUrl: string },
+  deps: HookDeps,
+  p: Paths,
+): Promise<void> {
+  try {
+    await fetchGoal(config, {
+      fetch: deps.fetch,
+      paths: p,
+      timeoutMs: HOOK_SYNC_TIMEOUT_MS,
+      now: deps.now?.(),
+    });
+  } catch {
+    // The next SessionEnd tries again.
   }
 }
 

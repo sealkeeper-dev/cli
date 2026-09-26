@@ -17,7 +17,7 @@ import { dayOf, readDay } from './log.js';
 import { stderr, stdout } from './output.js';
 import { agentHandle, type TaskResponse } from './responses.js';
 
-// What tasks pull, submit, post and show and prove share. fetch is
+// What tasks pull, claim, submit, post and show and prove share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
 // is a terminal, which prove reads to tell a person from an agent.
 // claudeDir and cwd say where prove looks for the Claude Code hooks.
@@ -35,7 +35,7 @@ export const defaultTasksDeps: TasksDeps = {
   stdin: () => streamInput(process.stdin),
 };
 
-type TaskSession = {
+export type TaskSession = {
   config: Config;
   signer: Signer;
   api: ApiClient;

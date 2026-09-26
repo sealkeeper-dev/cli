@@ -10,6 +10,7 @@ import { register as registerCard } from './commands/card.js';
 import { register as registerCheck } from './commands/check.js';
 import { register as registerConfig } from './commands/config.js';
 import { register as registerEmit } from './commands/emit.js';
+import { register as registerGoal } from './commands/goal.js';
 import {
   type HookCommandDeps,
   register as registerHook,
@@ -18,6 +19,10 @@ import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerProve } from './commands/prove.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
+import {
+  type RoutineDeps,
+  register as registerRoutine,
+} from './commands/routine.js';
 import { register as registerSeal, type SealDeps } from './commands/seal.js';
 import {
   register as registerStatus,
@@ -78,6 +83,7 @@ type ProgramDeps = {
   rate?: RateDeps;
   agent?: AgentDeps;
   seal?: Partial<SealDeps>;
+  routine?: RoutineDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -106,11 +112,13 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerStatus(program, deps.sync);
   registerTasks(program, deps.tasks);
   registerProve(program, deps.tasks);
+  registerGoal(program, deps.tasks);
+  registerRoutine(program, deps.routine);
   registerRate(program, deps.rate);
-  registerAgent(program, deps.agent);
+  registerAgent(program, deps.agent, deps.routine);
   registerWhoami(program);
   registerConfig(program);
-  registerLogout(program);
+  registerLogout(program, deps.routine);
   registerAdapter(program, deps.adapter);
   registerHook(program, deps.hook);
   registerWhatIsShared(program);

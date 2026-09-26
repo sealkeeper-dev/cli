@@ -18,9 +18,17 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { paths, writeConfig } from '../config.js';
+import {
+  paths,
+  readRoutineConfig,
+  writeConfig,
+  writeNudge,
+  writeRoutineConfig,
+} from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
+import { appendRoutine } from '../routine.js';
+import { jobName, type Runner } from '../routine-scheduler.js';
 
 const API_URL = 'https://api.test';
 
@@ -115,9 +123,27 @@ describe('sealkeeper agent delete', () => {
   let api: FakeApi;
   // What the terminal answers. isTTY false means no one could type.
   let input: { isTTY: boolean; answers: string[]; asked: number };
+  // The scheduler calls, and the crontab they see.
+  let calls: string[];
+  let crontab: string;
+  const runner: Runner = async (file, args, options) => {
+    calls.push([file, ...args].join(' '));
+    if (file === 'crontab' && args[0] === '-l') {
+      return { code: 0, stdout: crontab, stderr: '' };
+    }
+    if (file === 'crontab' && args[0] === '-') crontab = options?.input ?? '';
+    return { code: 0, stdout: '', stderr: '' };
+  };
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
+      routine: {
+        fetch: api.fetch,
+        run: runner,
+        platform: () => 'linux',
+        homedir: () => home,
+        uid: () => 501,
+      },
       agent: {
         fetch: api.fetch,
         stdin: () => ({
@@ -205,6 +231,8 @@ describe('sealkeeper agent delete', () => {
     }
     api = new FakeApi(agentId);
     input = { isTTY: true, answers: [], asked: 0 };
+    calls = [];
+    crontab = '0 1 * * * /usr/bin/backup\n';
   });
 
   afterEach(async () => {
@@ -226,7 +254,7 @@ describe('sealkeeper agent delete', () => {
         'handle           alice/app',
         'profile          https://sealkeeper.run/agents/alice/app',
         'on SealKeeper    the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
-        `on this machine  the key, config.json, the log, the SEAL cache and the well-known cache, in ${home}`,
+        `on this machine  the key, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache, in ${home}`,
         'deleted alice/app',
         '',
       ].join('\n'),
@@ -243,6 +271,48 @@ describe('sealkeeper agent delete', () => {
     expect(await remaining()).toEqual([]);
     // The home directory itself stays, empty.
     expect(await readdir(home)).toEqual([]);
+  });
+
+  it('names the daily routine job first, then removes it with the rest', async () => {
+    const job = 'run.sealkeeper.routine.abc';
+    crontab = `0 1 * * * /usr/bin/backup\n# BEGIN ${job} (managed-by: sealkeeper, removed by sealkeeper routine remove)\n0 10 * * * sk routine run\n# END ${job}\n`;
+    const p = paths(home);
+    await writeRoutineConfig({
+      limits: {
+        claimsPerDay: 10,
+        confirmsPerDay: 10,
+        minutesPerRun: 15,
+        tokensPerRun: 300_000,
+      },
+      allow: ['bob'],
+      schedule: {
+        time: '10:00',
+        scheduler: 'cron',
+        agent: 'claude-code',
+        agentCommand: '/usr/local/bin/claude',
+        job,
+        files: [],
+        installedAt: new Date().toISOString(),
+      },
+    });
+    await writeNudge(true);
+    await appendRoutine({ kind: 'resume' });
+
+    input.answers = ['nope'];
+    const refused = await run('agent', 'delete');
+    expect(refused.code).toBe(1);
+    expect(refused.out).toContain(`routine job      the daily cron job ${job}`);
+    expect(calls).toEqual([]);
+    expect((await readRoutineConfig()).schedule?.job).toBe(job);
+
+    input.answers = ['app'];
+    const { code, out } = await run('agent', 'delete');
+    expect(code).toBe(0);
+    expect(out).toContain('removed the daily routine job');
+    expect(crontab).toBe('0 1 * * * /usr/bin/backup\n');
+    for (const f of [p.routine, p.nudge, join(home, 'routine.jsonl')]) {
+      expect(await exists(f)).toBe(false);
+    }
   });
 
   it('refuses a name that does not match and sends nothing', async () => {
@@ -322,9 +392,34 @@ describe('sealkeeper agent delete', () => {
     expect(JSON.parse(out)).toEqual({
       handle: 'alice/app',
       deleted: true,
+      routineJob: null,
     });
     expect(err).toContain('handle           alice/app');
     expect(await remaining()).toEqual([]);
+  });
+
+  it('removes the job of this home by name when routine.json names none', async () => {
+    // The job name for a home other than ~/.sealkeeper carries a hash.
+    const job = jobName(home, join(home, '.sealkeeper'));
+    crontab = `# BEGIN ${job} (managed-by: sealkeeper, removed by sealkeeper routine remove)\n0 10 * * * sk routine run\n# END ${job}\n`;
+    const { code, out } = await run('agent', 'delete', '--yes', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).routineJob).toEqual({
+      removed: [`crontab entry ${job}`],
+      kept: [],
+    });
+    expect(crontab).toBe('');
+  });
+
+  it('says in --json when the routine job could not be removed', async () => {
+    const job = jobName(home, join(home, '.sealkeeper'));
+    crontab = `# BEGIN ${job} (managed-by: sealkeeper, removed by sealkeeper routine remove)\n0 10 * * * sk routine run\n`;
+    const { code, out, err } = await run('agent', 'delete', '--yes', '--json');
+    expect(code).toBe(0);
+    const json = JSON.parse(out);
+    expect(json.routineJob).toBeNull();
+    expect(json.routineJobError).toContain('crontab -e');
+    expect(err).toContain('could not be removed');
   });
 
   it('says to run init without a config', async () => {

@@ -19,9 +19,9 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
-import { proveCommandText } from '../claude-code-command.js';
+import { isOurs, proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
-import { paths, readConfig, writeConfig } from '../config.js';
+import { paths, readConfig, readNudge, writeConfig } from '../config.js';
 import { tildePath } from '../files.js';
 import {
   ACCESS_TOKEN_URL,
@@ -51,6 +51,8 @@ import {
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
   NOTHING_SENT,
+  NUDGE_INTRO,
+  NUDGE_NOT_ON,
   SHARED_SUMMARY,
   TAGLINE,
   TERMS,
@@ -771,7 +773,8 @@ describe('sealkeeper init', () => {
       expect(result.out).not.toContain('registration failed');
       expect(result.out).not.toContain('moved SealKeeper');
       expect(result.err).toContain(HOOKS_QUESTION);
-      expect(stdin.reads).toBe(2);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(3);
       expect((await readConfig(paths(home)))?.version).toBe('2.0.0');
     });
 
@@ -859,7 +862,8 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.out).toContain('Already set up as alice/scout');
-      expect(stdin.reads).toBe(1);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(2);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).toContain(
@@ -888,7 +892,8 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(0);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(1);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -942,7 +947,8 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(1);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(2);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -1067,7 +1073,8 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(0);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(1);
       expect(result.out).not.toContain(INSTALL_COMMAND);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
     });
@@ -1105,7 +1112,8 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(1);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(2);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain('Stop');
       expect(result.all).not.toContain(HOOKS_NOT_INSTALLED);
@@ -1133,7 +1141,8 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(2);
+      // One more read for the session nudge question, once hooks are in.
+      expect(stdin.reads).toBe(3);
       expect(result.err).toContain(
         '  Please answer y or n. Install them now? [Y/n] ',
       );
@@ -1198,6 +1207,71 @@ describe('sealkeeper init', () => {
       world.stdin = answering('');
       expect((await run(world, 'init')).code).toBe(0);
       expect(await readFile(command, 'utf8')).toBe('my own command\n');
+    });
+
+    describe('the session nudge', () => {
+      const skillFile = () =>
+        join(claudeDir(), 'skills', 'sealkeeper', 'SKILL.md');
+
+      it('installs the skill with the hooks and turns the nudge on after a yes', async () => {
+        await withClaudeCode();
+        const stdin = answeringEach(['y', 'y']);
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(stdin.reads).toBe(2);
+        expect(result.err).toContain(NUDGE_INTRO);
+        expect(result.err).toContain('three line SealKeeper summary');
+        expect(result.out).toContain('  ✓ Session nudge on\n');
+        expect(await readNudge(paths(home))).toBe(true);
+        expect(isOurs(await readFile(skillFile(), 'utf8'))).toBe(true);
+      });
+
+      it('Enter is no, which is kept and not asked again', async () => {
+        await withClaudeCode();
+        world.stdin = answeringEach(['y', '']);
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.out).toContain(`  ${NUDGE_NOT_ON}\n`);
+        expect(await readNudge(paths(home))).toBe(false);
+        world = newWorld();
+        const stdin = answering('y');
+        world.stdin = stdin;
+        expect((await run(world, 'init')).code).toBe(0);
+        expect(stdin.reads).toBe(0);
+        expect(await readNudge(paths(home))).toBe(false);
+      });
+
+      it('is not asked when the hooks were declined, or with --json', async () => {
+        await withClaudeCode();
+        const declined = answering('n');
+        world.stdin = declined;
+        await run(world, 'init', '--name', 'scout');
+        expect(declined.reads).toBe(1);
+        expect(await readNudge(paths(home))).toBeUndefined();
+        await expect(stat(skillFile())).rejects.toThrow('ENOENT');
+
+        await rm(paths(home).config);
+        world = newWorld();
+        const json = answering('y');
+        world.stdin = json;
+        const result = await run(world, 'init', '--name', 'scout', '--json');
+        expect(result.code).toBe(0);
+        expect(json.reads).toBe(0);
+        expect(await readNudge(paths(home))).toBeUndefined();
+        await expect(stat(skillFile())).rejects.toThrow('ENOENT');
+      });
+
+      it('a repeat run adds a missing skill next to hooks already in', async () => {
+        await withClaudeCode();
+        world.stdin = answeringEach(['y', 'n']);
+        await run(world, 'init', '--name', 'scout');
+        await rm(skillFile());
+        world = newWorld();
+        world.stdin = answering('');
+        const result = await run(world, 'init');
+        expect(result.out).toContain('✓ sealkeeper skill in');
+        expect(isOurs(await readFile(skillFile(), 'utf8'))).toBe(true);
+      });
     });
   });
 
@@ -1371,6 +1445,9 @@ describe('sealkeeper init', () => {
           The hooks record each session and tool call, names and timings only, into a local log.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
           ✓ /sealkeeper-prove in <home>/claude/commands
+          ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
+          The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
+          Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]   Session nudge off. Run npx sealkeeper config nudge on to turn it on later.
 
           Next
           1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks

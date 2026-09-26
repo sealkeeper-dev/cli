@@ -358,7 +358,41 @@ describe('sealkeeper seal', () => {
       );
     });
 
-    it.each([2, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    it('a version 2 SEAL is valid and shows the counted values beside the counts', async () => {
+      const counted = {
+        verified_tasks: 17,
+        seed_tasks: 17,
+        server_checked_tasks: 0,
+        confirmed_tasks: 0,
+      };
+      const seal = await sign(
+        { ...claims(), ver: 2, counted },
+        serverKey.privateKey,
+        KID,
+      );
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(0);
+      const lines = out.trimEnd().split('\n');
+      expect(lines[0]).toBe('valid SEAL');
+      expect(lines).toContain('verified tasks 26, 17 counted');
+      expect(lines).toContain('seed tasks 25, 17 counted');
+      expect(lines).toContain('server checked tasks 1, 0 counted');
+      expect(lines).toContain('confirmed tasks 0, 0 counted');
+      expect(lines).toContain('distinct operators 1');
+      // A version 1 SEAL from before counted evidence still verifies, and
+      // shows the counts alone.
+      const v1 = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign(claims(), serverKey.privateKey, KID),
+      );
+      expect(v1.code).toBe(0);
+      expect(v1.out).toContain('verified tasks 26\n');
+      expect(v1.out).not.toContain('counted');
+    });
+
+    it.each([3, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);

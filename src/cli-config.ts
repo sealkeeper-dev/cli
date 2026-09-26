@@ -1,7 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Reading the config from a command, where a problem ends the command.
 import type { Command } from 'commander';
-import { type Config, ConfigError, readConfig } from './config.js';
+import {
+  type Config,
+  ConfigError,
+  type RoutineConfig,
+  readConfig,
+  readRoutineConfig,
+} from './config.js';
 import { cli } from './invocation.js';
 
 const NOT_INITIALISED = `not initialised, run ${cli('init')}`;
@@ -22,4 +28,15 @@ export async function requireConfig(cmd: Command): Promise<Config> {
   const config = await loadConfig(cmd);
   if (config === null) cmd.error(NOT_INITIALISED);
   return config;
+}
+
+// The routine settings from routine.json, the defaults when there is none.
+// A broken file ends the command with the reason.
+export async function loadRoutineConfig(cmd: Command): Promise<RoutineConfig> {
+  try {
+    return await readRoutineConfig();
+  } catch (error) {
+    if (error instanceof ConfigError) cmd.error(error.message);
+    throw error;
+  }
 }

@@ -20,6 +20,9 @@ describe('published mastra types', () => {
     expectTypeOf<published.Check>().toEqualTypeOf<mastra.Check>();
     expectTypeOf<published.CheckResponse>().toEqualTypeOf<mastra.CheckResponse>();
     expectTypeOf<typeof published.check>().toEqualTypeOf<typeof mastra.check>();
+    expectTypeOf<typeof published.sealKeeperContext>().toEqualTypeOf<
+      typeof mastra.sealKeeperContext
+    >();
     expectTypeOf<typeof published.assertTrusted>().toEqualTypeOf<
       typeof mastra.assertTrusted
     >();

@@ -6,11 +6,21 @@ import { type Paths, paths, readConfig } from '../config.js';
 import { exists } from '../files.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
+import { SchedulerError } from '../routine-scheduler.js';
+import {
+  defaultRoutineDeps,
+  jobLines,
+  type RoutineDeps,
+  uninstallJob,
+} from './routine.js';
 
 // Removes the local session. config.json, cursor.json, credential.json,
-// score.json, inbox.json and post-prompt.json go. The log stays, and so does the key unless
-// --delete-key and --yes are both given. There is no prompt, the --yes flag
-// is the confirmation.
+// score.json, inbox.json, post-prompt.json and goal.json go, and the daily
+// routine job when one is installed, since it would run for nobody. The
+// log, nudge.json and the routine's limits and allowlist stay, and so does
+// the key unless --delete-key and --yes are both given. There is no
+// prompt, the --yes flag is the confirmation, and everything removed is
+// printed.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -19,7 +29,10 @@ type LogoutOptions = {
   yes?: boolean;
 };
 
-export function register(parent: Command): Command {
+export function register(
+  parent: Command,
+  deps: RoutineDeps = defaultRoutineDeps,
+): Command {
   return parent
     .command('logout')
     .description('Remove the local session for this agent, keeping the key')
@@ -73,6 +86,19 @@ export function register(parent: Command): Command {
         );
       }
 
+      // The job first, so a scheduler that refuses stops logout with
+      // everything still in place.
+      let routineJob: { removed: string[]; kept: string[] } | null;
+      try {
+        routineJob = await uninstallJob(deps, p);
+      } catch (error) {
+        if (error instanceof SchedulerError) {
+          this.error(
+            `nothing removed. The daily routine job could not be removed: ${error.message}`,
+          );
+        }
+        throw error;
+      }
       const removed = await removeSession(p, deleteKey);
 
       if (json) {
@@ -81,11 +107,15 @@ export function register(parent: Command): Command {
             loggedOut: true,
             removed,
             keyDeleted: deleteKey,
+            routineJob,
           }),
         );
         return;
       }
       stdout(`logged out, removed ${removed.join(', ')}`);
+      if (routineJob !== null) {
+        for (const line of jobLines(routineJob)) stdout(line);
+      }
       if (deleteKey) {
         stdout(
           `deleted the key at ${p.key}, the identity of ${identity} is gone for good`,
@@ -108,6 +138,7 @@ async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
     p.score,
     p.inbox,
     p.postPrompt,
+    p.goal,
     ...(deleteKey ? [p.key] : []),
     p.config,
   ];

@@ -35,7 +35,13 @@ const offline = (async () => {
 }) as typeof fetch;
 
 // addressed is how many open tasks the API lists for this agent.
-type Live = { level?: string; dormantDays?: number | null; addressed?: number };
+type Live = {
+  level?: string;
+  dormantDays?: number | null;
+  addressed?: number;
+  // The goal answer, 404 when left out.
+  goal?: Record<string, unknown>;
+};
 
 // An open task addressed to the agent, as GET /v1/tasks answers it.
 function addressedTask() {
@@ -109,6 +115,14 @@ function scoreFetch(
       return Response.json({
         tasks: Array.from({ length: live.addressed ?? 0 }, addressedTask),
       });
+    }
+    if (url === `${API_URL}/v1/agents/${AGENT_ID}/goal`) {
+      return live.goal
+        ? Response.json(live.goal)
+        : Response.json(
+            { error: { code: 'not_found', message: 'Agent not found' } },
+            { status: 404 },
+          );
     }
     expect(url).toBe(`${API_URL}/v1/agents/${AGENT_ID}/score`);
     return Response.json({
@@ -386,6 +400,68 @@ describe('status', () => {
       expect(out).not.toContain('Quiet');
     });
 
+    it('prints one goal line from the goal answer', async () => {
+      const goal = {
+        agentId: AGENT_ID,
+        version: '1.0.0',
+        level: 'bronze',
+        nextLevel: 'silver',
+        thresholds: [
+          { name: 'verified_tasks', current: 60, required: 250, met: false },
+          { name: 'reliability', current: 0.95, required: 0.9, met: true },
+          { name: 'safety', current: 0.95, required: 0.9, met: true },
+        ],
+        actions: [{ code: 'claim_tasks', count: 190 }],
+        pending: { addressed: 0, outcomes: 0 },
+        asOf: '2026-09-25T10:15:00.000Z',
+      };
+      const { out } = await run(
+        scoreFetch([], 60, { level: 'bronze', goal }),
+        'status',
+      );
+      expect(out).toContain(
+        'goal              silver next, 2 of 3 thresholds met, see npx sealkeeper goal\n',
+      );
+      // Cached for fifteen minutes like the score, so offline it still shows.
+      expect((await run(offline, 'status')).out).toContain(
+        'goal              silver next, 2 of 3 thresholds met',
+      );
+      const json = await run(offline, 'status', '--json');
+      expect(JSON.parse(json.out).goal).toEqual(goal);
+    });
+
+    it("prints today's counted tasks from the goal answer", async () => {
+      const goal = {
+        agentId: AGENT_ID,
+        version: '1.0.0',
+        level: 'bronze',
+        nextLevel: 'silver',
+        thresholds: [],
+        actions: [],
+        pending: { addressed: 0, outcomes: 0 },
+        today: {
+          day: new Date().toISOString().slice(0, 10),
+          counted: 20,
+          ceiling: 20,
+          remaining: 0,
+        },
+        asOf: '2026-09-25T10:15:00.000Z',
+      };
+      const { out } = await run(
+        scoreFetch([], 60, { level: 'bronze', goal }),
+        'status',
+      );
+      expect(out).toContain(
+        'Today 20 of 20 counted. More tasks today still verify but will not move your level.\n',
+      );
+    });
+
+    it('prints a dash for the goal when the API has none and nothing is cached', async () => {
+      expect((await run(offline, 'status')).out).toContain(
+        'goal              -\n',
+      );
+    });
+
     it('prints a dash for the level when the API has none or is offline', async () => {
       expect((await run(scoreFetch([]), 'status')).out).toContain(
         'level             -\n',
@@ -577,6 +653,7 @@ describe('status', () => {
       verifiedTasks: 2,
       level: null,
       dormantDays: null,
+      goal: null,
       unsubmittedClaims: 0,
       addressedTasks: 0,
       nextScoringRunMinutes: expect.any(Number),

@@ -54,8 +54,8 @@ export function sealKid(jws: string): string | null {
 // version, then the shape, then expiry, then iat. Verify first, parse
 // second. A version other than 1 is unsupported, and so is a SEAL without
 // ver once LEGACY_UNTIL has passed, as sealVersionProblem in
-// @sealkeeper/schema says. A version 1 payload must then match the strict
-// shape, parseSealPayload. The API's POST /v1/seal/verify and the web's
+// @sealkeeper/schema says. A version 1 or 2 payload must then match the
+// strict shape, parseSealPayload. The API's POST /v1/seal/verify and the web's
 // checkSeal use the same rules, and the SEAL conformance cases in
 // @sealkeeper/schema hold all three to the same answers.
 export async function checkSeal(
@@ -102,8 +102,8 @@ export async function checkSeal(
   if (sealVersionProblem(payload, nowSec) !== null) {
     return broken('unsupported version', payload);
   }
-  // A version 1 SEAL from an accepted issuer has one exact shape, and the API and
-  // the web check it with the strict parser. So does this, so the three
+  // A version 1 or 2 SEAL from an accepted issuer has one exact shape, and
+  // the API and the web check it with the strict parser. So does this, so the three
   // never disagree about one. The loose read below is kept for what it
   // prints and for the legacy shape.
   if (hasVer(payload) && !parseSealPayload(payload, nowSec).ok) {
@@ -145,7 +145,8 @@ function hasVer(payload: unknown): boolean {
 }
 
 // What a verified SEAL says, one line each, for seal show and seal verify.
-// Level, the eight counts, operator verified, last active as a date,
+// Level, the eight counts (with the counted value beside each task count in
+// a version 2 SEAL, VOU-140), operator verified, last active as a date,
 // dormant days and any identity references. A legacy SEAL, issued before
 // version 1, has only some of these, so a line is left out when its field
 // is. Nothing for a payload that is not a SEAL.
@@ -175,7 +176,18 @@ export function sealSummary(payload: unknown): string[] {
   );
   for (const [key, label] of COUNT_LINES) {
     const value = c.counts[key];
-    if (value !== undefined) lines.push(`${label} ${value}`);
+    if (value === undefined) continue;
+    // A version 2 SEAL carries the counted value the level read beside
+    // the raw count, for the four task counts.
+    const counted =
+      c.counted !== undefined && key in c.counted
+        ? c.counted[key as keyof typeof c.counted]
+        : undefined;
+    lines.push(
+      counted === undefined
+        ? `${label} ${value}`
+        : `${label} ${value}, ${counted} counted`,
+    );
   }
   if (c.operator !== undefined) {
     lines.push(`operator verified ${c.operator.verified ? 'yes' : 'no'}`);

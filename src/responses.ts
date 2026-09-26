@@ -194,6 +194,15 @@ const sealClaims = {
     distinct_operators: Count.optional(),
     safety_incidents_90d: Count.optional(),
   }),
+  // The counted evidence the level read, version 2 on (VOU-139).
+  counted: z
+    .object({
+      verified_tasks: Count,
+      seed_tasks: Count,
+      server_checked_tasks: Count,
+      confirmed_tasks: Count,
+    })
+    .optional(),
   operator: z.object({ verified: z.boolean() }).optional(),
   identity: z.array(IdentityClaim).optional(),
   last_active: Seconds.nullable().optional(),
@@ -335,3 +344,60 @@ export const ErrorResponse = z.object({
     issues: z.array(ErrorIssue).optional(),
   }),
 });
+
+// GET /v1/agents/<id>/goal, loose all the way down. Unknown keys are kept
+// rather than dropped, so goal --json prints the API answer as it came.
+// A threshold name or an action code this CLI does not know still parses,
+// and goalActionText (goal.ts) says something generic for it.
+export const GoalThreshold = z.looseObject({
+  name: z.string(),
+  current: z.number(),
+  required: z.number(),
+  met: z.boolean(),
+  // The raw count beside a counted one (VOU-139), from an API that sends
+  // it. Absent or null for the other rules.
+  raw: z.number().nullable().optional().catch(undefined),
+});
+export type GoalThreshold = z.infer<typeof GoalThreshold>;
+
+// A count that does not read, such as a fraction, reads as none rather
+// than failing the whole answer.
+export const GoalAction = z.looseObject({
+  code: z.string(),
+  count: Count.nullable().catch(null),
+});
+export type GoalAction = z.infer<typeof GoalAction>;
+
+export const GoalResponse = z.looseObject({
+  agentId: AgentId,
+  version: z.string(),
+  // Any string, so a level a newer API adds does not fail goal, the nudge
+  // or the ceiling check. Shown only through shownLevel (goal.ts).
+  level: z.string(),
+  nextLevel: z.string().nullable(),
+  thresholds: z.array(GoalThreshold),
+  actions: z.array(GoalAction),
+  // posterOutcomes, from an API that sends it, counts the tasks this agent
+  // posted whose outcome waits for its report. outcomes counts its own
+  // claims only.
+  pending: z.looseObject({
+    addressed: Count,
+    outcomes: Count,
+    posterOutcomes: Count.optional().catch(undefined),
+  }),
+  // The UTC day's counted tasks against the daily ceiling (VOU-139), from
+  // an API that sends it. Kept as it came, so goal --json prints it
+  // unchanged, and read through GoalToday (todayOf in goal.ts), so a shape
+  // this CLI does not know is ignored rather than failing the answer.
+  today: z.unknown().optional(),
+  asOf: Timestamp.nullable(),
+});
+export type GoalResponse = z.infer<typeof GoalResponse>;
+
+export const GoalToday = z.looseObject({
+  day: z.iso.date(),
+  counted: Count,
+  ceiling: Count,
+  remaining: Count,
+});
+export type GoalToday = z.infer<typeof GoalToday>;

@@ -26,6 +26,13 @@ import {
   profileUrl,
 } from '../config.js';
 import { exists } from '../files.js';
+import {
+  type GoalResponse,
+  goalSummary,
+  loadGoal,
+  todayLine,
+  todayOf,
+} from '../goal.js';
 import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import { readLiveAgent } from '../live-agent.js';
@@ -81,6 +88,9 @@ type Status = {
   // Whole days since the API last accepted an event from this agent. null
   // when unknown or when it has accepted none.
   dormantDays: number | null;
+  // What the next level needs, from the goal cache, fifteen minutes like
+  // the score. null when the API did not answer and there is no cache.
+  goal: GoalResponse | null;
   // Claimed in the local log and not submitted, over the last week.
   unsubmittedClaims: number;
   // Open tasks addressed to this agent, from the API or a cache under
@@ -153,7 +163,7 @@ async function readStatus(
     now,
     paths: p,
   });
-  const [events, pending, cursor, score, live, unsubmitted, inbox] =
+  const [events, pending, cursor, score, live, unsubmitted, inbox, goal] =
     await Promise.all([
       readDay(day, p),
       countPending(p),
@@ -162,6 +172,7 @@ async function readStatus(
       readLiveAgent(config, deps.fetch),
       unsubmittedClaims(now, p),
       inboxPromise,
+      loadGoal({ config, fetch: deps.fetch, now, paths: p }),
     ]);
 
   return {
@@ -173,6 +184,7 @@ async function readStatus(
     verifiedTasks: live?.counts?.verifiedTasks ?? null,
     level: live?.level ?? null,
     dormantDays: live?.standing?.dormant_days ?? null,
+    goal,
     unsubmittedClaims: unsubmitted.length,
     addressedTasks: inbox?.count ?? null,
     nextScoringRunMinutes: minutesToNextScoring(now),
@@ -305,6 +317,7 @@ function printStatus(status: Status): void {
       status.verifiedTasks === null ? '-' : String(status.verifiedTasks),
     ],
     ['level', status.level ?? '-'],
+    ['goal', status.goal ? goalLine(status.goal) : '-'],
     ...(status.dormantDays !== null && status.dormantDays > 0
       ? ([['dormant', days(status.dormantDays)]] as [string, string][])
       : []),
@@ -333,12 +346,21 @@ function printStatus(status: Status): void {
   if (hint) stdout(hint);
   const addressed = addressedLine(status.addressedTasks);
   if (addressed) stdout(addressed);
+  // Today's counted tasks against the daily ceiling (VOU-140), from the
+  // same goal answer, left out when it is from another UTC day.
+  const today = todayOf(status.goal);
+  if (today) stdout(todayLine(today));
 
   if (status.events) {
     stdout('');
     stdout(`today's events, ${status.events.length}, as they are sent`);
     for (const event of status.events) stdout(JSON.stringify(event));
   }
+}
+
+// The goal row of status, one line, and where the rest is.
+export function goalLine(goal: GoalResponse): string {
+  return `${goalSummary(goal)}, see ${cli('goal')}`;
 }
 
 export function nextScoringLine(minutes: number): string {

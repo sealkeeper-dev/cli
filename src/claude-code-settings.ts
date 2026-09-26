@@ -65,6 +65,17 @@ export function cliInvocation(
   return `${shellQuote(stableNode(execPath))} ${shellQuote(script)}`;
 }
 
+// The same node binary and script as cliInvocation, unquoted, one argument
+// each, for a scheduler that takes a program and its arguments. Empty when
+// this is not run as the CLI.
+export function cliProgram(
+  execPath: string = process.execPath,
+  argv1: string | undefined = process.argv[1],
+): string[] {
+  if (argv1 === undefined || argv1.length === 0) return [];
+  return [stableNode(execPath), realOrNull(argv1) ?? argv1];
+}
+
 // Homebrew node reports its versioned Cellar path, such as
 // /opt/homebrew/Cellar/node@24/24.20.0/bin/node, which brew cleanup deletes
 // after an upgrade. When the stable opt link for the same formula exists

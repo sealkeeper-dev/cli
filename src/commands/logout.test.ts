@@ -1,14 +1,28 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type Paths, paths, writeConfig } from '../config.js';
+import {
+  type Paths,
+  paths,
+  readRoutineConfig,
+  writeConfig,
+  writeRoutineConfig,
+} from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
+import { jobName, launchdPath, type Runner } from '../routine-scheduler.js';
 
 type RunResult = { code: number; out: string; err: string };
 
@@ -17,8 +31,25 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
+// The scheduler calls the routine job removal makes, as file and args.
+const calls: string[] = [];
+const runner: Runner = async (file, args) => {
+  calls.push([file, ...args].join(' '));
+  return { code: 0, stdout: '', stderr: '' };
+};
+
 async function run(...args: string[]): Promise<RunResult> {
-  const program = createProgram();
+  const program = createProgram({
+    routine: {
+      fetch: (() => {
+        throw new Error('no network');
+      }) as unknown as typeof fetch,
+      run: runner,
+      platform: () => 'darwin',
+      homedir: () => paths().home,
+      uid: () => 501,
+    },
+  });
   throwOnExit(program);
   let out = '';
   let err = '';
@@ -167,7 +198,99 @@ describe('logout', () => {
         'config.json',
       ],
       keyDeleted: false,
+      routineJob: null,
     });
+    expect(calls).toEqual([]);
+  });
+
+  it('removes the job of this home by name without routine.json', async () => {
+    await initialise();
+    calls.length = 0;
+    const env = { platform: 'darwin' as const, homedir: p.home, uid: 501 };
+    // The job name for a home other than ~/.sealkeeper carries a hash.
+    const job = jobName(p.home, join(p.home, '.sealkeeper'));
+    const plist = launchdPath(job, env);
+    await mkdir(dirname(plist), { recursive: true });
+    await writeFile(plist, '<?xml?>\n<!-- managed-by: sealkeeper -->\n');
+    const { code, out } = await run('logout', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).routineJob).toEqual({ removed: [plist], kept: [] });
+    expect(calls).toEqual([`launchctl bootout gui/501/${job}`]);
+  });
+
+  it('says the job was kept, and keeps it recorded, when none of it is ours', async () => {
+    await initialise();
+    const env = { platform: 'darwin' as const, homedir: p.home, uid: 501 };
+    const job = 'run.sealkeeper.routine';
+    const plist = launchdPath(job, env);
+    await mkdir(dirname(plist), { recursive: true });
+    await writeFile(plist, '<plist/>\n');
+    await writeRoutineConfig(
+      {
+        limits: {
+          claimsPerDay: 10,
+          confirmsPerDay: 10,
+          minutesPerRun: 15,
+          tokensPerRun: 300_000,
+        },
+        allow: [],
+        schedule: {
+          time: '10:00',
+          scheduler: 'launchd',
+          agent: 'claude-code',
+          agentCommand: '/usr/local/bin/claude',
+          job,
+          files: [plist],
+          installedAt: new Date().toISOString(),
+        },
+      },
+      p,
+    );
+    const { code, out } = await run('logout');
+    expect(code).toBe(0);
+    expect(out).not.toContain('removed the daily routine job');
+    expect(out).toContain('the daily routine job was kept');
+    expect(await exists(plist)).toBe(true);
+    expect((await readRoutineConfig(p)).schedule?.job).toBe(job);
+  });
+
+  it('removes the daily routine job and says so, keeping the allowlist', async () => {
+    await initialise();
+    calls.length = 0;
+    const env = { platform: 'darwin' as const, homedir: p.home, uid: 501 };
+    const job = 'run.sealkeeper.routine';
+    const plist = launchdPath(job, env);
+    await mkdir(dirname(plist), { recursive: true });
+    await writeFile(plist, '<?xml?>\n<!-- managed-by: sealkeeper -->\n');
+    await writeRoutineConfig(
+      {
+        limits: {
+          claimsPerDay: 10,
+          confirmsPerDay: 10,
+          minutesPerRun: 15,
+          tokensPerRun: 300_000,
+        },
+        allow: ['bob'],
+        schedule: {
+          time: '10:00',
+          scheduler: 'launchd',
+          agent: 'claude-code',
+          agentCommand: '/usr/local/bin/claude',
+          job,
+          files: [plist],
+          installedAt: new Date().toISOString(),
+        },
+      },
+      p,
+    );
+    const { code, out } = await run('logout');
+    expect(code).toBe(0);
+    expect(out).toContain('removed the daily routine job');
+    expect(calls).toEqual([`launchctl bootout gui/501/${job}`]);
+    expect(await exists(plist)).toBe(false);
+    const routine = await readRoutineConfig(p);
+    expect(routine.schedule).toBeUndefined();
+    expect(routine.allow).toEqual(['bob']);
   });
 
   it('still logs out with a broken config', async () => {

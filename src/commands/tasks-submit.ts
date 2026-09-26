@@ -11,6 +11,7 @@ import { ApiError } from '../api.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey, insideHome } from '../key-guard.js';
 import { stdout, wantsJson } from '../output.js';
+import { activeRoutineRun, appendRoutine } from '../routine.js';
 import {
   defaultTasksDeps,
   failOnApiError,
@@ -52,6 +53,8 @@ export function register(
       if (!request.success) this.error(z.prettifyError(request.error));
 
       const { signer, api } = await openTaskSession(this, deps);
+      // Inside a routine run the claimant's report carries origin routine.
+      const runId = await activeRoutineRun();
 
       let task: TaskResponse;
       try {
@@ -106,6 +109,9 @@ export function register(
           type: 'task.submitted',
           payload: { task_id: result.id, task_type: result.taskType },
         });
+        if (runId !== null) {
+          await appendRoutine({ kind: 'submit', runId, taskId: result.id });
+        }
       }
 
       // Counterparty tasks count only when both sides agree. The claimant
@@ -114,6 +120,7 @@ export function register(
         const outcome = TaskOutcomeRequest.parse({
           taskId: id,
           outcome: 'success',
+          ...(runId === null ? {} : { origin: 'routine' }),
         });
         try {
           result = await api.postOutcome(id, await signer.sign(outcome));

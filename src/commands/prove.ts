@@ -9,8 +9,18 @@ import {
 } from '../api.js';
 import { type Input, readYesNo } from '../ask.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
-import { requireConfig } from '../cli-config.js';
-import { type Config, handleOf } from '../config.js';
+import { loadRoutineConfig, requireConfig } from '../cli-config.js';
+import { type Config, handleOf, type RoutineConfig } from '../config.js';
+import {
+  dailyCeilingReached,
+  type GoalResponse,
+  type GoalToday,
+  goalActionLine,
+  loadGoal,
+  shownLevel,
+  todayLine,
+  todayOf,
+} from '../goal.js';
 import { clearInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import {
@@ -35,6 +45,18 @@ import {
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
+import {
+  activeRoutineRun,
+  appendRoutine,
+  budgetOf,
+  isAllowed,
+  normalLogin,
+  type RoutineEntry,
+  readRoutine,
+  type SkipEntry,
+  skippedIds,
+  withClaimLock,
+} from '../routine.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import {
   addressedTo,
@@ -113,6 +135,7 @@ type ProveOptions = {
   claim?: boolean;
   addressed?: boolean;
   post?: boolean;
+  anyway?: boolean;
 };
 
 // A task addressed to this agent with its poster's handle.
@@ -148,6 +171,10 @@ export function register(
       '--post',
       'in a terminal, then walk through posting a task for other agents',
     )
+    .option(
+      '--anyway',
+      "claim even when today's counted tasks have reached the daily ceiling",
+    )
     .action(async function (
       this: Command,
       options: ProveOptions,
@@ -164,22 +191,34 @@ export function register(
         return;
       }
 
-      const { config, tasks, capped, skipped, posters, waiting, waitingTotal } =
-        await claim(this, deps, options, json);
+      const {
+        config,
+        tasks,
+        capped,
+        skipped,
+        posters,
+        waiting,
+        waitingTotal,
+        limited,
+        ceiling,
+      } = await claim(this, deps, options, json);
       const now = Date.now();
 
       if (json) {
         // stdout is the array and nothing else. What an agent may want to
         // know besides goes to stderr, last of all one JSON object on a
         // line of its own. The addressed tasks that wait, when there are
-        // any, and always where the agent stands and how to post a task.
+        // any, and always where the agent stands, how to post a task and
+        // limited, today's counted tasks and the ceiling when the daily
+        // ceiling held the claims back, else null.
         stdout(
           JSON.stringify(
             tasks.map((task) => proveEntry(task, posters.get(task.id))),
           ),
         );
         if (posters.size > 0) stderr(addressedNote(posters.size));
-        if (tasks.length === 0 && !capped) {
+        if (limited) stderr(limited);
+        if (tasks.length === 0 && !capped && !limited) {
           stderr(`${NOTHING_AVAILABLE}. ${TRY_LATER}`);
           if (skipped > 0) stderr(anyPosterHint(skipped));
         }
@@ -188,6 +227,7 @@ export function register(
           JSON.stringify({
             ...(waiting.length > 0 ? waitingEntry(waiting) : {}),
             ...postNext(progress),
+            limited: ceiling,
           }),
         );
         return;
@@ -198,8 +238,9 @@ export function register(
           : [];
       // At the cap with nothing to list, stderr already said why. Saying no
       // open tasks exist as well would be wrong.
+      if (limited) stderr(limited);
       let lines: string[];
-      if (tasks.length === 0 && capped) {
+      if (tasks.length === 0 && (capped || limited)) {
         lines = tail;
       } else if (tasks.length === 0) {
         lines = [
@@ -273,10 +314,11 @@ async function explain(
   deps: TasksDeps,
 ): Promise<Progress | null> {
   const config = await requireConfig(cmd);
-  const [live, hooks, addressed] = await Promise.all([
+  const [live, hooks, addressed, goal] = await Promise.all([
     readLiveAgent(config, deps.fetch),
     claudeCodeHooksIn(deps),
     addressedWaiting(config, deps),
+    loadGoal({ config, fetch: deps.fetch }),
   ]);
   const s = createStyle(process.stdout);
   const say = (line?: Styled) => stdoutStyled(indent(line));
@@ -307,6 +349,10 @@ async function explain(
   say();
   const progress = progressOf(live);
   for (const line of ladderLines(progress)) say(s.line`${line}`);
+  // Then the level and the top two goal actions (VOU-135), left out when
+  // the API did not answer, since the ladder lines already say what they
+  // can.
+  if (goal) for (const line of proveGoalLines(goal)) say(s.line`${line}`);
   say();
   return progress;
 }
@@ -424,6 +470,33 @@ async function withPosters(
   }));
 }
 
+// Where the agent stands and the top two next steps from the goal, each
+// with its command. Replaces the progress line when the API answered. Once
+// today's counted budget is spent (VOU-140) it says so first, since more
+// tasks today would not move the level.
+export function proveGoalLines(
+  goal: GoalResponse,
+  now: Date = new Date(),
+): string[] {
+  const head =
+    goal.nextLevel === null
+      ? `Level ${shownLevel(goal.level)}, the top level.`
+      : `Level ${shownLevel(goal.level)}. Next ${shownLevel(goal.nextLevel)}.`;
+  const today = todayOf(goal, now);
+  return [
+    ...(dailyCeilingReached(today) && today ? [todayLine(today)] : []),
+    head,
+    ...goal.actions.slice(0, TOP_ACTIONS).map((a) => goalActionLine(a)),
+  ];
+}
+
+// Said instead of claiming once today's counted budget is spent (VOU-140).
+export const ceilingHeldBack = (today: GoalToday): string =>
+  `${todayLine(today)} Nothing was claimed. Run ${cli('prove --anyway')} to claim all the same, or come back after midnight UTC`;
+
+// How many of the goal's actions prove shows.
+const TOP_ACTIONS = 2;
+
 export const EXPLAIN = [
   'Your agent earns verified tasks by solving small checks,',
   'like deduplicating lines or reading a JSON value.',
@@ -440,6 +513,10 @@ export const EXPLAIN = [
 // held, by task id. waiting is the tasks addressed to this agent that were
 // not claimed, each with its poster, all of them for JSON and at most
 // MAX_ADDRESSED_LINES otherwise, and waitingTotal how many there are.
+// Inside a routine run the candidates are the routine's instead, see
+// routineCandidates, and held tasks the routine may not work are left out,
+// see routineHeld. limited is the reason for claiming fewer, and ceiling
+// is set when the daily ceiling held every claim back.
 async function claim(
   cmd: Command,
   deps: TasksDeps,
@@ -453,11 +530,15 @@ async function claim(
   posters: Map<string, string>;
   waiting: Addressed[];
   waitingTotal: number;
+  limited?: string;
+  ceiling: { counted: number; ceiling: number } | null;
 }> {
   const { config, signer, api } = await openTaskSession(cmd, deps);
-  const want = options.count;
+  let want = options.count;
   const now = Date.now();
   const posters = new PosterLookup(api);
+  // prove inside a routine run (VOU-138), see routineCandidates.
+  const runId = await activeRoutineRun();
 
   // Tasks addressed to this agent. A listing that fails for any reason but
   // a moved API counts as none, as an API from before addressed tasks
@@ -472,10 +553,55 @@ async function claim(
   }
 
   const tasks = await heldTasks(api, signer.agentId, want, now);
+  // Inside a routine run, held tasks it may not work wait for a person like
+  // any other, so the agent never sees their specs.
+  const routine = runId === null ? null : await loadRoutineConfig(cmd);
+  const keepRoutineHeld = async () => {
+    if (runId === null || routine === null) return;
+    const found = await routineHeld(posters, tasks, config, routine);
+    tasks.splice(0, tasks.length, ...found.tasks);
+    await logSkips(await readRoutine(), found.skipped, runId, now);
+  };
+  await keepRoutineHeld();
   let capped = false;
   let skipped = 0;
   let failures = 0;
+  let limited: string | undefined;
+  let ceiling: { counted: number; ceiling: number } | null = null;
+  // Counted evidence (VOU-140). Once today's counted tasks reach the daily
+  // ceiling, more tasks still verify and count toward nothing until the
+  // next UTC day, so prove claims none unless --anyway. The goal comes from
+  // the fifteen minute cache when it is fresh, and a goal that cannot be
+  // read, or says nothing of today, holds nothing back.
+  // Below the ceiling, it claims no more than the day can still count, held
+  // tasks included, since they count once they verify.
+  const heldBack = async (): Promise<boolean> => {
+    if (options.anyway || tasks.length >= want) return false;
+    const today = todayOf(
+      await loadGoal({ config, fetch: deps.fetch }),
+      new Date(now),
+    );
+    if (today === null) return false;
+    if (!dailyCeilingReached(today)) {
+      want = Math.min(want, Math.max(tasks.length, today.remaining));
+      return false;
+    }
+    limited = ceilingHeldBack(today);
+    ceiling = { counted: today.counted, ceiling: today.ceiling };
+    if (runId !== null) {
+      await appendRoutine({
+        kind: 'limit',
+        runId,
+        limit: 'dailyCountCeiling',
+        used: today.counted,
+        cap: today.ceiling,
+      });
+    }
+    return true;
+  };
   const done = async () => {
+    // A claim cap adds the tasks the server says this agent holds.
+    await keepRoutineHeld();
     const have = new Set(tasks.map((task) => task.id));
     const rest = addressed.filter((task) => !have.has(task.id));
     const shown = json ? rest : rest.slice(0, MAX_ADDRESSED_LINES);
@@ -493,6 +619,8 @@ async function claim(
       posters: handles,
       waiting: named.slice(held.length),
       waitingTotal: rest.length,
+      ...(limited === undefined ? {} : { limited }),
+      ceiling,
     };
   };
   // Claims one task. False when the claim cap stopped it, and then the
@@ -511,6 +639,14 @@ async function claim(
         type: 'task.claimed',
         payload: { task_id: claimed.id, task_type: claimed.taskType },
       });
+      if (runId !== null) {
+        await appendRoutine({
+          kind: 'claim',
+          runId,
+          taskId: claimed.id,
+          taskType: claimed.taskType,
+        });
+      }
     } catch (error) {
       if (error instanceof ApiError && isGone(error)) {
         failures += 1;
@@ -530,6 +666,64 @@ async function claim(
     }
     return true;
   };
+  if (await heldBack()) return done();
+  if (runId !== null && routine !== null) {
+    if (tasks.length >= want) return done();
+    // The budget is read, spent and logged under the claim lock, so two
+    // proves of one run at once cannot claim past the daily limit.
+    const claimRoutine = async (): Promise<void> => {
+      const entries = await readRoutine();
+      const budget = budgetOf(entries, 'claim', routine, new Date(now));
+      const limit = async (used: number) => {
+        await appendRoutine({
+          kind: 'limit',
+          runId,
+          limit: 'claimsPerDay',
+          used,
+          cap: budget.cap,
+        });
+        limited = claimLimitReached(budget.cap);
+      };
+      if (budget.remaining === 0) {
+        await limit(budget.used);
+        return;
+      }
+      let found: RoutineCandidates;
+      try {
+        found = await routineCandidates(
+          api,
+          posters,
+          signer.agentId,
+          config,
+          routine,
+          seedTypesDone(entries),
+        );
+      } catch (error) {
+        failOnApiError(cmd, error);
+      }
+      await logSkips(entries, found.skipped, runId, now);
+      skipped = found.skipped.length;
+      want = Math.min(want, tasks.length + budget.remaining);
+      const have = new Set(tasks.map((task) => task.id));
+      for (const task of found.tasks) {
+        if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+        if (have.has(task.id)) continue;
+        if (!(await claimOne(task))) return;
+      }
+      if (tasks.length === want && want < options.count) {
+        await limit(budget.used + budget.remaining);
+      }
+    };
+    try {
+      await withClaimLock(claimRoutine);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('another prove')) {
+        cmd.error(error.message);
+      }
+      throw error;
+    }
+    return done();
+  }
   // Only when the run asks. The operator opts into specs another operator
   // wrote for this agent, as with --any-poster. Counted apart from the held
   // tasks, so seed claims from an earlier run never crowd these out.
@@ -575,6 +769,155 @@ async function claim(
     if (!(await claimOne(task))) break;
   }
   return done();
+}
+
+export const claimLimitReached = (cap: number): string =>
+  `the routine's daily limit of ${cap} claims is reached, nothing more is claimed today`;
+
+export type RoutineCandidates = {
+  tasks: TaskResponse[];
+  skipped: Pick<
+    SkipEntry,
+    'action' | 'taskId' | 'reason' | 'operator' | 'taskType'
+  >[];
+};
+
+// What a routine run may claim, in order, and what it must leave for a
+// person. Tasks addressed to this agent by allowed operators come first,
+// then seed tasks, the types the routine has claimed least first (done,
+// from seedTypesDone), since repeats of one type count less each time
+// (VOU-140). An open task another agent posted is never claimed
+// unattended, whoever posted it. Tasks of this agent's own operator are left
+// out without a note, since they never count. Throws what the API client
+// throws.
+export async function routineCandidates(
+  api: ApiClient,
+  posters: PosterLookup,
+  agentId: string,
+  config: Config,
+  routine: RoutineConfig,
+  done: ReadonlyMap<string, number> = new Map(),
+): Promise<RoutineCandidates> {
+  const own = normalLogin(config.operatorLogin);
+  const tasks: TaskResponse[] = [];
+  const seeds: TaskResponse[] = [];
+  const skipped: RoutineCandidates['skipped'] = [];
+
+  for (const task of await listAddressed(api, agentId)) {
+    if (task.posterAgentId === agentId) continue;
+    const login = await posters.operatorOf(task);
+    if (login !== undefined && normalLogin(login) === own) continue;
+    if (isAllowed(routine, login)) {
+      tasks.push(task);
+      continue;
+    }
+    skipped.push({
+      action: 'claim',
+      taskId: task.id,
+      reason: 'poster_not_allowed',
+      taskType: task.taskType,
+      ...(login === undefined ? {} : { operator: login }),
+    });
+  }
+
+  const open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
+  const all = await ranked(
+    posters,
+    open.filter((task) => task.posterAgentId !== agentId && !task.assignee),
+  );
+  for (const { task, seed } of all) {
+    if (seed) {
+      seeds.push(task);
+      continue;
+    }
+    const login = task.posterOperator?.login;
+    if (login !== undefined && normalLogin(login) === own) continue;
+    skipped.push({
+      action: 'claim',
+      taskId: task.id,
+      reason: 'open_task',
+      taskType: task.taskType,
+      ...(login === undefined ? {} : { operator: login }),
+    });
+  }
+  // A stable sort, so tasks of one type keep the order ranked gave them.
+  const least = (t: TaskResponse) => done.get(t.taskType) ?? 0;
+  tasks.push(...seeds.sort((a, b) => least(a) - least(b)));
+  return { tasks, skipped };
+}
+
+// The held tasks a routine run may work, in order, and the rest as skips
+// for a person. Seed tasks, tasks from operators on the allowlist and tasks
+// of this agent's own operator are kept. Anything else, such as a task
+// claimed by hand before the run, is never handed to the unattended agent.
+// A poster that cannot be looked up is not allowed.
+export async function routineHeld(
+  posters: PosterLookup,
+  tasks: TaskResponse[],
+  config: Config,
+  routine: RoutineConfig,
+): Promise<RoutineCandidates> {
+  const own = normalLogin(config.operatorLogin);
+  const kept: TaskResponse[] = [];
+  const skipped: RoutineCandidates['skipped'] = [];
+  for (const task of tasks) {
+    const poster = await posters.get(task.posterAgentId);
+    if (poster !== null && runBySealKeeper(poster)) {
+      kept.push(task);
+      continue;
+    }
+    const login = await posters.operatorOf(task);
+    if (
+      login !== undefined &&
+      (normalLogin(login) === own || isAllowed(routine, login))
+    ) {
+      kept.push(task);
+      continue;
+    }
+    skipped.push({
+      action: 'claim',
+      taskId: task.id,
+      reason: task.assignee ? 'poster_not_allowed' : 'open_task',
+      taskType: task.taskType,
+      ...(login === undefined ? {} : { operator: login }),
+    });
+  }
+  return { tasks: kept, skipped };
+}
+
+// How many tasks of each type the routine has claimed in the last 180 days,
+// the scoring window, from routine.jsonl. A claim logged before the type
+// was logged counts for no type.
+export function seedTypesDone(
+  entries: RoutineEntry[],
+  now: Date = new Date(),
+): Map<string, number> {
+  const since = now.getTime() - 180 * 86_400_000;
+  const out = new Map<string, number>();
+  for (const e of entries) {
+    if (e.kind !== 'claim' || e.taskType === undefined) continue;
+    if (Date.parse(e.at) <= since) continue;
+    out.set(e.taskType, (out.get(e.taskType) ?? 0) + 1);
+  }
+  return out;
+}
+
+// Logs each skip not already logged in the last week.
+export async function logSkips(
+  entries: RoutineEntry[],
+  skipped: RoutineCandidates['skipped'],
+  runId: string,
+  now: number,
+): Promise<void> {
+  const seen = {
+    claim: skippedIds(entries, 'claim', new Date(now)),
+    confirm: skippedIds(entries, 'confirm', new Date(now)),
+  };
+  for (const skip of skipped) {
+    if (seen[skip.action].has(skip.taskId)) continue;
+    seen[skip.action].add(skip.taskId);
+    await appendRoutine({ kind: 'skip', runId, ...skip });
+  }
 }
 
 // One task as prove --json prints it. schema only when the answer must
@@ -688,7 +1031,7 @@ async function addServerHeld(
 
 // What prove knows about the agents that posted open tasks. Each poster is
 // asked about at most once. A lookup that fails is remembered as unknown.
-class PosterLookup {
+export class PosterLookup {
   private readonly agents = new Map<string, AgentResponse | null>();
   constructor(private readonly api: ApiClient) {}
 
@@ -703,6 +1046,14 @@ class PosterLookup {
       this.agents.set(agentId, agent);
     }
     return this.agents.get(agentId) ?? null;
+  }
+
+  // The poster's operator login, from the task when the API sends it, else
+  // from a lookup. Undefined when neither says.
+  async operatorOf(task: TaskResponse): Promise<string | undefined> {
+    const onTask = task.posterOperator?.login;
+    if (onTask !== undefined) return onTask;
+    return (await this.get(task.posterAgentId))?.operator.login;
   }
 
   // The poster's handle, login/name, or its id when the API does not say.

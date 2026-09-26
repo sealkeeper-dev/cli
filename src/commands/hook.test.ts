@@ -16,9 +16,10 @@ import type { Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STALE_MARKER_MS, toolNameOf } from '../claude-code.js';
-import { paths, writeConfig } from '../config.js';
+import { paths, writeConfig, writeNudge } from '../config.js';
 import { createKey } from '../identity.js';
 import { dayOf, readCursor, readDay } from '../log.js';
+import { NUDGE_CACHE_MAX_MS, type NudgeGoal } from '../nudge.js';
 import { createProgram } from '../program.js';
 import { readStdin } from './hook.js';
 
@@ -69,9 +70,22 @@ function throwOnExit(cmd: Command): void {
 describe('hook claude-code', () => {
   let home: string;
   let fetches: string[];
+  // The cached goal the session nudge reads, and every read of it.
+  let goal: NudgeGoal | null | Error;
+  let goalReads: { maxAgeMs: number }[];
+  // What GET /goal answers, 404 while null.
+  let goalAnswer: Record<string, unknown> | null;
 
   const fakeFetch = (async (input: string | URL | Request) => {
     fetches.push(String(input));
+    if (String(input).endsWith('/goal')) {
+      return goalAnswer === null
+        ? Response.json(
+            { error: { code: 'not_found', message: 'Not found' } },
+            { status: 404 },
+          )
+        : Response.json(goalAnswer);
+    }
     return Response.json({ accepted: 1, duplicates: 0 });
   }) as typeof fetch;
 
@@ -81,6 +95,13 @@ describe('hook claude-code', () => {
         fetch: fakeFetch,
         sleep: async () => {},
         readStdin: async () => stdin,
+        cachedGoal: async (options) => {
+          goalReads.push(options);
+          if (goal instanceof Error) throw goal;
+          return goal === null
+            ? null
+            : { goal, fetchedAt: new Date().toISOString() };
+        },
       },
     });
     throwOnExit(program);
@@ -135,7 +156,7 @@ describe('hook claude-code', () => {
     return readdir(paths(home).sessions).catch(() => []);
   }
 
-  async function initialise(autoSync = true): Promise<void> {
+  async function initialise(autoSync = true, nudge?: boolean): Promise<string> {
     const agentId = (await createKey({}, paths(home))).agentId;
     await writeConfig(
       {
@@ -149,6 +170,9 @@ describe('hook claude-code', () => {
       },
       paths(home),
     );
+    await rm(paths(home).nudge, { force: true });
+    if (nudge !== undefined) await writeNudge(nudge, paths(home));
+    return agentId;
   }
 
   beforeEach(async () => {
@@ -156,6 +180,9 @@ describe('hook claude-code', () => {
     vi.stubEnv('SEALKEEPER_HOME', home);
     vi.stubEnv('SEALKEEPER_API_URL', '');
     fetches = [];
+    goal = null;
+    goalReads = [];
+    goalAnswer = null;
   });
 
   afterEach(async () => {
@@ -481,6 +508,122 @@ describe('hook claude-code', () => {
 
     await hook(payloads.sessionStart());
     expect((await markers()).sort()).toEqual([SESSION, 'tool.toolu_fresh']);
+  });
+
+  describe('session nudge', () => {
+    const cached: NudgeGoal = {
+      level: 'none',
+      nextLevel: 'bronze',
+      thresholds: [
+        { name: 'verified_tasks', current: 13, required: 25, met: false },
+        { name: 'history_days', current: 2, required: 3, met: false },
+      ],
+      pending: { addressed: 2, outcomes: 1 },
+    };
+    const SUMMARY = [
+      'SealKeeper. Level none, 13 of 25 verified tasks to bronze.',
+      '2 tasks addressed to you, 1 outcome to report.',
+      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+    ].join('\n');
+
+    it('SessionStart prints the summary from the cache once the nudge is on', async () => {
+      await initialise(true, true);
+      goal = cached;
+      const { code, out, err } = await run(
+        JSON.stringify(payloads.sessionStart()),
+      );
+      expect(code).toBe(0);
+      expect(out).toBe(`${SUMMARY}\n`);
+      expect(err).toBe('');
+      expect(goalReads).toEqual([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);
+      // The event is logged as without the nudge.
+      expect(await logged()).toHaveLength(1);
+      expect(fetches).toEqual([]);
+    });
+
+    it('prints again on a resume, and still logs one session', async () => {
+      await initialise(true, true);
+      goal = cached;
+      await run(JSON.stringify(payloads.sessionStart()));
+      const again = await run(
+        JSON.stringify({ ...payloads.sessionStart(), source: 'resume' }),
+      );
+      expect(again.out).toBe(`${SUMMARY}\n`);
+      expect(await logged()).toHaveLength(1);
+    });
+
+    it('prints nothing with the nudge off or never answered', async () => {
+      goal = cached;
+      await initialise(true, false);
+      await hook(payloads.sessionStart());
+      await rm(paths(home).config);
+      await rm(paths(home).key);
+      await initialise(true);
+      await hook({ ...payloads.sessionStart(), session_id: 'other-session' });
+      expect(goalReads).toEqual([]);
+    });
+
+    it('prints nothing offline or without a fresh cache', async () => {
+      await initialise(true, true);
+      goal = null;
+      await hook(payloads.sessionStart());
+      expect(goalReads).toEqual([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);
+      expect(await logged()).toHaveLength(1);
+    });
+
+    it('prints nothing when reading the goal fails, and the event is logged', async () => {
+      await initialise(true, true);
+      goal = new Error('disk on fire');
+      const { err } = await hook(payloads.sessionStart());
+      expect(err).toBe('');
+      expect(await logged()).toHaveLength(1);
+    });
+
+    it('prints nothing on the other hooks or without a config', async () => {
+      goal = cached;
+      await hook(payloads.sessionStart());
+      await initialise(true, true);
+      await hook(payloads.pre('toolu_09'));
+      await hook(payloads.post('toolu_09'));
+      await hook(payloads.stop());
+      await hook(payloads.sessionEnd());
+      expect(goalReads).toEqual([]);
+    });
+
+    it('SessionEnd refreshes the cached goal once the nudge is on', async () => {
+      const agentId = await initialise(false, true);
+      goalAnswer = {
+        agentId,
+        version: '1.2.0',
+        level: 'none',
+        nextLevel: 'bronze',
+        thresholds: [],
+        actions: [],
+        pending: { addressed: 1, outcomes: 0 },
+        asOf: null,
+      };
+      await hook(payloads.sessionStart());
+      expect(fetches).toEqual([]);
+      await hook(payloads.sessionEnd());
+      expect(fetches).toEqual([`${API_URL}/v1/agents/${agentId}/goal`]);
+      const cache = JSON.parse(await readFile(paths(home).goal, 'utf8'));
+      expect(cache.goal.pending).toEqual({ addressed: 1, outcomes: 0 });
+    });
+
+    it('SessionEnd sends nothing for the goal with the nudge off', async () => {
+      await initialise(false, false);
+      await hook(payloads.sessionStart());
+      await hook(payloads.sessionEnd());
+      expect(fetches).toEqual([]);
+    });
+
+    it('SessionEnd stays quiet when the goal cannot be read', async () => {
+      await initialise(false, true);
+      await hook(payloads.sessionStart());
+      const { err } = await hook(payloads.sessionEnd());
+      expect(err).toBe('');
+      expect(await logged()).toHaveLength(2);
+    });
   });
 });
 
