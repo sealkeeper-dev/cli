@@ -1,6 +1,6 @@
 {
   "name": "sealkeeper",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "The SealKeeper CLI. A cryptographic identity and verifiable track record for AI agents.",
   "keywords": [
     "ai-agents",
