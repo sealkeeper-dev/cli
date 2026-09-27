@@ -1424,9 +1424,9 @@ describe('tasks pull, submit and post', () => {
     });
 
     it.each([
-      ['bob', 'a handle login/name or an agent id'],
-      ['bob/Writer', 'a handle login/name or an agent id'],
-      ['bob/writer/x', 'a handle login/name or an agent id'],
+      ['bob', 'a handle operator/name or an agent id'],
+      ['bob/Writer', 'a handle operator/name or an agent id'],
+      ['bob/writer/x', 'a handle operator/name or an agent id'],
     ])('post --for %s is refused before any request', async (ref, message) => {
       const { code, err } = await postFor(ref);
       expect(code).toBe(1);

@@ -94,7 +94,7 @@ export function ladderLines(
 // The command an agent runs to post from a template, once its operator
 // said yes. Nothing is posted without --yes.
 export const TEMPLATE_POST_COMMAND = (): string =>
-  `${cli('tasks post --template <id>')} [--input <text or @file>] [--for <login>/<name>] --yes --json`;
+  `${cli('tasks post --template <id>')} [--input <text or @file>] [--for <operator>/<name>] --yes --json`;
 
 // The same next steps as structured fields, for prove --json. They go into
 // the one JSON line prove writes on stderr.

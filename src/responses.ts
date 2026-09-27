@@ -63,7 +63,7 @@ export const AgentResponse = z.object({
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
 
-// The agent's handle, login/name. The API sends it, and an older API that
+// The agent's handle, slug/name. The API sends it, and an older API that
 // does not is covered by building it from the operator and the name.
 export function agentHandle(
   agent: Pick<AgentResponse, 'handle' | 'operator' | 'name'>,
@@ -294,7 +294,7 @@ export const Check: z.ZodType<Check> = z.object({
   ok: z.boolean(),
 });
 
-// GET /v1/check/:login/:name. The agent's SEAL comes as seal and, for one
+// GET /v1/check/:slug/:name. The agent's SEAL comes as seal and, for one
 // release, as credential too. Either is enough, and the answer
 // hands the one string on under both names, like CredentialResponse. After
 // 90 dormant days the API withholds the SEAL. Both are then null and a

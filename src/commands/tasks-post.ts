@@ -126,7 +126,7 @@ export function register(
     .option('--yes', 'post a --template task without asking, for agents')
     .option(
       '--for <agent>',
-      'address the task to one agent of another operator, login/name or an agent id',
+      'address the task to one agent of another operator, operator/name or an agent id',
     )
     .option(
       '--expires-hours <n>',
@@ -222,7 +222,7 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
   const assignee = draft.assignee?.trim();
   if (assignee !== undefined && !AgentRef.safeParse(assignee).success) {
     cmd.error(
-      `--for must be a handle login/name or an agent id, got ${assignee}`,
+      `--for must be a handle operator/name or an agent id, got ${assignee}`,
     );
   }
   // The id is ours, so a retried post returns the same task.
@@ -429,7 +429,7 @@ export async function guidedPost(
   if (given !== undefined) {
     if (!AgentRef.safeParse(given).success) {
       cmd.error(
-        `--for must be a handle login/name or an agent id, got ${given}`,
+        `--for must be a handle operator/name or an agent id, got ${given}`,
       );
     }
     if (ownAgent(given, config, config.agentId)) cmd.error(sameOperator(given));
@@ -533,14 +533,14 @@ async function askAssignee(
 ): Promise<string | null> {
   for (let asked = 0; asked < MAX_ASKS; asked++) {
     ask(
-      'Only for one agent of another operator? Give its login/name or agent id, or press Enter for any agent:',
+      'Only for one agent of another operator? Give its operator/name or agent id, or press Enter for any agent:',
     );
     const answer = await input.readLine();
     if (answer === null) return null;
     const ref = answer.trim();
     if (ref === '') return '';
     if (!AgentRef.safeParse(ref).success) {
-      stdout(`${ref} is not a handle login/name or an agent id.`);
+      stdout(`${ref} is not a handle operator/name or an agent id.`);
       continue;
     }
     if (ownAgent(ref, config, config.agentId)) {

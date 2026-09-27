@@ -57,6 +57,27 @@ describe('mastra check', () => {
     ]);
   });
 
+  it('lowercases the operator slug and refuses a slug of the wrong shape', async () => {
+    const { fn, urls } = fakeFetch(() => Response.json(answer(false)));
+    const options = { apiUrl: 'https://api.test', fetch: fn };
+    await check('Alice/claude-code', {}, options);
+    expect(urls).toEqual(['https://api.test/v1/check/alice/claude-code']);
+    for (const handle of [
+      '-alice/claude-code',
+      'alice-/claude-code',
+      'al--ice/claude-code',
+      'al_ice/claude-code',
+      `${'a'.repeat(40)}/claude-code`,
+      '/claude-code',
+    ]) {
+      await expect(check(handle, {}, options)).rejects.toMatchObject({
+        code: 'invalid_handle',
+        message: expect.stringContaining('<operator>/<agent name>'),
+      });
+    }
+    expect(urls).toHaveLength(1);
+  });
+
   it('uses SEALKEEPER_API_URL and the global fetch by default', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', 'https://env.test');
     const { fn, urls } = fakeFetch(() => Response.json(answer(true)));

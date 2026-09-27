@@ -1,12 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// GET /v1/check/:login/:name, shared by `sealkeeper check` and the Mastra
+// GET /v1/check/:slug/:name, shared by `sealkeeper check` and the Mastra
 // adapter's check and assertTrusted. A plain public GET. No key, no config
 // and no registration needed.
 import {
   AgentName,
   CheckQuery,
-  GithubLogin,
   type Level,
+  OperatorSlug,
 } from '@sealkeeper/schema';
 import { ApiError, redirectError, resolveApiUrl } from './api.js';
 import { INSECURE_API_URL, isSecureApiUrl, paths } from './config.js';
@@ -39,22 +39,24 @@ export type CheckOptions = {
   timeoutMs?: number | undefined;
 };
 
-// Splits login/name and checks both parts. Throws an ApiError with code
-// invalid_handle, before anything is sent.
-function parseHandle(handle: string): { login: string; name: string } {
-  const [login, name, ...rest] = handle.split('/');
+// Splits slug/name and checks both parts. The slug is lowercased first, as
+// the API does, so a handle written with a login in capitals still works.
+// Throws an ApiError with code invalid_handle, before anything is sent.
+function parseHandle(handle: string): { slug: string; name: string } {
+  const [first, name, ...rest] = handle.split('/');
+  const slug = first?.toLowerCase();
   if (
     rest.length > 0 ||
-    !GithubLogin.safeParse(login).success ||
+    !OperatorSlug.safeParse(slug).success ||
     !AgentName.safeParse(name).success
   ) {
     throw new ApiError(
       0,
       'invalid_handle',
-      `invalid handle ${handle}, use <github login>/<agent name>, as in alice/claude-code`,
+      `invalid handle ${handle}, use <operator>/<agent name>, as in alice/claude-code`,
     );
   }
-  return { login: login as string, name: name as string };
+  return { slug: slug as string, name: name as string };
 }
 
 // The query string for the thresholds that are set. Each value goes through
@@ -94,7 +96,7 @@ export async function fetchCheck(
   thresholds: CheckThresholds | RawThresholds = {},
   options: CheckOptions = {},
 ): Promise<CheckResponse> {
-  const { login, name } = parseHandle(handle);
+  const { slug, name } = parseHandle(handle);
   const search = checkSearch(thresholds);
   const apiUrl = (options.apiUrl?.trim() || resolveApiUrl({})).replace(
     /\/+$/,
@@ -108,7 +110,7 @@ export async function fetchCheck(
     );
   }
   const fetchFn = options.fetch ?? fetch;
-  const url = `${apiUrl}/v1/check/${encodeURIComponent(login)}/${encodeURIComponent(name)}${search}`;
+  const url = `${apiUrl}/v1/check/${encodeURIComponent(slug)}/${encodeURIComponent(name)}${search}`;
 
   let res: Response;
   try {
@@ -138,7 +140,7 @@ export async function fetchCheck(
   if (res.status === 200) {
     const parsed = CheckResponse.safeParse(json);
     if (parsed.success) {
-      await trustedPass(parsed.data, `${login}/${name}`, apiUrl, fetchFn);
+      await trustedPass(parsed.data, `${slug}/${name}`, apiUrl, fetchFn);
       return parsed.data;
     }
   }
@@ -147,7 +149,7 @@ export async function fetchCheck(
     throw new ApiError(
       404,
       'renamed',
-      `${login}/${name} is now ${renamed.data.handle}`,
+      `${slug}/${name} is now ${renamed.data.handle}`,
     );
   }
   const error = ErrorResponse.safeParse(json);
@@ -156,7 +158,7 @@ export async function fetchCheck(
     throw new ApiError(
       res.status,
       code,
-      code === 'not_found' ? `no agent ${login}/${name}` : message,
+      code === 'not_found' ? `no agent ${slug}/${name}` : message,
       error.data.error.issues,
     );
   }

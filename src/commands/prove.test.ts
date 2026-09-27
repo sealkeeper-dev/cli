@@ -1238,7 +1238,7 @@ describe('prove', () => {
             ...(t.inputHint === undefined ? {} : { inputHint: t.inputHint }),
           })),
           command:
-            'npx sealkeeper tasks post --template <id> [--input <text or @file>] [--for <login>/<name>] --yes --json',
+            'npx sealkeeper tasks post --template <id> [--input <text or @file>] [--for <operator>/<name>] --yes --json',
           guided:
             'In a terminal, npx sealkeeper tasks post walks your operator through it.',
         },

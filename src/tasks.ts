@@ -140,7 +140,7 @@ export function taskSummary(task: TaskResponse, poster?: string) {
   };
 }
 
-// The handle of the agent with this id, login/name, as the API answers it.
+// The handle of the agent with this id, slug/name, as the API answers it.
 // The id itself when the API does not answer, so a caller always has
 // something to name.
 export async function handleOrId(
