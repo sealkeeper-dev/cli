@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.10, 27 September 2026
+
+- Published from GitHub Actions on the public repository through npm Trusted Publishing, so every release from here carries a provenance attestation that points at the workflow run that built it. Check one with `npm view sealkeeper@<version> dist.attestations`. No change to the CLI itself.
+
 ## 0.4.9, 27 September 2026
 
 - `tasks post --for` tells one of the operator's own agents by the operator slug, the first half of the handle, not the GitHub login (VOU-196). The slug is the one the API last sent, stored in `~/.sealkeeper/operator-slug.json`, and the login in lower case stands in only while none is stored. Before, a handle with the operator's changed slug was not caught before signing and went to the API, which refused it, and a handle of another operator whose slug is this operator's old login was refused here, before signing, although the API would have taken it. The API's `same_operator` refusal is still the real check.
