@@ -46,15 +46,43 @@ export const RUNTIME_CHOICES: readonly Runtime[] = RUNTIMES.filter(
 // question. Only a hint, the operator confirms it.
 export type DetectedRuntime = { runtime: Runtime; from: string };
 
-// Variables the runtimes set for the commands they run. Claude Code sets
-// CLAUDECODE=1, Codex sets CODEX_SANDBOX inside its sandbox, Cursor's agent
-// sets CURSOR_AGENT and Gemini CLI sets GEMINI_CLI. Checked in this order.
-const RUNTIME_ENV: readonly (readonly [string, Runtime])[] = [
-  ['CLAUDECODE', 'claude-code'],
+// Variables the runtimes set in the shells they spawn, each read in the
+// source or official docs of the named release (VOU-189, 26 September 2026).
+// Checked in this order, the first one set wins. CLAUDECODE comes last.
+// The Claude Code IDE extensions set it in every integrated terminal, so a
+// Codex, Cursor or Gemini agent started from one inherits it. Its own
+// variable, set only in the shells it runs, says more, and wins.
+//
+// Codex CLI rust-v0.157.1 sets CODEX_THREAD_ID for every command the model
+// runs (unified exec) and every command the user runs with !, sandboxed or
+// not. CODEX_SANDBOX=seatbelt is set only under the macOS Seatbelt sandbox
+// and CODEX_SANDBOX_NETWORK_DISABLED=1 only when network is restricted.
+// Both stay as backups for a Codex shell without CODEX_THREAD_ID.
+// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/unified_exec/process_manager.rs
+// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/tasks/user_shell.rs
+// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/sandboxing/mod.rs
+//
+// Cursor Agent CLI 2026.09.26-dd393fe sets CURSOR_AGENT=1 for the shell
+// commands it runs (read in its bundled index.js, the CLI is closed
+// source). The Cursor editor's agent sets it too, which is still Cursor.
+// https://cursor.com/docs/agent/tools/terminal
+// https://downloads.cursor.com/lab/2026.09.26-dd393fe/darwin/arm64/agent-cli-package.tar.gz
+//
+// Gemini CLI v0.61.0 sets GEMINI_CLI=1 for run_shell_command.
+// https://github.com/google-gemini/gemini-cli/blob/v0.61.0/packages/core/src/services/shellExecutionService.ts
+// https://github.com/google-gemini/gemini-cli/blob/v0.61.0/docs/tools/shell.md
+//
+// Claude Code 2.1.283 sets CLAUDECODE=1 for its Bash and PowerShell tools,
+// hooks, status line and stdio MCP servers, and its IDE extensions set it
+// in their integrated terminals.
+// https://code.claude.com/docs/en/env-vars
+export const RUNTIME_ENV: readonly (readonly [string, Runtime])[] = [
+  ['CODEX_THREAD_ID', 'codex'],
   ['CODEX_SANDBOX', 'codex'],
   ['CODEX_SANDBOX_NETWORK_DISABLED', 'codex'],
   ['CURSOR_AGENT', 'cursor'],
   ['GEMINI_CLI', 'gemini-cli'],
+  ['CLAUDECODE', 'claude-code'],
 ];
 
 // The runtime this machine points at. The environment first, since it says

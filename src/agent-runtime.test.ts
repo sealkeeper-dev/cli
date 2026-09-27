@@ -16,6 +16,7 @@ import {
   offerRuntime,
   parseRuntime,
   RUNTIME_CHOICES,
+  RUNTIME_ENV,
   RUNTIME_LATER,
   RUNTIME_UNKNOWN_INTRO,
   readRuntimeAnswer,
@@ -62,17 +63,66 @@ describe('detectRuntime', () => {
     cwd: () => join(dir, 'project'),
   });
 
+  // Each with the value the named release sets, see RUNTIME_ENV.
   it.each([
-    ['CLAUDECODE', 'claude-code'],
-    ['CODEX_SANDBOX', 'codex'],
-    ['CODEX_SANDBOX_NETWORK_DISABLED', 'codex'],
-    ['CURSOR_AGENT', 'cursor'],
-    ['GEMINI_CLI', 'gemini-cli'],
-  ])('reads %s as %s', async (name, runtime) => {
-    expect(await detectRuntime({ env: { [name]: '1' }, ...where() })).toEqual({
-      runtime,
-      from: name,
-    });
+    ['CODEX_THREAD_ID', '0199a213-81c0-7800-8aa1-bbab2a035a53', 'codex'],
+    ['CODEX_SANDBOX', 'seatbelt', 'codex'],
+    ['CODEX_SANDBOX_NETWORK_DISABLED', '1', 'codex'],
+    ['CURSOR_AGENT', '1', 'cursor'],
+    ['GEMINI_CLI', '1', 'gemini-cli'],
+    ['CLAUDECODE', '1', 'claude-code'],
+  ])('reads %s=%s as %s', async (name, value, runtime) => {
+    expect(await detectRuntime({ env: { [name]: value }, ...where() })).toEqual(
+      { runtime, from: name },
+    );
+  });
+
+  it('checks only the variables confirmed against a release, in order', () => {
+    // A new hint needs a named release and a source URL in RUNTIME_ENV.
+    expect(RUNTIME_ENV.map(([name]) => name)).toEqual([
+      'CODEX_THREAD_ID',
+      'CODEX_SANDBOX',
+      'CODEX_SANDBOX_NETWORK_DISABLED',
+      'CURSOR_AGENT',
+      'GEMINI_CLI',
+      'CLAUDECODE',
+    ]);
+  });
+
+  // The Claude Code IDE extensions set CLAUDECODE in every integrated
+  // terminal, so an agent started from one inherits it.
+  it.each([
+    ['CODEX_THREAD_ID', '0199a213-81c0-7800-8aa1-bbab2a035a53', 'codex'],
+    ['CURSOR_AGENT', '1', 'cursor'],
+    ['GEMINI_CLI', '1', 'gemini-cli'],
+  ])(
+    'offers the inner agent over CLAUDECODE, %s wins',
+    async (name, value, runtime) => {
+      expect(
+        await detectRuntime({
+          env: { CLAUDECODE: '1', [name]: value },
+          ...where(),
+        }),
+      ).toEqual({ runtime, from: name });
+    },
+  );
+
+  it('takes the first variable in the table when several are set', async () => {
+    expect(
+      await detectRuntime({
+        env: { GEMINI_CLI: '1', CODEX_SANDBOX: 'seatbelt' },
+        ...where(),
+      }),
+    ).toEqual({ runtime: 'codex', from: 'CODEX_SANDBOX' });
+  });
+
+  it('reads nothing into variables the runtimes do not set', async () => {
+    expect(
+      await detectRuntime({
+        env: { CURSOR_CLI: '1', CODEX_HOME: '/tmp/codex', GEMINI_API_KEY: 'x' },
+        ...where(),
+      }),
+    ).toBeNull();
   });
 
   it('ignores an empty variable', async () => {
