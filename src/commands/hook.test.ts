@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { randomUUID } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
@@ -15,10 +16,17 @@ import { PassThrough } from 'node:stream';
 import type { Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCK_FILE, resetBackgroundSyncThrottle } from '../background-sync.js';
 import { STALE_MARKER_MS, toolNameOf } from '../claude-code.js';
 import { paths, writeConfig, writeNudge } from '../config.js';
 import { createKey } from '../identity.js';
-import { dayOf, readCursor, readDay } from '../log.js';
+import {
+  appendEvent,
+  countPending,
+  dayOf,
+  readCursor,
+  readDay,
+} from '../log.js';
 import { NUDGE_CACHE_MAX_MS, type NudgeGoal } from '../nudge.js';
 import { createProgram } from '../program.js';
 import { readStdin } from './hook.js';
@@ -183,6 +191,9 @@ describe('hook claude-code', () => {
     goal = null;
     goalReads = [];
     goalAnswer = null;
+    // Each hook run stands for its own process, so none inherits the
+    // in-memory sync throttle of the one before.
+    resetBackgroundSyncThrottle();
   });
 
   afterEach(async () => {
@@ -389,6 +400,114 @@ describe('hook claude-code', () => {
       'session.end',
     ]);
   });
+
+  // Runs the SessionEnd hook with its own fetch and returns stderr.
+  async function sessionEndWith(fetchFn: typeof fetch): Promise<string> {
+    const program = createProgram({
+      hook: {
+        fetch: fetchFn,
+        sleep: async () => {},
+        readStdin: async () => JSON.stringify(payloads.sessionEnd()),
+      },
+    });
+    let err = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      err += String(chunk);
+      return true;
+    });
+    try {
+      await program.parseAsync(['hook', 'claude-code'], { from: 'user' });
+    } finally {
+      vi.mocked(process.stdout.write).mockRestore();
+      vi.mocked(process.stderr.write).mockRestore();
+    }
+    return err;
+  }
+
+  async function seedToolCalls(count: number): Promise<void> {
+    for (let n = 0; n < count; n++) {
+      await appendEvent(
+        {
+          event_id: randomUUID(),
+          type: 'tool.call',
+          occurred_at: new Date().toISOString(),
+          version: '1.2.0',
+          payload: { tool: 'Bash', duration_ms: n, ok: true },
+        },
+        paths(home),
+      );
+    }
+  }
+
+  it('a second SessionEnd within five minutes of a sync sends nothing and prints nothing', async () => {
+    await initialise();
+    await hook(payloads.sessionStart());
+    await hook(payloads.sessionEnd());
+    expect(fetches).toEqual([`${API_URL}/v1/events`]);
+    const other = { session_id: 'second-session' };
+    await hook({ ...payloads.sessionStart(), ...other });
+    const { err } = await hook({ ...payloads.sessionEnd(), ...other });
+    expect(err).toBe('');
+    expect(fetches).toEqual([`${API_URL}/v1/events`]);
+    expect(await countPending(paths(home))).toBe(2);
+  });
+
+  it('SessionEnd stays out, silently, while another sync holds the lock', async () => {
+    await initialise();
+    await hook(payloads.sessionStart());
+    await writeFile(join(home, LOCK_FILE), `${process.pid}\n`);
+    const { err } = await hook(payloads.sessionEnd());
+    expect(err).toBe('');
+    expect(fetches).toEqual([]);
+  });
+
+  it('SessionEnd stops starting rounds after its deadline', async () => {
+    await initialise();
+    await hook(payloads.sessionStart());
+    await seedToolCalls(1000);
+    // Each request takes 2.5 seconds on the clock the sync reads. Rounds
+    // start at 0 and 2.5 seconds, and the 3 second deadline stops the third.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    let requests = 0;
+    const slow = (async (_input: unknown, init: RequestInit = {}) => {
+      requests++;
+      vi.setSystemTime(Date.now() + 2_500);
+      const { envelopes } = JSON.parse(String(init.body)) as {
+        envelopes: string[];
+      };
+      return Response.json({ accepted: envelopes.length, duplicates: 0 });
+    }) as typeof fetch;
+    const err = await sessionEndWith(slow);
+    vi.useRealTimers();
+    expect(err).toBe('');
+    expect(requests).toBe(2);
+    expect(await countPending(paths(home))).toBe(2);
+  }, 30_000);
+
+  it('SessionEnd returns within its deadline when the API never answers', async () => {
+    await initialise();
+    await hook(payloads.sessionStart());
+    // Stands in for an API that accepts the connection and never answers.
+    // Like real fetch it gives up when the request signal aborts.
+    const hanging = ((_input: unknown, init: RequestInit = {}) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () =>
+          reject(new TypeError('fetch failed')),
+        );
+      })) as typeof fetch;
+    const started = Date.now();
+    const err = await sessionEndWith(hanging);
+    const took = Date.now() - started;
+    // One request timeout of 2 seconds, well inside the 3 second deadline
+    // plus one request timeout.
+    expect(took).toBeGreaterThanOrEqual(1_900);
+    expect(took).toBeLessThan(5_000);
+    expect(err).toBe(
+      'sealkeeper: sync did not finish, run npx sealkeeper sync\n',
+    );
+    expect(await countPending(paths(home))).toBe(2);
+  }, 15_000);
 
   it('PreToolUse then PostToolUse emits tool.call with the duration between them', async () => {
     await initialise();

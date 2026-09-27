@@ -2,6 +2,7 @@
 import type { Command } from 'commander';
 import { createApiClient, resolveApiUrl } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
+import { SyncBusyError, withSyncLock } from '../background-sync.js';
 import { requireConfig } from '../cli-config.js';
 import { writeConfig } from '../config.js';
 import { type Sleep, sleep } from '../github-device.js';
@@ -102,10 +103,16 @@ export function register(
         fetch: deps.fetch,
       });
       let result: Awaited<ReturnType<typeof syncEvents>>;
+      // Under the lock the automatic syncs take, so this one never runs next
+      // to one of them and moves the cursor back. It skips their throttle,
+      // so a person can always send now.
       try {
-        result = await syncEvents({ api, sleep: deps.sleep, until });
+        result = await withSyncLock(() =>
+          syncEvents({ api, sleep: deps.sleep, until }),
+        );
       } catch (error) {
         if (
+          error instanceof SyncBusyError ||
           error instanceof SyncError ||
           error instanceof KeyError ||
           error instanceof CursorError

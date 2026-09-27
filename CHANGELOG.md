@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- 27 September 2026. `emit` with automatic sync and the Claude Code `SessionEnd` hook send through the same gate as the Mastra and OpenClaw background sync (VOU-222). It sends at most once every 5 minutes across every process on the machine, from a stamp file in `~/.sealkeeper`, and under the lock file `background-sync.lock`, so parallel emits never post the same batch twice. `emit` and the hook stop starting rounds after 3 seconds, with a 2 second timeout per request, so they hold up the hook that called them for about 5 seconds at most. An `emit` or hook held back by the 5 minutes or the lock returns at once and prints nothing. Before, each `emit` ran a full sync of its own with no lock or throttle, so an agent that emits for every tool call made a request per call, got 429 and printed `warning: sync did not finish` into its hook output, parallel emits posted the same batch twice against the agent's ingest quota, and a backlog of 5,000 events held one emit for about 20 seconds. `emit` runs the gated sync before it returns rather than in the background, since the process exits when the command ends and would cut a background sync off mid request.
+- `sync` takes the same lock, waiting up to 30 seconds for an automatic sync that holds it, so the two never run side by side and move the cursor back. It skips the 5 minute throttle, so `sync` still sends at once. A lock whose process is no longer running, as after Ctrl-C on a sync, is taken over at once rather than after its 2 minute stale age, and when `sync` does give up its message names the lock file.
+- A session that ends within 5 minutes of the last automatic sync leaves its events in the log for the next one, the next `emit`, `SessionEnd` or adapter event after the 5 minutes, or `sync`.
+
 ## 0.4.7, 27 September 2026
 
 - `prove` and the routine ask SealKeeper for seed tasks by name, with `GET /v1/tasks?state=open&seed=true`, and tell a seed task by the `seed` flag the API now sends on every task (VOU-208, 27 September 2026). Before, they read one page of the 100 oldest open tasks and filtered it here, so 100 older open tasks from any other agent hid every seed task, and `prove --json` printed `[]` while seed tasks were open. A task without the flag, from an API that does not send it, is unknown and its poster is looked up as before.

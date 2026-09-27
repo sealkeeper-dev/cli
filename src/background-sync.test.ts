@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   appendFile,
@@ -14,15 +15,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BACKGROUND_SYNC_INTERVAL_MS,
   backgroundSync,
+  gatedSync,
   LOCK_FILE,
   LOCK_STALE_MS,
   resetBackgroundSyncThrottle,
+  SyncBusyError,
+  withSyncLock,
 } from './background-sync.js';
 import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { appendEvent, countPending, writeCursor } from './log.js';
 
 const API_URL = 'https://api.test';
+
+// The pid of a process that ran and has exited, as a sync cut off by Ctrl-C
+// leaves in its lock file.
+function deadPid(): number {
+  const child = spawnSync(process.execPath, ['-e', '']);
+  if (child.pid === undefined) throw new Error('could not start a child');
+  return child.pid;
+}
 
 function toolCall() {
   return {
@@ -189,7 +201,7 @@ describe('background sync', () => {
     await initialise(true);
     await appendEvent(toolCall(), p);
     const lock = join(home, LOCK_FILE);
-    await writeFile(lock, '123\n');
+    await writeFile(lock, `${process.pid}\n`);
     await utimes(lock, clock / 1000, clock / 1000);
     expect(await run()).toBe('locked');
     expect(requests).toBe(0);
@@ -197,16 +209,46 @@ describe('background sync', () => {
     expect((await stat(lock)).isFile()).toBe(true);
   });
 
-  it('takes over a lock left by a process that died', async () => {
+  it('takes over a lock older than the stale age', async () => {
     await initialise(true);
     await appendEvent(toolCall(), p);
     const lock = join(home, LOCK_FILE);
-    await writeFile(lock, '123\n');
+    // A running pid, so only the age lets it go.
+    await writeFile(lock, `${process.pid}\n`);
     const old = (clock - LOCK_STALE_MS - 1000) / 1000;
     await utimes(lock, old, old);
     expect(await run()).toBe('synced');
     expect(requests).toBe(1);
     await expect(stat(lock)).rejects.toThrow();
+  });
+
+  it('takes over a fresh lock whose process is gone', async () => {
+    await initialise(true);
+    await appendEvent(toolCall(), p);
+    const lock = join(home, LOCK_FILE);
+    await writeFile(lock, `${deadPid()}\n`);
+    await utimes(lock, clock / 1000, clock / 1000);
+    expect(
+      await gatedSync({
+        fetch: accepting,
+        now,
+        paths: p,
+        timeoutMs: 2_000,
+        deadlineMs: 3_000,
+      }),
+    ).toBe('synced');
+    expect(requests).toBe(1);
+    await expect(stat(lock)).rejects.toThrow();
+  });
+
+  it('keeps the age rule for a fresh lock with no pid in it', async () => {
+    await initialise(true);
+    await appendEvent(toolCall(), p);
+    const lock = join(home, LOCK_FILE);
+    await writeFile(lock, '');
+    await utimes(lock, clock / 1000, clock / 1000);
+    expect(await run()).toBe('locked');
+    expect(requests).toBe(0);
   });
 
   it('two at once send one batch between them', async () => {
@@ -231,5 +273,79 @@ describe('background sync', () => {
     expect(await first).toBe('synced');
     expect(['locked', 'throttled']).toContain(second);
     expect(requests).toBe(1);
+  });
+
+  describe('the lock the sync command takes', () => {
+    it('runs under the lock and releases it', async () => {
+      const lock = join(home, LOCK_FILE);
+      const held = await withSyncLock(async () => (await stat(lock)).isFile(), {
+        paths: p,
+      });
+      expect(held).toBe(true);
+      await expect(stat(lock)).rejects.toThrow();
+    });
+
+    it('releases the lock when the sync throws', async () => {
+      await expect(
+        withSyncLock(
+          async () => {
+            throw new Error('boom');
+          },
+          { paths: p },
+        ),
+      ).rejects.toThrow('boom');
+      await expect(stat(join(home, LOCK_FILE))).rejects.toThrow();
+    });
+
+    it('gives up with SyncBusyError while another sync holds the lock', async () => {
+      const lock = join(home, LOCK_FILE);
+      await writeFile(lock, `${process.pid}\n`);
+      let ran = false;
+      await expect(
+        withSyncLock(
+          async () => {
+            ran = true;
+          },
+          { paths: p, waitMs: 300 },
+        ),
+      ).rejects.toBeInstanceOf(SyncBusyError);
+      expect(ran).toBe(false);
+      // The lock is left to its owner.
+      expect((await stat(lock)).isFile()).toBe(true);
+    });
+
+    it('takes over a lock older than the stale age', async () => {
+      const lock = join(home, LOCK_FILE);
+      // A running pid, so only the age lets it go.
+      await writeFile(lock, `${process.pid}\n`);
+      const old = (Date.now() - LOCK_STALE_MS - 1000) / 1000;
+      await utimes(lock, old, old);
+      expect(await withSyncLock(async () => 'sent', { paths: p })).toBe('sent');
+    });
+
+    it('takes over a fresh lock at once when its process is gone, as after Ctrl-C', async () => {
+      const lock = join(home, LOCK_FILE);
+      await writeFile(lock, `${deadPid()}\n`);
+      // No wait at all, so only an immediate takeover gets through.
+      expect(
+        await withSyncLock(async () => 'sent', { paths: p, waitMs: 0 }),
+      ).toBe('sent');
+      await expect(stat(lock)).rejects.toThrow();
+    });
+
+    it('names the lock file when it gives up', async () => {
+      await writeFile(join(home, LOCK_FILE), `${process.pid}\n`);
+      await expect(
+        withSyncLock(async () => {}, { paths: p, waitMs: 0 }),
+      ).rejects.toThrow(join(home, LOCK_FILE));
+    });
+
+    it('keeps a gated sync out while it holds the lock', async () => {
+      await initialise(true);
+      await appendEvent(toolCall(), p);
+      const outcome = await withSyncLock(() => run(), { paths: p });
+      expect(outcome).toBe('locked');
+      expect(requests).toBe(0);
+    });
   });
 });

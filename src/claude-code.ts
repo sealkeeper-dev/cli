@@ -1,7 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createApiClient, resolveApiUrl } from './api.js';
+import { gatedSync, WAITING_CALLER_LIMITS } from './background-sync.js';
 import {
   ConfigError,
   type Paths,
@@ -16,7 +16,6 @@ import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
 import { type NudgeDeps, nudgeLines } from './nudge.js';
 import { stderr, stdout } from './output.js';
-import { syncEvents } from './sync.js';
 
 export { toolNameOf } from './names.js';
 
@@ -29,10 +28,11 @@ export { toolNameOf } from './names.js';
 // nothing there.
 
 // Only the SessionEnd hook goes to the network. It tries a sync once
-// autoSync is on, and refreshes the goal the next SessionStart summary
+// autoSync is on, through the gate every automatic sync takes (see
+// background-sync.ts), and refreshes the goal the next SessionStart summary
 // reads once the nudge is on, never for longer than this per request.
 // Every other hook only appends, and SessionStart reads only the cache.
-const HOOK_SYNC_TIMEOUT_MS = 2_000;
+const HOOK_SYNC_TIMEOUT_MS = WAITING_CALLER_LIMITS.timeoutMs;
 
 // Markers older than this belong to sessions or tool calls that never ended.
 export const STALE_MARKER_MS = 24 * 60 * 60 * 1000;
@@ -177,7 +177,7 @@ async function logHook(
         await removeStaleMarkers(p, now, append);
         // Nothing leaves on its own until the operator has previewed and
         // confirmed a first sync, which turns autoSync on.
-        if (config.autoSync) await trySync(config.apiUrl, deps, p);
+        if (config.autoSync) await trySync(deps, p);
         if ((await readNudge(p)) === true) await refreshGoal(config, deps, p);
         return;
       }
@@ -321,22 +321,17 @@ async function removeStaleMarkers(
 }
 
 // Best effort. The events are in the log already, so a failure only means
-// they go with the next sync.
-async function trySync(
-  apiUrl: string,
-  deps: HookDeps,
-  p: Paths,
-): Promise<void> {
+// they go with the next sync. The gate keeps Claude Code waiting for a few
+// seconds at most, and a sync it holds back for the throttle or the lock
+// prints nothing.
+async function trySync(deps: HookDeps, p: Paths): Promise<void> {
+  const now = deps.now;
   try {
-    await syncEvents({
-      api: createApiClient({
-        apiUrl: resolveApiUrl({ config: apiUrl }),
-        fetch: deps.fetch,
-        timeoutMs: HOOK_SYNC_TIMEOUT_MS,
-      }),
-      sleep: deps.sleep,
-      maxRateLimitWaitSec: 0,
+    await gatedSync({
+      fetch: deps.fetch,
       paths: p,
+      now: now ? () => now().getTime() : undefined,
+      ...WAITING_CALLER_LIMITS,
     });
   } catch {
     stderr(`sealkeeper: sync did not finish, run ${cli('sync')}`);

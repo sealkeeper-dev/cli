@@ -1,6 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -15,6 +23,12 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  LOCK_FILE,
+  resetBackgroundSyncThrottle,
+  STAMP_FILE,
+} from '../background-sync.js';
 import { paths, readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import {
@@ -156,10 +170,7 @@ describe('emit and sync', () => {
     during?: () => Promise<void>;
   };
 
-  async function run(
-    fetchFn: typeof fetch,
-    ...args: string[]
-  ): Promise<RunResult> {
+  function build(fetchFn: typeof fetch): Command {
     const program = createProgram({
       sync: {
         fetch: fetchFn,
@@ -177,6 +188,14 @@ describe('emit and sync', () => {
       },
     });
     throwOnExit(program);
+    return program;
+  }
+
+  async function run(
+    fetchFn: typeof fetch,
+    ...args: string[]
+  ): Promise<RunResult> {
+    const program = build(fetchFn);
     let out = '';
     let err = '';
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
@@ -248,6 +267,9 @@ describe('emit and sync', () => {
     sleeps = [];
     outputs = [];
     input = { isTTY: false, answers: [], asked: 0 };
+    // Each run stands for its own process, so none inherits the in-memory
+    // throttle of the one before.
+    resetBackgroundSyncThrottle();
   });
 
   // Nothing printed may carry a signature or the private key.
@@ -437,7 +459,151 @@ describe('emit and sync', () => {
     });
   });
 
+  describe('emit with automatic sync, through the sync gate', () => {
+    const emitArgs = [
+      'emit',
+      '--type',
+      'session.start',
+      '--payload',
+      '{"session_id":"s1"}',
+    ];
+
+    it('two emits within five minutes make one request, the second prints nothing, and sync still sends at once', async () => {
+      await initialise();
+      expect((await api(...emitArgs)).err).toBe('');
+      // The second emit is its own process, with its own in-memory throttle.
+      // The stamp file holds it back.
+      resetBackgroundSyncThrottle();
+      const second = await api(...emitArgs);
+      expect(second.code).toBe(0);
+      expect(second.out).toMatch(/^[0-9a-f-]{36}\n$/);
+      expect(second.err).toBe('');
+      expect(server.batches.map((b) => b.length)).toEqual([1]);
+      expect(await countPending()).toBe(1);
+
+      // A person can always send now.
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 1, duplicates 0\n');
+      expect(server.batches.map((b) => b.length)).toEqual([1, 1]);
+    });
+
+    it('sends again once five minutes have passed since the last gated sync', async () => {
+      await initialise();
+      await api(...emitArgs);
+      const stamp = join(home, STAMP_FILE);
+      const earlier = (Date.now() - BACKGROUND_SYNC_INTERVAL_MS - 1000) / 1000;
+      await utimes(stamp, earlier, earlier);
+      resetBackgroundSyncThrottle();
+      await api(...emitArgs);
+      expect(server.batches.map((b) => b.length)).toEqual([1, 1]);
+      expect(await countPending()).toBe(0);
+    });
+
+    it('parallel emits do not post the same batch twice', async () => {
+      await initialise();
+      await seed(3);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((done) => {
+        release = done;
+      });
+      const inner = fakeFetch(server);
+      let requests = 0;
+      const slow = (async (...args: Parameters<typeof fetch>) => {
+        requests++;
+        await gate;
+        return inner(...args);
+      }) as typeof fetch;
+
+      let err = '';
+      vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+        err += String(chunk);
+        return true;
+      });
+      try {
+        const first = build(slow).parseAsync(emitArgs, { from: 'user' });
+        // The first emit holds the lock and waits on the network.
+        await vi.waitFor(async () => {
+          await stat(join(home, LOCK_FILE));
+          expect(requests).toBe(1);
+        });
+        // The second is another process that looked at the stamp before the
+        // first wrote it, so only the lock stands in its way.
+        resetBackgroundSyncThrottle();
+        await rm(join(home, STAMP_FILE), { force: true });
+        await build(slow).parseAsync(emitArgs, { from: 'user' });
+        expect(requests).toBe(1);
+        release();
+        await first;
+      } finally {
+        vi.mocked(process.stdout.write).mockRestore();
+        vi.mocked(process.stderr.write).mockRestore();
+      }
+      expect(err).toBe('');
+      // The first emit sends the 4 events it found, then the one the second
+      // emit logged while it waited. No event goes twice.
+      expect(server.batches.map((b) => b.length)).toEqual([4, 1]);
+      const ids = server.batches.flat().map((e) => e.event_id);
+      expect(new Set(ids).size).toBe(5);
+      expect(await countPending()).toBe(0);
+      await expect(stat(join(home, LOCK_FILE))).rejects.toThrow();
+    });
+
+    it('stops starting rounds after its deadline and leaves the rest pending', async () => {
+      await initialise();
+      await seed(1001);
+      // Each request takes 2.5 seconds on the clock the sync reads. The first
+      // round starts at once, the second at 2.5 seconds, before the 3 second
+      // deadline, and no third one starts.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const inner = fakeFetch(server);
+        const slow = (async (...args: Parameters<typeof fetch>) => {
+          vi.setSystemTime(Date.now() + 2_500);
+          return inner(...args);
+        }) as typeof fetch;
+        const { code, err } = await run(slow, ...emitArgs);
+        expect(code).toBe(0);
+        expect(err).toBe('');
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(server.batches.map((b) => b.length)).toEqual([500, 500]);
+      expect(await countPending()).toBe(2);
+    }, 30_000);
+
+    it('stays out, silently, while another sync holds the lock', async () => {
+      await initialise();
+      const lock = join(home, LOCK_FILE);
+      await writeFile(lock, `${process.pid}\n`);
+      const { code, err } = await api(...emitArgs);
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(server.batches).toEqual([]);
+      expect((await stat(lock)).isFile()).toBe(true);
+    });
+  });
+
   describe('sync', () => {
+    it('waits for an automatic sync that holds the lock, then sends', async () => {
+      await initialise();
+      await seed(2);
+      const lock = join(home, LOCK_FILE);
+      await writeFile(lock, `${process.pid}\n`);
+      const released = new Promise<void>((done) =>
+        setTimeout(() => {
+          void rm(lock, { force: true }).then(() => done());
+        }, 300),
+      );
+      const { code, out } = await api('sync');
+      await released;
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 2, duplicates 0\n');
+      expect(server.batches.map((b) => b.length)).toEqual([2]);
+      await expect(stat(lock)).rejects.toThrow();
+    });
+
     it('sends all pending in one verified batch and advances the cursor', async () => {
       await initialise();
       const events = await seed(3);

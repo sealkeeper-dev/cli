@@ -2,18 +2,15 @@
 import type { Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
-import { createApiClient, resolveApiUrl } from '../api.js';
+import { gatedSync, WAITING_CALLER_LIMITS } from '../background-sync.js';
 import { loadConfig } from '../cli-config.js';
 import { DEFAULT_AGENT_VERSION } from '../config.js';
 import { type EmitInput, emit } from '../emit.js';
 import { cli } from '../invocation.js';
 import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import { pendingText, SyncError, syncEvents } from '../sync.js';
+import { pendingText, SyncError } from '../sync.js';
 import { defaultSyncDeps, type SyncDeps } from './sync.js';
-
-// emit never waits long on the network. The hook that called it is waiting.
-const EMIT_SYNC_TIMEOUT_MS = 2_000;
 
 type EmitOptions = {
   type: string;
@@ -86,17 +83,17 @@ export function register(
       }
 
       // Best effort. Whatever goes wrong, the event is already in the log and
-      // the next sync sends it, so the command still succeeds.
+      // the next sync sends it, so the command still succeeds. It goes
+      // through the gate the background sync uses, so an agent that emits
+      // for every tool call sends at most once every 5 minutes across all
+      // its processes, never sends one batch twice from parallel emits and
+      // never holds up the hook that called it for more than a few seconds.
+      // emit runs it here rather than starting it in the background, since
+      // the process exits as soon as the command returns and would cut a
+      // background sync off mid request. A throttled or locked emit prints
+      // nothing. sync sends now, whatever the throttle.
       try {
-        await syncEvents({
-          api: createApiClient({
-            apiUrl: resolveApiUrl({ config: config.apiUrl }),
-            fetch: deps.fetch,
-            timeoutMs: EMIT_SYNC_TIMEOUT_MS,
-          }),
-          sleep: deps.sleep,
-          maxRateLimitWaitSec: 0,
-        });
+        await gatedSync({ fetch: deps.fetch, ...WAITING_CALLER_LIMITS });
       } catch (error) {
         const pending =
           error instanceof SyncError
