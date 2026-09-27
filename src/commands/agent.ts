@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   AgentName,
   type AgentResponse,
@@ -18,14 +19,21 @@ import {
 } from '../agent-runtime.js';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
+import { LOCK_FILE, STAMP_FILE } from '../background-sync.js';
 import {
+  boundFolders,
+  ConfigError,
   handleOf,
   handleUrl,
+  listMachineAgents,
+  type MachineAgent,
   type Paths,
   paths,
   profileUrl,
+  releaseHome,
   writeConfig,
 } from '../config.js';
+import { tildePath } from '../files.js';
 import { deleteKey } from '../identity.js';
 import { cli } from '../invocation.js';
 import { readOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
@@ -71,6 +79,34 @@ export function register(
   routineDeps: RoutineDeps = defaultRoutineDeps,
 ): Command {
   const agent = parent.command('agent').description('Manage this agent');
+
+  agent
+    .command('list')
+    .description(
+      'List the agents on this machine and the folders that use them',
+    )
+    .action(async function (this: Command): Promise<void> {
+      let agents: MachineAgent[];
+      try {
+        agents = await listMachineAgents();
+      } catch (error) {
+        if (error instanceof ConfigError) this.error(error.message);
+        throw error;
+      }
+      const listed = await Promise.all(agents.map(listedAgent));
+      if (wantsJson(this)) {
+        stdout(JSON.stringify({ agents: listed }));
+        return;
+      }
+      if (listed.length === 0) {
+        stdout(`no agents on this machine, run ${cli('init')}`);
+        return;
+      }
+      listed.forEach((entry, i) => {
+        if (i > 0) stdout('');
+        for (const line of agentLines(entry)) stdout(line);
+      });
+    });
 
   agent
     .command('rename <new-name>')
@@ -247,6 +283,12 @@ export function register(
           `the daily ${job.scheduler} job ${job.job}`,
         ]);
       }
+      // Folders init bound to this agent stop using it. Only named here, a
+      // map that does not read is left for the removal to report.
+      const bound = await boundFolders(p.home).catch(() => []);
+      if (bound.length > 0) {
+        fields.push(['folders', bound.map((f) => tildePath(f)).join(', ')]);
+      }
       const width = Math.max(...fields.map(([key]) => key.length));
       for (const [key, value] of fields) {
         print(`${key.padEnd(width)}  ${value}`);
@@ -305,6 +347,7 @@ export function register(
         );
       }
       const keyCopies = await removeLocal(p);
+      const folders = await releaseFolders(p);
       if (routineJob !== null && !json) {
         for (const line of jobLines(routineJob)) stdout(line);
       }
@@ -315,11 +358,13 @@ export function register(
             deleted: true,
             keyCopies,
             routineJob,
+            folders,
             ...(routineJobError === null ? {} : { routineJobError }),
           }),
         );
         return;
       }
+      for (const line of unboundLines(folders)) stdout(line);
       if (result === 'gone') {
         stdout(
           `${handle} was already gone from SealKeeper, removed the files on this machine`,
@@ -330,6 +375,65 @@ export function register(
     });
 
   return agent;
+}
+
+type ListedAgent = {
+  home: string;
+  name: string | null;
+  agentId: string | null;
+  handle: string | null;
+  isDefault: boolean;
+  folders: string[];
+};
+
+// One agent as agent list shows it. The handle is built offline, from the
+// operator slug the API last sent, as status does.
+async function listedAgent(agent: MachineAgent): Promise<ListedAgent> {
+  const { config } = agent;
+  const slug =
+    config === null
+      ? null
+      : await readOperatorSlug(config.agentId, paths(agent.home));
+  return {
+    home: agent.home,
+    name: config?.name ?? null,
+    agentId: config?.agentId ?? null,
+    handle: config === null ? null : handleOf(config, slug),
+    isDefault: agent.isDefault,
+    folders: agent.folders,
+  };
+}
+
+function agentLines(agent: ListedAgent): string[] {
+  const head = [
+    agent.handle ?? `no config in ${tildePath(agent.home)}`,
+    ...(agent.isDefault ? ['default'] : []),
+  ].join('  ');
+  const folders =
+    agent.folders.length > 0
+      ? agent.folders.map((folder) => `  ${tildePath(folder)}`)
+      : ['  no folder uses it'];
+  return [head, ...folders];
+}
+
+// Takes this agent's folders out of the map and its named home off the
+// disk, once its files are gone. The agent is deleted by then, so a map
+// that does not read only warns.
+export async function releaseFolders(p: Paths): Promise<string[]> {
+  try {
+    return await releaseHome(p.home);
+  } catch (error) {
+    stderr(
+      `the folders that used this agent could not be unbound: ${(error as Error).message.split('\n')[0]}`,
+    );
+    return [];
+  }
+}
+
+export function unboundLines(folders: string[]): string[] {
+  return folders.map(
+    (folder) => `${tildePath(folder)} no longer uses this agent`,
+  );
 }
 
 function noInput(): Input {
@@ -354,7 +458,8 @@ async function stillRegistered(
 }
 
 // Everything under the SealKeeper home that belongs to this agent. The home
-// directory itself stays. config.json goes last, so a run cut short leaves
+// directory itself stays here, and releaseFolders removes a named one once
+// it is empty. config.json goes last, so a run cut short leaves
 // a config that still names the agent. Returns the full paths of the key
 // copies (key.<time>.bak, key.<id>.tmp) it deleted with the key.
 async function removeLocal(p: Paths): Promise<string[]> {
@@ -376,6 +481,10 @@ async function removeLocal(p: Paths): Promise<string[]> {
     routinePaths(p).work,
     p.cursor,
     p.cursorOffset,
+    // What the automatic sync leaves, so a named home ends up empty and
+    // goes with it.
+    join(p.home, STAMP_FILE),
+    join(p.home, LOCK_FILE),
     p.sessions,
     p.log,
   ]) {

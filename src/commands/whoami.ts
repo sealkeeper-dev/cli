@@ -36,15 +36,7 @@ export function printIdentity(
   json: boolean,
   slug: string | null,
 ): void {
-  const identity = {
-    agentId: config.agentId,
-    handle: handleOf(config, slug),
-    operatorLogin: config.operatorLogin,
-    name: config.name,
-    version: config.version,
-    apiUrl: config.apiUrl,
-    profileUrl: profileUrl(config, slug),
-  };
+  const identity = identityOf(config, slug);
 
   if (json) {
     stdout(JSON.stringify(identity));
@@ -54,4 +46,17 @@ export function printIdentity(
   for (const [key, value] of Object.entries(identity)) {
     stdout(`${key.padEnd(width)}  ${value}`);
   }
+}
+
+// The identity whoami prints, and init prints with --json on a repeat run.
+export function identityOf(config: Config, slug: string | null) {
+  return {
+    agentId: config.agentId,
+    handle: handleOf(config, slug),
+    operatorLogin: config.operatorLogin,
+    name: config.name,
+    version: config.version,
+    apiUrl: config.apiUrl,
+    profileUrl: profileUrl(config, slug),
+  };
 }

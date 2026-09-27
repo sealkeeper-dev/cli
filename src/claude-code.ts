@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { clampMs } from './adapter-core.js';
 import { gatedSync, WAITING_CALLER_LIMITS } from './background-sync.js';
 import {
@@ -9,6 +9,7 @@ import {
   paths,
   readConfig,
   readNudge,
+  sealkeeperHome,
 } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { readIfExists } from './files.js';
@@ -54,6 +55,9 @@ type HookInput = {
   // PostToolUseFailure only. true when the user interrupted the call, so
   // the failure is not the agent's.
   interrupted: boolean;
+  // The folder Claude Code runs in, which picks the agent, see
+  // sealkeeperHome. null when the payload has no absolute path there.
+  cwd: string | null;
 };
 
 type HookDeps = {
@@ -89,20 +93,31 @@ export function parseHookInput(text: string): HookInput | null {
     toolName: toolNameOf(raw.tool_name),
     toolUseId: idOf(raw.tool_use_id),
     interrupted: raw.is_interrupt === true,
+    cwd: cwdOf(raw.cwd),
   };
+}
+
+function cwdOf(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' && isAbsolute(value)
+    ? value
+    : null;
 }
 
 function idOf(value: unknown): string | null {
   return typeof value === 'string' && ID.test(value) ? value : null;
 }
 
-// Handles one hook event. Without a config it does nothing. Any failure
-// ends in at most one warning line on stderr.
+// Handles one hook event for the agent of the folder Claude Code runs in,
+// the payload's cwd, since the hook process may start elsewhere. Without a
+// config it does nothing. Any failure ends in at most one warning line on
+// stderr.
 export async function handleHook(
   input: HookInput,
   deps: HookDeps,
 ): Promise<void> {
-  const p = deps.paths ?? paths();
+  const p =
+    deps.paths ??
+    paths(sealkeeperHome(process.env, input.cwd ?? process.cwd()));
   await logHook(input, deps, p);
   // After the event is in the log, so the summary never holds it up or
   // breaks it.

@@ -26,8 +26,10 @@ import { createApiClient } from '../api.js';
 import type { Input } from '../ask.js';
 import { ANSWER_RULES } from '../claude-code-command.js';
 import {
+  bindFolder,
   type Config,
   defaultRoutineConfig,
+  namedHome,
   paths,
   type RoutineConfig,
   readConfig,
@@ -736,6 +738,30 @@ describe('routine', () => {
 
       await run('routine', 'remove');
       expect(crontab).toBe('0 1 * * * /usr/bin/backup\n');
+    });
+
+    it('gives a job installed from a named home its SEALKEEPER_HOME, and the root none', async () => {
+      // No SEALKEEPER_HOME, so the folder the command runs in picks the
+      // agent, and the scheduled job starts somewhere else.
+      const root = join(home, 'root');
+      const named = paths(namedHome('scout', root));
+      await writeConfig((await readConfig()) as Config, named);
+      await bindFolder(process.cwd(), named.home, root);
+      vi.stubEnv('SEALKEEPER_HOME', '');
+      vi.stubEnv('SEALKEEPER_ROOT', root);
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      expect(crontab).toContain(`SEALKEEPER_HOME='${named.home}'`);
+      expect((await readRoutineConfig(named)).schedule?.scheduler).toBe('cron');
+      await run('routine', 'remove');
+      expect(crontab).toBe('');
+
+      // The same folder bound to the root, the default agent.
+      await writeConfig((await readConfig(named)) as Config, paths(root));
+      await bindFolder(process.cwd(), root, root);
+      expect((await run('routine', 'install', '--yes')).code).toBe(0);
+      expect(crontab).toContain('routine');
+      expect(crontab).not.toContain('SEALKEEPER_HOME');
     });
 
     it('remove without settings finds the job of this home by name, and only a marked one', async () => {

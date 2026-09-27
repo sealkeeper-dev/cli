@@ -5,6 +5,8 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
+  realpath,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -13,6 +15,9 @@ import { dirname, join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  agentsMapPath,
+  bindFolder,
+  namedHome,
   type Paths,
   paths,
   readRoutineConfig,
@@ -260,6 +265,7 @@ describe('logout', () => {
       removed: ['score.json', 'inbox.json', 'post-prompt.json', 'config.json'],
       keyDeleted: false,
       routineJob: null,
+      folders: [],
     });
     expect(calls).toEqual([]);
   });
@@ -383,6 +389,64 @@ describe('logout', () => {
     expect(await exists(p.key)).toBe(false);
     expect(await exists(p.log)).toBe(false);
     expect(await exists(p.cursor)).toBe(false);
+  });
+
+  describe('in a named home', () => {
+    let root: string;
+    let project: string;
+
+    // The agent in agents/scout under a temp root, with a project folder
+    // bound to it, and no SEALKEEPER_HOME.
+    beforeEach(async () => {
+      root = join(home, 'root');
+      p = paths(namedHome('scout', root));
+      project = await realpath(await mkdtemp(join(home, 'project-')));
+      vi.stubEnv('SEALKEEPER_HOME', p.home);
+      vi.stubEnv('SEALKEEPER_ROOT', root);
+      await initialise();
+      await bindFolder(project, p.home, root);
+    });
+
+    const mapped = async () =>
+      JSON.parse(await readFile(agentsMapPath(root), 'utf8')).folders;
+
+    it('plain logout keeps the folder bound', async () => {
+      const { code, out } = await run('logout', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).folders).toEqual([]);
+      expect(await mapped()).toEqual({ [project]: 'agents/scout' });
+    });
+
+    it('--delete-key --yes unbinds the folder, says so and removes the empty home', async () => {
+      const { code, out } = await run('logout', '--delete-key', '--yes');
+      expect(code).toBe(0);
+      expect(out).toContain(`${project} no longer uses this agent`);
+      expect(await mapped()).toEqual({});
+      // The key, the log and the cursor went with it, so nothing is left
+      // and the named home goes too.
+      await expect(readdir(p.home)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('--delete-key --yes removes the home once nothing is left in it', async () => {
+      await rm(p.log, { recursive: true });
+      const { code, out } = await run(
+        'logout',
+        '--delete-key',
+        '--yes',
+        '--json',
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(out).folders).toEqual([project]);
+      expect(await exists(p.home)).toBe(false);
+    });
+
+    it('after a plain logout, --delete-key --yes still unbinds', async () => {
+      expect((await run('logout')).code).toBe(0);
+      const { code, out } = await run('logout', '--delete-key', '--yes');
+      expect(code).toBe(0);
+      expect(out).toContain(`${project} no longer uses this agent`);
+      expect(await mapped()).toEqual({});
+    });
   });
 
   it('without config, --delete-key alone keeps the key and exits 0', async () => {

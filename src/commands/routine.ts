@@ -1,7 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { Command } from 'commander';
 import {
   type ApiClient,
@@ -23,6 +23,7 @@ import {
   type RoutineLimits,
   type RoutineSchedule,
   readRoutineConfig,
+  sealkeeperRoot,
   writeRoutineConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
@@ -252,7 +253,7 @@ export async function prepareInstall(
     {
       time,
       program: [...program, 'routine', 'run'],
-      env: jobEnv(),
+      env: jobEnv(p),
       home: p.home,
       outFile: routinePaths(p).out,
     },
@@ -376,13 +377,16 @@ const defaultJob = (p: Paths, env: SchedulerEnv): string =>
   jobName(p.home, paths(join(env.homedir, '.sealkeeper')).home);
 
 // PATH so the agent's launcher finds node under a scheduler's bare
-// environment, and SEALKEEPER_HOME when this CLI uses another home.
-function jobEnv(): Record<string, string> {
+// environment, and SEALKEEPER_HOME for any home but the root. The job does
+// not start in the folder that picked the agent, so for a named home or a
+// SEALKEEPER_HOME elsewhere it must say which one.
+function jobEnv(p: Paths): Record<string, string> {
   const env: Record<string, string> = {};
   const path = process.env.PATH;
   if (path) env.PATH = path;
-  const home = readEnv('SEALKEEPER_HOME');
-  if (home) env.SEALKEEPER_HOME = home;
+  if (resolve(p.home) !== resolve(sealkeeperRoot())) {
+    env.SEALKEEPER_HOME = p.home;
+  }
   // The agent's working directory follows it, so the scheduled run and
   // agent delete agree on where it is.
   const cache = readEnv('XDG_CACHE_HOME');

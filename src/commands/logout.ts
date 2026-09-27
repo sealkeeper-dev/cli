@@ -8,6 +8,7 @@ import { deleteKey as removeKey } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { SchedulerError } from '../routine-scheduler.js';
+import { releaseFolders, unboundLines } from './agent.js';
 import {
   defaultRoutineDeps,
   jobLines,
@@ -24,7 +25,10 @@ import {
 // also deletes the key, every copy of it (key.<time>.bak and key.<id>.tmp),
 // the log and the cursor, as agent delete does, so a new key never signs
 // the events the old one logged. There is no prompt, the --yes flag is the
-// confirmation, and everything removed is printed.
+// confirmation, and everything removed is printed. With the key
+// gone the folders init bound to this agent are unbound too, and a named
+// home left empty is removed. A plain logout keeps them, since the key
+// stays.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -54,6 +58,7 @@ export function register(
         // must still be deletable then, or no command could remove it.
         if (deleteKey && (await exists(p.key))) {
           const { removed, keyCopies } = await removeSession(p, true);
+          const folders = await releaseFolders(p);
           if (json) {
             stdout(
               JSON.stringify({
@@ -61,12 +66,14 @@ export function register(
                 removed,
                 keyDeleted: true,
                 keyCopies,
+                folders,
               }),
             );
           } else {
             for (const line of deletedKeyLines(p, 'this agent', keyCopies)) {
               stdout(line);
             }
+            for (const line of unboundLines(folders)) stdout(line);
           }
           return;
         }
@@ -109,6 +116,7 @@ export function register(
         throw error;
       }
       const { removed, keyCopies } = await removeSession(p, deleteKey);
+      const folders = deleteKey ? await releaseFolders(p) : [];
 
       if (json) {
         stdout(
@@ -118,6 +126,7 @@ export function register(
             keyDeleted: deleteKey,
             ...(deleteKey ? { keyCopies } : {}),
             routineJob,
+            folders,
           }),
         );
         return;
@@ -130,6 +139,7 @@ export function register(
         for (const line of deletedKeyLines(p, identity, keyCopies)) {
           stdout(line);
         }
+        for (const line of unboundLines(folders)) stdout(line);
       } else {
         stdout(
           `kept the key at ${p.key} and the log at ${p.log}, run ${cli('init')} to sign in again`,

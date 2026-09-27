@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { open, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, relative, resolve, sep } from 'node:path';
+import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 import { activeRoutineRun } from './routine.js';
 
@@ -16,6 +17,9 @@ import { activeRoutineRun } from './routine.js';
 // where it points, and a symlink out of the answers folder is refused like
 // the file it points to. Then, in order
 // - nothing inside the SealKeeper home, which holds the private key
+// - nothing inside the SealKeeper root, ~/.sealkeeper, which holds the
+//   homes of every other agent on this machine, so no agent's key is read
+//   through another agent's folder
 // - in a routine run, nothing outside <cwd>/.sealkeeper-answers
 // - otherwise nothing in a hidden file or folder at the top of the user's
 //   home, such as .ssh, .config, .aws or .gnupg, whatever the flags,
@@ -112,6 +116,12 @@ export async function readGuardedFile(
   const home = await insideHome(target);
   if (home !== null) {
     return refuse(`it is inside ${home}, which holds this agent's private key`);
+  }
+  const root = await real(sealkeeperRoot());
+  if (within(root, target)) {
+    return refuse(
+      `it is inside ${root}, which holds the private keys of the agents on this machine`,
+    );
   }
 
   // The answers folder is not resolved itself, so when it is a symlink

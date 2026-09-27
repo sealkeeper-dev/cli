@@ -1,12 +1,22 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { chmod, mkdir, open, rename, rm } from 'node:fs/promises';
+import { readFileSync, realpathSync } from 'node:fs';
+import {
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  rmdir,
+} from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { AgentId, agentHandle } from '@sealkeeper/schema';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { AgentId, AgentName, agentHandle } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { readEnv } from './env.js';
-import { readIfExists } from './files.js';
+import { exists, readIfExists } from './files.js';
 
 export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
@@ -215,11 +225,298 @@ export type Paths = {
 };
 
 const HOME_DIR_NAME = '.sealkeeper';
+const AGENTS_DIR_NAME = 'agents';
+const FOLDER_MAP_FILE = 'agents.json';
 
-// SEALKEEPER_HOME wins so tests and multiple agents on one machine can each
-// have their own directory. The default is ~/.sealkeeper.
-export function sealkeeperHome(env: NodeJS.ProcessEnv = process.env): string {
-  return readEnv('SEALKEEPER_HOME', env) ?? join(homedir(), HOME_DIR_NAME);
+// The root of every agent on this machine, ~/.sealkeeper. It holds the
+// folder map, agents.json, the named homes under agents/, and is itself the
+// home of the default agent. SEALKEEPER_HOME does not move it.
+// SEALKEEPER_ROOT is for tests only, so a test can point the root at a temp
+// directory without touching HOME.
+export function sealkeeperRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return readEnv('SEALKEEPER_ROOT', env) ?? join(homedir(), HOME_DIR_NAME);
+}
+
+// The home of the agent this command acts for. SEALKEEPER_HOME wins and
+// reads no map. Otherwise the folder map picks it, by the nearest folder
+// at or above cwd that init bound to an agent, see agents.json below. A
+// folder no agent is bound to gets the root, the default agent. The map is
+// read on every call, it is tiny, and a broken one counts as empty here so
+// no command dies on it. readFolderMap says what is wrong with it.
+export function sealkeeperHome(
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): string {
+  const home = readEnv('SEALKEEPER_HOME', env);
+  if (home !== undefined) return home;
+  const root = sealkeeperRoot(env);
+  return boundHome(cwd, root) ?? root;
+}
+
+// The home the nearest folder at or above cwd is bound to, or null when no
+// folder there is bound. Unlike sealkeeperHome it tells a folder bound to
+// the root apart from one bound to nothing, so init knows when to offer the
+// choice. It reads no SEALKEEPER_HOME, and a broken map counts as empty.
+export function boundHome(
+  cwd: string,
+  root: string = sealkeeperRoot(),
+): string | null {
+  const folders = readFolderMapSync(root).folders;
+  let dir = realFolder(cwd);
+  for (;;) {
+    if (Object.hasOwn(folders, dir)) {
+      return join(root, folders[dir] as string);
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+function realFolder(folder: string): string {
+  const absolute = resolve(folder);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+// agents.json in the root. Which folder uses which agent, so one machine
+// holds several. Keys are folders after realpath. Values are homes relative
+// to the root, '.' for the root itself, the default agent, and
+// agents/<name> for a named home. The value is a path and not the agent's
+// name, so agent rename never moves a directory.
+const HomeValue = z.union([
+  z.literal('.'),
+  z
+    .string()
+    .refine(
+      (value) =>
+        value.startsWith(`${AGENTS_DIR_NAME}/`) &&
+        AgentName.safeParse(value.slice(AGENTS_DIR_NAME.length + 1)).success,
+      `expected . or ${AGENTS_DIR_NAME}/<agent name>`,
+    ),
+]);
+
+const FolderMapSchema = z.strictObject({
+  version: z.literal(1),
+  folders: z.record(
+    z.string().refine(isAbsolute, 'expected an absolute folder'),
+    HomeValue,
+  ),
+});
+export type FolderMap = { version: 1; folders: Record<string, string> };
+
+const emptyMap = (): FolderMap => ({ version: 1, folders: {} });
+
+export function agentsMapPath(root: string = sealkeeperRoot()): string {
+  return join(root, FOLDER_MAP_FILE);
+}
+
+// The map for sealkeeperHome, which must not throw. Anything that does not
+// read counts as empty.
+function readFolderMapSync(root: string): FolderMap {
+  try {
+    const parsed = FolderMapSchema.safeParse(
+      JSON.parse(readFileSync(agentsMapPath(root), 'utf8')),
+    );
+    return parsed.success ? parsed.data : emptyMap();
+  } catch {
+    return emptyMap();
+  }
+}
+
+// The folder map. A missing file is an empty map. Throws ConfigError when
+// the file is not valid JSON or does not match the schema.
+export async function readFolderMap(
+  root: string = sealkeeperRoot(),
+): Promise<FolderMap> {
+  const file = agentsMapPath(root);
+  const raw = await readIfExists(file);
+  if (raw === null) return emptyMap();
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new ConfigError(`Invalid agent folders at ${file}: not valid JSON`);
+  }
+  const result = FolderMapSchema.safeParse(json);
+  if (!result.success) {
+    throw new ConfigError(
+      `Invalid agent folders at ${file}:\n${z.prettifyError(result.error)}`,
+    );
+  }
+  return result.data;
+}
+
+async function writeFolderMap(map: FolderMap, root: string): Promise<void> {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
+  await writeFileAtomic(
+    agentsMapPath(root),
+    `${JSON.stringify(FolderMapSchema.parse(map), null, 2)}\n`,
+  );
+}
+
+// The home of the agent called name, under the root.
+export function namedHome(
+  name: string,
+  root: string = sealkeeperRoot(),
+): string {
+  return join(root, AGENTS_DIR_NAME, name);
+}
+
+// home as the map stores it. '.' for the root, agents/<name> for a named
+// home, null for anything else, such as a SEALKEEPER_HOME elsewhere.
+export function relativeHome(
+  home: string,
+  root: string = sealkeeperRoot(),
+): string | null {
+  const rel = relative(resolve(root), resolve(home));
+  if (rel === '') return '.';
+  const parts = rel.split(sep);
+  if (
+    parts.length === 2 &&
+    parts[0] === AGENTS_DIR_NAME &&
+    AgentName.safeParse(parts[1]).success
+  ) {
+    return `${AGENTS_DIR_NAME}/${parts[1]}`;
+  }
+  return null;
+}
+
+// Binds folder to home, so every command run in it or below it acts for
+// that agent. A folder already bound is bound again. Returns the folder as
+// stored, after realpath. Throws ConfigError when home is not the root or
+// a named home under it, or the map does not read.
+export async function bindFolder(
+  folder: string,
+  home: string,
+  root: string = sealkeeperRoot(),
+): Promise<string> {
+  const real = await realpath(resolve(folder));
+  const value = relativeHome(home, root);
+  if (value === null) {
+    throw new ConfigError(
+      `${home} is not ${root} or a home under ${join(root, AGENTS_DIR_NAME)}, so no folder can use it`,
+    );
+  }
+  const map = await readFolderMap(root);
+  map.folders[real] = value;
+  await writeFolderMap(map, root);
+  return real;
+}
+
+// The folders bound to home. Throws ConfigError when the map does not
+// read.
+export async function boundFolders(
+  home: string,
+  root: string = sealkeeperRoot(),
+): Promise<string[]> {
+  return foldersIn(await readFolderMap(root), home, root);
+}
+
+function foldersIn(map: FolderMap, home: string, root: string): string[] {
+  const target = resolve(home);
+  return Object.keys(map.folders).filter(
+    (folder) => join(root, map.folders[folder] as string) === target,
+  );
+}
+
+// Takes every folder bound to home out of the map. Returns the folders
+// taken out. Writes only when something changed.
+export async function unbindHome(
+  home: string,
+  root: string = sealkeeperRoot(),
+): Promise<string[]> {
+  const map = await readFolderMap(root);
+  const removed = foldersIn(map, home, root);
+  if (removed.length === 0) return [];
+  for (const folder of removed) delete map.folders[folder];
+  await writeFolderMap(map, root);
+  return removed;
+}
+
+// For agent delete and logout --delete-key, once the agent's files are
+// gone. Takes every folder bound to home out of the map, and removes a named
+// home when nothing is left in it. The root, and a SEALKEEPER_HOME
+// elsewhere, always stay. Returns the folders taken out.
+export async function releaseHome(
+  home: string,
+  root: string = sealkeeperRoot(),
+): Promise<string[]> {
+  const folders = await unbindHome(home, root);
+  if (relativeHome(home, root)?.startsWith(`${AGENTS_DIR_NAME}/`)) {
+    // rmdir removes only an empty directory, so a home with files left in
+    // it, such as the log after logout, stays.
+    await rmdir(home).catch(() => undefined);
+  }
+  return folders;
+}
+
+export type MachineAgent = {
+  home: string;
+  // As the map stores it, '.' or agents/<name>.
+  relative: string;
+  // null when there is no config or it does not read.
+  config: Config | null;
+  folders: string[];
+  isDefault: boolean;
+};
+
+// Every agent on this machine. The default agent in the root first, when it
+// has a config.json or a folder bound to it. Then each named home in the
+// map, in the order it first appears, and last any home under agents/ that
+// holds a config.json and has no folder bound, so a stale one still shows.
+// Throws ConfigError when the map does not read.
+export async function listMachineAgents(
+  root: string = sealkeeperRoot(),
+): Promise<MachineAgent[]> {
+  const map = await readFolderMap(root);
+  const byHome = new Map<string, string[]>();
+  for (const [folder, value] of Object.entries(map.folders)) {
+    const list = byHome.get(value) ?? [];
+    list.push(folder);
+    byHome.set(value, list);
+  }
+
+  const agents: MachineAgent[] = [];
+  const add = async (value: string, isDefault: boolean) => {
+    const home = value === '.' ? root : join(root, value);
+    agents.push({
+      home,
+      relative: value,
+      config: await readConfigOrNull(paths(home)),
+      folders: byHome.get(value) ?? [],
+      isDefault,
+    });
+  };
+
+  if (byHome.has('.') || (await exists(paths(root).config))) {
+    await add('.', true);
+  }
+  for (const value of byHome.keys()) {
+    if (value !== '.') await add(value, false);
+  }
+  const named = await readdir(join(root, AGENTS_DIR_NAME), {
+    withFileTypes: true,
+  }).catch(() => []);
+  for (const entry of named.sort((a, b) => a.name.localeCompare(b.name))) {
+    const value = `${AGENTS_DIR_NAME}/${entry.name}`;
+    if (!entry.isDirectory() || byHome.has(value)) continue;
+    if (await exists(paths(join(root, value)).config)) await add(value, false);
+  }
+  return agents;
+}
+
+async function readConfigOrNull(p: Paths): Promise<Config | null> {
+  try {
+    return await readConfig(p);
+  } catch (error) {
+    if (error instanceof ConfigError) return null;
+    throw error;
+  }
 }
 
 // The only place file paths under the SealKeeper home are built.

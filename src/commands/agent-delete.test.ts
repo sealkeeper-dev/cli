@@ -4,6 +4,9 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
+  realpath,
+  rename,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -19,6 +22,9 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  agentsMapPath,
+  bindFolder,
+  namedHome,
   paths,
   readRoutineConfig,
   writeConfig,
@@ -32,6 +38,7 @@ import { appendRoutine } from '../routine.js';
 import { jobName, type Runner } from '../routine-scheduler.js';
 
 const API_URL = 'https://api.test';
+const DELETE_LINE_START = 'the key and any copies of it, config.json, the log';
 
 // Every signed payload names the API it is for (VOU-111). The fake takes
 // aud off before it parses, and a payload without the right aud fails the
@@ -413,9 +420,71 @@ describe('sealkeeper agent delete', () => {
       deleted: true,
       keyCopies: [],
       routineJob: null,
+      folders: [],
     });
     expect(err).toContain('handle           alice/app');
     expect(await remaining()).toEqual([]);
+  });
+
+  it('unbinds the folders of a named home and removes the home once empty', async () => {
+    // The agent lives in a named home the current folder is bound to, and
+    // no SEALKEEPER_HOME is set, as after init in a project folder.
+    const root = join(home, 'root');
+    const named = namedHome('app', root);
+    await mkdir(named, { recursive: true });
+    for (const name of await readdir(home)) {
+      if (name !== 'root') await rename(join(home, name), join(named, name));
+    }
+    await writeFile(join(named, 'background-sync.stamp'), '');
+    const project = await realpath(await mkdtemp(join(home, 'project-')));
+    const here = await bindFolder(process.cwd(), named, root);
+    await bindFolder(project, named, root);
+    await bindFolder(join(home), root, root);
+    vi.stubEnv('SEALKEEPER_HOME', '');
+    vi.stubEnv('SEALKEEPER_ROOT', root);
+
+    const { code, out } = await run('agent', 'delete', '--yes');
+    expect(code).toBe(0);
+    expect(out).toContain(`on this machine  ${DELETE_LINE_START}`);
+    expect(out).toContain(`in ${named}`);
+    expect(out).toContain(`folders          ${here}, ${project}`);
+    expect(out).toContain(`${here} no longer uses this agent`);
+    expect(out).toContain(`${project} no longer uses this agent`);
+    expect(out.trim().split('\n').at(-1)).toBe('deleted alice/app');
+    expect(await exists(named)).toBe(false);
+    // Only the other folder's binding is left.
+    expect(JSON.parse(await readFile(agentsMapPath(root), 'utf8'))).toEqual({
+      version: 1,
+      folders: { [await realpath(home)]: '.' },
+    });
+  });
+
+  it('lists the unbound folders with --json', async () => {
+    const root = join(home, 'root');
+    const named = namedHome('app', root);
+    await mkdir(named, { recursive: true });
+    for (const name of await readdir(home)) {
+      if (name !== 'root') await rename(join(home, name), join(named, name));
+    }
+    const project = await realpath(await mkdtemp(join(home, 'project-')));
+    await bindFolder(project, named, root);
+    vi.stubEnv('SEALKEEPER_HOME', named);
+    vi.stubEnv('SEALKEEPER_ROOT', root);
+    const { code, out } = await run('agent', 'delete', '--yes', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).folders).toEqual([project]);
+    expect(await exists(named)).toBe(false);
+  });
+
+  it('keeps the root home and deletes with a broken folder map', async () => {
+    const root = await realpath(home);
+    await writeFile(agentsMapPath(root), '{ nope');
+    vi.stubEnv('SEALKEEPER_ROOT', root);
+    const { code, out, err } = await run('agent', 'delete', '--yes', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).folders).toEqual([]);
+    expect(err).toContain('could not be unbound');
+    expect(await exists(root)).toBe(true);
   });
 
   it('names the agent by the stored operator slug and removes the slug file', async () => {

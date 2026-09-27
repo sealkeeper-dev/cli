@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
   writeFile,
@@ -26,8 +27,10 @@ import { proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
   DEFAULT_API_URL,
+  namedHome,
   paths,
   readConfig,
+  readFolderMap,
   readNudge,
   readRoutineConfig,
   writeConfig,
@@ -55,12 +58,16 @@ import {
   BRONZE,
   bronzeLine,
   CONSENT,
+  folderLine,
   HOOKS_INTRO,
   HOOKS_MAX_ASKS,
   HOOKS_NOT_INSTALLED,
   HOOKS_QUESTION,
+  homeTaken,
   isYesByDefault,
   leftBehindLine,
+  MACHINE_AGENTS_SHOWN,
+  machineAgentsLine,
   NEXT_HOOKS,
   NEXT_NPX,
   NEXT_POST,
@@ -2313,6 +2320,373 @@ describe('sealkeeper init', () => {
       expect(piped.code).toBe(0);
       expect(piped.all).not.toContain(ROUTINE_QUESTION);
       expect(world.scheduler).toEqual([]);
+    });
+  });
+
+  describe('an agent per folder', () => {
+    // The root and the project folders, after realpath, since the temp
+    // directory may sit behind a symlink and the map stores real paths.
+    let root: string;
+    let app: string;
+    let worktree: string;
+    let billing: string;
+
+    beforeEach(async () => {
+      // No SEALKEEPER_HOME, so init reads the folder map, in a root of its
+      // own.
+      vi.stubEnv('SEALKEEPER_HOME', '');
+      const dir = await realpath(home);
+      root = join(dir, 'root');
+      vi.stubEnv('SEALKEEPER_ROOT', root);
+      app = join(dir, 'app');
+      worktree = join(dir, 'app-worktree');
+      billing = join(dir, 'billing');
+      for (const folder of [join(app, 'src'), worktree, billing]) {
+        await mkdir(folder, { recursive: true });
+      }
+    });
+
+    // The first agent, app, registered from the app folder. The world
+    // starts over after it, so a test counts only its own requests.
+    async function registerApp(): Promise<void> {
+      world.cwd = app;
+      expect((await run(world, 'init', '--name', 'app')).code).toBe(0);
+      world = newWorld();
+    }
+
+    const signedIn = () => world.fetchUrls.includes(DEVICE_CODE_URL);
+    const folders = async () => (await readFolderMap(root)).folders;
+
+    async function identity(p = paths(root)) {
+      const config = await readConfig(p);
+      return {
+        agentId: config?.agentId,
+        handle: `alice/${config?.name}`,
+        operatorLogin: 'alice',
+        name: config?.name,
+        version: '0.1.0',
+        // SEALKEEPER_API_URL is used for the run and never saved (VOU-237).
+        apiUrl: DEFAULT_API_URL,
+        profileUrl: `https://sealkeeper.run/agents/alice/${config?.name}`,
+      };
+    }
+
+    it('names the agents on this machine by handle, counting past a few', () => {
+      expect(machineAgentsLine(['alice/app'])).toBe(
+        'This machine has one agent, alice/app. Type its name to use it in this folder, or a new name to register another.',
+      );
+      expect(machineAgentsLine(['alice/app', 'alice/billing'])).toBe(
+        'This machine has 2 agents, alice/app and alice/billing. Type a name to use one in this folder, or a new name to register another.',
+      );
+      const many = Array.from(
+        { length: MACHINE_AGENTS_SHOWN + 2 },
+        (_, i) => `alice/a${i}`,
+      );
+      expect(machineAgentsLine(many)).toBe(
+        'This machine has 7 agents, alice/a0, alice/a1, alice/a2, alice/a3, alice/a4 and 2 more. Type a name to use one in this folder, or a new name to register another.',
+      );
+    });
+
+    it('registers the first agent in the root and binds its folder to it', async () => {
+      world.cwd = app;
+      const result = await run(world, 'init', '--name', 'app', '--json');
+      expect(result.code).toBe(0);
+      const json = JSON.parse(result.out);
+      expect(json).toMatchObject({
+        name: 'app',
+        handle: 'alice/app',
+        folder: app,
+        home: root,
+      });
+      expect(Object.keys(json)).toEqual([
+        'agentId',
+        'handle',
+        'operatorLogin',
+        'name',
+        'version',
+        'runtime',
+        'apiUrl',
+        'profileUrl',
+        'folder',
+        'home',
+        'nextSteps',
+      ]);
+      expect(await readConfig(paths(root))).toMatchObject({ name: 'app' });
+      expect(await folders()).toEqual({ [app]: '.' });
+
+      // agent list reads the same map.
+      world = newWorld();
+      const list = await run(world, 'agent', 'list', '--json');
+      expect(JSON.parse(list.out)).toEqual({
+        agents: [
+          {
+            home: root,
+            name: 'app',
+            agentId: json.agentId,
+            handle: 'alice/app',
+            isDefault: true,
+            folders: [app],
+          },
+        ],
+      });
+    });
+
+    it('says which folder now uses the agent it registered', async () => {
+      world.cwd = app;
+      const result = await run(world, 'init', '--name', 'app');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(
+        [
+          '  ✓ Registered alice/app',
+          '    Profile  https://sealkeeper.run/agents/alice/app',
+          `  ✓ ${folderLine(tildePath(app), 'alice/app')}`,
+          '',
+        ].join('\n'),
+      );
+      expect(folderLine('~/code/app', 'alice/app')).toBe(
+        '~/code/app now uses alice/app',
+      );
+    });
+
+    it('in a subfolder of a bound folder is a repeat run for its agent', async () => {
+      await registerApp();
+      world.cwd = join(app, 'src');
+      const human = await run(world, 'init');
+      expect(human.code).toBe(0);
+      expect(human.out).toContain('  ✓ Already set up as alice/app\n');
+      expect(human.out).not.toContain('now uses');
+      expect(human.err).not.toContain('This machine has');
+
+      const json = await run(world, 'init', '--json');
+      expect(JSON.parse(json.out)).toEqual(await identity());
+      expect(signedIn()).toBe(false);
+      expect(await folders()).toEqual({ [app]: '.' });
+    });
+
+    it('in a worktree binds to the agent on Enter and registers nothing', async () => {
+      await registerApp();
+      world.cwd = worktree;
+      world.repo = 'app';
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(signedIn()).toBe(false);
+      expect(world.registrations).toEqual([]);
+      const lines = result.err.split('\n');
+      const choice = lines.indexOf(`  ${machineAgentsLine(['alice/app'])}`);
+      expect(choice).toBeGreaterThan(0);
+      expect(result.err).toContain(`  ${nameQuestion('app')} `);
+      // The welcome box once, before the choice.
+      expect(result.err.split(TAGLINE[0] as string)).toHaveLength(2);
+      expect(result.out).toContain(
+        [
+          `  ✓ ${folderLine(tildePath(worktree), 'alice/app')}`,
+          '  ✓ Already set up as alice/app',
+          '    Profile  https://sealkeeper.run/agents/alice/app',
+        ].join('\n'),
+      );
+      expect(await folders()).toEqual({ [app]: '.', [worktree]: '.' });
+    });
+
+    it('binds to the agent whose name or handle is typed', async () => {
+      await registerApp();
+      world.cwd = billing;
+      world.stdin = answering('app');
+      const byName = await run(world, 'init');
+      expect(byName.code).toBe(0);
+      expect(byName.out).toContain(
+        `  ✓ ${folderLine(tildePath(billing), 'alice/app')}\n`,
+      );
+
+      world.cwd = worktree;
+      world.stdin = answering('alice/app');
+      const byHandle = await run(world, 'init');
+      expect(byHandle.code).toBe(0);
+      expect(byHandle.err).not.toContain('is not a valid name');
+      expect(signedIn()).toBe(false);
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [billing]: '.',
+        [worktree]: '.',
+      });
+    });
+
+    it('registers a new name in a home of its own and binds the folder', async () => {
+      await registerApp();
+      world.cwd = billing;
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(
+        world.fetchUrls.filter((url) => url === DEVICE_CODE_URL),
+      ).toHaveLength(1);
+      expect(world.registrations).toMatchObject([{ name: 'billing' }]);
+      const home = namedHome('billing', root);
+      expect(await readConfig(paths(home))).toMatchObject({ name: 'billing' });
+      expect((await loadKey(paths(home)))?.agentId).toBe(
+        world.registrations[0]?.publicKey,
+      );
+      // The first agent keeps its own key.
+      expect((await loadKey(paths(root)))?.agentId).not.toBe(
+        world.registrations[0]?.publicKey,
+      );
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [billing]: 'agents/billing',
+      });
+      expect(result.out).toContain(
+        `  ✓ ${folderLine(tildePath(billing), 'alice/billing')}\n`,
+      );
+      // The name is asked once, in the choice, before the sign in.
+      expect(result.err.split(nameQuestion('billing'))).toHaveLength(2);
+      expect(result.err.indexOf(nameQuestion('billing'))).toBeLessThan(
+        result.err.indexOf('Sign in with GitHub'),
+      );
+    });
+
+    it('with --name of an agent binds without a question', async () => {
+      await registerApp();
+      world.cwd = billing;
+      const stdin = answering('nope');
+      world.stdin = stdin;
+      const human = await run(world, 'init', '--name', 'app');
+      expect(human.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(human.err).not.toContain('This machine has');
+      expect(human.out).toContain(
+        `  ✓ ${folderLine(tildePath(billing), 'alice/app')}\n`,
+      );
+
+      world.cwd = worktree;
+      const json = await run(world, 'init', '--name', 'app', '--json');
+      expect(json.code).toBe(0);
+      expect(JSON.parse(json.out)).toEqual({
+        ...(await identity()),
+        folder: worktree,
+        home: root,
+      });
+      expect(signedIn()).toBe(false);
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [billing]: '.',
+        [worktree]: '.',
+      });
+    });
+
+    it('with --name of a new agent registers it', async () => {
+      await registerApp();
+      world.cwd = billing;
+      const result = await run(world, 'init', '--name', 'billing', '--json');
+      expect(result.code).toBe(0);
+      const home = namedHome('billing', root);
+      expect(JSON.parse(result.out)).toMatchObject({
+        name: 'billing',
+        folder: billing,
+        home,
+      });
+      expect(world.registrations).toMatchObject([{ name: 'billing' }]);
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [billing]: 'agents/billing',
+      });
+    });
+
+    it('without a terminal binds when the suggestion names an agent', async () => {
+      await registerApp();
+      world.cwd = worktree;
+      world.repo = 'app';
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(signedIn()).toBe(false);
+      expect(result.out).toContain(
+        `  ✓ ${folderLine(tildePath(worktree), 'alice/app')}\n`,
+      );
+      expect(await folders()).toEqual({ [app]: '.', [worktree]: '.' });
+    });
+
+    it('refuses a new name whose home holds an agent already', async () => {
+      await registerApp();
+      // An agent renamed since keeps the home of its old name.
+      const old = namedHome('old', root);
+      await writeConfig(
+        {
+          agentId: 'A'.repeat(43),
+          operatorLogin: 'alice',
+          name: 'renamed',
+          version: '0.1.0',
+          registeredAt: '2026-09-23T10:00:00.000Z',
+        },
+        paths(old),
+      );
+      world.cwd = billing;
+      const result = await run(world, 'init', '--name', 'old');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(homeTaken(tildePath(old)));
+      expect(homeTaken('~/.sealkeeper/agents/old')).toBe(
+        '~/.sealkeeper/agents/old already holds an agent, which may have been renamed since, see npx sealkeeper agent list or choose another name',
+      );
+      expect(signedIn()).toBe(false);
+      expect(await folders()).toEqual({ [app]: '.' });
+    });
+
+    it('binds nothing when the registration fails', async () => {
+      world.api = () => apiError(403, 'account_too_new', 'created today');
+      world.cwd = app;
+      expect((await run(world, 'init', '--name', 'app')).code).toBe(1);
+      expect(await folders()).toEqual({});
+
+      world = newWorld();
+      await registerApp();
+      world.api = () => apiError(403, 'account_too_new', 'created today');
+      world.cwd = billing;
+      const result = await run(world, 'init', '--name', 'billing');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('your GitHub account is too new');
+      // The key stays in the named home for the next try, as in the root.
+      expect(await loadKey(paths(namedHome('billing', root)))).not.toBeNull();
+      expect(await readConfig(paths(namedHome('billing', root)))).toBeNull();
+      expect(await folders()).toEqual({ [app]: '.' });
+    });
+
+    it('--force follows the choice and binds once registered again', async () => {
+      await registerApp();
+      const before = (await loadKey(paths(root)))?.agentId;
+      world.cwd = billing;
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'app',
+        '--force',
+        '--json',
+      );
+      expect(result.code).toBe(0);
+      const after = (await loadKey(paths(root)))?.agentId;
+      expect(after).not.toBe(before);
+      expect(JSON.parse(result.out)).toMatchObject({
+        agentId: after,
+        folder: billing,
+        home: root,
+      });
+      expect(await folders()).toEqual({ [app]: '.', [billing]: '.' });
+    });
+
+    it('with SEALKEEPER_HOME set reads and writes no map', async () => {
+      await registerApp();
+      const elsewhere = join(home, 'elsewhere');
+      vi.stubEnv('SEALKEEPER_HOME', elsewhere);
+      world.cwd = app;
+      const result = await run(world, 'init', '--name', 'solo', '--json');
+      expect(result.code).toBe(0);
+      const json = JSON.parse(result.out);
+      expect(json).toMatchObject({ name: 'solo' });
+      expect(json).not.toHaveProperty('folder');
+      expect(json).not.toHaveProperty('home');
+      expect(signedIn()).toBe(true);
+      expect(await readConfig(paths(elsewhere))).toMatchObject({
+        name: 'solo',
+      });
+      expect(await folders()).toEqual({ [app]: '.' });
     });
   });
 

@@ -17,8 +17,14 @@ import type { Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_FILE, resetBackgroundSyncThrottle } from '../background-sync.js';
-import { STALE_MARKER_MS, toolNameOf } from '../claude-code.js';
-import { paths, writeConfig, writeNudge } from '../config.js';
+import { parseHookInput, STALE_MARKER_MS, toolNameOf } from '../claude-code.js';
+import {
+  bindFolder,
+  namedHome,
+  paths,
+  writeConfig,
+  writeNudge,
+} from '../config.js';
 import { createKey } from '../identity.js';
 import {
   appendEvent,
@@ -785,6 +791,61 @@ describe('hook claude-code', () => {
       expect(err).toBe('');
       expect(await logged()).toHaveLength(2);
     });
+  });
+
+  describe('agent per folder', () => {
+    it('logs to the home of the folder the payload names as cwd', async () => {
+      // No SEALKEEPER_HOME, so the folder map picks the home.
+      const root = join(home, 'root');
+      vi.stubEnv('SEALKEEPER_HOME', '');
+      vi.stubEnv('SEALKEEPER_ROOT', root);
+      const project = join(home, 'billing-project');
+      await mkdir(join(project, 'src'), { recursive: true });
+      const billing = paths(namedHome('billing', root));
+      const agentId = (await createKey({}, billing)).agentId;
+      await writeConfig(
+        {
+          agentId,
+          operatorLogin: 'alice',
+          name: 'billing',
+          version: '2.0.0',
+          apiUrl: API_URL,
+          registeredAt: '2026-09-23T10:00:00Z',
+        },
+        billing,
+      );
+      await bindFolder(project, billing.home, root);
+
+      // The hook runs from anywhere, the payload says where Claude Code is.
+      await hook({
+        ...payloads.sessionStart(),
+        cwd: join(project, 'src'),
+      });
+      const events = await readDay(dayOf(new Date()), billing);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: 'session.start',
+        version: '2.0.0',
+      });
+      expect(await readdir(billing.sessions)).toEqual([SESSION]);
+      // The default agent in the root got nothing.
+      expect(await readdir(root)).toEqual(['agents', 'agents.json']);
+    });
+  });
+});
+
+describe('parseHookInput', () => {
+  const payload = (cwd: unknown) =>
+    JSON.stringify({ hook_event_name: 'Stop', session_id: 's1', cwd });
+
+  it('takes cwd only when it is an absolute path', () => {
+    expect(parseHookInput(payload('/Users/alice/app'))?.cwd).toBe(
+      '/Users/alice/app',
+    );
+    expect(parseHookInput(payload('app'))?.cwd).toBeNull();
+    expect(parseHookInput(payload(''))?.cwd).toBeNull();
+    expect(parseHookInput(payload(42))?.cwd).toBeNull();
+    expect(parseHookInput(payload(undefined))?.cwd).toBeNull();
   });
 });
 

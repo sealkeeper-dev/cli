@@ -55,6 +55,8 @@ import {
 } from '../claude-code-settings.js';
 import { installSkill, skillPath } from '../claude-code-skill.js';
 import {
+  bindFolder,
+  boundHome,
   Config,
   ConfigError,
   DEFAULT_AGENT_VERSION,
@@ -62,6 +64,9 @@ import {
   handleOf,
   handleUrl,
   INSECURE_API_URL,
+  listMachineAgents,
+  type MachineAgent,
+  namedHome,
   type Paths,
   paths,
   profileUrl as profileUrlOf,
@@ -69,10 +74,11 @@ import {
   readConfig,
   readNudge,
   readRoutineConfig,
+  sealkeeperRoot,
   writeConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
-import { isDirectory, tildePath } from '../files.js';
+import { exists, isDirectory, tildePath } from '../files.js';
 import { repoName } from '../git-remote.js';
 import {
   DeviceFlowError,
@@ -98,7 +104,11 @@ import {
 } from '../live-agent.js';
 import { cursorToEnd } from '../log.js';
 import { setNudge } from '../nudge.js';
-import { currentOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
+import {
+  currentOperatorSlug,
+  readOperatorSlug,
+  refreshOperatorSlug,
+} from '../operator-slug.js';
 import {
   promptStyled,
   stderr,
@@ -136,7 +146,7 @@ import {
   preview,
   type RoutineDeps,
 } from './routine.js';
-import { printIdentity } from './whoami.js';
+import { identityOf, printIdentity } from './whoami.js';
 
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
 // taxonomy block. The human output says less, see below.
@@ -277,6 +287,31 @@ export const runtimeNameNudge = (name: string): string =>
 // a terminal.
 export const runtimeNameLine = (name: string): string =>
   `${name} names what the agent runs in, so many agents share it. Kept. Run ${cli('agent rename <new-name>')} to give it a name of its own.`;
+// Said before the name question when this folder uses no agent yet and the
+// machine has some, so the operator can pick one or register another. The
+// agents are named by handle, and past MACHINE_AGENTS_SHOWN only counted.
+export const MACHINE_AGENTS_SHOWN = 5;
+export function machineAgentsLine(handles: string[]): string {
+  const shown = handles.slice(0, MACHINE_AGENTS_SHOWN);
+  const more = handles.length - shown.length;
+  const list =
+    more > 0
+      ? `${shown.join(', ')} and ${more} more`
+      : shown.length === 1
+        ? shown[0]
+        : `${shown.slice(0, -1).join(', ')} and ${shown.at(-1)}`;
+  return handles.length === 1
+    ? `This machine has one agent, ${list}. Type its name to use it in this folder, or a new name to register another.`
+    : `This machine has ${handles.length} agents, ${list}. Type a name to use one in this folder, or a new name to register another.`;
+}
+// Said when this run binds the folder to an agent, on the first
+// registration, a new agent or one picked by name.
+export const folderLine = (folder: string, handle: string): string =>
+  `${folder} now uses ${handle}`;
+// A new name whose home holds a config already, most likely an agent
+// renamed since, which still owns the directory.
+export const homeTaken = (home: string): string =>
+  `${home} already holds an agent, which may have been renamed since, see ${cli('agent list')} or choose another name`;
 // Where an operator changes the slug, on the web only.
 export const ACCOUNT_URL = 'https://sealkeeper.run/me/account';
 export const operatorLine = (slug: string): string =>
@@ -377,6 +412,109 @@ function profileLine(s: Style, url: string): Styled {
   return s.line`  ${s.dim('Profile')}  ${s.cyan(url)}`;
 }
 
+// The home this run acts in, and whether it binds a folder to it.
+type Target = {
+  p: Paths;
+  // The folder to bind to p.home, as cwd gave it. A registration binds it
+  // only once it worked, so a failed sign in leaves no binding. null when
+  // this run binds nothing.
+  folder: string | null;
+  // The name the choice asked for, so the registration does not ask again.
+  name?: string;
+  // Whether the choice printed the welcome box already.
+  welcomed: boolean;
+};
+
+// Picks the home before anything is created, since the key goes there.
+// SEALKEEPER_HOME wins and reads no map. A folder bound already, or below
+// one, uses that agent. An unbound folder on a machine with no agent gets
+// the root, as before the folder map, and is bound to it once registered.
+// An unbound folder on a machine with agents is the choice, see choose.
+async function chooseHome(
+  cmd: Command,
+  options: InitOptions,
+  deps: InitDeps,
+  ui: Ui | null,
+): Promise<Target> {
+  if (readEnv('SEALKEEPER_HOME') !== undefined) {
+    return { p: paths(), folder: null, welcomed: false };
+  }
+  const cwd = (deps.cwd ?? process.cwd)();
+  const root = sealkeeperRoot();
+  const bound = boundHome(cwd, root);
+  if (bound !== null) return { p: paths(bound), folder: null, welcomed: false };
+  const agents = (await listMachineAgents(root)).filter(
+    (agent): agent is MachineAgent & { config: Config } =>
+      agent.config !== null,
+  );
+  if (agents.length === 0) {
+    return { p: paths(root), folder: cwd, welcomed: false };
+  }
+  return choose(cmd, options, deps, ui, cwd, root, agents);
+}
+
+// The choice, for an unbound folder on a machine with agents. The name
+// comes from --name, from the question, or without a terminal from the
+// suggestion. A name one of the agents has binds the folder to it, which
+// is how a worktree of a project picks up the project's agent on Enter. A
+// new name registers another agent in its own home under agents/.
+async function choose(
+  cmd: Command,
+  options: InitOptions,
+  deps: InitDeps,
+  ui: Ui | null,
+  cwd: string,
+  root: string,
+  agents: (MachineAgent & { config: Config })[],
+): Promise<Target> {
+  if (
+    options.name !== undefined &&
+    !AgentName.safeParse(options.name).success
+  ) {
+    cmd.error(`invalid agent name ${options.name}, use ${NAME_RULES}`);
+  }
+  let name = options.name;
+  let asked: string | undefined;
+  let welcomed = false;
+  if (name === undefined) {
+    const suggestion = await suggestName(deps);
+    const stdin = ui === null ? undefined : deps.stdin?.();
+    if (ui !== null && stdin?.isTTY) {
+      // Each agent answers to its name and to its handle, since the line
+      // before the question names them by handle.
+      const known = new Map<string, string>();
+      const handles: string[] = [];
+      for (const agent of agents) {
+        const slug = await readOperatorSlug(
+          agent.config.agentId,
+          paths(agent.home),
+        );
+        const handle = handleOf(agent.config, slug);
+        handles.push(handle);
+        known.set(agent.config.name, agent.config.name);
+        known.set(handle, agent.config.name);
+      }
+      welcome(ui);
+      welcomed = true;
+      note();
+      note(ui.err.line`${machineAgentsLine(handles)}`);
+      name = await askName(cmd, stdin, suggestion, ui, known);
+      asked = name;
+    } else if (suggestion === null) {
+      cmd.error(NO_NAME);
+    } else {
+      name = suggestion;
+    }
+  }
+  const chosen = agents.find((agent) => agent.config.name === name);
+  if (chosen !== undefined) {
+    return { p: paths(chosen.home), folder: cwd, name: asked, welcomed };
+  }
+  const home = namedHome(name, root);
+  if (await exists(paths(home).config)) cmd.error(homeTaken(tildePath(home)));
+  return { p: paths(home), folder: cwd, name: asked, welcomed };
+}
+
 async function init(
   cmd: Command,
   options: InitOptions,
@@ -384,13 +522,14 @@ async function init(
   routineDeps: RoutineDeps,
 ): Promise<void> {
   const json = wantsJson(cmd);
-  const p = paths();
   const ui: Ui | null = json
     ? null
     : {
         out: createStyle(process.stdout),
         err: createStyle(process.stderr),
       };
+  const target = await chooseHome(cmd, options, deps, ui);
+  const p = target.p;
 
   // Without --force an existing config ends the command here. With --force it
   // is read only for its apiUrl, so a re-register goes to the same API. A
@@ -404,47 +543,7 @@ async function init(
   } else {
     const existing = await readConfig(p);
     if (existing !== null) {
-      // One agent read, for the operator slug in the handle, the runtime
-      // question and Next. Offline the slug is the one last stored.
-      const { slug, live: firstLive } = await currentOperatorSlug(
-        existing,
-        deps.fetch,
-        p,
-      );
-      if (ui === null) {
-        printIdentity(existing, true, slug);
-        return;
-      }
-      const s = ui.out;
-      welcome(ui);
-      say();
-      say(
-        s.line`${s.tick()} Already set up as ${s.bold(handleOf(existing, slug))}`,
-      );
-      say(profileLine(s, profileUrlOf(existing, slug)));
-      // A moved version has a level of its own, so the agent is read
-      // again for Next.
-      const live = (await offerVersionMove(existing, deps, ui))
-        ? await readLiveAgent(existing, deps.fetch)
-        : firstLive;
-      await offerRuntime({
-        config: existing,
-        readRuntime: async () => live?.runtime,
-        input: deps.stdin?.(),
-        fetch: deps.fetch,
-        report: runtimeReport(ui),
-        layout: indent,
-        claudeDir: deps.claudeDir,
-        cwd: deps.cwd,
-        env: deps.env?.(),
-      });
-      // Registered already, but the hooks may be missing or pointing at a
-      // path that moved. Offer them the way a fresh init does, so npx
-      // sealkeeper init is always enough.
-      const hooks = await offerHooks(deps, ui);
-      await offerNudge(hooks, deps, ui, p);
-      await offerRoutine(hooks, deps, routineDeps, ui);
-      printNext(ui.out, hooks, nextStateOf(existing, live));
+      await initRegistered(existing, target, deps, routineDeps, ui);
       return;
     }
   }
@@ -466,9 +565,12 @@ async function init(
     cmd.error(`invalid agent name ${options.name}, use ${NAME_RULES}`);
   }
   const suggestion =
-    options.name === undefined ? await suggestName(deps) : null;
+    options.name === undefined && target.name === undefined
+      ? await suggestName(deps)
+      : null;
   if (
     options.name === undefined &&
+    target.name === undefined &&
     suggestion === null &&
     terminal === undefined
   ) {
@@ -536,7 +638,7 @@ async function init(
   let prompt: ((url: string, code: string) => void) | undefined;
   if (ui !== null) {
     const s = ui.err;
-    welcome(ui);
+    if (!target.welcomed) welcome(ui);
     if (backup !== undefined) {
       note();
       note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
@@ -551,7 +653,13 @@ async function init(
   // sign in. Otherwise the suggestion, and the runtime only from --runtime,
   // since a detected one is only a hint until the operator confirms it.
   let name: string;
-  if (options.name === undefined && terminal !== undefined && ui !== null) {
+  if (target.name !== undefined) {
+    name = target.name;
+  } else if (
+    options.name === undefined &&
+    terminal !== undefined &&
+    ui !== null
+  ) {
     name = await askName(cmd, terminal, suggestion, ui);
   } else {
     name = (options.name ?? suggestion) as string;
@@ -634,6 +742,10 @@ async function init(
     },
     p,
   );
+  // Only now that the agent is registered, so a failed sign in or a
+  // refusal binds nothing.
+  const folder =
+    target.folder === null ? null : await bindFolder(target.folder, p.home);
 
   // Asked at init, or set with --runtime, counts as the one time question,
   // whatever the answer.
@@ -670,6 +782,7 @@ async function init(
         runtime: registeredRuntime,
         apiUrl: api.apiUrl,
         profileUrl,
+        ...(folder === null ? {} : { folder, home: p.home }),
         nextSteps: nextSteps(hooks, deps),
       }),
     );
@@ -691,11 +804,81 @@ async function init(
     say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
   }
   await printOperator(s, config, live, deps);
+  if (folder !== null && target.folder !== null) {
+    say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
+  }
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
-  await offerRoutine(hooks, deps, routineDeps, ui);
+  await offerRoutine(hooks, deps, routineDeps, ui, p);
   printNext(ui.out, hooks, nextStateOf(config, live));
+}
+
+// A run for an agent registered already. When the choice picked it by
+// name the folder is bound first. Then who it is, and what a fresh init
+// offers, since the hooks may be missing or point at a path that moved, so
+// npx sealkeeper init is always enough.
+async function initRegistered(
+  existing: Config,
+  target: Target,
+  deps: InitDeps,
+  routineDeps: RoutineDeps,
+  ui: Ui | null,
+): Promise<void> {
+  const p = target.p;
+  const folder =
+    target.folder === null ? null : await bindFolder(target.folder, p.home);
+  // One agent read, for the operator slug in the handle, the runtime
+  // question and Next. Offline the slug is the one last stored.
+  const { slug, live: firstLive } = await currentOperatorSlug(
+    existing,
+    deps.fetch,
+    p,
+  );
+  if (ui === null) {
+    if (folder === null) {
+      printIdentity(existing, true, slug);
+    } else {
+      stdout(
+        JSON.stringify({
+          ...identityOf(existing, slug),
+          folder,
+          home: p.home,
+        }),
+      );
+    }
+    return;
+  }
+  const s = ui.out;
+  if (!target.welcomed) welcome(ui);
+  say();
+  const handle = handleOf(existing, slug);
+  if (folder !== null && target.folder !== null) {
+    say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
+  }
+  say(s.line`${s.tick()} Already set up as ${s.bold(handle)}`);
+  say(profileLine(s, profileUrlOf(existing, slug)));
+  // A moved version has a level of its own, so the agent is read again
+  // for Next.
+  const live = (await offerVersionMove(existing, deps, ui, p))
+    ? await readLiveAgent(existing, deps.fetch)
+    : firstLive;
+  await offerRuntime({
+    config: existing,
+    readRuntime: async () => live?.runtime,
+    input: deps.stdin?.(),
+    fetch: deps.fetch,
+    report: runtimeReport(ui),
+    layout: indent,
+    claudeDir: deps.claudeDir,
+    cwd: deps.cwd,
+    env: deps.env?.(),
+    paths: p,
+  });
+  const hooks = await offerHooks(deps, ui);
+  await offerNudge(hooks, deps, ui, p);
+  await offerRoutine(hooks, deps, routineDeps, ui, p);
+  printNext(ui.out, hooks, nextStateOf(existing, live));
 }
 
 // The suggested name. The repository name of the origin remote, then the
@@ -718,6 +901,7 @@ async function askName(
   input: Input,
   suggestion: string | null,
   ui: Ui,
+  known: ReadonlyMap<string, string> = new Map(),
 ): Promise<string> {
   const e = ui.err;
   let fallback = suggestion;
@@ -737,6 +921,9 @@ async function askName(
       again = 'Please type a name. ';
       continue;
     }
+    // A name or handle of an agent on this machine, the choice decides.
+    const agent = known.get(answer);
+    if (agent !== undefined) return agent;
     if (!AgentName.safeParse(answer).success) {
       note(e.line`${answer} is not a valid name, use ${NAME_RULES}.`);
       again = '';
@@ -813,6 +1000,7 @@ async function offerRoutine(
   deps: InitDeps,
   routineDeps: RoutineDeps,
   ui: Ui,
+  p: Paths,
 ): Promise<void> {
   if (hooks === 'none') return;
   const input = deps.stdin?.();
@@ -821,7 +1009,7 @@ async function offerRoutine(
   const o = ui.out;
   let current: RoutineConfig;
   try {
-    current = await readRoutineConfig();
+    current = await readRoutineConfig(p);
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     note(e.line`${error.message}`);
@@ -1006,6 +1194,7 @@ async function offerVersionMove(
   config: Config,
   deps: InitDeps,
   ui: Ui,
+  p: Paths,
 ): Promise<boolean> {
   const input = deps.stdin?.();
   if (input === undefined || !input.isTTY) return false;
@@ -1038,10 +1227,11 @@ async function offerVersionMove(
   try {
     change = await changeVersion({
       api,
-      signer: await loadSigner(api.apiUrl),
+      signer: await loadSigner(api.apiUrl, p),
       config,
       previous: server,
       version: config.version,
+      paths: p,
     });
   } catch (error) {
     if (!(error instanceof ApiError) && !(error instanceof KeyError)) {

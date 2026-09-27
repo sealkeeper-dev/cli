@@ -22,6 +22,7 @@ describe('readGuardedFile (VOU-229)', () => {
       await fs.mkdtemp(join(tmpdir(), 'sealkeeper-guard-')),
     );
     vi.stubEnv('SEALKEEPER_HOME', join(dir, 'sealkeeper-home'));
+    vi.stubEnv('SEALKEEPER_ROOT', join(dir, 'sealkeeper-root'));
     await fs.mkdir(join(dir, 'sealkeeper-home'));
     cwd = join(dir, 'work');
     userHome = join(dir, 'home');
@@ -210,6 +211,39 @@ describe('readGuardedFile (VOU-229)', () => {
         "which holds this agent's private key",
       );
     }
+  });
+
+  it("refuses any agent's home under the SealKeeper root in every mode", async () => {
+    const root = join(dir, 'sealkeeper-root');
+    const other = await write(join(root, 'agents', 'billing', 'key'), 'k');
+    const map = await write(join(root, 'agents.json'), '{}');
+    // A symlink from the current directory into the root is judged by
+    // where it points.
+    const link = join(cwd, ANSWERS_DIR, 'a.txt');
+    await fs.symlink(other, link);
+    for (const file of [other, map, link]) {
+      for (const routine of [true, false]) {
+        const read = await readGuardedFile(file, {
+          ...rules,
+          routine,
+          allowOutsideCwd: true,
+        });
+        expect((read as { error: string }).error).toContain(
+          `it is inside ${root}, which holds the private keys of the agents on this machine`,
+        );
+      }
+    }
+    // Also when this agent's own home is a named one under the root.
+    vi.stubEnv('SEALKEEPER_HOME', join(root, 'agents', 'app'));
+    const own = await write(join(root, 'agents', 'app', 'key'), 'k');
+    const read = await readGuardedFile(own, {
+      ...rules,
+      allowOutsideCwd: true,
+    });
+    expect((read as { error: string }).error).toContain(
+      "which holds this agent's private key",
+    );
+    expect(await readGuardedFile(other, rules)).toHaveProperty('error');
   });
 
   it('refuses a file over the cap without opening it', async () => {
