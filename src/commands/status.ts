@@ -200,7 +200,7 @@ async function readStatus(
   const [events, pending, cursor, score, live, unsubmitted, inbox, goal] =
     await Promise.all([
       readDay(day, p),
-      countPending(p),
+      countPending(p, { now }),
       readCursor(p),
       scorePromise,
       readLiveAgent(config, deps.fetch),

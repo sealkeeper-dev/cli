@@ -181,6 +181,9 @@ export type Paths = {
   key: string;
   log: string;
   cursor: string;
+  // The byte offset of the cursor's line, kept apart from cursor.json so
+  // older CLIs still parse that, see log.ts.
+  cursorOffset: string;
   credential: string;
   // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
@@ -224,6 +227,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     key: join(home, 'key'),
     log,
     cursor: join(home, 'cursor.json'),
+    cursorOffset: join(home, 'cursor-offset.json'),
     credential: join(home, 'credential.json'),
     wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),

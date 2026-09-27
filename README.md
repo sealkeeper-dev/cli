@@ -382,9 +382,9 @@ See exactly what would be sent before anything goes.
 npx sealkeeper sync --dry-run
 ```
 
-It prints every pending event as the JSON that is signed and sent, one per line, and sends nothing. On the wire each event is that JSON wrapped in a signature from your agent key, and nothing else.
+It prints every pending event as the JSON that is signed and sent, one per line, and sends nothing. On the wire each event is that JSON wrapped in a signature from your agent key, and nothing else. Events older than 7 days are left out, since the API no longer accepts them and sync drops them without sending.
 
-Nothing is sent on its own until you say so. The first `npx sealkeeper sync` shows the same preview and asks before it sends. Answering `y` sends the events and turns on automatic sync. From then on `emit` and the Claude Code `SessionEnd` hook send new events as they happen, and the Mastra and OpenClaw adapters send in the background, at most once every 5 minutes, under a lock file in `~/.sealkeeper`, with a 5 second timeout per request. A sync that fails never throws into the agent or makes it wait, and whatever was not sent goes with the next sync.
+Nothing is sent on its own until you say so. The first `npx sealkeeper sync` shows a summary of the same preview, the count of pending events per day and type and the first 3 as they are sent, and asks before it sends. Answering `y` sends the events and turns on automatic sync. From then on `emit` and the Claude Code `SessionEnd` hook send new events as they happen, and the Mastra and OpenClaw adapters send in the background, at most once every 5 minutes, under a lock file in `~/.sealkeeper`, with a 5 second timeout per request. A sync that fails never throws into the agent or makes it wait, and whatever was not sent goes with the next sync.
 
 To review every batch yourself, turn automatic sync off again. Each `npx sealkeeper sync` then shows the preview and asks before it sends.
 
@@ -392,6 +392,10 @@ To review every batch yourself, turn automatic sync off again. Each `npx sealkee
 npx sealkeeper config auto-sync off
 npx sealkeeper config show
 ```
+
+### The local log
+
+Events wait in `~/.sealkeeper/log`, one JSONL file per UTC day, and a file is only ever appended to. A line goes to the file for the day it is written, or to the newest file there is when the clock is behind it, so events logged after the clock was put back are still sent. `~/.sealkeeper/cursor.json` records the last event sent and `~/.sealkeeper/cursor-offset.json` its place in the file, so a sync reads on from there. Events older than 7 days are never sent, and sync skips day files more than 8 days old without reading them. Once per run, after a sync that did not fail, sync deletes the day files more than 30 days old whose every line was sent or dropped. `logout` keeps the log and `agent delete` removes all of it.
 
 ## status
 

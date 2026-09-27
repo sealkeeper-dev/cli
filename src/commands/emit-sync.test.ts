@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,7 +17,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { paths, readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
-import { appendEvent, countPending, readCursor, readDay } from '../log.js';
+import {
+  appendEvent,
+  countPending,
+  LOG_RETENTION_DAYS,
+  readCursor,
+  readDay,
+} from '../log.js';
 import { createProgram } from '../program.js';
 import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
@@ -978,6 +984,40 @@ describe('emit and sync', () => {
       ]);
     });
 
+    it('drops whole day files too old to send without reading them, then deletes the oldest', async () => {
+      await initialise();
+      const daysAgo = (n: number) =>
+        new Date(Date.now() - n * 24 * 3600 * 1000);
+      const dayName = (n: number) =>
+        `${daysAgo(n).toISOString().slice(0, 10)}.jsonl`;
+      const oldest = LOG_RETENTION_DAYS + 5;
+      const stale = EVENT_MAX_AGE_DAYS + 3;
+      for (const n of [oldest, oldest, stale]) {
+        await appendEvent(
+          { ...toolCall(n), occurred_at: daysAgo(n).toISOString() },
+          paths(),
+          daysAgo(n),
+        );
+      }
+      const fresh = await seed(2);
+      const { code, out, err } = await api('sync', '--json');
+      expect(code).toBe(0);
+      expect(server.batches).toEqual([fresh]);
+      expect(JSON.parse(out)).toMatchObject({ accepted: 2, dropped: 3 });
+      expect(err).toContain('dropped 3 events');
+      // The oldest file is past retention and behind the cursor. The other
+      // old one is kept until it is too.
+      const files = await readdir(paths().log);
+      expect(files).not.toContain(dayName(oldest));
+      expect(files).toContain(dayName(stale));
+      expect(await countPending()).toBe(0);
+
+      // A second sync drops nothing again.
+      const again = await api('sync', '--json');
+      expect(JSON.parse(again.out)).toMatchObject({ accepted: 0, dropped: 0 });
+      expect(again.err).toBe('');
+    });
+
     it('skips an event with a bad signature at an index', async () => {
       await initialise();
       const events = await seed(2);
@@ -1193,6 +1233,28 @@ describe('emit and sync', () => {
       expect(err).toContain('npx sealkeeper config auto-sync off');
       expect(server.batches).toEqual([events]);
       expect((await readConfig())?.autoSync).toBe(true);
+    });
+
+    it('first sync summarises many events and sends every one', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = await seed(5);
+      const old = new Date(
+        Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
+      ).toISOString();
+      await appendEvent({ ...toolCall(9), occurred_at: old });
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toContain(`  ${today()}  5 events  tool.call 5\n`);
+      expect(out).toContain('the first 3 of 5, as sent');
+      expect(out).toContain(JSON.stringify(events[2]));
+      expect(out).not.toContain(JSON.stringify(events[3]));
+      expect(out).toContain('sync --dry-run to see every event');
+      expect(out).toContain('5 events pending, nothing sent yet.');
+      expect(err).toContain('send these 5 events now');
+      expect(server.batches).toEqual([events]);
+      expect(err).toContain('dropped 1 event older than');
+      expect(await countPending()).toBe(0);
     });
 
     it('first sync answered n sends nothing and leaves auto-sync off', async () => {

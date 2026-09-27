@@ -1,6 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdtemp,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +20,7 @@ import {
 } from './background-sync.js';
 import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
-import { appendEvent, countPending } from './log.js';
+import { appendEvent, countPending, writeCursor } from './log.js';
 
 const API_URL = 'https://api.test';
 
@@ -101,6 +108,33 @@ describe('background sync', () => {
     expect(await run()).toBe('synced');
     expect(requests).toBe(1);
     expect(await countPending(p)).toBe(0);
+  });
+
+  it('prints nothing for a damaged log or a lost cursor line', async () => {
+    await initialise(true);
+    await appendEvent(toolCall(), p);
+    const file = p.logFile(new Date(clock).toISOString().slice(0, 10));
+    await appendFile(file, 'not json\n');
+    await appendFile(file, '{"v":1,"eve');
+    await writeCursor(
+      {
+        v: 1,
+        lastAcked: {
+          file: file.slice(-16),
+          eventId: randomUUID(),
+          offset: 3,
+        },
+      },
+      p,
+    );
+    const write = vi.spyOn(process.stderr, 'write');
+    try {
+      expect(await run()).toBe('synced');
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
+    expect(requests).toBe(1);
   });
 
   it('runs at most once every five minutes in one process', async () => {

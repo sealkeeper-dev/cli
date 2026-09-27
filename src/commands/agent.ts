@@ -371,6 +371,7 @@ async function removeLocal(p: Paths): Promise<void> {
     routinePaths(p).out,
     routinePaths(p).work,
     p.cursor,
+    p.cursorOffset,
     p.sessions,
     p.log,
     p.key,

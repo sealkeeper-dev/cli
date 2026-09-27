@@ -187,6 +187,15 @@ describe('logout', () => {
     expect(await exists(p.operatorSlug)).toBe(false);
   });
 
+  it('removes the cursor offset file', async () => {
+    await initialise();
+    await writeFile(p.cursorOffset, '{}\n');
+    const { code, out } = await run('logout', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).removed).toContain('cursor-offset.json');
+    expect(await exists(p.cursorOffset)).toBe(false);
+  });
+
   it('--yes alone keeps the key', async () => {
     await initialise();
     expect((await run('logout', '--yes')).code).toBe(0);

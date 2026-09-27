@@ -13,8 +13,10 @@ import {
   CURSOR_VERSION,
   countPending,
   type LogPosition,
+  pruneLog,
   readCursor,
   readPending,
+  skipStaleDays,
   writeCursor,
 } from './log.js';
 import { stderr } from './output.js';
@@ -22,8 +24,9 @@ import { stderr } from './output.js';
 // Sends pending events from the local log to the API. Each round reads up to
 // 500 pending events, drops the ones too old for the API to accept, signs
 // the rest, posts them to /v1/events and, on 200, moves the cursor past the
-// last one sent. It loops until nothing is pending. It runs when sync, emit,
-// a hook or an adapter's background sync calls it.
+// last one sent. It loops until nothing is pending. Once a run has finished
+// it deletes the day files the log no longer needs, see pruneLog. It runs
+// when sync, emit, a hook or an adapter's background sync calls it.
 
 // The API caps a batch at 500 events and the request body at 256 KB.
 const MAX_BATCH_EVENTS = MAX_EVENTS_PER_BATCH;
@@ -46,6 +49,12 @@ const DAY_MS = 24 * 3600 * 1000;
 // this far off. One further off is skipped, so it cannot hold back the events
 // logged after it for hours or days.
 const FUTURE_WAIT_MS = 3600 * 1000;
+
+// An event whose occurred_at is before this moment (ms since the epoch) is
+// dropped, not sent. The sync preview leaves it out too.
+export function staleCutoff(now: number): number {
+  return now - EVENT_MAX_AGE_DAYS * DAY_MS - STALE_MARGIN_MS;
+}
 
 type SyncResult = {
   accepted: number;
@@ -104,7 +113,19 @@ export async function syncEvents(options: SyncOptions): Promise<SyncResult> {
     dropped: 0,
   };
   try {
-    return await sendRounds(options, result, warn);
+    await sendRounds(options, result, warn);
+    // At most once per run, and only after a run that did not fail. The
+    // events are sent either way, so a file that cannot be deleted is only
+    // a warning.
+    const p = options.paths ?? paths();
+    try {
+      await pruneLog(p, new Date((options.now ?? Date.now)()));
+    } catch (error) {
+      warn(
+        `warning: could not delete old day files from ${p.log}, ${(error as Error).message}`,
+      );
+    }
+    return result;
   } finally {
     // Said once per run, however many rounds dropped events.
     if (result.dropped > 0) {
@@ -159,6 +180,10 @@ async function sendRounds(
   // until is null when the preview was empty, so there is nothing to send.
   if (options.until === null) return result;
   const until = options.until;
+  const reading = () => ({ now: new Date(now()), warn });
+
+  // Whole day files too old to send are dropped without reading a line.
+  result.dropped += await skipStaleDays(p, reading());
 
   // Loaded once, when the first fresh event needs signing, so a run with
   // nothing to send never reads the key. A refused apiUrl stops the sync the
@@ -174,7 +199,7 @@ async function sendRounds(
       throw new SyncError(
         error.code,
         stopMessage(error, now()),
-        await countPending(p),
+        await countPending(p, reading()),
         result,
       );
     }
@@ -184,7 +209,7 @@ async function sendRounds(
     if (options.deadline !== undefined && now() >= options.deadline) {
       return result;
     }
-    const pending = await readPending(MAX_BATCH_EVENTS, p);
+    const pending = await readPending(MAX_BATCH_EVENTS, p, reading());
     let lastRound = false;
     if (until) {
       const end = pending.positions.findIndex((at) => samePosition(at, until));
@@ -206,7 +231,7 @@ async function sendRounds(
     // them, in the one move each round makes, or on its own when the whole
     // round is stale. They are counted as dropped once the cursor is past
     // them, so a round that stops early does not count them twice.
-    const cutoff = now() - EVENT_MAX_AGE_DAYS * DAY_MS - STALE_MARGIN_MS;
+    const cutoff = staleCutoff(now());
     const fresh: { event: Event; at: number }[] = [];
     const stale: number[] = [];
     for (const [at, event] of pending.events.entries()) {

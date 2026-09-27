@@ -61,6 +61,7 @@ describe('config', () => {
       key: '/h/key',
       log: '/h/log',
       cursor: '/h/cursor.json',
+      cursorOffset: '/h/cursor-offset.json',
       credential: '/h/credential.json',
       score: '/h/score.json',
       inbox: '/h/inbox.json',

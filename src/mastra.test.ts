@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetBackgroundSyncThrottle } from './background-sync.js';
+import { LOCK_FILE, resetBackgroundSyncThrottle } from './background-sync.js';
 import { writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { countPending } from './log.js';
@@ -450,6 +450,8 @@ describe('mastra adapter', () => {
       expect(await tool?.execute()).toBe('a');
       await vi.waitFor(async () => {
         expect(await countPending()).toBe(0);
+        // The sync has ended, so the next event cannot join its last round.
+        expect(await readdir(home)).not.toContain(LOCK_FILE);
       });
       expect(api.requests()).toBe(1);
       // The next call inside five minutes only appends.

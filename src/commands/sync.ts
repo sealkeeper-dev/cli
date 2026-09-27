@@ -9,7 +9,12 @@ import { KeyError } from '../identity.js';
 import { cli } from '../invocation.js';
 import { CursorError, type LogPosition } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import { type Preview, previewLines, readPreview } from '../preview.js';
+import {
+  type Preview,
+  previewLines,
+  readPreview,
+  summaryLines,
+} from '../preview.js';
 import { SyncError, syncEvents } from '../sync.js';
 
 // fetch and sleep are injectable so tests can stand in for the API and skip
@@ -51,7 +56,7 @@ export function register(
 
       // Works before init too, since emit logs before init.
       if (options.dryRun) {
-        const preview = await loadPreview(this);
+        const preview = await loadPreview(this, true);
         if (json) {
           stdout(
             JSON.stringify({
@@ -121,10 +126,10 @@ export function register(
     });
 }
 
-// Prints the preview and asks on stderr. True on yes. With no terminal to
-// ask it ends the command with exit 1 before anything is sent. first is true
-// until one sync has been confirmed, and then yes also turns on automatic
-// sync.
+// Prints a summary of the preview and asks on stderr. True on yes. With no
+// terminal to ask it ends the command with exit 1 before anything is sent.
+// first is true until one sync has been confirmed, and then yes also turns
+// on automatic sync.
 async function confirmSync(
   cmd: Command,
   preview: Preview,
@@ -134,7 +139,7 @@ async function confirmSync(
 ): Promise<boolean> {
   // With --json stdout carries only the result, so the preview goes to stderr.
   const print = json ? stderr : stdout;
-  for (const line of previewLines(preview)) print(line);
+  for (const line of summaryLines(preview)) print(line);
 
   const input = (deps.stdin ?? noInput)();
   if (!input.isTTY) {
@@ -158,9 +163,11 @@ function noInput(): Input {
   return { isTTY: false, readLine: async () => null };
 }
 
-async function loadPreview(cmd: Command): Promise<Preview> {
+// full keeps every event, for --dry-run. The question before a sync shows
+// a summary, which needs only a few.
+async function loadPreview(cmd: Command, full = false): Promise<Preview> {
   try {
-    return await readPreview();
+    return await readPreview(undefined, { full });
   } catch (error) {
     if (error instanceof CursorError) cmd.error(error.message);
     throw error;
