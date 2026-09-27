@@ -1,0 +1,57 @@
+# Publishes the CLI to npm when a GitHub release is published on this
+# repository. See docs/release.md in the monorepo, Moving to Trusted
+# Publishing.
+#
+# There is no npm token. npm accepts the publish through a short lived OIDC
+# token from this workflow (Trusted Publishing), and attaches a provenance
+# attestation that points at this run. On npmjs.com the package's trusted
+# publisher is this repository, this file and the npm environment.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # The GitHub App client id for the device flow. Public. The build inlines
+  # it, and prepublishOnly refuses to publish without it.
+  GITHUB_CLIENT_ID: Ov23liER4N1b1XVokKPA
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          # npm 11.5.1 or newer speaks OIDC to the registry. Node 24 ships it,
+          # Node 22 does not.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Release tag matches package.json
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "refusing. Release tag $TAG is not v$version from package.json." >&2
+            exit 1
+          fi
+      - run: npm ci
+      # prepublishOnly runs lint, typecheck, the tests and the build first.
+      # A pre-release goes to the next dist-tag, never to latest.
+      - run: npm publish --provenance --access public --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
