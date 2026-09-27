@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.6, Unreleased
+## 0.4.6, 27 September 2026
 
 - `init` says registering the agent means you accept the terms and the privacy policy, with full https links, right before the GitHub device code, in the plain and styled output and on stderr with `--json` (VOU-121). The API records which versions were accepted. The CLI sends nothing new.
 - `init` suggests a name for the agent, the repository name of the git remote `origin` and else the current directory name (VOU-176). In a terminal it asks `Agent name [<suggestion>]`, Enter takes the suggestion, and a name that is not valid is asked again, three questions in all. `--name` asks nothing, as before. Without a terminal the suggestion is taken, and when neither the remote nor the directory makes a name `init` refuses before anything is created. Before, the directory name was taken without a question.
