@@ -6,8 +6,11 @@ import { join } from 'node:path';
 import type { Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RUNTIME_UNKNOWN_INTRO, wasAskedRuntime } from '../agent-runtime.js';
+import type { Input } from '../ask.js';
 import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
+import { createKey } from '../identity.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { createProgram } from '../program.js';
 import {
@@ -138,12 +141,17 @@ function scoreFetch(
   }) as typeof fetch;
 }
 
+// The terminal status reads from. A closed pipe unless a test sets one.
+let terminal: Input = { isTTY: false, readLine: async () => null };
+
 async function run(fetchFn: typeof fetch, ...args: string[]) {
   const program = createProgram({
     sync: {
       fetch: fetchFn,
       sleep: async () => {},
       cwd: () => join(String(process.env.SEALKEEPER_HOME), 'project'),
+      stdin: () => terminal,
+      env: () => ({}),
     },
   });
   throwOnExit(program);
@@ -234,7 +242,59 @@ describe('status', () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    terminal = { isTTY: false, readLine: async () => null };
     await rm(home, { recursive: true, force: true });
+  });
+
+  describe('the one time runtime question', () => {
+    // The agent route answers with runtime unknown, and every PATCH is
+    // kept.
+    function unknownRuntime(
+      patches: string[],
+      reads: string[] = [],
+    ): typeof fetch {
+      const base = scoreFetch([]);
+      return (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input);
+        if (url === `${API_URL}/v1/agents/${AGENT_ID}`) {
+          if (init?.method === 'PATCH') patches.push(String(init.body));
+          else reads.push(url);
+          return Response.json({ ...agentAnswer(2), runtime: 'unknown' });
+        }
+        return base(input, init);
+      }) as typeof fetch;
+    }
+
+    it('asks on a terminal once, sends the PATCH, and never again', async () => {
+      await createKey({}, paths(home));
+      const patches: string[] = [];
+      terminal = { isTTY: true, readLine: async () => '2' };
+      const reads: string[] = [];
+      const result = await run(unknownRuntime(patches, reads), 'status');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(RUNTIME_UNKNOWN_INTRO);
+      // The agent read status makes anyway answers the question too.
+      expect(reads).toHaveLength(1);
+      expect(result.out).toContain('Runtime set to Codex\n');
+      expect(patches).toHaveLength(1);
+      expect(await wasAskedRuntime(AGENT_ID, paths(home))).toBe(true);
+
+      const again = await run(unknownRuntime(patches), 'status');
+      expect(again.err).not.toContain(RUNTIME_UNKNOWN_INTRO);
+      expect(patches).toHaveLength(1);
+    });
+
+    it('asks nothing with --json or without a terminal', async () => {
+      const patches: string[] = [];
+      terminal = { isTTY: true, readLine: async () => '2' };
+      const json = await run(unknownRuntime(patches), 'status', '--json');
+      expect(json.err).not.toContain(RUNTIME_UNKNOWN_INTRO);
+      terminal = { isTTY: false, readLine: async () => '2' };
+      const piped = await run(unknownRuntime(patches), 'status');
+      expect(piped.err).not.toContain(RUNTIME_UNKNOWN_INTRO);
+      expect(patches).toEqual([]);
+      expect(await wasAskedRuntime(AGENT_ID, paths(home))).toBe(false);
+    });
   });
 
   it('prints counts, pending, last sync and scores with null as a dash', async () => {

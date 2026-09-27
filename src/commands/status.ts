@@ -9,7 +9,9 @@ import {
   type Level,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
+import { offerRuntime } from '../agent-runtime.js';
 import { resolveApiUrl } from '../api.js';
+import { type Input, streamInput } from '../ask.js';
 import {
   claudeCodeHooksIn,
   claudeConfigDir,
@@ -35,7 +37,7 @@ import {
 } from '../goal.js';
 import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
-import { readLiveAgent } from '../live-agent.js';
+import { type LiveAgent, readLiveAgent } from '../live-agent.js';
 import {
   CursorError,
   countPending,
@@ -56,10 +58,14 @@ import { defaultSyncDeps } from './sync.js';
 
 // claudeDir and cwd say where to look for the Claude Code settings, and
 // default to CLAUDE_CONFIG_DIR or ~/.claude and the working directory.
+// stdin answers the one time runtime question, asked only on a terminal.
+// Defaults to process.stdin. env is what runtime detection reads.
 export type StatusDeps = {
   fetch: typeof fetch;
   claudeDir?: () => string;
   cwd?: () => string;
+  stdin?: () => Input;
+  env?: () => NodeJS.ProcessEnv;
 };
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
@@ -125,8 +131,19 @@ export function register(
       const config = await requireConfig(this);
 
       let status: Status;
+      // The agent answer readStatus got, reused for the runtime question so
+      // status sends one agent read, not two.
+      let live: LiveAgent | null = null;
       try {
-        status = await readStatus(config, deps, new Date(), options.show);
+        status = await readStatus(
+          config,
+          deps,
+          new Date(),
+          options.show,
+          (answer) => {
+            live = answer;
+          },
+        );
       } catch (error) {
         if (error instanceof CursorError) this.error(error.message);
         throw error;
@@ -137,6 +154,20 @@ export function register(
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
+      // An agent the API has as unknown is asked what it runs in, once,
+      // and only where a person can answer.
+      if (!wantsJson(this)) {
+        await offerRuntime({
+          config,
+          readRuntime: async () => (live as LiveAgent | null)?.runtime,
+          input: (deps.stdin ?? (() => streamInput(process.stdin)))(),
+          fetch: deps.fetch,
+          report: { ok: stdout, info: stderr },
+          claudeDir: deps.claudeDir,
+          cwd: deps.cwd,
+          env: deps.env?.(),
+        });
+      }
     });
 }
 
@@ -145,6 +176,7 @@ async function readStatus(
   deps: StatusDeps,
   now: Date,
   show = false,
+  seen: (live: LiveAgent | null) => void = () => {},
 ): Promise<Status> {
   const p = paths();
   const day = dayOf(now);
@@ -174,6 +206,7 @@ async function readStatus(
       inboxPromise,
       loadGoal({ config, fetch: deps.fetch, now, paths: p }),
     ]);
+  seen(live);
 
   return {
     agentId: config.agentId,

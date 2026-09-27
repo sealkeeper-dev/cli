@@ -14,6 +14,8 @@ export function refusal(error: ApiError): string {
       return 'a newer rename of this agent is already stored';
     case 'stale_version':
       return 'a newer version change of this agent is already stored';
+    case 'stale_runtime':
+      return 'a newer runtime change of this agent is already stored';
     case 'issued_at_out_of_window':
       return 'the API refused the request time, check this machine clock';
     case 'rate_limited':

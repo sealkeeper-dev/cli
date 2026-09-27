@@ -18,6 +18,7 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { wasAskedRuntime } from '../agent-runtime.js';
 import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
 import { isOurs, proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
@@ -36,6 +37,7 @@ import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
 import { VERSION } from '../version.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import {
+  ACCOUNT_URL,
   ADAPTERS_URL,
   BRONZE,
   bronzeLine,
@@ -50,9 +52,13 @@ import {
   NEXT_POST,
   NEXT_PROVE,
   NEXT_WHAT_IS_SHARED,
+  NO_NAME,
   NOTHING_SENT,
   NUDGE_INTRO,
   NUDGE_NOT_ON,
+  nameQuestion,
+  runtimeNameLine,
+  runtimeNameNudge,
   SHARED_SUMMARY,
   TAGLINE,
   TERMS,
@@ -118,6 +124,21 @@ type World = {
   live?: { verifiedTasks: number; level: string };
   // When set, GET /v1/agents/:id answers a redirect to this address.
   agentMovedTo?: string;
+  // The repository name of the git remote. None when not set.
+  repo?: string;
+  // The environment runtime detection reads. Empty when not set, so the
+  // variables of whatever runs the tests never leak in.
+  env?: NodeJS.ProcessEnv;
+  // The operator slug GET /v1/agents/:id answers with, and the handle
+  // built from it. Needs serverVersion set, else the route fails.
+  slug?: string;
+  // How many agents GET /v1/agents?operator= lists. Unset means that
+  // route fails.
+  operatorAgents?: number;
+  // The runtime GET /v1/agents/:id answers with. A signed PATCH sets it.
+  runtime?: string;
+  // Every signed PATCH that set a runtime.
+  runtimeChanges?: Record<string, unknown>[];
 };
 
 // A terminal that answers with each line in turn, then closes.
@@ -200,6 +221,14 @@ function fakeFetch(world: World): typeof fetch {
       const reply = world.api(registration);
       return Response.json(reply.body, { status: reply.status });
     }
+    if (url.startsWith(`${API_URL}/v1/agents?`)) {
+      if (world.operatorAgents === undefined)
+        throw new TypeError('fetch failed');
+      return Response.json({
+        agents: Array.from({ length: world.operatorAgents }, () => ({})),
+        nextCursor: null,
+      });
+    }
     const agentRoute =
       /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
     if (agentRoute && world.agentMovedTo !== undefined && !init.method) {
@@ -230,15 +259,25 @@ function fakeFetch(world: World): typeof fetch {
         const payload = unsigned(
           (await verify(envelope, base64urlDecode(kid))).payload,
         );
-        const change = payload as { version: string };
-        world.versionChanges.push(change);
-        world.serverVersion = change.version;
+        const change = payload as { version?: string; runtime?: string };
+        if (change.runtime !== undefined) {
+          world.runtimeChanges = [...(world.runtimeChanges ?? []), change];
+          world.runtime = change.runtime;
+        } else {
+          world.versionChanges.push(change);
+          world.serverVersion = change.version;
+        }
       }
       return Response.json({
         id: agentRoute[1],
         name: 'scout',
         version: world.serverVersion,
-        operator: { login: 'alice' },
+        operator:
+          world.slug === undefined
+            ? { login: 'alice' }
+            : { login: 'alice', slug: world.slug, displayName: world.slug },
+        ...(world.slug === undefined ? {} : { handle: `${world.slug}/scout` }),
+        ...(world.runtime === undefined ? {} : { runtime: world.runtime }),
         createdAt: '2026-09-23T10:00:00.000Z',
         ...(world.live === undefined
           ? {}
@@ -263,6 +302,8 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       hookCommand: () => HOOK_COMMAND,
       isNpx: () => world.npx === true,
       cwd: world.cwd === undefined ? undefined : () => world.cwd as string,
+      repoName: async () => world.repo ?? null,
+      env: () => world.env ?? {},
     },
   });
   throwOnExit(program);
@@ -821,7 +862,14 @@ describe('sealkeeper init', () => {
 
     it('says nothing about hooks when there is no Claude Code dir', async () => {
       world.stdin = answering('');
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
       expect(result.code).toBe(0);
       expect((world.stdin as Input & { reads: number }).reads).toBe(0);
       expect(result.all).not.toContain('hook');
@@ -835,7 +883,14 @@ describe('sealkeeper init', () => {
     it('honours CLAUDE_CONFIG_DIR when looking for Claude Code', async () => {
       vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'elsewhere'));
       await mkdir(join(home, 'elsewhere'));
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(result.err).toContain(`  Claude Code\n  ${HOOKS_INTRO}\n`);
       expect(result.out).toContain(
@@ -856,7 +911,18 @@ describe('sealkeeper init', () => {
         }),
       );
       world.stdin = answering('n');
-      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
       const stdin = answering('');
       world.stdin = stdin;
       const result = await run(world, 'init');
@@ -890,7 +956,14 @@ describe('sealkeeper init', () => {
       );
       const stdin = answering('');
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       // One more read for the session nudge question, once hooks are in.
       expect(stdin.reads).toBe(1);
@@ -920,7 +993,14 @@ describe('sealkeeper init', () => {
         }),
       );
       world.stdin = answering('');
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       const after = await readFile(projectFile, 'utf8');
@@ -932,7 +1012,18 @@ describe('sealkeeper init', () => {
     it('asks nothing on a repeat init when the hooks are current', async () => {
       await withClaudeCode();
       world.stdin = answering('');
-      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
       const stdin = answering('');
       world.stdin = stdin;
       const result = await run(world, 'init');
@@ -945,7 +1036,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       const stdin = answering('');
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       // One more read for the session nudge question, once hooks are in.
       expect(stdin.reads).toBe(2);
@@ -975,7 +1073,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       world.stdin = answering('');
       world.npx = true;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(NEXT_NPX).toBe(
         'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.',
@@ -990,14 +1095,28 @@ describe('sealkeeper init', () => {
       );
       world.stdin = answering('');
       world.npx = true;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.out).not.toContain(NEXT_NPX);
     });
 
     it('prints the command instead on n and leaves the settings alone', async () => {
       await withClaudeCode();
       world.stdin = answering('n');
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(
@@ -1025,7 +1144,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       const stdin = answering('y', false);
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
       expect(result.err).not.toContain(HOOKS_QUESTION);
@@ -1071,7 +1197,14 @@ describe('sealkeeper init', () => {
       );
       const stdin = answering('');
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       // One more read for the session nudge question, once hooks are in.
       expect(stdin.reads).toBe(1);
@@ -1082,7 +1215,14 @@ describe('sealkeeper init', () => {
     it('refuses a settings file that is not JSON, names it and still registers', async () => {
       await withClaudeCode('{ "hooks": ');
       world.stdin = answering('y');
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(result.err).toContain(
         `${settingsFile()} is not valid JSON, left it unchanged`,
@@ -1110,7 +1250,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       const stdin = answering(ARROWS_THEN_Y);
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       // One more read for the session nudge question, once hooks are in.
       expect(stdin.reads).toBe(2);
@@ -1139,7 +1286,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       const stdin = answeringEach(['maybe', 'y']);
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       // One more read for the session nudge question, once hooks are in.
       expect(stdin.reads).toBe(3);
@@ -1153,7 +1307,14 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       const stdin = answeringEach(['what', '\u001b[Bx', 'nope', 'y']);
       world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(HOOKS_MAX_ASKS);
       expect(HOOKS_MAX_ASKS).toBe(3);
@@ -1167,7 +1328,14 @@ describe('sealkeeper init', () => {
     it('says in one line that a declined answer left the hooks out', async () => {
       await withClaudeCode();
       world.stdin = answering('n');
-      const result = await run(world, 'init', '--name', 'scout');
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
       expect(result.code).toBe(0);
       expect(
         result.out.split('\n').filter((l) => l.includes('Hooks not installed')),
@@ -1177,7 +1345,18 @@ describe('sealkeeper init', () => {
     it('brings an outdated /sealkeeper-prove up to date on a repeat run', async () => {
       await withClaudeCode();
       world.stdin = answering('');
-      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
       const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
       await writeFile(
         command,
@@ -1200,7 +1379,18 @@ describe('sealkeeper init', () => {
     it('leaves a /sealkeeper-prove it did not write alone on a repeat run', async () => {
       await withClaudeCode();
       world.stdin = answering('');
-      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
       const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
       await writeFile(command, 'my own command\n');
       world = newWorld();
@@ -1217,7 +1407,14 @@ describe('sealkeeper init', () => {
         await withClaudeCode();
         const stdin = answeringEach(['y', 'y']);
         world.stdin = stdin;
-        const result = await run(world, 'init', '--name', 'scout');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
         expect(result.code).toBe(0);
         expect(stdin.reads).toBe(2);
         expect(result.err).toContain(NUDGE_INTRO);
@@ -1230,7 +1427,14 @@ describe('sealkeeper init', () => {
       it('Enter is no, which is kept and not asked again', async () => {
         await withClaudeCode();
         world.stdin = answeringEach(['y', '']);
-        const result = await run(world, 'init', '--name', 'scout');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
         expect(result.out).toContain(`  ${NUDGE_NOT_ON}\n`);
         expect(await readNudge(paths(home))).toBe(false);
         world = newWorld();
@@ -1245,7 +1449,7 @@ describe('sealkeeper init', () => {
         await withClaudeCode();
         const declined = answering('n');
         world.stdin = declined;
-        await run(world, 'init', '--name', 'scout');
+        await run(world, 'init', '--name', 'scout', '--runtime', 'claude-code');
         expect(declined.reads).toBe(1);
         expect(await readNudge(paths(home))).toBeUndefined();
         await expect(stat(skillFile())).rejects.toThrow('ENOENT');
@@ -1264,13 +1468,275 @@ describe('sealkeeper init', () => {
       it('a repeat run adds a missing skill next to hooks already in', async () => {
         await withClaudeCode();
         world.stdin = answeringEach(['y', 'n']);
-        await run(world, 'init', '--name', 'scout');
+        await run(world, 'init', '--name', 'scout', '--runtime', 'claude-code');
         await rm(skillFile());
         world = newWorld();
         world.stdin = answering('');
         const result = await run(world, 'init');
         expect(result.out).toContain('✓ sealkeeper skill in');
         expect(isOurs(await readFile(skillFile(), 'utf8'))).toBe(true);
+      });
+    });
+  });
+
+  describe('the agent name', () => {
+    it('suggests the repository name of the git remote over the directory name', async () => {
+      world.repo = 'Research_Bot.v2';
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/work/my-agent');
+      const result = await run(world, 'init').finally(() => cwd.mockRestore());
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]?.name).toBe('research-bot-v2');
+    });
+
+    it('falls back to the directory name when the remote makes no name', async () => {
+      world.repo = '--';
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/work/my-agent');
+      const result = await run(world, 'init').finally(() => cwd.mockRestore());
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]?.name).toBe('my-agent');
+    });
+
+    it('without a terminal and no usable name, ends before anything is created', async () => {
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/');
+      const result = await run(world, 'init').finally(() => cwd.mockRestore());
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(NO_NAME);
+      expect(world.fetchUrls).toEqual([]);
+      expect(await readIfExists(paths(home).key)).toBe('');
+    });
+
+    it('asks on a terminal, and Enter takes the suggestion', async () => {
+      world.repo = 'scout-repo';
+      const stdin = answeringEach(['', '']);
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`  ${nameQuestion('scout-repo')} `);
+      expect(world.registrations[0]?.name).toBe('scout-repo');
+      // The name, then the runtime, skipped.
+      expect(stdin.reads).toBe(2);
+    });
+
+    it('takes a typed name, and asks again after one that is not valid', async () => {
+      world.repo = 'scout-repo';
+      world.stdin = answeringEach(['Bad Name', 'my-helper', '']);
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain('Bad Name is not a valid name');
+      expect(world.registrations[0]?.name).toBe('my-helper');
+    });
+
+    it('asks without a suggestion when there is none, and ends after three tries', async () => {
+      world.stdin = answeringEach(['', 'X', '']);
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/');
+      const result = await run(world, 'init').finally(() => cwd.mockRestore());
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`  ${nameQuestion(null)} `);
+      expect(result.err).toContain('Please type a name.');
+      expect(result.err).toContain('no agent name, pass --name');
+      expect(world.registrations).toEqual([]);
+    });
+
+    it('nudges once for a runtime name, and Enter keeps it', async () => {
+      world.repo = 'claude-code';
+      const stdin = answeringEach(['', '', '']);
+      world.stdin = stdin;
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.err.split(runtimeNameNudge('claude-code'))).toHaveLength(2);
+      expect(world.registrations[0]?.name).toBe('claude-code');
+      // The name, the name again after the nudge, then the runtime.
+      expect(stdin.reads).toBe(3);
+    });
+
+    it('takes another name typed after the nudge', async () => {
+      world.repo = 'codex';
+      world.stdin = answeringEach(['', 'reviewer', '']);
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(runtimeNameNudge('codex'));
+      expect(world.registrations[0]?.name).toBe('reviewer');
+    });
+
+    it('with --name says one line for a runtime name and does not ask', async () => {
+      const stdin = answeringEach(['']);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'codex');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`  ${runtimeNameLine('codex')}\n`);
+      expect(result.err).not.toContain(runtimeNameNudge('codex'));
+      expect(result.err).not.toContain(nameQuestion(null));
+      // Only the runtime question.
+      expect(stdin.reads).toBe(1);
+      expect(world.registrations[0]?.name).toBe('codex');
+    });
+
+    it('with --json says the line on stderr', async () => {
+      const result = await run(world, 'init', '--name', 'gemini-cli', '--json');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`${runtimeNameLine('gemini-cli')}\n`);
+      expect(JSON.parse(result.out)).toMatchObject({ name: 'gemini-cli' });
+    });
+  });
+
+  describe('the runtime', () => {
+    it('sends --runtime with the registration and asks nothing', async () => {
+      const stdin = answeringEach([]);
+      world.stdin = stdin;
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(world.registrations[0]).toMatchObject({ runtime: 'codex' });
+      expect(result.out).toContain('    Runtime  Codex\n');
+      const agentId = (await loadKey(paths(home)))?.agentId ?? '';
+      expect(await wasAskedRuntime(agentId, paths(home))).toBe(true);
+    });
+
+    it('reports the runtime the API has over the one sent', async () => {
+      world.serverVersion = '0.1.0';
+      world.runtime = 'mastra';
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+        '--json',
+      );
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.out)).toMatchObject({ runtime: 'mastra' });
+    });
+
+    it('refuses a --runtime that is not one before any request', async () => {
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'gpt',
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('invalid runtime gpt, use one of');
+      expect(world.fetchUrls).toEqual([]);
+    });
+
+    it('confirms a detected runtime on Enter, sends it and counts as asked', async () => {
+      world.env = { CLAUDECODE: '1' };
+      world.stdin = answeringEach(['']);
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(
+        'This agent runs in Claude Code, from CLAUDECODE. Right? [Y/n] ',
+      );
+      expect(world.registrations[0]).toMatchObject({ runtime: 'claude-code' });
+      const agentId = (await loadKey(paths(home)))?.agentId ?? '';
+      expect(await wasAskedRuntime(agentId, paths(home))).toBe(true);
+    });
+
+    it('registers without a runtime on a skip, and counts as asked', async () => {
+      world.stdin = answeringEach(['']);
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]).not.toHaveProperty('runtime');
+      expect(result.out).not.toContain('Runtime');
+      const agentId = (await loadKey(paths(home)))?.agentId ?? '';
+      expect(await wasAskedRuntime(agentId, paths(home))).toBe(true);
+    });
+
+    it('sends no runtime without a terminal, even with one detected', async () => {
+      world.env = { CLAUDECODE: '1' };
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]).not.toHaveProperty('runtime');
+      expect(JSON.parse(result.out)).toMatchObject({ runtime: 'unknown' });
+      const agentId = (await loadKey(paths(home)))?.agentId ?? '';
+      expect(await wasAskedRuntime(agentId, paths(home))).toBe(false);
+    });
+
+    it('asks an unknown agent once on a repeat init and sends the PATCH', async () => {
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      world = newWorld();
+      world.serverVersion = '0.1.0';
+      world.runtime = 'unknown';
+      world.stdin = answeringEach(['3']);
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(world.runtimeChanges).toEqual([
+        { runtime: 'cursor', issuedAt: expect.any(String) },
+      ]);
+      expect(result.out).toContain('  ✓ Runtime set to Cursor\n');
+
+      world.runtime = 'unknown';
+      const again = answeringEach(['3']);
+      world.stdin = again;
+      expect((await run(world, 'init')).code).toBe(0);
+      expect(again.reads).toBe(0);
+      expect(world.runtimeChanges).toHaveLength(1);
+    });
+  });
+
+  describe('the operator slug', () => {
+    beforeEach(() => {
+      world.serverVersion = '0.1.0';
+      world.slug = 'alice-2';
+    });
+
+    it('prints the slug and where to change it on the first agent', async () => {
+      world.operatorAgents = 1;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(
+        [
+          '  ✓ Registered alice-2/scout',
+          '    Profile  https://sealkeeper.run/agents/alice-2/scout',
+          `    Operator  alice-2, change it at ${ACCOUNT_URL}`,
+        ].join('\n'),
+      );
+      expect(ACCOUNT_URL).toBe('https://sealkeeper.run/me/account');
+    });
+
+    it('says nothing about the slug on a later agent or without an answer', async () => {
+      world.operatorAgents = 2;
+      const later = await run(world, 'init', '--name', 'scout');
+      expect(later.code).toBe(0);
+      expect(later.out).toContain('Registered alice-2/scout');
+      expect(later.out).not.toContain('Operator');
+
+      await rm(paths(home).config, { force: true });
+      world = newWorld();
+      world.serverVersion = '0.1.0';
+      world.slug = 'alice-2';
+      const unanswered = await run(world, 'init', '--name', 'scout');
+      expect(unanswered.out).not.toContain('Operator');
+    });
+
+    it('falls back to the login for a handle or slug not in the API shape', async () => {
+      world.slug = '../../evil';
+      world.operatorAgents = 1;
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.out)).toMatchObject({
+        handle: 'alice/scout',
+        profileUrl: 'https://sealkeeper.run/agents/alice/scout',
+      });
+      expect(world.fetchUrls.some((u) => u.includes('operator='))).toBe(false);
+    });
+
+    it('prints the handle from the API with --json', async () => {
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.out)).toMatchObject({
+        handle: 'alice-2/scout',
+        profileUrl: 'https://sealkeeper.run/agents/alice-2/scout',
       });
     });
   });
@@ -1428,6 +1894,9 @@ describe('sealkeeper init', () => {
 
           By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.
 
+          What does this agent run in?
+          1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
+          Number or name, Enter to skip 
           Sign in with GitHub
           Open https://github.com/login/device and enter ABCD-1234
           ✓ Signed in as alice

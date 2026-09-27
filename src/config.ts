@@ -45,7 +45,12 @@ export function handleOf(config: Named): string {
 
 // The public profile page, at the handle.
 export function profileUrl(config: Named): string {
-  return `${PROFILE_BASE_URL}/${handleOf(config)}`;
+  return handleUrl(handleOf(config));
+}
+
+// The public profile page at a handle as the API sent it.
+export function handleUrl(handle: string): string {
+  return `${PROFILE_BASE_URL}/${handle}`;
 }
 
 // The profile by agent id. It redirects to the handle and never changes, so
@@ -191,6 +196,9 @@ export type Paths = {
   nudge: string;
   // The routine's limits, allowlist, schedule and pause, see routine.ts.
   routine: string;
+  // Which agent was asked the one time runtime question, see
+  // agent-runtime.ts.
+  runtimeQuestion: string;
   logFile(day: string): string;
 };
 
@@ -220,6 +228,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     goal: join(home, 'goal.json'),
     nudge: join(home, 'nudge.json'),
     routine: join(home, 'routine.json'),
+    runtimeQuestion: join(home, 'runtime-question.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

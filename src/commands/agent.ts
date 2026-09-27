@@ -5,9 +5,17 @@ import {
   type AgentResponse,
   DeleteAgentRequest,
   RenameAgentRequest,
+  RUNTIME_LABELS,
+  RUNTIMES,
   Version,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
+import {
+  changeRuntime,
+  parseRuntime,
+  RUNTIME_RULES,
+  recordRuntimeAsked,
+} from '../agent-runtime.js';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
 import {
@@ -168,6 +176,38 @@ export function register(
     });
 
   agent
+    .command('runtime <runtime>')
+    .description(`Say what this agent runs in, one of ${RUNTIMES.join(', ')}`)
+    .action(async function (this: Command, value: string): Promise<void> {
+      // Checked before the key is loaded or anything is signed.
+      const runtime = parseRuntime(value);
+      if (runtime === null) {
+        this.error(`invalid runtime ${value}, ${RUNTIME_RULES}`);
+      }
+      const { config, signer, api } = await openTaskSession(this, deps);
+      let changed: AgentResponse;
+      try {
+        changed = await changeRuntime({
+          api,
+          signer,
+          agentId: config.agentId,
+          runtime,
+        });
+      } catch (error) {
+        if (error instanceof ApiError) this.error(refusal(error));
+        throw error;
+      }
+      // Set by hand counts as the one time question answered.
+      await recordRuntimeAsked(config.agentId);
+      const now = changed.runtime ?? runtime;
+      if (wantsJson(this)) {
+        stdout(JSON.stringify({ agentId: config.agentId, runtime: now }));
+        return;
+      }
+      stdout(`runtime set to ${RUNTIME_LABELS[now]}`);
+    });
+
+  agent
     .command('delete')
     .description(
       'Delete this agent on SealKeeper and its key and files on this machine',
@@ -317,6 +357,7 @@ async function removeLocal(p: Paths): Promise<void> {
     p.goal,
     p.nudge,
     p.routine,
+    p.runtimeQuestion,
     routinePaths(p).log,
     routinePaths(p).lock,
     routinePaths(p).claimLock,

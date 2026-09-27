@@ -88,6 +88,8 @@ export type ApiClient = {
   renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
   // PATCH /v1/agents/:id with a signed { version, issuedAt }.
   changeAgentVersion(agentId: string, envelope: string): Promise<AgentResponse>;
+  // PATCH /v1/agents/:id with a signed { runtime, issuedAt }.
+  changeAgentRuntime(agentId: string, envelope: string): Promise<AgentResponse>;
   // DELETE /v1/agents/:id, signed. deleted on 204, gone on 404. Anything
   // else throws.
   deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
@@ -164,8 +166,8 @@ export function createApiClient(options: {
     return result.data;
   }
 
-  // PATCH /v1/agents/:id, which renames the agent or moves its version,
-  // whichever the signed payload asks for.
+  // PATCH /v1/agents/:id, which renames the agent, moves its version or
+  // sets its runtime, whichever the signed payload asks for.
   async function patchAgent(
     agentId: string,
     envelope: string,
@@ -312,6 +314,7 @@ export function createApiClient(options: {
     },
     renameAgent: (agentId, envelope) => patchAgent(agentId, envelope),
     changeAgentVersion: (agentId, envelope) => patchAgent(agentId, envelope),
+    changeAgentRuntime: (agentId, envelope) => patchAgent(agentId, envelope),
     async deleteAgent(agentId, envelope) {
       const { status, json, headers } = await request(
         `/v1/agents/${encodeURIComponent(agentId)}`,

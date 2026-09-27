@@ -3,15 +3,33 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
   AgentName,
+  isRuntimeName,
   LEVEL_THRESHOLDS,
   type Level,
   type RegisterAgentRequest,
+  RUNTIME_LABELS,
+  RUNTIMES,
+  type Runtime,
   toAgentName,
   Version,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
+import {
+  askRuntime,
+  detectRuntime,
+  offerRuntime,
+  parseRuntime,
+  RUNTIME_RULES,
+  recordRuntimeAsked,
+} from '../agent-runtime.js';
 import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
-import { type Input, isYes, readYesNo, streamInput } from '../ask.js';
+import {
+  cleanAnswer,
+  type Input,
+  isYes,
+  readYesNo,
+  streamInput,
+} from '../ask.js';
 import {
   installProveCommand,
   proveCommandPath,
@@ -34,6 +52,7 @@ import {
   ConfigError,
   DEFAULT_AGENT_VERSION,
   handleOf,
+  handleUrl,
   INSECURE_API_URL,
   type Paths,
   paths,
@@ -43,6 +62,7 @@ import {
   writeConfig,
 } from '../config.js';
 import { isDirectory, tildePath } from '../files.js';
+import { repoName } from '../git-remote.js';
 import {
   DeviceFlowError,
   deviceFlow,
@@ -59,7 +79,12 @@ import {
   signEnvelope,
 } from '../identity.js';
 import { cli } from '../invocation.js';
-import { atBronzeOrAbove, readLiveAgent } from '../live-agent.js';
+import {
+  atBronzeOrAbove,
+  type LiveAgent,
+  operatorAgentCount,
+  readLiveAgent,
+} from '../live-agent.js';
 import { setNudge } from '../nudge.js';
 import {
   promptStyled,
@@ -149,10 +174,16 @@ export type InitDeps = {
   sleep: Sleep;
   stdin?: () => Input;
   claudeDir?: () => string;
-  // The directory whose .claude/settings.json holds project scope hooks.
+  // The directory whose .claude/settings.json holds project scope hooks,
+  // and whose git remote and name suggest the agent's name.
   cwd?: () => string;
   hookCommand?: () => string;
   isNpx?: () => boolean;
+  // The repository name of the origin remote in a directory, or null.
+  // Defaults to asking git.
+  repoName?: (cwd: string) => Promise<string | null>;
+  // The environment runtime detection reads. Defaults to process.env.
+  env?: () => NodeJS.ProcessEnv;
 };
 
 const defaultInitDeps: InitDeps = {
@@ -163,6 +194,8 @@ const defaultInitDeps: InitDeps = {
   cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),
   isNpx: () => isNpxCopy(),
+  repoName,
+  env: () => process.env,
 };
 
 type InitOptions = {
@@ -170,12 +203,34 @@ type InitOptions = {
   version: string;
   apiUrl?: string;
   force?: boolean;
+  runtime?: string;
 };
 
 export const VERSION_RULES = 'use 1 to 32 characters';
 
 export const NAME_RULES =
   'lowercase letters, digits and single hyphens, 2 to 39 characters, starting and ending with a letter or digit';
+
+// The name question. The suggestion, from the git remote or the directory
+// name, is the default an empty answer takes.
+export const nameQuestion = (suggestion: string | null): string =>
+  suggestion === null ? 'Agent name' : `Agent name [${suggestion}]`;
+// Asked again after an answer that is not a valid name, up to this many
+// questions in all.
+export const NAME_MAX_ASKS = 3;
+export const NO_NAME = `neither the git remote nor the directory name makes an agent name, pass --name with ${NAME_RULES}`;
+// Said once, in the question, for a name on the soft list of runtime names.
+// Keeping it is allowed.
+export const runtimeNameNudge = (name: string): string =>
+  `${name} names what the agent runs in, so many agents share it. A name of its own reads better. Type one, or press Enter to keep ${name}.`;
+// Said instead, on one line, when nobody is asked, with --name or without
+// a terminal.
+export const runtimeNameLine = (name: string): string =>
+  `${name} names what the agent runs in, so many agents share it. Kept. Run ${cli('agent rename <new-name>')} to give it a name of its own.`;
+// Where an operator changes the slug, on the web only.
+export const ACCOUNT_URL = 'https://sealkeeper.run/me/account';
+export const operatorLine = (slug: string): string =>
+  `${slug}, change it at ${ACCOUNT_URL}`;
 
 // One line per API error code the operator can act on. Anything else falls
 // back to the code and the message the API sent.
@@ -213,7 +268,14 @@ export function register(
   return parent
     .command('init')
     .description('Create a keypair, register via GitHub, write config')
-    .option('--name <name>', 'agent name (default: current directory name)')
+    .option(
+      '--name <name>',
+      'agent name (default: the git repository name, then the directory name)',
+    )
+    .option(
+      '--runtime <runtime>',
+      `what the agent runs in, one of ${RUNTIMES.join(', ')}`,
+    )
     .option('--version <version>', 'agent version', DEFAULT_AGENT_VERSION)
     .option('--api-url <url>', 'SealKeeper API base URL')
     .option('--force', 'regenerate the key and register again')
@@ -300,12 +362,30 @@ async function init(
       say(s.line`${s.tick()} Already set up as ${s.bold(handleOf(existing))}`);
       say(profileLine(s, profileUrlOf(existing)));
       await offerVersionMove(existing, deps, ui);
+      // One agent read for the runtime question and Next, made only when
+      // one of them needs it.
+      let liveRead: Promise<LiveAgent | null> | undefined;
+      const readLive = () => {
+        liveRead ??= readLiveAgent(existing, deps.fetch);
+        return liveRead;
+      };
+      await offerRuntime({
+        config: existing,
+        readRuntime: async () => (await readLive())?.runtime,
+        input: deps.stdin?.(),
+        fetch: deps.fetch,
+        report: runtimeReport(ui),
+        layout: indent,
+        claudeDir: deps.claudeDir,
+        cwd: deps.cwd,
+        env: deps.env?.(),
+      });
       // Registered already, but the hooks may be missing or pointing at a
       // path that moved. Offer them the way a fresh init does, so npx
       // sealkeeper init is always enough.
       const hooks = await offerHooks(deps, ui);
       await offerNudge(hooks, deps, ui, p);
-      printNext(ui.out, hooks, await readNextState(existing, deps));
+      printNext(ui.out, hooks, nextStateOf(existing, await readLive()));
       return;
     }
   }
@@ -313,17 +393,35 @@ async function init(
   const clientId = githubClientId();
   if (clientId === null) cmd.error(MISSING_CLIENT_ID);
 
-  // An explicit --name must already be a valid name. The directory name is
-  // only a default, so it is made into one.
-  const name =
-    options.name ?? toAgentName(basename(process.cwd())) ?? undefined;
-  if (name === undefined) {
-    cmd.error(
-      `the directory name does not make an agent name, pass --name with ${NAME_RULES}`,
-    );
+  // An explicit --name must already be a valid name. The suggestion, the
+  // repository name of the git remote and then the directory name, is only
+  // a default, so it is made into one. Nobody to ask and no suggestion ends
+  // the command here, before anything is created. terminal is where a
+  // person answers, undefined when nobody can.
+  const stdin = ui === null ? undefined : deps.stdin?.();
+  const terminal = stdin?.isTTY ? stdin : undefined;
+  if (
+    options.name !== undefined &&
+    !AgentName.safeParse(options.name).success
+  ) {
+    cmd.error(`invalid agent name ${options.name}, use ${NAME_RULES}`);
   }
-  if (!AgentName.safeParse(name).success) {
-    cmd.error(`invalid agent name ${name}, use ${NAME_RULES}`);
+  const suggestion =
+    options.name === undefined ? await suggestName(deps) : null;
+  if (
+    options.name === undefined &&
+    suggestion === null &&
+    terminal === undefined
+  ) {
+    cmd.error(NO_NAME);
+  }
+  let runtime: Runtime | undefined;
+  if (options.runtime !== undefined) {
+    const parsed = parseRuntime(options.runtime);
+    if (parsed === null) {
+      cmd.error(`invalid runtime ${options.runtime}, ${RUNTIME_RULES}`);
+    }
+    runtime = parsed;
   }
   if (!Version.safeParse(options.version).success) {
     cmd.error('agent version must be 1 to 32 characters');
@@ -367,6 +465,35 @@ async function init(
     }
     note();
     note(s.dim(TERMS));
+  }
+
+  // The name and the runtime, asked where a person can answer, before the
+  // sign in. Otherwise the suggestion, and the runtime only from --runtime,
+  // since a detected one is only a hint until the operator confirms it.
+  let name: string;
+  if (options.name === undefined && terminal !== undefined && ui !== null) {
+    name = await askName(cmd, terminal, suggestion, ui);
+  } else {
+    name = (options.name ?? suggestion) as string;
+    if (isRuntimeName(name)) {
+      if (ui === null) stderr(runtimeNameLine(name));
+      else note(ui.err.line`${runtimeNameLine(name)}`);
+    }
+  }
+  let askedRuntime = false;
+  if (runtime === undefined && terminal !== undefined && ui !== null) {
+    const detected = await detectRuntime({
+      env: deps.env?.(),
+      claudeDir: deps.claudeDir,
+      cwd: deps.cwd,
+    });
+    note();
+    runtime = (await askRuntime(terminal, detected, indent)) ?? undefined;
+    askedRuntime = true;
+  }
+
+  if (ui !== null) {
+    const s = ui.err;
     note();
     note(s.bold('Sign in with GitHub'));
     // The URL and the code come from GitHub, so the style functions escape
@@ -381,11 +508,13 @@ async function init(
     prompt,
   });
 
+  // unknown is what the API stores when runtime is left out, so it is.
   const request: RegisterAgentRequest = {
     publicKey: agentId,
     githubToken,
     name,
     version: options.version,
+    ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
   };
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
   const envelope = await signEnvelope(request, api.apiUrl, p);
@@ -410,8 +539,24 @@ async function init(
     p,
   );
 
-  const handle = handleOf(config);
-  const profileUrl = profileUrlOf(config);
+  // Asked at init, or set with --runtime, counts as the one time question,
+  // whatever the answer.
+  if (askedRuntime || options.runtime !== undefined) {
+    await recordRuntimeAsked(config.agentId, new Date(), p);
+  }
+
+  // The handle is built from the operator slug, which the registration
+  // answer leaves out for CLI 0.1.0, so it comes from the agent read. The
+  // login stands in when the API does not answer.
+  const live = await readLiveAgent(config, deps.fetch);
+  const handle = live?.handle ?? handleOf(config);
+  const profileUrl =
+    live?.handle === undefined ? profileUrlOf(config) : handleUrl(live.handle);
+  // What the API has, which differs from what was sent when the key was
+  // registered already, since a repeat registration changes nothing.
+  const registeredRuntime =
+    live?.runtime ??
+    (runtime === undefined || runtime === 'unknown' ? 'unknown' : runtime);
   if (ui === null) {
     const hooks = await offerHooks(deps, null);
     stdout(
@@ -421,6 +566,7 @@ async function init(
         operatorLogin: config.operatorLogin,
         name: config.name,
         version: config.version,
+        runtime: registeredRuntime,
         apiUrl: config.apiUrl,
         profileUrl,
         nextSteps: nextSteps(hooks, deps),
@@ -440,10 +586,96 @@ async function init(
   say();
   say(s.line`${s.tick()} Registered ${s.bold(handle)}`);
   say(profileLine(s, profileUrl));
+  if (registeredRuntime !== 'unknown') {
+    say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
+  }
+  await printOperator(s, config, live, deps);
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
-  printNext(ui.out, hooks, await readNextState(config, deps));
+  printNext(ui.out, hooks, nextStateOf(config, live));
+}
+
+// The suggested name. The repository name of the origin remote, then the
+// directory name, each made into a valid name, else null.
+async function suggestName(deps: InitDeps): Promise<string | null> {
+  const cwd = (deps.cwd ?? process.cwd)();
+  const repo = await (deps.repoName ?? repoName)(cwd).catch(() => null);
+  return (
+    (repo === null ? null : toAgentName(repo)) ?? toAgentName(basename(cwd))
+  );
+}
+
+// The name question, on stderr. Enter takes the suggestion. A name on the
+// soft list of runtime names gets the nudge once, and Enter after it keeps
+// the name. An answer that is not a valid name asks again, up to
+// NAME_MAX_ASKS questions, and then the command ends. A closed input takes
+// the suggestion when there is one.
+async function askName(
+  cmd: Command,
+  input: Input,
+  suggestion: string | null,
+  ui: Ui,
+): Promise<string> {
+  const e = ui.err;
+  let fallback = suggestion;
+  let nudged = false;
+  let again = '';
+  note();
+  for (let asked = 0; asked < NAME_MAX_ASKS; ) {
+    promptStyled(indent(e.line`${again}${nameQuestion(fallback)} `));
+    const line = await input.readLine();
+    if (line === null) {
+      if (fallback === null) break;
+      return fallback;
+    }
+    const answer = cleanAnswer(line) || fallback;
+    asked++;
+    if (answer === null) {
+      again = 'Please type a name. ';
+      continue;
+    }
+    if (!AgentName.safeParse(answer).success) {
+      note(e.line`${answer} is not a valid name, use ${NAME_RULES}.`);
+      again = '';
+      continue;
+    }
+    if (isRuntimeName(answer) && !nudged) {
+      // Once, and it does not count as a try. Enter keeps the name.
+      nudged = true;
+      asked--;
+      fallback = answer;
+      again = '';
+      note(e.line`${runtimeNameNudge(answer)}`);
+      continue;
+    }
+    return answer;
+  }
+  cmd.error(`no agent name, pass --name with ${NAME_RULES}`);
+}
+
+// The operator slug, on the first sign up only, with where to change it.
+// The slug comes from the agent read, and first means the operator has no
+// other agent. Said on the first agent only, so nothing is printed when
+// the API does not answer.
+async function printOperator(
+  s: Style,
+  config: Config,
+  live: LiveAgent | null,
+  deps: InitDeps,
+): Promise<void> {
+  const slug = live?.operator?.slug;
+  if (slug === undefined) return;
+  if ((await operatorAgentCount(config, slug, deps.fetch)) !== 1) return;
+  say(s.line`  ${s.dim('Operator')}  ${operatorLine(slug)}`);
+}
+
+// What init says, as offerRuntime reports it, styled like its other lines.
+function runtimeReport(ui: Ui) {
+  return {
+    ok: (text: string) => say(ui.out.line`${ui.out.tick()} ${text}`),
+    info: (text: string) => note(ui.err.line`${text}`),
+  };
 }
 
 // Asks once whether to add the session nudge, when the hooks that print it
@@ -485,11 +717,7 @@ export type NextState = {
 
 // null when the API does not answer or sends no count, so Next falls back
 // to the generic steps rather than failing init.
-async function readNextState(
-  config: Config,
-  deps: InitDeps,
-): Promise<NextState | null> {
-  const live = await readLiveAgent(config, deps.fetch);
+function nextStateOf(config: Config, live: LiveAgent | null): NextState | null {
   const verifiedTasks = live?.counts?.verifiedTasks;
   if (verifiedTasks === undefined) return null;
   return {
