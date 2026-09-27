@@ -1,2 +1,5 @@
 SealKeeper CLI
 Copyright 2026 The SealKeeper Authors
+
+This product bundles @noble/ed25519, commander and zod, each under the MIT
+License. Their licence texts are in THIRD-PARTY-LICENSES.

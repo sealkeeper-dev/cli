@@ -4,9 +4,15 @@
 // (lib.js), the Mastra adapter (mastra.js) and the OpenClaw plugin entry
 // (openclaw.js). The lib and the adapters are then imported and used like
 // an agent would, and the bin is run the way a user would run it.
+//
+// Every package is bundled, so the published package has no runtime
+// dependencies. The build goes to a folder outside the package with no
+// node_modules above it, so a bundle that still imports a package fails to
+// load here as it would for a user.
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -23,6 +29,7 @@ const pkg = JSON.parse(
   exports: Record<string, { types: string; default: string }>;
   files: string[];
   openclaw: { extensions: string[] };
+  devDependencies: Record<string, string>;
 };
 
 // An import or require of the module, or of any path under it, in any of
@@ -45,6 +52,93 @@ const FORBIDDEN = [
   'pg',
   'postgres',
 ];
+
+// Every module specifier a bundle imports or requires, in the forms esbuild
+// writes, __require included. After bundling everything these must all be
+// node builtins.
+const SPECIFIER_PATTERNS = [
+  /\bimport\s+[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
+  /\bexport\s+[^'"`;]*?\bfrom\s*['"]([^'"]+)['"]/g,
+  /\bimport\s*['"]([^'"]+)['"]/g,
+  /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  /\b(?:__)?require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+];
+
+function specifiersOf(code: string): string[] {
+  const found = new Set<string>();
+  for (const pattern of SPECIFIER_PATTERNS) {
+    for (const match of code.matchAll(pattern)) {
+      if (match[1]) found.add(match[1]);
+    }
+  }
+  return [...found].sort();
+}
+
+// The packages inlined into a bundle and the folders they came from, read
+// from the source path comments esbuild writes above each inlined module,
+// such as a line holding only a comment with
+// node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/core.js
+// in the workspace or node_modules/zod/v4/core/core.js after npm ci. Two
+// folders for one package mean two copies of it in the bundle.
+function bundledPackages(code: string): Map<string, Set<string>> {
+  const packages = new Map<string, Set<string>>();
+  for (const [, path] of code.matchAll(/^\/\/ (\S*node_modules\/\S+)$/gm)) {
+    if (!path) continue;
+    const at = path.lastIndexOf('node_modules/') + 'node_modules/'.length;
+    const parts = path.slice(at).split('/');
+    const name = parts[0]?.startsWith('@')
+      ? `${parts[0]}/${parts[1]}`
+      : (parts[0] ?? '');
+    const folders = packages.get(name) ?? new Set<string>();
+    folders.add(path.slice(0, at) + name);
+    packages.set(name, folders);
+  }
+  return packages;
+}
+
+// The three packages that were runtime dependencies up to CLI 0.4.7.
+const BUNDLED = ['@noble/ed25519', 'commander', 'zod'];
+
+describe('bundle scanners', () => {
+  const q = (m: string) => `"${m}"`;
+  const FROM = 'from';
+  const IMPORT = 'im' + 'port';
+  const REQUIRE = 're' + 'quire';
+
+  it('find every import form', () => {
+    const code = [
+      `${IMPORT} { z } ${FROM} ${q('zod')};`,
+      `${IMPORT} * as fs ${FROM} ${q('fs')};`,
+      `${'ex' + 'port'} { a } ${FROM} ${q('commander')};`,
+      `${IMPORT} ${q('side')};`,
+      `await ${IMPORT}(${q('dyn')});`,
+      `var x = __${REQUIRE}(${q('@noble/ed25519')});`,
+    ].join('\n');
+    expect(specifiersOf(code)).toEqual([
+      '@noble/ed25519',
+      'commander',
+      'dyn',
+      'fs',
+      'side',
+      'zod',
+    ]);
+  });
+
+  it('find inlined packages and duplicate copies', () => {
+    const code = [
+      '// ../../node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/core/core.js',
+      'var a = 1;',
+      '// ../../node_modules/.pnpm/zod@4.6.5/node_modules/zod/v4/classic/schemas.js',
+      '// node_modules/@noble/ed25519/index.js',
+      '// node_modules/@sealkeeper/schema/node_modules/zod/v4/core/core.js',
+      '// src/index.ts',
+    ].join('\n');
+    const found = bundledPackages(code);
+    expect([...found.keys()].sort()).toEqual(['@noble/ed25519', 'zod']);
+    expect(found.get('zod')?.size).toBe(2);
+    expect(found.get('@noble/ed25519')?.size).toBe(1);
+  });
+});
 
 describe('import guards', () => {
   // Built from parts so the isolation test, which reads this file's own
@@ -86,9 +180,9 @@ describe('cli bundle', () => {
   let openclaw: string;
 
   beforeAll(async () => {
-    // Inside the package so the bundle finds commander and zod in
-    // node_modules when it is run.
-    outDir = await mkdtemp(join(packageDir, '.bundle-test-'));
+    // Outside the package, with no node_modules to fall back on, so the
+    // bundles load only when they are self-contained.
+    outDir = await mkdtemp(join(tmpdir(), 'sealkeeper-bundle-test-'));
     await build({
       ...options,
       config: false,
@@ -119,6 +213,32 @@ describe('cli bundle', () => {
   it('inlines @sealkeeper/schema', () => {
     expect(bundle).toContain('EdDSA');
     expect(bundle).not.toMatch(importOf('@sealkeeper/schema'));
+  });
+
+  it('imports nothing but node builtins', () => {
+    const bundles = { index: bundle, lib, mastra, openclaw };
+    for (const [name, code] of Object.entries(bundles)) {
+      const bare = specifiersOf(code).filter(
+        (specifier) => !isBuiltin(specifier),
+      );
+      expect(bare, `${name}.js imports`).toEqual([]);
+      for (const module of BUNDLED) {
+        expect(code).not.toMatch(importOf(module));
+      }
+    }
+  });
+
+  it('inlines @noble/ed25519, commander and zod into the bin, once each', () => {
+    const inlined = bundledPackages(bundle);
+    for (const module of BUNDLED) {
+      expect(pkg.devDependencies[module], module).toBeDefined();
+      expect(inlined.get(module)?.size, module).toBe(1);
+    }
+    for (const code of [lib, mastra, openclaw]) {
+      for (const [module, folders] of bundledPackages(code)) {
+        expect(folders.size, module).toBe(1);
+      }
+    }
   });
 
   it('does not pull in the database layer', () => {
@@ -156,6 +276,7 @@ describe('cli bundle', () => {
     expect(mastra).not.toMatch(/from ['"]@mastra\//);
     expect(mastra).not.toMatch(importOf('@sealkeeper/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
+    expect(bundledPackages(mastra).has('commander')).toBe(false);
     expect(mastra).toContain('kickBackgroundSync');
     expect(mastra).toMatch(/export\s*\{[^}]*\bwithSealKeeper\b/);
     expect(mastra).toMatch(/export\s*\{[^}]*\bsealKeeperSession\b/);
@@ -200,6 +321,7 @@ describe('cli bundle', () => {
     expect(openclaw).not.toMatch(/from ['"]openclaw/);
     expect(openclaw).not.toMatch(importOf('@sealkeeper/schema'));
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
+    expect(bundledPackages(openclaw).has('commander')).toBe(false);
     // It syncs only through the throttled background sync.
     expect(openclaw).toContain('kickBackgroundSync');
     expect(openclaw).toMatch(/export\s*\{[^}]*\bsealKeeperPlugin\b/);
@@ -273,6 +395,7 @@ describe('cli bundle', () => {
   it('keeps the lib free of the CLI and of @sealkeeper/schema imports', () => {
     expect(lib).not.toMatch(importOf('@sealkeeper/schema'));
     expect(lib).not.toMatch(/from ['"]commander['"]/);
+    expect(bundledPackages(lib).has('commander')).toBe(false);
     expect(lib).toMatch(/export\s*\{[^}]*\bemit\b/);
   });
 

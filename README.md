@@ -581,6 +581,8 @@ npm run typecheck
 
 Release builds take the GitHub client id from `GITHUB_CLIENT_ID` at build time.
 
+The published package has no runtime dependencies. `@noble/ed25519`, `commander`, `zod` and `@sealkeeper/schema` are devDependencies that tsup bundles into `dist`, so an install runs exactly the code that was built and tested for the release, never a newer version of a library resolved at install time. A test fails when `package.json` gains a runtime dependency or a bundle imports anything but a node builtin. The licences of the bundled third party packages are in `THIRD-PARTY-LICENSES`.
+
 Pull requests are welcome here. They are merged upstream and come back in the next mirror push.
 
 Licensed under Apache-2.0. See `LICENSE` and `NOTICE`.

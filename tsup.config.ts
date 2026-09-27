@@ -13,6 +13,12 @@ import { defineConfig, type Options } from 'tsup';
 // self-contained file. The banner lands on all four, which is harmless for
 // the modules since Node skips a leading #! line in a module. Their types
 // are in types/lib.d.ts, types/mastra.d.ts and types/openclaw.d.ts.
+//
+// Every package is bundled, not only @sealkeeper/schema. @noble/ed25519,
+// commander and zod are devDependencies and end up inside dist, so the
+// published package has no runtime dependencies and an install never
+// resolves a newer version of them than the one built and tested here. Only
+// node builtins stay imports. bundle.test.ts checks both.
 const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };
@@ -30,7 +36,7 @@ export const options: Options = {
   target: 'node22',
   splitting: false,
   clean: true,
-  noExternal: ['@sealkeeper/schema'],
+  noExternal: [/.*/],
   banner: { js: '#!/usr/bin/env node' },
   define: {
     __VERSION__: JSON.stringify(pkg.version),

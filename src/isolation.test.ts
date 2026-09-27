@@ -1,8 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // Guards the rule that the package is self-contained.
-// Source may import only the allowed runtime packages, node builtins and
-// relative paths that stay inside this package folder. Every .ts file in the
-// package also carries the one-line Apache header.
+// Source may import only the allowed packages, node builtins and relative
+// paths that stay inside this package folder. The allowed packages are
+// bundled into dist at build time, so package.json declares no runtime
+// dependencies and lists each of them under devDependencies. Every .ts file
+// in the package also carries the one-line Apache header.
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +12,10 @@ import { describe, expect, it } from 'vitest';
 
 const srcDir = dirname(fileURLToPath(import.meta.url));
 const packageDir = resolve(srcDir, '..');
+
+const pkg = JSON.parse(
+  readFileSync(join(packageDir, 'package.json'), 'utf8'),
+) as Record<string, unknown>;
 
 const ALLOWED_BARE = new Set([
   '@sealkeeper/schema',
@@ -114,6 +120,41 @@ describe('cli isolation', () => {
         .map((problem) => `${relative(packageDir, file)}: ${problem}`),
     );
     expect(problems).toEqual([]);
+  });
+
+  // An install resolves a declared runtime dependency to the newest version
+  // in range, in the process that reads the private key. The tarball ships
+  // none, and anything the CLI needs is bundled from devDependencies.
+  it('package.json declares no runtime dependencies', () => {
+    for (const field of [
+      'dependencies',
+      'peerDependencies',
+      'optionalDependencies',
+      'bundleDependencies',
+      'bundledDependencies',
+    ]) {
+      expect(pkg[field], field).toBeUndefined();
+    }
+  });
+
+  it('every allowed package is a devDependency and so is bundled', () => {
+    const dev = pkg.devDependencies as Record<string, string>;
+    for (const name of ALLOWED_BARE) {
+      expect(dev[name], name).toBeDefined();
+    }
+  });
+
+  // Bundling ships their code, so their licences ship with it.
+  it('every bundled third party package has its licence in the tarball', () => {
+    expect(pkg.files).toContain('THIRD-PARTY-LICENSES');
+    const notices = readFileSync(
+      join(packageDir, 'THIRD-PARTY-LICENSES'),
+      'utf8',
+    );
+    for (const name of ALLOWED_BARE) {
+      if (name.startsWith('@sealkeeper/')) continue;
+      expect(notices, name).toContain(`\n${name} `);
+    }
   });
 
   it('every .ts file in the package starts with the Apache header', () => {
