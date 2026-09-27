@@ -3,7 +3,12 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Command } from 'commander';
-import { type ApiClient, ApiError } from '../api.js';
+import {
+  type ApiClient,
+  ApiError,
+  createApiClient,
+  resolveApiUrl,
+} from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
 import {
   cliInvocation,
@@ -23,7 +28,7 @@ import {
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
 import { HIGHEST_ISSUED, loadGoal, shownLevel } from '../goal.js';
-import type { Signer } from '../identity.js';
+import { KeyError, loadSigner, type Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import {
@@ -73,7 +78,6 @@ import {
   type SchedulerEnv,
   SchedulerError,
 } from '../routine-scheduler.js';
-import { openTaskSession } from '../tasks.js';
 import { dailyCeilingReached, todayOf } from '../today.js';
 import {
   logSkips,
@@ -242,8 +246,8 @@ export async function prepareInstall(
   const p = paths();
   const job = defaultJob(p, env);
   const scheduler = await detectScheduler(env, run);
-  const plan = await planInstall(
-    scheduler,
+  const planned = await planInstall(
+    scheduler.kind,
     job,
     {
       time,
@@ -255,6 +259,10 @@ export async function prepareInstall(
     env,
     run,
   );
+  const plan =
+    scheduler.note === undefined
+      ? planned
+      : { ...planned, note: scheduler.note };
   return {
     plan,
     agentCommand,
@@ -406,6 +414,7 @@ export function preview(
     'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They never post tasks. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
     ...(npx ? [NPX_NOTE] : []),
+    ...(plan.note === undefined ? [] : [plan.note]),
     `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('config routine allow <operator>')}.`,
     '',
     'Limits',
@@ -586,8 +595,31 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       return;
     }
 
-    // What there is to do, read before any agent starts.
-    const { signer, api } = await openTaskSession(cmd, { fetch: deps.fetch });
+    // What there is to do, read before any agent starts. The key is loaded
+    // here rather than through openTaskSession, which ends the command on a
+    // missing or broken key. That exit would skip the finally that removes
+    // the run lock and leave no run line (cli-adapters-tasks-5).
+    let api: ApiClient;
+    let signer: Signer;
+    try {
+      api = createApiClient({
+        apiUrl: resolveApiUrl({ config: config.apiUrl }),
+        fetch: deps.fetch,
+      });
+      signer = await loadSigner(api.apiUrl);
+    } catch (error) {
+      if (error instanceof KeyError || error instanceof ApiError) {
+        await finish(
+          'failed',
+          error instanceof KeyError
+            ? `the agent key could not be loaded: ${error.message}`
+            : `could not read the API: ${error.message}`,
+          null,
+        );
+        return;
+      }
+      throw error;
+    }
     let held: TaskResponse[];
     let found: RoutineCandidates;
     let confirm: Confirmable[];

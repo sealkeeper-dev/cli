@@ -12,11 +12,14 @@ import { writeFileAtomic } from './config.js';
 
 // What follows the CLI invocation in every hook command we write.
 const HOOK_ARGS = 'hook claude-code';
+// PostToolUseFailure fires instead of PostToolUse when a tool call that
+// started fails, see claude-code.ts.
 export const HOOK_EVENTS = [
   'SessionStart',
   'SessionEnd',
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
   'Stop',
 ] as const;
 
@@ -38,8 +41,11 @@ export function claudeConfigDir(
   return dir !== undefined && dir.length > 0 ? dir : join(home, '.claude');
 }
 
-// <claude dir>/settings.json for the user, <cwd>/.claude/settings.json for
-// the project. The claude dir defaults to <home>/.claude.
+// <claude dir>/settings.json for the user, <cwd>/.claude/settings.local.json
+// for the project. The claude dir defaults to <home>/.claude. A hook command
+// holds this machine's absolute node and script paths, so project scope
+// writes the local file, which stays on this machine, and never the shared
+// settings.json a repo commits (cli-adapters-tasks-9).
 export function settingsPath(
   scope: Scope,
   dirs: { home: string; cwd: string; claudeDir?: string },
@@ -47,8 +53,34 @@ export function settingsPath(
   if (scope === 'user') {
     return join(dirs.claudeDir ?? join(dirs.home, '.claude'), 'settings.json');
   }
-  return join(dirs.cwd, '.claude', 'settings.json');
+  return join(dirs.cwd, '.claude', 'settings.local.json');
 }
+
+// <cwd>/.claude/settings.json, where project scope wrote the hooks before
+// they moved to settings.local.json. Still read, so hooks written there are
+// found, and install and uninstall take ours out of it.
+export function sharedProjectSettingsPath(cwd: string): string {
+  return join(cwd, '.claude', 'settings.json');
+}
+
+// Every settings file that may hold hooks of ours. The user settings, the
+// project's local settings and the project's shared settings.
+export function allSettingsPaths(dirs: {
+  home: string;
+  cwd: string;
+  claudeDir?: string;
+}): string[] {
+  return [
+    settingsPath('user', dirs),
+    settingsPath('project', dirs),
+    sharedProjectSettingsPath(dirs.cwd),
+  ];
+}
+
+// Said after a project scope install. The hooks stay on this machine, but
+// the command and skill files beside them name this machine's paths too.
+export const PROJECT_PATHS_NOTE =
+  'The hooks went to .claude/settings.local.json, since they hold absolute paths on this machine. .claude/commands/sealkeeper-prove.md and .claude/skills/sealkeeper/SKILL.md hold them too, so keep all three out of git and run the install on each machine.';
 
 // How to run this CLI from any shell, whatever its PATH. The absolute node
 // binary and the real path of the running script, each double quoted, for
@@ -260,10 +292,9 @@ export async function claudeCodeHooksIn(dirs: {
     cwd: (dirs.cwd ?? (() => process.cwd()))(),
     claudeDir: (dirs.claudeDir ?? claudeConfigDir)(),
   };
-  const found = await Promise.all([
-    hasHooks(settingsPath('user', where)),
-    hasHooks(settingsPath('project', where)),
-  ]);
+  const found = await Promise.all(
+    allSettingsPaths(where).map((file) => hasHooks(file)),
+  );
   return found.some(Boolean);
 }
 

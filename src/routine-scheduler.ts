@@ -6,17 +6,17 @@ import { dirname, join } from 'node:path';
 import type { RoutineSchedule, SchedulerKind } from './config.js';
 import { writeFileAtomic } from './config.js';
 import { readIfExists } from './files.js';
+import { isManaged, MANAGED_MARKER } from './managed.js';
 
 // The daily job of sealkeeper routine, written with the operator's own
 // scheduler (VOU-136). launchd on macOS, a systemd user timer on Linux when
-// the user manager answers, cron otherwise, Task Scheduler on Windows.
+// the user manager answers and the user lingers, cron otherwise, Task
+// Scheduler on Windows.
 //
 // Every file carries the managed-by: sealkeeper marker the Claude Code
 // command file uses, and the cron entry sits between marker lines, so remove
 // only ever takes out what install wrote. Scheduler calls go through a
 // Runner, which tests replace.
-
-export const MANAGED_MARKER = 'managed-by: sealkeeper';
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Runner = (
@@ -60,16 +60,75 @@ export type SchedulerEnv = {
   uid: number;
 };
 
+// Said in the preview when the job is a systemd user timer and the user
+// does not linger, since systemd stops user timers at logout then.
+export const LINGER_NOTE =
+  'systemd stops your user timers when you log out, and lingering is off for this user, so the job runs only while you are logged in. Run loginctl enable-linger to keep it running after you log out.';
+
+// The scheduler to use, and a note for the preview when there is something
+// the operator should know about it.
+export type SchedulerChoice = { kind: SchedulerKind; note?: string };
+
 // launchd on macOS, Task Scheduler on Windows. On anything else a systemd
-// user timer when the user manager answers, else cron.
+// user timer when the user manager answers and the user lingers, else
+// cron. The user manager answers in any SSH session, but without linger
+// systemd stops it, and every user timer, once the user logs out
+// (cli-adapters-tasks-10). So without linger cron is used when there is a
+// crontab command and a cron daemon runs, and otherwise the systemd timer
+// with LINGER_NOTE. A crontab binary with no daemon would take the job and
+// never fire it.
 export async function detectScheduler(
   env: SchedulerEnv,
   run: Runner,
-): Promise<SchedulerKind> {
-  if (env.platform === 'darwin') return 'launchd';
-  if (env.platform === 'win32') return 'schtasks';
+): Promise<SchedulerChoice> {
+  if (env.platform === 'darwin') return { kind: 'launchd' };
+  if (env.platform === 'win32') return { kind: 'schtasks' };
   const systemd = await run('systemctl', ['--user', 'show-environment']);
-  return systemd.code === 0 ? 'systemd' : 'cron';
+  if (systemd.code !== 0) return { kind: 'cron' };
+  if (await lingers(env, run)) return { kind: 'systemd' };
+  if ((await hasCron(run)) && (await cronDaemonRuns(run))) {
+    return { kind: 'cron' };
+  }
+  return { kind: 'systemd', note: LINGER_NOTE };
+}
+
+// Whether logind keeps this user's manager running after logout.
+// loginctl prints Linger=yes or Linger=no. Anything else, loginctl missing
+// included, counts as no.
+async function lingers(env: SchedulerEnv, run: Runner): Promise<boolean> {
+  const result = await run('loginctl', [
+    'show-user',
+    String(env.uid),
+    '-p',
+    'Linger',
+  ]);
+  return result.code === 0 && /^Linger=yes$/m.test(result.stdout);
+}
+
+// Whether there is a crontab command. crontab -l exits 1 for a user with
+// no crontab, and the runner gives 127 when the program cannot start.
+async function hasCron(run: Runner): Promise<boolean> {
+  return (await run('crontab', ['-l'])).code !== 127;
+}
+
+// The names a cron daemon runs under. cron on Debian and Ubuntu, crond on
+// Fedora, RHEL, Arch cronie and busybox.
+const CRON_DAEMONS = ['cron', 'crond'];
+
+// Whether a cron daemon runs. pgrep -x exits 0 when a process has exactly
+// that name, and systemctl is-active exits 0 when the unit is active. Either
+// one for either name is enough. Anything else, a missing program included,
+// counts as no. Runs through the Runner, so tests never read this machine.
+async function cronDaemonRuns(run: Runner): Promise<boolean> {
+  for (const name of CRON_DAEMONS) {
+    if ((await run('pgrep', ['-x', name])).code === 0) return true;
+  }
+  for (const name of CRON_DAEMONS) {
+    if ((await run('systemctl', ['is-active', '--quiet', name])).code === 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // What the job runs. program is the CLI's node and script paths followed by
@@ -96,6 +155,9 @@ export type Plan = {
   commands: Command[];
   // Lines to show for a change that is not a file of ours.
   preview?: string[];
+  // Something the operator should know about the scheduler, said in the
+  // preview, such as LINGER_NOTE.
+  note?: string;
 };
 
 // A name for this home's job. The default home gets the plain name, any
@@ -165,7 +227,7 @@ export async function applyPlan(
 ): Promise<void> {
   for (const file of plan.files) {
     const current = await readIfExists(file.path);
-    if (current !== null && !isOurs(current)) {
+    if (current !== null && !isManaged(current)) {
       throw new SchedulerError(
         `${file.path} exists and was not written by SealKeeper, it is left alone`,
       );
@@ -214,14 +276,6 @@ export class SchedulerError extends Error {
   override name = 'SchedulerError';
 }
 
-// Ours when the marker is in the first few lines.
-export function isOurs(text: string): boolean {
-  return text
-    .split(/\r?\n/)
-    .slice(0, 4)
-    .some((l) => l.includes(MANAGED_MARKER));
-}
-
 // Removes what install wrote. Files without the marker are left alone and
 // reported in kept. The scheduler is told first, so it stops using them.
 export async function removeJob(
@@ -235,7 +289,7 @@ export async function removeJob(
   for (const path of schedule.files) {
     const text = await readIfExists(path);
     if (text === null) continue;
-    if (isOurs(text)) ours.push(path);
+    if (isManaged(text)) ours.push(path);
     else kept.push(path);
   }
   switch (schedule.scheduler) {
@@ -302,7 +356,7 @@ export async function removeJobByName(
     for (const path of files) {
       const text = await readIfExists(path);
       if (text === null) continue;
-      if (isOurs(text)) ours.push(path);
+      if (isManaged(text)) ours.push(path);
       else kept.push(path);
     }
     return ours;

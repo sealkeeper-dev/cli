@@ -12,14 +12,15 @@ import { defaultSyncDeps, type SyncDeps } from './sync.js';
 const STDIN_TIMEOUT_MS = 1_000;
 const MAX_STDIN_BYTES = 64 * 1024 * 1024;
 
-export type HookCommandDeps = SyncDeps & {
+export type HookCommandDeps = {
+  fetch: SyncDeps['fetch'];
   readStdin: () => Promise<string | null>;
   // The cached goal the session nudge reads. Tests pass their own.
   cachedGoal?: NudgeDeps['cachedGoal'];
 };
 
 const defaultHookDeps: HookCommandDeps = {
-  ...defaultSyncDeps,
+  fetch: defaultSyncDeps.fetch,
   readStdin: () => readStdin(process.stdin),
 };
 
@@ -44,7 +45,6 @@ export function register(
         if (input === null) return;
         await handleHook(input, {
           fetch: deps.fetch,
-          sleep: deps.sleep,
           cachedGoal: deps.cachedGoal,
         });
       } catch {

@@ -10,6 +10,8 @@ export type MastraToolLike = {
 };
 
 export type SealKeeperSession = {
+  // The id as logged. The id given when it is a plain id (letters, digits,
+  // _ and -, at most 64), else its sha256.
   sessionId: string;
   // Pass to agent.generate or agent.stream as onStepFinish.
   onStepFinish: (step: unknown) => Promise<void>;
@@ -19,7 +21,7 @@ export type SealKeeperSession = {
 
 // Wraps the execute of every tool in a record or an array and returns the
 // same shape. Each call emits tool.call with the tool id, duration and
-// outcome. Arguments and results are never read. Errors are rethrown.
+// outcome. Characters a tool name cannot hold become a dash. Arguments and results are never read. Errors are rethrown.
 export declare function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
 >(tools: T): T;

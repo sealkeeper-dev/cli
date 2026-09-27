@@ -15,12 +15,9 @@
 // Types are in types/openclaw.d.ts, which openclaw-types.test.ts keeps in
 // step.
 import { EventPayload } from '@sealkeeper/schema';
-import { clampMs, safeEmit } from './adapter-core.js';
-import { cli } from './invocation.js';
+import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
 import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
-import { nudgeLines } from './nudge.js';
-import { quietly } from './output.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
 const NAME = EventPayload['session.start'].shape.session_id;
@@ -104,11 +101,7 @@ function register(api: OpenClawPluginApiLike): void {
   const runs = bounded<number>();
 
   // Events are written in order, one after another.
-  let queue: Promise<void> = Promise.resolve();
-  const enqueue = (input: EmitInput): Promise<void> => {
-    queue = queue.then(() => safeEmit(input));
-    return queue;
-  };
+  const enqueue = emitQueue();
 
   registerNudge(api);
 
@@ -250,15 +243,8 @@ function register(api: OpenClawPluginApiLike): void {
 function registerNudge(api: OpenClawPluginApiLike): void {
   try {
     api.on('before_prompt_build', async () => {
-      try {
-        const run = `\`${cli('prove --json')}\``;
-        const lines = await quietly(() => nudgeLines(run));
-        return lines.length > 0
-          ? { appendSystemContext: lines.join('\n') }
-          : undefined;
-      } catch {
-        return undefined;
-      }
+      const text = await adapterNudge();
+      return text.length > 0 ? { appendSystemContext: text } : undefined;
     });
   } catch {
     // Refused by policy. The other hooks still work.

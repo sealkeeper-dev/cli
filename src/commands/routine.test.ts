@@ -1,7 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -30,6 +37,7 @@ import {
 } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
+import { MANAGED_MARKER } from '../managed.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
@@ -46,6 +54,7 @@ import {
   routinePaths,
   routineWorkDir,
   withClaimLock,
+  withConfirmLock,
 } from '../routine.js';
 import {
   type AgentProcess,
@@ -60,7 +69,7 @@ import {
   applyPlan,
   cronBlock,
   jobName,
-  MANAGED_MARKER,
+  LINGER_NOTE,
   planInstall,
   type Runner,
   removeJobByName,
@@ -135,6 +144,10 @@ class FakeApi {
   down = false;
   // The goal answer, 404 while null.
   goal: Record<string, unknown> | null = null;
+  // Claims of these task ids fail with a 500.
+  failClaim = new Set<string>();
+  // Runs as an outcome report arrives, before it is stored.
+  beforeOutcome: (() => Promise<void>) | null = null;
 
   constructor(readonly agentId: string) {}
 
@@ -256,6 +269,7 @@ class FakeApi {
     if (method === 'GET' && !match[2]) return Response.json(task);
     const payload = await this.payload(init);
     if (match[2] === '/claim') {
+      if (this.failClaim.has(task.id)) return error(500, 'internal');
       Object.assign(task, {
         state: 'claimed',
         claimantAgentId: this.agentId,
@@ -282,6 +296,7 @@ class FakeApi {
         },
       });
     }
+    await this.beforeOutcome?.();
     this.outcomes.push(payload);
     this.posterReports.set(task.id, payload.outcome as string);
     return Response.json(task);
@@ -294,6 +309,12 @@ function error(status: number, code: string): Response {
     { status },
   );
 }
+
+const fileExists = (file: string): Promise<boolean> =>
+  stat(file).then(
+    () => true,
+    () => false,
+  );
 
 function throwOnExit(cmd: Command): void {
   cmd.exitOverride();
@@ -352,6 +373,11 @@ describe('routine', () => {
   let calls: { line: string; input?: string }[];
   let crontab: string | null;
   let systemdUp: boolean;
+  // loginctl's Linger answer for the user, whether crontab exists and
+  // whether a cron daemon runs.
+  let linger: boolean;
+  let cronInstalled: boolean;
+  let cronRunning: boolean;
   let agents: FakeAgent[];
   let nextAgent: () => FakeAgent;
   let spawned: {
@@ -365,6 +391,19 @@ describe('routine', () => {
     calls.push({ line: [file, ...args].join(' '), input: options?.input });
     if (file === 'systemctl' && args[1] === 'show-environment') {
       return { code: systemdUp ? 0 : 1, stdout: '', stderr: '' };
+    }
+    if (file === 'loginctl') {
+      return {
+        code: 0,
+        stdout: `Linger=${linger ? 'yes' : 'no'}\n`,
+        stderr: '',
+      };
+    }
+    if (file === 'pgrep' || (file === 'systemctl' && args[0] === 'is-active')) {
+      return { code: cronRunning ? 0 : 1, stdout: '', stderr: '' };
+    }
+    if (file === 'crontab' && !cronInstalled) {
+      return { code: 127, stdout: '', stderr: 'spawn crontab ENOENT' };
     }
     if (file === 'crontab' && args[0] === '-l') {
       return crontab === null
@@ -473,6 +512,9 @@ describe('routine', () => {
     calls = [];
     crontab = null;
     systemdUp = false;
+    linger = true;
+    cronInstalled = true;
+    cronRunning = true;
     agents = [];
     spawned = [];
     nextAgent = () => new FakeAgent([assistant('m1', 50)], 0);
@@ -597,6 +639,7 @@ describe('routine', () => {
       );
       expect(calls.map((c) => c.line)).toEqual([
         'systemctl --user show-environment',
+        'loginctl show-user 501 -p Linger',
         'systemctl --user daemon-reload',
         `systemctl --user enable --now ${schedule?.job}.timer`,
       ]);
@@ -608,6 +651,47 @@ describe('routine', () => {
         'systemctl --user daemon-reload',
       ]);
       await expect(readFile(service ?? '', 'utf8')).rejects.toThrow();
+    });
+
+    it('uses cron over a systemd user timer when the user does not linger', async () => {
+      systemdUp = true;
+      linger = false;
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      expect((await readRoutineConfig())?.schedule?.scheduler).toBe('cron');
+      expect(crontab).toContain(MANAGED_MARKER);
+      expect(result.out).not.toContain(LINGER_NOTE);
+    });
+
+    it('says linger is needed when there is no cron to fall back on', async () => {
+      systemdUp = true;
+      linger = false;
+      cronInstalled = false;
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
+      expect(result.out).toContain(LINGER_NOTE);
+      expect(LINGER_NOTE).toContain('loginctl enable-linger');
+    });
+
+    it('keeps the systemd timer and says linger is needed when crontab exists but no cron daemon runs', async () => {
+      systemdUp = true;
+      linger = false;
+      cronRunning = false;
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
+      expect(result.out).toContain(LINGER_NOTE);
+      expect(crontab).toBeNull();
+      // Both daemon names were looked for, by process and by unit.
+      expect(calls.map((c) => c.line)).toEqual(
+        expect.arrayContaining([
+          'pgrep -x cron',
+          'pgrep -x crond',
+          'systemctl is-active --quiet cron',
+          'systemctl is-active --quiet crond',
+        ]),
+      );
     });
 
     it('never overwrites or removes a unit file the operator wrote', async () => {
@@ -1133,6 +1217,19 @@ describe('routine', () => {
       expect((await runs())[0]?.reason).toContain('could not read the API');
     });
 
+    it('records a failed run and lets go of the run lock when the key is missing', async () => {
+      await installed();
+      api.add();
+      await rm(paths().key, { force: true });
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(1);
+      expect(spawned).toEqual([]);
+      const [line] = await runs();
+      expect(line?.outcome).toBe('failed');
+      expect(line?.reason).toContain('the agent key could not be loaded');
+      expect(await fileExists(routinePaths().lock)).toBe(false);
+    });
+
     it('does nothing while paused by the operator', async () => {
       await installed();
       api.add();
@@ -1421,6 +1518,31 @@ describe('routine', () => {
       ).toHaveLength(2);
     });
 
+    it('prove prints the tasks it claimed when a later claim fails, and lets go of the claim lock', async () => {
+      const first = api.add();
+      const second = api.add();
+      api.failClaim = new Set([second.id]);
+      const result = await run('prove', '--json');
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.out).map((t: { id: string }) => t.id)).toEqual([
+        first.id,
+      ]);
+      expect(result.err).toContain(
+        'warning: stopped claiming after 1 task, failed with internal',
+      );
+      expect(await fileExists(routinePaths().claimLock)).toBe(false);
+    });
+
+    it('prove ends with the API error before any claim, and lets go of the claim lock', async () => {
+      const only = api.add();
+      api.failClaim = new Set([only.id]);
+      const result = await run('prove', '--json');
+      expect(result.code).toBe(1);
+      expect(result.out).toBe('');
+      expect(result.err).toContain('failed with internal');
+      expect(await fileExists(routinePaths().claimLock)).toBe(false);
+    });
+
     it('tasks post is refused, a template post too, and nothing is sent', async () => {
       const plain = await run(
         'tasks',
@@ -1472,11 +1594,21 @@ describe('routine', () => {
       expect(refused.code).toBe(1);
       expect(refused.err).toContain('waits for a person');
       expect(api.outcomes).toEqual([]);
+      // A refusal inside the confirm lock still lets go of it.
+      expect(await fileExists(routinePaths().confirmLock)).toBe(false);
 
+      // The limit is read, the report sent and the confirm line written
+      // under one lock (cli-adapters-tasks-4).
       const bob = submitted(BOB_AGENT);
+      let heldDuringReport = false;
+      api.beforeOutcome = async () => {
+        heldDuringReport = await fileExists(routinePaths().confirmLock);
+      };
       expect(
         (await run('tasks', 'outcome', bob.id, 'success', '--yes')).code,
       ).toBe(0);
+      expect(heldDuringReport).toBe(true);
+      expect(await fileExists(routinePaths().confirmLock)).toBe(false);
       expect(api.outcomes[0]?.origin).toBe('routine');
 
       const another = submitted(BOB_AGENT);
@@ -1734,6 +1866,27 @@ describe('routine', () => {
     );
     await claimOnce();
     expect(count).toBe(4);
+  });
+
+  it('runs one confirmation at a time under the confirm lock, apart from claims', async () => {
+    let inside = 0;
+    let most = 0;
+    const confirmOnce = () =>
+      withConfirmLock(
+        async () => {
+          inside += 1;
+          most = Math.max(most, inside);
+          await new Promise((r) => setTimeout(r, 5));
+          inside -= 1;
+        },
+        paths(),
+        (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 2))),
+      );
+    await Promise.all([confirmOnce(), confirmOnce(), confirmOnce()]);
+    expect(most).toBe(1);
+    // The claim lock is another file, so a claim never waits on a report.
+    await withConfirmLock(() => withClaimLock(async () => undefined));
+    expect(routinePaths().confirmLock).not.toBe(routinePaths().claimLock);
   });
 
   it('plain tasks post sends no origin', async () => {

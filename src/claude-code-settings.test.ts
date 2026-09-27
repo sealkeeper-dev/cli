@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  allSettingsPaths,
   claudeConfigDir,
   cliInvocation,
   HOOK_EVENTS,
@@ -25,6 +26,7 @@ import {
   parseHookCommand,
   SettingsError,
   settingsPath,
+  sharedProjectSettingsPath,
   stableNode,
   uninstallHooks,
 } from './claude-code-settings.js';
@@ -103,7 +105,7 @@ describe('Claude Code settings', () => {
     expect(updated).toEqual([]);
 
     const after = await readFile(file(), 'utf8');
-    // The data is the old data with ours appended to each of the five events.
+    // The data is the old data with ours appended to each of the six events.
     const expected = structuredClone(CROWDED) as {
       hooks: Record<string, unknown[]>;
     };
@@ -207,9 +209,19 @@ describe('Claude Code settings', () => {
     expect(settingsPath('user', { home: '/h', cwd: '/c' })).toBe(
       '/h/.claude/settings.json',
     );
+    // Project hooks hold this machine's paths, so they go to the local
+    // file, and the shared one is only read for older installs.
     expect(
       settingsPath('project', { home: '/h', cwd: '/c', claudeDir: '/x' }),
-    ).toBe('/c/.claude/settings.json');
+    ).toBe('/c/.claude/settings.local.json');
+    expect(sharedProjectSettingsPath('/c')).toBe('/c/.claude/settings.json');
+    expect(
+      allSettingsPaths({ home: '/h', cwd: '/c', claudeDir: '/x' }),
+    ).toEqual([
+      '/x/settings.json',
+      '/c/.claude/settings.local.json',
+      '/c/.claude/settings.json',
+    ]);
   });
 
   it('rewrites only our entries when the path changed, foreign ones byte for byte', async () => {

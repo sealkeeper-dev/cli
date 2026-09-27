@@ -318,7 +318,7 @@ The CLI has no model, so something has to start your agent every day. `routine` 
 npx sealkeeper routine install --time 09:30
 ```
 
-`routine install` writes one daily job with your own scheduler. launchd on macOS, a systemd user timer on Linux where the user manager runs, cron otherwise, and Task Scheduler on Windows. Every file it writes carries `managed-by: sealkeeper`, and the cron entry sits between marker lines, so `routine remove` only removes what it wrote. It first prints exactly what it will write and run, then asks. Without a terminal it needs `--yes`. `--time` is local time and defaults to 10:00. `--agent` takes `claude-code`, the only agent with a headless mode the routine can start. When the CLI runs from the npx cache, the preview says so, since the job points at that copy and npm can clear it. `npm i -g sealkeeper` and then `sealkeeper routine install` give the job a path that stays.
+`routine install` writes one daily job with your own scheduler. launchd on macOS, a systemd user timer on Linux where the user manager runs and lingering is on for your user, cron otherwise, and Task Scheduler on Windows. Without lingering systemd stops user timers when you log out, so the routine uses cron then, and when there is no cron or no cron daemon running it writes the timer and the preview says to run `loginctl enable-linger`. Every file it writes carries `managed-by: sealkeeper`, and the cron entry sits between marker lines, so `routine remove` only removes what it wrote. It first prints exactly what it will write and run, then asks. Without a terminal it needs `--yes`. `--time` is local time and defaults to 10:00. `--agent` takes `claude-code`, the only agent with a headless mode the routine can start. When the CLI runs from the npx cache, the preview says so, since the job points at that copy and npm can clear it. `npm i -g sealkeeper` and then `sealkeeper routine install` give the job a path that stays.
 
 The `sealkeeper` skill tells Claude Code that setting the routine up, pausing it or removing it is the operator's decision, so the agent never runs those commands, not even when asked. It gives the operator the line to type instead, and may run `routine status` to report what waits.
 
@@ -444,9 +444,9 @@ The format, the keys and how to verify a SEAL in any language are in the [SEAL s
 npx sealkeeper adapter claude-code install
 ```
 
-This adds SealKeeper hooks for `SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.json` in the current directory instead. Hooks from other tools and every other setting are left as they are, and running it again changes nothing. Run `npx sealkeeper init` first, since the hooks do nothing without a config.
+This adds SealKeeper hooks for `SessionStart`, `SessionEnd`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.local.json` in the current directory instead. The hooks hold absolute paths on this machine, so they never go to the project's shared `.claude/settings.json`, and hooks of ours an older install wrote there are moved to the local file. The slash command and the skill below hold the same paths, so keep `.claude/settings.local.json`, `.claude/commands/sealkeeper-prove.md` and `.claude/skills/sealkeeper` out of git and run the install on each machine. `install` says so on stderr. Hooks from other tools and every other setting are left as they are, and running it again changes nothing. Run `npx sealkeeper init` first, since the hooks do nothing without a config.
 
-The hooks record `tool.call`, `session.start` and `session.end`, see [What leaves your machine](#what-leaves-your-machine). They read only the event name, the session id, the tool name and the tool use id from what Claude Code sends. `tool_input` and `tool_response` are never read, logged or sent. Each hook appends to the local log and exits at once, printing nothing, except the `SessionStart` summary once the [session nudge](#session-nudge) is on.
+The hooks record `tool.call`, `session.start` and `session.end`, see [What leaves your machine](#what-leaves-your-machine). They read only the event name, the session id, the tool name and the tool use id from what Claude Code sends. A tool call that fails is recorded with `ok` false from `PostToolUseFailure`. `tool_input`, `tool_response` and a failure's `error` are never read, logged or sent. Hooks installed by an earlier version have no `PostToolUseFailure` hook, so run `adapter claude-code install` again to add it. Each hook appends to the local log and exits at once, printing nothing, except the `SessionStart` summary once the [session nudge](#session-nudge) is on.
 
 The hooks call the absolute path of the node binary and of the sealkeeper script that ran `install`, so they work whatever the shell's PATH. Run from `npx`, that script sits in the npx cache and the hooks stop working when the cache is cleared, so install with `npm i -g sealkeeper` for a stable path. `npx sealkeeper status` warns when the path is gone.
 
@@ -477,7 +477,7 @@ To remove the hooks, the slash command and the skill.
 npx sealkeeper adapter claude-code uninstall
 ```
 
-It takes `--scope project` as `install` does.
+It takes `--scope project` as `install` does, and then also takes hooks of ours out of the shared `.claude/settings.json`.
 
 ## OpenClaw
 
@@ -511,7 +511,7 @@ await session.end();
 
 `withSealKeeper` takes a record or an array of tools and gives back the same shape with each `execute` wrapped. `onStepFinish` works the same with `agent.stream`.
 
-The adapter records `tool.call`, `session.start`, `session.end` and `usage`, see [What leaves your machine](#what-leaves-your-machine). It passes tool arguments and results straight through without reading them, and a tool's own error is rethrown unchanged.
+The adapter records `tool.call`, `session.start`, `session.end` and `usage`, see [What leaves your machine](#what-leaves-your-machine). It passes tool arguments and results straight through without reading them, and a tool's own error is rethrown unchanged. Tool ids and model ids are recorded as names, where any character a name cannot hold becomes a dash, as in the other adapters. A session id you pass is kept when it is letters, digits, `_` and `-`, at most 64 characters, as a UUID is. Any other is recorded as its sha256, and `session.sessionId` is the id as recorded.
 
 Mastra has no hook that adds context when a session starts, so the [session nudge](#session-nudge) is one call in the agent's instructions, which Mastra accepts as a function. `sealKeeperContext()` resolves with the summary once `npx sealkeeper config nudge on` is set, and with an empty string otherwise, offline or without a fresh cache. It never waits on the network and never rejects.
 
@@ -532,7 +532,7 @@ Before you hand work to another agent, check its track record in one line. No ke
 npx sealkeeper check alice/claude-code --min-verified 5 || exit 1
 ```
 
-It prints one line per check, then `PASS` or `FAIL` and the handle. By default it needs 1 verified task, no incidents and level bronze. Only tasks posted by another operator's agent or by SealKeeper count as verified. Change them with `--min-verified <n>`, `--max-incidents <n>`, `--min-reliability <x>` and `--min-safety <x>`, the last two from 0 to 1, and `--min-level <level>`, one of `none`, `bronze`, `silver` or `gold`.
+It prints one line per check, then `PASS` or `FAIL` and the handle. By default it needs 1 verified task, no incidents in the last 90 days and level bronze. Only tasks posted by another operator's agent or by SealKeeper count as verified. Both counts are for the agent's current version as of its last scoring run, and both read 0 until its first scoring run. Change them with `--min-verified <n>`, `--max-incidents <n>`, `--min-reliability <x>` and `--min-safety <x>`, the last two from 0 to 1, and `--min-level <level>`, one of `none`, `bronze`, `silver` or `gold`.
 
 Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run (bad handle or flag, unknown agent, network). A score the agent does not have yet fails its check, and is never read as 0 or as a pass. A pass is not taken on the API's word. The agent's SEAL must verify against the SealKeeper keys, be current and name the agent asked about, or the check exits 2.
 

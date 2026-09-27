@@ -55,6 +55,7 @@ import {
   isAllowed,
   normalLogin,
   type RoutineEntry,
+  RoutineLockBusy,
   readRoutine,
   type SkipEntry,
   skippedIds,
@@ -629,7 +630,12 @@ async function claim(
   };
   // Claims one task. False when the claim cap stopped it, and then the
   // tasks the server says this agent holds are added. The local log may
-  // not know every claim (another machine, a fresh home).
+  // not know every claim (another machine, a fresh home). Any other API
+  // error before the first claim of this run is thrown. After it, the loop
+  // stops with a warning, so the tasks already claimed are still printed
+  // (cli-adapters-tasks-6). It never ends the command itself, since it runs
+  // under the claim lock in a routine run.
+  let claimedHere = 0;
   const claimOne = async (task: TaskResponse): Promise<boolean> => {
     try {
       const envelope = await signer.sign(
@@ -637,6 +643,7 @@ async function claim(
       );
       const claimed = await api.claimTask(task.id, envelope);
       tasks.push(claimed);
+      claimedHere += 1;
       // The count status caches is too high now.
       if (claimed.assignee) await clearInbox();
       await recordEvent({
@@ -666,9 +673,23 @@ async function claim(
         );
         return false;
       }
-      failOnApiError(cmd, error);
+      if (error instanceof ApiError && claimedHere > 0) {
+        stderr(
+          `warning: stopped claiming after ${claimedHere} ${claimedHere === 1 ? 'task' : 'tasks'}, ${error.message}`,
+        );
+        return false;
+      }
+      throw error;
     }
     return true;
+  };
+  // claimOne outside the claim lock, where an API error ends the command.
+  const claimOrExit = async (task: TaskResponse): Promise<boolean> => {
+    try {
+      return await claimOne(task);
+    } catch (error) {
+      failOnApiError(cmd, error);
+    }
   };
   if (await heldBack()) return done();
   if (runId !== null && routine !== null) {
@@ -692,19 +713,15 @@ async function claim(
         await limit(budget.used);
         return;
       }
-      let found: RoutineCandidates;
-      try {
-        found = await routineCandidates(
-          api,
-          posters,
-          signer.agentId,
-          config,
-          routine,
-          seedTypesDone(entries),
-        );
-      } catch (error) {
-        failOnApiError(cmd, error);
-      }
+      // An API error is thrown and reported once the lock is released.
+      const found = await routineCandidates(
+        api,
+        posters,
+        signer.agentId,
+        config,
+        routine,
+        seedTypesDone(entries),
+      );
       await logSkips(entries, found.skipped, runId, now);
       skipped = found.skipped.length;
       want = Math.min(want, tasks.length + budget.remaining);
@@ -718,13 +735,13 @@ async function claim(
         await limit(budget.used + budget.remaining);
       }
     };
+    // Nothing inside the lock ends the command, so the lock is always
+    // released first (cli-adapters-tasks-5).
     try {
       await withClaimLock(claimRoutine);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('another prove')) {
-        cmd.error(error.message);
-      }
-      throw error;
+      if (error instanceof RoutineLockBusy) cmd.error(error.message);
+      failOnApiError(cmd, error);
     }
     return done();
   }
@@ -738,7 +755,7 @@ async function claim(
       if (claimed >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
       if (held.has(task.id)) continue;
       const before = tasks.length;
-      if (!(await claimOne(task))) return done();
+      if (!(await claimOrExit(task))) return done();
       if (tasks.length > before) claimed += 1;
     }
   }
@@ -768,7 +785,7 @@ async function claim(
     // operator's own account, and its tasks count for every agent, so a
     // poster SealKeeper runs is never the same operator.
     if (await posters.sameOperator(task, config.operatorLogin)) continue;
-    if (!(await claimOne(task))) break;
+    if (!(await claimOrExit(task))) break;
   }
   // The hint names the open tasks other agents posted. A read that fails
   // only leaves the hint out.

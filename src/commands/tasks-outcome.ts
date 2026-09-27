@@ -25,7 +25,9 @@ import {
   appendRoutine,
   budgetOf,
   isAllowed,
+  RoutineLockBusy,
   readRoutine,
+  withConfirmLock,
 } from '../routine.js';
 import {
   defaultTasksDeps,
@@ -87,6 +89,10 @@ export function agreementOf(
 
 type OutcomeOptions = { yes?: boolean };
 
+// A reason to report nothing, thrown inside the report so a routine run's
+// confirm lock is released before the command ends with it.
+class Refused extends Error {}
+
 export function register(
   parent: Command,
   deps: TasksDeps = defaultTasksDeps,
@@ -145,59 +151,66 @@ export function register(
       }
       const refused = localRefusal(publicTask, signer.agentId, Date.now());
       if (refused) this.error(refused);
-      if (runId !== null) {
-        const held = await routineRefusal(
-          api,
-          await loadRoutineConfig(this),
-          publicTask,
-          runId,
-        );
-        if (held) this.error(held);
-      }
+      const routine = runId === null ? null : await loadRoutineConfig(this);
 
-      let read: TaskSubmissionResponse;
-      try {
-        read = await fetchSubmission(api, signer, id);
-      } catch (error) {
-        fail(error);
-      }
-      const submission = read.task.submission;
-      if (submission === undefined) this.error(NO_SUBMISSION);
+      // Everything from the routine's checks to the report and its routine
+      // line. Inside a routine run it runs under the confirm lock, so two
+      // reports at once cannot pass the daily limit. It never ends the
+      // process, since that would leave the lock behind. A refusal is thrown
+      // as Refused and reported once the lock is released.
+      const report = async (): Promise<TaskResponse> => {
+        if (runId !== null && routine !== null) {
+          const held = await routineRefusal(api, routine, publicTask, runId);
+          if (held) throw new Refused(held);
+        }
 
-      // With --json stdout carries only the result, so the task and the
-      // submission go to stderr.
-      const print = json ? stderr : stdout;
-      const shown = taskDetail(read.task, Date.now(), [
-        'Submission:',
-        indentText(submission),
-      ]);
-      for (const line of shown) print(line);
+        const read = await fetchSubmission(api, signer, id);
+        const submission = read.task.submission;
+        if (submission === undefined) throw new Refused(NO_SUBMISSION);
 
-      if (input !== null) {
-        process.stderr.write(`Report ${outcome} for this submission? [y/N] `);
-        if (!isYes(await input.readLine())) this.error('nothing reported');
-      }
+        // With --json stdout carries only the result, so the task and the
+        // submission go to stderr.
+        const print = json ? stderr : stdout;
+        const shown = taskDetail(read.task, Date.now(), [
+          'Submission:',
+          indentText(submission),
+        ]);
+        for (const line of shown) print(line);
 
-      // The hash binds the verdict to the submission the poster read.
-      const evidenceHash = sha256Hex(submission);
-      const request = TaskOutcomeRequest.parse({
-        taskId: id,
-        outcome,
-        evidenceHash,
-        ...(runId === null ? {} : { origin: 'routine' }),
-      });
+        if (input !== null) {
+          process.stderr.write(`Report ${outcome} for this submission? [y/N] `);
+          if (!isYes(await input.readLine())) {
+            throw new Refused('nothing reported');
+          }
+        }
+
+        // The hash binds the verdict to the submission the poster read.
+        const evidenceHash = sha256Hex(submission);
+        const request = TaskOutcomeRequest.parse({
+          taskId: id,
+          outcome,
+          evidenceHash,
+          ...(runId === null ? {} : { origin: 'routine' }),
+        });
+        const sent = await api.postOutcome(id, await signer.sign(request));
+        await recordEvent({
+          type: 'task.outcome',
+          payload: { task_id: id, outcome, evidence_hash: evidenceHash },
+        });
+        if (runId !== null) {
+          await appendRoutine({ kind: 'confirm', runId, taskId: id });
+        }
+        return sent;
+      };
       let result: TaskResponse;
       try {
-        result = await api.postOutcome(id, await signer.sign(request));
+        result =
+          runId === null ? await report() : await withConfirmLock(report);
       } catch (error) {
+        if (error instanceof Refused || error instanceof RoutineLockBusy) {
+          this.error(error.message);
+        }
         fail(error);
-      }
-      await recordEvent({
-        type: 'task.outcome',
-        payload: { task_id: id, outcome, evidence_hash: evidenceHash },
-      });
-      if (runId !== null) {
-        await appendRoutine({ kind: 'confirm', runId, taskId: id });
       }
 
       // Read the reports back, so what is said about agreement is what the

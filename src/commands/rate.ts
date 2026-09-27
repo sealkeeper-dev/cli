@@ -8,8 +8,8 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
-import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
 import {
   defaultTasksDeps,
   openTaskSession,
@@ -49,7 +49,7 @@ export function register(
       try {
         rating = await api.postRating(await signer.sign(request));
       } catch (error) {
-        if (error instanceof ApiError) this.error(refusal(error, agentId));
+        if (error instanceof ApiError) this.error(rateRefusal(error, agentId));
         throw error;
       }
 
@@ -96,9 +96,10 @@ function validate(
   });
 }
 
-// One line per refusal. The API message is the fallback for codes this
-// version does not know.
-function refusal(error: ApiError, agentId: string): string {
+// One line per refusal code of the ratings route. Codes every signed
+// command shares, such as rate_limited, unknown_agent and a request time
+// out of the window, fall through to refusal.
+function rateRefusal(error: ApiError, agentId: string): string {
   switch (error.code) {
     case 'ratings_closed':
       return RATINGS_CLOSED;
@@ -108,17 +109,9 @@ function refusal(error: ApiError, agentId: string): string {
       return `no agent with id ${agentId}`;
     case 'rater_below_minimum':
       return 'your agent needs a higher score before it can rate others';
-    case 'issued_at_out_of_window':
-      return 'the API refused the rating time, check this machine clock';
     case 'stale_rating':
       return 'a newer rating for this agent and dimension is already stored';
-    case 'rate_limited':
-      return error.retryAfterSec === null
-        ? 'too many ratings, try again later'
-        : `too many ratings, try again in ${error.retryAfterSec} seconds`;
-    case 'unknown_agent':
-      return `this agent is not registered, run ${cli('init')}`;
     default:
-      return error.message;
+      return refusal(error);
   }
 }

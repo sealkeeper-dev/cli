@@ -73,6 +73,7 @@ describe('sync preview', () => {
 
     const preview = await readPreview(p, { now: NOW, full: true });
     expect(preview.count).toBe(3);
+    expect(preview.stale).toBe(1);
     expect(preview.groups.flatMap((g) => g.events)).toEqual([a, b, edge]);
     expect(preview.sample).toEqual([a, b, edge]);
     expect(preview.last?.eventId).toBe(edge.event_id);
@@ -88,12 +89,36 @@ describe('sync preview', () => {
     expect(preview.last?.eventId).toBe(stale.event_id);
   });
 
-  it('counts nothing when every pending event is stale', async () => {
+  it('counts nothing when every pending event is stale, and says how many it drops', async () => {
     await append(toolCall(ago(20 * DAY_MS)));
     const preview = await readPreview(p, { now: NOW });
     expect(preview.count).toBe(0);
+    expect(preview.stale).toBe(1);
     expect(summaryLines(preview, p)).toEqual([
       'nothing pending, nothing to send',
+      `1 event older than ${EVENT_MAX_AGE_DAYS} days is left out, sync drops it without sending.`,
+    ]);
+  });
+
+  it('counts stale events apart in the summary and in --dry-run', async () => {
+    const fresh = toolCall(NOW);
+    await append(fresh);
+    await append(toolCall(ago(20 * DAY_MS)));
+    await append(toolCall(ago(30 * DAY_MS)));
+    const summary = summaryLines(await readPreview(p, { now: NOW }), p);
+    expect(summary.at(-2)).toBe(
+      `1 event pending, nothing sent yet. 2 events older than ${EVENT_MAX_AGE_DAYS} days are left out, sync drops them without sending.`,
+    );
+    const full = previewLines(
+      await readPreview(p, { now: NOW, full: true }),
+      p,
+    );
+    expect(full).toEqual([
+      p.logFile('2026-09-24'),
+      JSON.stringify(fresh),
+      '',
+      `1 event pending, nothing sent yet. 2 events older than ${EVENT_MAX_AGE_DAYS} days are left out, sync drops them without sending.`,
+      WIRE_FORM,
     ]);
   });
 

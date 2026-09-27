@@ -14,10 +14,12 @@ import {
   type InstallResult,
   installHooks,
   invocationOf,
+  PROJECT_PATHS_NOTE,
   refuseOutsideProject,
   type Scope,
   SettingsError,
   settingsPath,
+  sharedProjectSettingsPath,
   uninstallHooks,
 } from '../claude-code-settings.js';
 import {
@@ -34,7 +36,7 @@ import {
 } from '../config.js';
 import { cli } from '../invocation.js';
 import { NUDGE_OFF, NUDGE_ON, NUDGE_QUESTION, setNudge } from '../nudge.js';
-import { promptStyled, stdout, wantsJson } from '../output.js';
+import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { createStyle, type Styled } from '../style.js';
 
 // Installs and removes framework hooks that call sealkeeper. The home and
@@ -89,27 +91,44 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
+      const shared = sharedFor(options.scope, deps);
       const commandPath = proveCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
+        ...shared,
         commandPath,
         skillFile,
       ]);
       const hook = deps.hookCommand();
       const result = await orExit(this, () => installHooks(file, hook));
+      // Hooks an older install wrote to the shared settings.json move to
+      // the local file, so Claude Code does not run both. The local hooks
+      // are in already, so a shared file we cannot read or change is only a
+      // warning and the command and skill are still written, as in init.
+      let moved = 0;
+      for (const old of shared) {
+        try {
+          moved += await uninstallHooks(old, hook);
+        } catch (error) {
+          if (!(error instanceof SettingsError)) throw error;
+          stderr(error.message);
+        }
+      }
       const command = await orExit(this, () =>
         installProveCommand(commandPath, invocationOf(hook)),
       );
       const skill = await orExit(this, () =>
         installSkill(skillFile, invocationOf(hook)),
       );
+      if (options.scope === 'project') stderr(PROJECT_PATHS_NOTE);
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
             path: file,
             added: result.added,
             updated: result.updated,
+            ...(options.scope === 'project' ? { movedFromShared: moved } : {}),
             command: { path: commandPath, result: command },
             skill: { path: skillFile, result: skill },
           }),
@@ -117,6 +136,7 @@ export function register(
         return;
       }
       for (const line of hooksLines(result, file)) stdout(line);
+      if (moved > 0) stdout(movedLine(moved, shared[0] ?? ''));
       stdout(commandLine(command, commandPath));
       stdout(skillLine(skill, skillFile));
       await offerNudge(deps);
@@ -128,16 +148,25 @@ export function register(
     .addOption(scopeOption())
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
+      const shared = sharedFor(options.scope, deps);
       const commandPath = proveCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
+        ...shared,
         commandPath,
         skillFile,
       ]);
       const removed = await orExit(this, () =>
         uninstallHooks(file, deps.hookCommand()),
       );
+      // Hooks an older install wrote to the shared settings.json go too.
+      let removedShared = 0;
+      for (const old of shared) {
+        removedShared += await orExit(this, () =>
+          uninstallHooks(old, deps.hookCommand()),
+        );
+      }
       const commandRemoved = await orExit(this, () =>
         uninstallProveCommand(commandPath),
       );
@@ -147,6 +176,9 @@ export function register(
           JSON.stringify({
             path: file,
             removed,
+            ...(options.scope === 'project'
+              ? { removedFromShared: removedShared }
+              : {}),
             command: { path: commandPath, removed: commandRemoved },
             skill: { path: skillFile, removed: skillRemoved },
           }),
@@ -158,6 +190,11 @@ export function register(
       } else {
         stdout(
           `removed ${removed} sealkeeper hook${removed === 1 ? '' : 's'} from ${file}`,
+        );
+      }
+      if (removedShared > 0) {
+        stdout(
+          `removed ${removedShared} sealkeeper hook${removedShared === 1 ? '' : 's'} from ${shared[0] ?? ''}`,
         );
       }
       if (commandRemoved) stdout(`removed ${PROVE_SLASH} from ${commandPath}`);
@@ -187,6 +224,11 @@ export function hooksLines(result: InstallResult, file: string): string[] {
   if (lines.length === 0)
     lines.push(`sealkeeper hooks already installed in ${file}`);
   return lines;
+}
+
+// Said when install took hooks of ours out of the shared settings.json.
+export function movedLine(moved: number, shared: string): string {
+  return `moved ${moved} sealkeeper hook${moved === 1 ? '' : 's'} out of ${shared}, which a repo shares`;
 }
 
 // One line on what install did with the slash command.
@@ -251,6 +293,12 @@ function pathFor(scope: Scope, deps: AdapterDeps): string {
     cwd: deps.cwd(),
     claudeDir: deps.claudeDir?.(),
   });
+}
+
+// The shared project settings.json for project scope, which an older
+// install wrote to. None for user scope.
+function sharedFor(scope: Scope, deps: AdapterDeps): string[] {
+  return scope === 'project' ? [sharedProjectSettingsPath(deps.cwd())] : [];
 }
 
 async function guardProject(

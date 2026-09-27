@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { createHash } from 'node:crypto';
 import {
   chmod,
   mkdtemp,
@@ -273,6 +274,47 @@ describe('mastra adapter', () => {
       };
       expect(end.session_id).toBe('run-42');
       expect(end.duration_ms).toBeGreaterThan(0);
+    });
+
+    it('keeps a plain session id and logs the sha256 of any other', async () => {
+      const plain = sealKeeperSession('run_42-a');
+      await plain.end();
+      const odd = 'alice@example.com/chat 1';
+      const hashed = sealKeeperSession(odd);
+      const sha = createHash('sha256').update(odd).digest('hex');
+      expect(hashed.sessionId).toBe(sha);
+      await hashed.end();
+      const tooLong = sealKeeperSession('a'.repeat(65));
+      await tooLong.end();
+      const ids = (await logged())
+        .filter((e) => e.type === 'session.start')
+        .map((e) => (e.payload as { session_id: string }).session_id);
+      expect(ids).toEqual([
+        'run_42-a',
+        sha,
+        createHash('sha256').update('a'.repeat(65)).digest('hex'),
+      ]);
+      expect(JSON.stringify(await logged())).not.toContain('alice');
+    });
+
+    it('logs tool ids and model ids that break the name rule as names', async () => {
+      const [tool] = withSealKeeper([
+        { id: 'web search!', execute: async () => 'ok' },
+      ]);
+      await tool?.execute?.();
+      const session = sealKeeperSession('names');
+      await session.onStepFinish({
+        usage: { promptTokens: 1, completionTokens: 2 },
+        response: { modelId: 'openai gpt 4o' },
+      });
+      await session.end();
+      const events = await logged();
+      expect(events.find((e) => e.type === 'tool.call')?.payload).toMatchObject(
+        { tool: 'web-search-', ok: true },
+      );
+      expect(events.find((e) => e.type === 'usage')?.payload).toMatchObject({
+        model: 'openai-gpt-4o',
+      });
     });
 
     it('defaults the session id to a uuid', async () => {

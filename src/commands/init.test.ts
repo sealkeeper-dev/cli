@@ -20,7 +20,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wasAskedRuntime } from '../agent-runtime.js';
 import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
-import { isOurs, proveCommandText } from '../claude-code-command.js';
+import { proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
   paths,
@@ -37,6 +37,7 @@ import {
   MISSING_CLIENT_ID,
 } from '../github-device.js';
 import { loadKey } from '../identity.js';
+import { isManaged } from '../managed.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { Runner } from '../routine-scheduler.js';
@@ -999,7 +1000,7 @@ describe('sealkeeper init', () => {
       const project = join(home, 'project');
       world.cwd = project;
       await mkdir(join(project, '.claude'), { recursive: true });
-      const projectFile = join(project, '.claude', 'settings.json');
+      const projectFile = join(project, '.claude', 'settings.local.json');
       await writeFile(
         projectFile,
         JSON.stringify({
@@ -1028,14 +1029,56 @@ describe('sealkeeper init', () => {
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
-    it('rewrites old hooks in the project settings in place, not in the user settings', async () => {
+    it('moves current hooks in the shared project settings to the local file without asking', async () => {
       await withClaudeCode();
       const project = join(home, 'project');
       world.cwd = project;
       await mkdir(join(project, '.claude'), { recursive: true });
-      const projectFile = join(project, '.claude', 'settings.json');
+      const sharedFile = join(project, '.claude', 'settings.json');
+      const projectFile = join(project, '.claude', 'settings.local.json');
       await writeFile(
-        projectFile,
+        sharedFile,
+        JSON.stringify({
+          model: 'opus',
+          hooks: {
+            Stop: [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }],
+          },
+        }),
+      );
+      const stdin = answering('');
+      world.stdin = stdin;
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'claude-code',
+      );
+      expect(result.code).toBe(0);
+      // Only the session nudge question is read, the hooks are not asked.
+      expect(stdin.reads).toBe(1);
+      expect(result.err).not.toContain(HOOKS_QUESTION);
+      expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
+      expect(result.out).toContain(`Moved the hooks out of ${sharedFile}`);
+      expect(hooksIn(await readFile(projectFile, 'utf8'))).toContain('Stop');
+      // The shared file a repo commits keeps its own settings and none of
+      // this machine's paths.
+      expect(JSON.parse(await readFile(sharedFile, 'utf8'))).toEqual({
+        model: 'opus',
+      });
+      expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    it('moves old hooks in the shared project settings to the local file, not to the user settings', async () => {
+      await withClaudeCode();
+      const project = join(home, 'project');
+      world.cwd = project;
+      await mkdir(join(project, '.claude'), { recursive: true });
+      const sharedFile = join(project, '.claude', 'settings.json');
+      const projectFile = join(project, '.claude', 'settings.local.json');
+      await writeFile(
+        sharedFile,
         JSON.stringify({
           hooks: {
             Stop: [
@@ -1060,6 +1103,8 @@ describe('sealkeeper init', () => {
       const after = await readFile(projectFile, 'utf8');
       expect(after).not.toContain(STALE_SCRIPT);
       expect(after).toContain(JSON.stringify(HOOK_COMMAND).slice(1, -1));
+      // The shared file a repo commits keeps no machine paths of ours.
+      expect(await readFile(sharedFile, 'utf8')).toBe('{}');
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
@@ -1114,6 +1159,7 @@ describe('sealkeeper init', () => {
         'SessionEnd',
         'PreToolUse',
         'PostToolUse',
+        'PostToolUseFailure',
       ]);
       expect(after).toContain('other-tool stop');
       const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
@@ -1475,7 +1521,7 @@ describe('sealkeeper init', () => {
         expect(result.err).toContain('three line SealKeeper summary');
         expect(result.out).toContain('  ✓ Session nudge on\n');
         expect(await readNudge(paths(home))).toBe(true);
-        expect(isOurs(await readFile(skillFile(), 'utf8'))).toBe(true);
+        expect(isManaged(await readFile(skillFile(), 'utf8'))).toBe(true);
       });
 
       it('Enter is no, which is kept and not asked again', async () => {
@@ -1528,7 +1574,7 @@ describe('sealkeeper init', () => {
         world.stdin = answering('');
         const result = await run(world, 'init');
         expect(result.out).toContain('✓ sealkeeper skill in');
-        expect(isOurs(await readFile(skillFile(), 'utf8'))).toBe(true);
+        expect(isManaged(await readFile(skillFile(), 'utf8'))).toBe(true);
       });
     });
   });

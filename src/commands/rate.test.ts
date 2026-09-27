@@ -245,7 +245,7 @@ describe('sealkeeper rate', () => {
     ],
     [
       error(429, 'rate_limited', { 'Retry-After': '12' }),
-      'too many ratings, try again in 12 seconds',
+      'too many requests, try again in 12 seconds',
     ],
     [
       error(409, 'stale_rating'),
@@ -253,7 +253,7 @@ describe('sealkeeper rate', () => {
     ],
     [
       error(400, 'issued_at_out_of_window'),
-      'the API refused the rating time, check this machine clock',
+      'the API refused the request time, check this machine clock',
     ],
     [error(418, 'teapot'), 'failed with teapot'],
   ])('prints one line for other refusals (%#)', async (response, line) => {

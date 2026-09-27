@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { clampMs } from './adapter-core.js';
 import { gatedSync, WAITING_CALLER_LIMITS } from './background-sync.js';
 import {
   ConfigError,
@@ -37,9 +38,6 @@ const HOOK_SYNC_TIMEOUT_MS = WAITING_CALLER_LIMITS.timeoutMs;
 // Markers older than this belong to sessions or tool calls that never ended.
 export const STALE_MARKER_MS = 24 * 60 * 60 * 1000;
 
-// The payload schema caps durations at a week.
-const MAX_DURATION_MS = 604_800_000;
-
 // Session and tool use ids become file names, so only plain ids are used.
 // The cap matches the taxonomy's 64 character names.
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -53,11 +51,13 @@ type HookInput = {
   sessionId: string | null;
   toolName: string | null;
   toolUseId: string | null;
+  // PostToolUseFailure only. true when the user interrupted the call, so
+  // the failure is not the agent's.
+  interrupted: boolean;
 };
 
 type HookDeps = {
   fetch: typeof fetch;
-  sleep: (ms: number) => Promise<void>;
   now?: () => Date;
   paths?: Paths;
   cachedGoal?: NudgeDeps['cachedGoal'];
@@ -68,8 +68,9 @@ type HookDeps = {
 export const CLAUDE_CODE_RUN = '/sealkeeper-prove';
 
 // Picks the few fields the adapter uses out of the raw stdin text, or null
-// when it is not a hook payload. Only tool_name is used. tool_input and
-// tool_response are never read, logged or emitted.
+// when it is not a hook payload. Only tool_name is used, and a failure's
+// is_interrupt, read as a boolean. tool_input, tool_response and a
+// failure's error are never read, logged or emitted.
 export function parseHookInput(text: string): HookInput | null {
   let json: unknown;
   try {
@@ -87,6 +88,7 @@ export function parseHookInput(text: string): HookInput | null {
     sessionId: idOf(raw.session_id),
     toolName: toolNameOf(raw.tool_name),
     toolUseId: idOf(raw.tool_use_id),
+    interrupted: raw.is_interrupt === true,
   };
 }
 
@@ -186,18 +188,28 @@ async function logHook(
         await writeMarker(p, TOOL_MARKER_PREFIX + input.toolUseId, now);
         return;
       }
-      case 'PostToolUse': {
+      // Claude Code fires PostToolUse after a tool call succeeds and
+      // PostToolUseFailure after one that started and failed, both with
+      // tool_name and tool_use_id (hooks reference, checked 27 September
+      // 2026). A call refused before it runs fires neither. The failure's
+      // error text is never read, so a failed call is ok false with no
+      // error_class. A failure with is_interrupt true is the user pressing
+      // Esc during the call, not the agent failing, so it only clears the
+      // PreToolUse marker and records nothing.
+      case 'PostToolUse':
+      case 'PostToolUseFailure': {
         if (input.toolName === null) return;
         const started =
           input.toolUseId === null
             ? null
             : await takeMarker(p, TOOL_MARKER_PREFIX + input.toolUseId);
+        if (input.event === 'PostToolUseFailure' && input.interrupted) return;
         await append({
           type: 'tool.call',
           payload: {
             tool: input.toolName,
             duration_ms: started === null ? 0 : durationMs(started, now),
-            ok: true,
+            ok: input.event === 'PostToolUse',
           },
         });
         return;
@@ -210,10 +222,11 @@ async function logHook(
   }
 }
 
+// Within the range the payload schema accepts, see clampMs. A marker that
+// does not hold a valid time gives 0.
 function durationMs(started: Date, now: Date): number {
-  const ms = Math.round(now.getTime() - started.getTime());
-  if (!Number.isFinite(ms)) return 0;
-  return Math.min(Math.max(ms, 0), MAX_DURATION_MS);
+  const ms = now.getTime() - started.getTime();
+  return Number.isFinite(ms) ? clampMs(ms) : 0;
 }
 
 // Writes the start time marker unless it exists. Returns whether it wrote.

@@ -838,14 +838,17 @@ describe('status', () => {
     const DAY_MS = 24 * 60 * 60 * 1000;
     // The current form, node and a script by absolute path, shaped like a
     // global install and present on disk, so the hook is ours and not gone.
-    async function settingsIn(dir: string): Promise<void> {
+    async function settingsIn(
+      dir: string,
+      name = 'settings.json',
+    ): Promise<void> {
       const scriptDir = join(home, 'lib', 'node_modules', 'sealkeeper', 'dist');
       await mkdir(scriptDir, { recursive: true });
       const script = join(scriptDir, 'index.js');
       await writeFile(script, '');
       await mkdir(dir, { recursive: true });
       await writeFile(
-        join(dir, 'settings.json'),
+        join(dir, name),
         JSON.stringify({
           hooks: {
             Stop: [
@@ -896,6 +899,11 @@ describe('status', () => {
 
     it('does not warn when the project settings hold the hooks', async () => {
       await settingsIn(join(home, 'project', '.claude'));
+      expect((await run(offline, 'status')).err).toBe('');
+    });
+
+    it('does not warn when the local project settings hold the hooks', async () => {
+      await settingsIn(join(home, 'project', '.claude'), 'settings.local.json');
       expect((await run(offline, 'status')).err).toBe('');
     });
 

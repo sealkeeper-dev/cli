@@ -11,18 +11,17 @@
 // Before delegating to another agent, gate on its track record.
 //   await assertTrusted('alice/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventPayload } from '@sealkeeper/schema';
-import { clampMs, safeEmit } from './adapter-core.js';
+import { adapterNudge, clampMs, emitQueue, safeEmit } from './adapter-core.js';
 import {
   type CheckOptions,
   type CheckThresholds,
   describeCheck,
   fetchCheck,
 } from './check.js';
-import { cli } from './invocation.js';
 import type { EmitInput } from './lib.js';
-import { nudgeLines } from './nudge.js';
+import { toolNameOf } from './names.js';
 import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
@@ -55,10 +54,15 @@ function errorClass(error: unknown): string {
   return TOOL_CALL.tool.safeParse(name).success ? (name as string) : 'Unknown';
 }
 
+// Tool ids go through toolNameOf as in the other adapters, so an id with a
+// space or any other character outside the taxonomy still names the tool
+// rather than failing the event. A tool whose id leaves no name is not
+// wrapped.
 function wrapTool<T extends MastraToolLike>(tool: T): T {
   const execute = tool.execute;
-  if (typeof execute !== 'function') return tool;
-  const id = tool.id;
+  const name = toolNameOf(tool.id);
+  if (typeof execute !== 'function' || name === null) return tool;
+  const id: string = name;
   // Arguments and results pass straight through and are never read, logged or emitted.
   async function wrapped(this: unknown, ...args: never[]): Promise<unknown> {
     const start = performance.now();
@@ -100,14 +104,11 @@ export function withSealKeeper<
   return out as T;
 }
 
-function modelOf(value: unknown): string | null {
-  return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
 // The usage payload of a step, or null when the step has no token counts or
 // no model id. Tokens come from usage.promptTokens and usage.completionTokens
 // (inputTokens and outputTokens in newer versions). The model is
-// response.modelId, else step.model.modelId. Latency is measured locally by
+// response.modelId, else step.model.modelId, through toolNameOf like a
+// tool id. Latency is measured locally by
 // the session, since the provider timestamp is missing or coarse for some
 // providers. emit validates the ranges. Text and tool data are never read.
 function usageOf(step: unknown, latencyMs: number): EmitInput | null {
@@ -122,9 +123,9 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
   const tokensIn = u.promptTokens ?? u.inputTokens;
   const tokensOut = u.completionTokens ?? u.outputTokens;
   const modelId =
-    modelOf(response?.modelId) ??
-    modelOf((model as { modelId?: unknown } | null | undefined)?.modelId) ??
-    modelOf(model);
+    toolNameOf(response?.modelId) ??
+    toolNameOf((model as { modelId?: unknown } | null | undefined)?.modelId) ??
+    toolNameOf(model);
   if (
     typeof tokensIn !== 'number' ||
     typeof tokensOut !== 'number' ||
@@ -143,23 +144,34 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
   };
 }
 
+// A session id is kept only when it is a plain id, letters, digits, _ and
+// -, at most 64 characters, as a UUID is. Any other id is replaced by its
+// sha256, so it still names one session, never fails the event and never
+// carries a path or an address into the log.
+const PLAIN_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+function sessionIdOf(id: string): string {
+  return PLAIN_ID.test(id)
+    ? id
+    : createHash('sha256').update(id, 'utf8').digest('hex');
+}
+
 // Starts a session and emits session.start. The id defaults to a new UUID.
+// sessionId in the result is the id as logged, see sessionIdOf.
 export function sealKeeperSession(
-  sessionId: string = randomUUID(),
+  given: string = randomUUID(),
 ): SealKeeperSession {
+  const sessionId = sessionIdOf(String(given));
   const start = performance.now();
   // A step's latency runs from the end of the previous step, or from session
   // creation for the first one.
   let last = start;
   // Events of one session are written in order, one after another.
-  let queue = safeEmit({
+  const enqueue = emitQueue();
+  void enqueue({
     type: 'session.start',
     payload: { session_id: sessionId },
   });
-  const enqueue = (input: EmitInput): Promise<void> => {
-    queue = queue.then(() => safeEmit(input));
-    return queue;
-  };
 
   return {
     sessionId,
@@ -189,13 +201,8 @@ export function sealKeeperSession(
 // Resolves with the short SealKeeper summary once the operator turned the
 // nudge on with sealkeeper config nudge on, else with ''. It reads the
 // cached goal only, so it never waits on the network, and never rejects.
-export async function sealKeeperContext(): Promise<string> {
-  try {
-    const run = `\`${cli('prove --json')}\``;
-    return (await quietly(() => nudgeLines(run))).join('\n');
-  } catch {
-    return '';
-  }
+export function sealKeeperContext(): Promise<string> {
+  return adapterNudge();
 }
 
 // GET /v1/check for handle, as in alice/claude-code. Resolves with the

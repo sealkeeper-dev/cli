@@ -5,6 +5,7 @@ import { COUNTED_EVIDENCE } from '@sealkeeper/schema';
 import { SettingsError } from './claude-code-settings.js';
 import { writeFileAtomic } from './config.js';
 import { readIfExists } from './files.js';
+import { isManaged, MANAGED_MARKER } from './managed.js';
 
 // The /sealkeeper-prove slash command for Claude Code. A markdown file
 // under <claude dir>/commands, next to settings.json. Its YAML frontmatter
@@ -13,7 +14,6 @@ import { readIfExists } from './files.js';
 // belongs to the operator and is left alone.
 
 const PROVE_COMMAND_FILE = 'sealkeeper-prove.md';
-export const PROVE_COMMAND_MARKER = 'managed-by: sealkeeper';
 
 // A one line shell function that makes sealkeeper mean invocation. For
 // plain sealkeeper it goes through command, so the function does not call
@@ -40,7 +40,7 @@ export const ANSWER_RULES =
 export function proveCommandText(invocation: string): string {
   return `---
 description: Earn verified tasks on SealKeeper
-${PROVE_COMMAND_MARKER}
+${MANAGED_MARKER}
 ---
 Earn verified tasks for this agent on SealKeeper.
 
@@ -110,7 +110,7 @@ export async function installManagedFile(
 ): Promise<CommandResult> {
   const current = await readOurFile(file);
   if (current !== null) {
-    if (!isOurs(current)) return 'kept';
+    if (!isManaged(current)) return 'kept';
     if (current === text) return 'unchanged';
   }
   try {
@@ -127,20 +127,15 @@ export async function installManagedFile(
 // Rewrites the command only when the file is there, ours and out of date.
 // Returns whether it did. A missing file stays missing, since the operator
 // may have removed it.
-export function refreshProveCommand(
+export async function refreshProveCommand(
   file: string,
   invocation: string,
 ): Promise<boolean> {
-  return refreshManagedFile(file, proveCommandText(invocation));
-}
-
-export async function refreshManagedFile(
-  file: string,
-  text: string,
-): Promise<boolean> {
   const current = await readOurFile(file);
-  if (current === null || !isOurs(current)) return false;
-  return (await installManagedFile(file, text)) === 'written';
+  if (current === null || !isManaged(current)) return false;
+  return (
+    (await installManagedFile(file, proveCommandText(invocation))) === 'written'
+  );
 }
 
 // Removes the command only when it is ours. Returns whether it did.
@@ -150,7 +145,7 @@ export function uninstallProveCommand(file: string): Promise<boolean> {
 
 export async function uninstallManagedFile(file: string): Promise<boolean> {
   const current = await readOurFile(file);
-  if (current === null || !isOurs(current)) return false;
+  if (current === null || !isManaged(current)) return false;
   try {
     await rm(file, { force: true });
   } catch (error) {
@@ -159,17 +154,6 @@ export async function uninstallManagedFile(file: string): Promise<boolean> {
     );
   }
   return true;
-}
-
-// Ours when the frontmatter at the very top holds the managed-by key.
-export function isOurs(text: string): boolean {
-  const lines = text.split(/\r?\n/);
-  if (lines[0] !== '---') return false;
-  for (const line of lines.slice(1)) {
-    if (line === '---') return false;
-    if (line.trim() === PROVE_COMMAND_MARKER) return true;
-  }
-  return false;
 }
 
 async function readOurFile(file: string): Promise<string | null> {

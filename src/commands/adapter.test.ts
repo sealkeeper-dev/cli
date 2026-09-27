@@ -16,14 +16,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import {
   ANSWER_RULES,
-  isOurs,
-  PROVE_COMMAND_MARKER,
   proveCommandText,
   shellFunction,
 } from '../claude-code-command.js';
-import { hookCommand, invocationOf } from '../claude-code-settings.js';
+import {
+  hookCommand,
+  invocationOf,
+  PROJECT_PATHS_NOTE,
+} from '../claude-code-settings.js';
 import { skillText } from '../claude-code-skill.js';
 import { paths, readNudge, writeConfig, writeNudge } from '../config.js';
+import { isManaged, MANAGED_MARKER } from '../managed.js';
 import { createProgram } from '../program.js';
 
 type RunResult = { code: number; out: string; err: string };
@@ -67,6 +70,7 @@ const EVENTS = [
   'SessionEnd',
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
   'Stop',
 ];
 
@@ -76,7 +80,8 @@ describe('adapter claude-code', () => {
   let project: string;
 
   const userFile = () => join(home, '.claude', 'settings.json');
-  const projectFile = () => join(project, '.claude', 'settings.json');
+  const projectFile = () => join(project, '.claude', 'settings.local.json');
+  const sharedFile = () => join(project, '.claude', 'settings.json');
   const userCommand = () =>
     join(home, '.claude', 'commands', 'sealkeeper-prove.md');
   const userSkill = () =>
@@ -143,7 +148,7 @@ describe('adapter claude-code', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('install into a missing file creates it with the five hooks', async () => {
+  it('install into a missing file creates it with the six hooks', async () => {
     const { code, out } = await run('install');
     expect(code).toBe(0);
     expect(out).toBe(
@@ -159,14 +164,85 @@ describe('adapter claude-code', () => {
     );
   });
 
-  it('--scope project writes under the working directory', async () => {
-    const { code, out } = await run('install', '--scope', 'project');
+  it('--scope project writes the local settings under the working directory, never the shared file', async () => {
+    const { code, out, err } = await run('install', '--scope', 'project');
     expect(code).toBe(0);
     expect(out).toContain(projectFile());
     expect(
       Object.keys((await readJson(projectFile())).hooks as object),
     ).toEqual(EVENTS);
+    await expect(readFile(sharedFile(), 'utf8')).rejects.toThrow();
+    // The command and skill files hold this machine's paths too.
+    expect(err).toBe(`${PROJECT_PATHS_NOTE}\n`);
+    expect(PROJECT_PATHS_NOTE).toContain('keep all three out of git');
   });
+
+  it('--scope project moves hooks an older install wrote to the shared settings.json', async () => {
+    await mkdir(join(project, '.claude'));
+    const shared = JSON.parse(OTHER_TEXT) as {
+      hooks: Record<string, unknown[]>;
+    };
+    shared.hooks.Stop = [...(shared.hooks.Stop ?? []), OUR_ENTRY];
+    await writeFile(sharedFile(), `${JSON.stringify(shared, null, 2)}\n`);
+    const { code, out } = await run('install', '--scope', 'project');
+    expect(code).toBe(0);
+    expect(out).toContain(
+      `moved 1 sealkeeper hook out of ${sharedFile()}, which a repo shares\n`,
+    );
+    expect(await readFile(sharedFile(), 'utf8')).toBe(OTHER_TEXT);
+    expect(
+      Object.keys((await readJson(projectFile())).hooks as object),
+    ).toEqual(EVENTS);
+
+    // Uninstall takes ours out of both files.
+    await writeFile(sharedFile(), `${JSON.stringify(shared, null, 2)}\n`);
+    const removed = await run('uninstall', '--scope', 'project', '--json');
+    expect(JSON.parse(removed.out)).toMatchObject({
+      path: projectFile(),
+      removed: EVENTS.length,
+      removedFromShared: 1,
+    });
+    expect(await readFile(sharedFile(), 'utf8')).toBe(OTHER_TEXT);
+  });
+
+  it.each([
+    ['is not valid JSON', '{ nope', 'is not valid JSON'],
+    ['has hooks that are not an object', '{"hooks": []}', 'is not an object'],
+  ])(
+    '--scope project warns when the shared settings.json %s and still writes the command and skill',
+    async (_, text, message) => {
+      await mkdir(join(project, '.claude'));
+      await writeFile(sharedFile(), text);
+      const { code, out, err } = await run('install', '--scope', 'project');
+      expect(code).toBe(0);
+      expect(err).toContain(sharedFile());
+      expect(err).toContain(message);
+      expect(
+        Object.keys((await readJson(projectFile())).hooks as object),
+      ).toEqual(EVENTS);
+      const commandFile = join(
+        project,
+        '.claude',
+        'commands',
+        'sealkeeper-prove.md',
+      );
+      const skillFile = join(
+        project,
+        '.claude',
+        'skills',
+        'sealkeeper',
+        'SKILL.md',
+      );
+      expect(out).toContain(
+        `added the /sealkeeper-prove command at ${commandFile}\n`,
+      );
+      expect(out).toContain(`added the sealkeeper skill at ${skillFile}\n`);
+      await readFile(commandFile, 'utf8');
+      await readFile(skillFile, 'utf8');
+      // The shared file is left as it was.
+      expect(await readFile(sharedFile(), 'utf8')).toBe(text);
+    },
+  );
 
   it('rejects an unknown scope', async () => {
     const { code, err } = await run('install', '--scope', 'global');
@@ -262,7 +338,7 @@ describe('adapter claude-code', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       path: userFile(),
-      removed: 5,
+      removed: EVENTS.length,
       command: { path: userCommand(), removed: true },
       skill: { path: userSkill(), removed: true },
     });
@@ -283,7 +359,7 @@ describe('adapter claude-code', () => {
     await run('install');
     const { out } = await run('uninstall');
     expect(out).toBe(
-      `removed 5 sealkeeper hooks from ${userFile()}\nremoved the /sealkeeper-prove command from ${userCommand()}\nremoved the sealkeeper skill from ${userSkill()}\n`,
+      `removed ${EVENTS.length} sealkeeper hooks from ${userFile()}\nremoved the /sealkeeper-prove command from ${userCommand()}\nremoved the sealkeeper skill from ${userSkill()}\n`,
     );
     expect(await readFile(userFile(), 'utf8')).toBe(
       '{\n  "model": "opus"\n}\n',
@@ -324,7 +400,7 @@ describe('adapter claude-code', () => {
         'managed-by: sealkeeper',
         '---',
       ]);
-      expect(PROVE_COMMAND_MARKER).toBe('managed-by: sealkeeper');
+      expect(MANAGED_MARKER).toBe('managed-by: sealkeeper');
       expect(text).not.toContain('<!--');
       // The exact invocation, and a line that makes sealkeeper mean it.
       expect(text).toContain(`\n${INVOCATION}\n`);
@@ -378,10 +454,7 @@ describe('adapter claude-code', () => {
       const again = await run('install', '--json');
       expect(JSON.parse(again.out).command.result).toBe('unchanged');
 
-      await writeFile(
-        userCommand(),
-        `---\n${PROVE_COMMAND_MARKER}\n---\nold text\n`,
-      );
+      await writeFile(userCommand(), `---\n${MANAGED_MARKER}\n---\nold text\n`);
       const updated = await run('install', '--json');
       expect(JSON.parse(updated.out).command.result).toBe('written');
       expect(await readFile(userCommand(), 'utf8')).toBe(PROVE_COMMAND_TEXT);
@@ -395,15 +468,29 @@ describe('adapter claude-code', () => {
       );
     });
 
-    it('isOurs knows the marker and nothing else', () => {
-      expect(isOurs(PROVE_COMMAND_TEXT)).toBe(true);
-      expect(isOurs('---\nmanaged-by: vouched\n---\nbody\n')).toBe(false);
-      expect(isOurs('---\r\nmanaged-by: sealkeeper\r\n---\r\nbody')).toBe(true);
-      expect(isOurs('my own prove command\n')).toBe(false);
+    it('isManaged knows the marker and nothing else', () => {
+      expect(isManaged(PROVE_COMMAND_TEXT)).toBe(true);
+      expect(isManaged('---\nmanaged-by: vouched\n---\nbody\n')).toBe(false);
+      expect(isManaged('---\r\nmanaged-by: sealkeeper\r\n---\r\nbody')).toBe(
+        true,
+      );
+      expect(isManaged('my own prove command\n')).toBe(false);
       expect(
-        isOurs('---\ndescription: mine\n---\nmanaged-by: sealkeeper\n'),
+        isManaged('---\ndescription: mine\n---\nmanaged-by: sealkeeper\n'),
       ).toBe(false);
-      expect(isOurs('body\n---\nmanaged-by: sealkeeper\n---\n')).toBe(false);
+      expect(isManaged('body\n---\nmanaged-by: sealkeeper\n---\n')).toBe(false);
+      // The same test reads the scheduler files, where the marker sits in a
+      // comment on one of the first lines.
+      expect(
+        isManaged(
+          '<?xml version="1.0"?>\n<!-- managed-by: sealkeeper. Written by sealkeeper routine install -->\n',
+        ),
+      ).toBe(true);
+      expect(isManaged('# managed-by: sealkeeper.\n[Service]\n')).toBe(true);
+      expect(isManaged('# managed-by: sealkeeperx\n')).toBe(false);
+      expect(isManaged('a\nb\nc\nd\ne\n# managed-by: sealkeeper\n')).toBe(
+        false,
+      );
     });
 
     it('the shell function never calls itself for plain sealkeeper', () => {
@@ -452,13 +539,13 @@ describe('adapter claude-code', () => {
       });
       const text = await readFile(userSkill(), 'utf8');
       expect(text).toBe(SKILL_TEXT());
-      expect(isOurs(text)).toBe(true);
+      expect(isManaged(text)).toBe(true);
       const lines = text.split('\n');
       expect(lines[0]).toBe('---');
       expect(lines[1]).toBe('name: sealkeeper');
       expect(lines[2]).toMatch(/^description: .*SealKeeper summary/);
       expect(lines[2]).toContain('asks about SealKeeper');
-      expect(lines[3]).toBe(PROVE_COMMAND_MARKER);
+      expect(lines[3]).toBe(MANAGED_MARKER);
       // The same prove steps and untrusted spec rules as the command.
       expect(text).toContain(`\n${INVOCATION}\n`);
       expect(text).toContain('Run `sealkeeper prove --json`.');
@@ -501,7 +588,7 @@ describe('adapter claude-code', () => {
       await run('install');
       const again = await run('install', '--json');
       expect(JSON.parse(again.out).skill.result).toBe('unchanged');
-      await writeFile(userSkill(), `---\n${PROVE_COMMAND_MARKER}\n---\nold\n`);
+      await writeFile(userSkill(), `---\n${MANAGED_MARKER}\n---\nold\n`);
       const updated = await run('install', '--json');
       expect(JSON.parse(updated.out).skill.result).toBe('written');
       expect(await readFile(userSkill(), 'utf8')).toBe(SKILL_TEXT());
@@ -634,7 +721,7 @@ describe('adapter claude-code', () => {
     expect(code).toBe(0);
     expect(
       Object.keys(
-        (await readJson(join(inside, 'settings.json'))).hooks as object,
+        (await readJson(join(inside, 'settings.local.json'))).hooks as object,
       ),
     ).toEqual(EVENTS);
   });

@@ -1293,6 +1293,18 @@ describe('prove', () => {
     expect(err).toBe('Agent is not registered\n');
   });
 
+  it('stops at an unexpected API error after a claim and still prints what it claimed', async () => {
+    const tasks = seedTasks(3);
+    api.claims.set(tasks[1]?.id ?? '', 'unknown_agent');
+    const { code, out, err } = await run('prove', '--count', '3');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([tasks[0]?.id]);
+    expect(jsonIds(out)).toEqual([tasks[0]?.id]);
+    expect(splitErr(err).text).toBe(
+      'warning: stopped claiming after 1 task, Agent is not registered\n',
+    );
+  });
+
   it('says expiry in plain relative words', () => {
     expect(relative(-1)).toBe('now');
     expect(relative(30_000)).toBe('in under a minute');

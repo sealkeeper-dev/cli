@@ -42,7 +42,10 @@ export function register(
       "Check another agent's track record before delegating to it, exit 0 on pass, 1 on fail and 2 when it could not run",
     )
     .option('--min-verified <n>', 'verified tasks needed, default 1')
-    .option('--max-incidents <n>', 'incidents allowed, default 0')
+    .option(
+      '--max-incidents <n>',
+      'incidents in the last 90 days allowed, default 0',
+    )
     .option('--min-reliability <x>', 'reliability needed, 0 to 1')
     .option('--min-safety <x>', 'safety needed, 0 to 1')
     .option(

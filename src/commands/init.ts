@@ -45,6 +45,8 @@ import {
   refuseOutsideProject,
   SettingsError,
   settingsPath,
+  sharedProjectSettingsPath,
+  uninstallHooks,
 } from '../claude-code-settings.js';
 import { installSkill, skillPath } from '../claude-code-skill.js';
 import {
@@ -1013,8 +1015,9 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // sealkeeper adapter claude-code install, the /sealkeeper-prove command
 // included.
 // Hooks already there, in the user or the project settings, count as
-// installed and nothing is asked. A --json run, ui null, never asks and
-// prints the install lines the way adapter claude-code install does.
+// installed and nothing is asked. Current hooks in the shared project
+// settings.json move to settings.local.json on the way. A --json run, ui
+// null, never asks, and prints any install lines on stderr.
 async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
@@ -1026,22 +1029,39 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const dirs = { home: '', cwd: (deps.cwd ?? process.cwd)(), claudeDir: dir };
   const user = settingsPath('user', dirs);
   const project = settingsPath('project', dirs);
+  // Where project hooks went before they moved to settings.local.json.
+  const shared = sharedProjectSettingsPath(dirs.cwd);
   const hook = (deps.hookCommand ?? hookCommand)();
   // Only hooks that run this very command count. A path that moved is
   // offered the install again, which rewrites our entries in place.
   const inUser = await hasHooks(user, hook);
-  if (inUser || (await hasHooks(project, hook))) {
+  const found = inUser
+    ? user
+    : (await hasHooks(project, hook))
+      ? project
+      : (await hasHooks(shared, hook))
+        ? shared
+        : null;
+  if (found === shared) {
+    // Current hooks in the shared settings.json, which a repo commits, hold
+    // this machine's absolute paths. They were installed already, so they
+    // move to the local file without a question.
+    await moveFromShared(shared, project, dirs.cwd, hook, ui);
+    return 'present';
+  }
+  if (found !== null) {
     if (ui !== null) {
       const s = ui.out;
-      say(s.line`${s.tick()} Hooks in ${tildePath(inUser ? user : project)}`);
+      say(s.line`${s.tick()} Hooks in ${tildePath(found)}`);
     }
-    await refreshCommand(inUser ? user : project, !inUser, dirs.cwd, hook, ui);
+    await refreshCommand(found, !inUser, dirs.cwd, hook, ui);
     return 'present';
   }
   // Hooks of ours in the project settings, with an older path, are
-  // rewritten there, so a second set never lands in the user settings
-  // beside them.
-  const file = (await hasHooks(project)) ? project : user;
+  // rewritten in the local project file and taken out of the shared one,
+  // so a second set never lands in the user settings beside them.
+  const file =
+    (await hasHooks(project)) || (await hasHooks(shared)) ? project : user;
 
   const input = deps.stdin?.();
   if (ui === null || input === undefined || !input.isTTY) {
@@ -1053,14 +1073,71 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   }
   if (file === project) {
     try {
-      await refuseOutsideProject(dirs.cwd, [file, proveCommandPath(file)]);
+      await refuseOutsideProject(dirs.cwd, [
+        file,
+        shared,
+        proveCommandPath(file),
+      ]);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
       note(ui.err.line`${error.message}`);
       return 'not-installed';
     }
   }
-  return (await installAt(file, hook, ui)) ? 'installed' : 'not-installed';
+  if (!(await installAt(file, hook, ui))) return 'not-installed';
+  if (file === project) {
+    try {
+      await uninstallHooks(shared, hook);
+    } catch (error) {
+      if (!(error instanceof SettingsError)) throw error;
+      note(ui.err.line`${error.message}`);
+    }
+  }
+  return 'installed';
+}
+
+// Moves current hooks of ours from the shared project settings.json into
+// settings.local.json, the same install as the stale path case, and takes
+// them out of the shared file. A path outside the project, or a local file
+// that cannot be changed, leaves the hooks where they are with a warning.
+async function moveFromShared(
+  shared: string,
+  project: string,
+  cwd: string,
+  hook: string,
+  ui: Ui | null,
+): Promise<void> {
+  const warn = (message: string) =>
+    ui === null ? stderr(message) : note(ui.err.line`${message}`);
+  try {
+    await refuseOutsideProject(cwd, [
+      project,
+      shared,
+      proveCommandPath(project),
+      skillPath(project),
+    ]);
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    warn(error.message);
+    if (ui !== null) {
+      const s = ui.out;
+      say(s.line`${s.tick()} Hooks in ${tildePath(shared)}`);
+    }
+    return;
+  }
+  if (!(await installAt(project, hook, ui))) return;
+  let removed: number;
+  try {
+    removed = await uninstallHooks(shared, hook);
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    warn(error.message);
+    return;
+  }
+  if (removed === 0) return;
+  const moved = `Moved the hooks out of ${tildePath(shared)}, since they hold absolute paths on this machine and a repo commits that file`;
+  if (ui === null) stderr(moved);
+  else say(ui.out.line`${moved}`);
 }
 
 // The hooks question. Escape sequences such as arrow keys are taken out of
@@ -1118,7 +1195,8 @@ async function refreshCommand(
 // The same install as sealkeeper adapter claude-code install into one
 // settings file, the hooks and then the /sealkeeper-prove command. false
 // when the settings file could not be changed. A --json run, ui null,
-// prints the lines adapter claude-code install prints.
+// prints the lines adapter claude-code install prints, on stderr, so the
+// --json output stays one object.
 async function installAt(
   file: string,
   hook: string,
@@ -1129,7 +1207,7 @@ async function installAt(
   try {
     const result = await installHooks(file, hook);
     if (ui === null) {
-      for (const text of hooksLines(result, file)) stdout(text);
+      for (const text of hooksLines(result, file)) stderr(text);
     } else {
       const s = ui.out;
       say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
@@ -1147,7 +1225,7 @@ async function installAt(
   try {
     const command = await installProveCommand(commandPath, invocationOf(hook));
     if (ui === null) {
-      stdout(commandLine(command, commandPath));
+      stderr(commandLine(command, commandPath));
     } else {
       const s = ui.out;
       say(
@@ -1165,7 +1243,7 @@ async function installAt(
   try {
     const skill = await installSkill(skillFile, invocationOf(hook));
     if (ui === null) {
-      stdout(skillLine(skill, skillFile));
+      stderr(skillLine(skill, skillFile));
     } else {
       const s = ui.out;
       say(

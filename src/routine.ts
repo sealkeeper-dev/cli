@@ -54,6 +54,9 @@ export type RoutinePaths = {
   // Held while prove claims inside a run, so two claims at once cannot
   // pass the daily claim limit.
   claimLock: string;
+  // Held while tasks outcome reports inside a run, so two reports at once
+  // cannot pass the daily confirmation limit.
+  confirmLock: string;
   // Where the headless agent runs and writes its answer files. Outside the
   // CLI home, since tasks submit refuses any file inside it, see
   // key-guard.ts.
@@ -67,6 +70,7 @@ export function routinePaths(p: Paths = paths()): RoutinePaths {
     log: join(p.home, 'routine.jsonl'),
     lock: join(p.home, 'routine-run.json'),
     claimLock: join(p.home, 'routine-claim.lock'),
+    confirmLock: join(p.home, 'routine-confirm.lock'),
     work: routineWorkDir(p.home),
     out: join(p.home, 'routine.out.log'),
   };
@@ -494,40 +498,78 @@ function processAlive(pid: number): boolean {
   }
 }
 
-// How long prove waits for another prove of the same run to finish its
-// claims, and when a claim lock counts as left behind.
-const CLAIM_LOCK_WAIT_MS = 60_000;
-const CLAIM_LOCK_STALE_MS = 5 * 60_000;
-const CLAIM_LOCK_POLL_MS = 100;
+// How long a command waits for another of the same run to let go of a
+// routine lock, and when a lock counts as left behind.
+const ROUTINE_LOCK_WAIT_MS = 60_000;
+const ROUTINE_LOCK_STALE_MS = 5 * 60_000;
+const ROUTINE_LOCK_POLL_MS = 100;
+
+type Sleep = (ms: number) => Promise<void>;
+const realSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Thrown when another command of the same run holds a routine lock for
+// longer than a minute. The message is the line to show.
+export class RoutineLockBusy extends Error {
+  override name = 'RoutineLockBusy';
+}
 
 // Runs fn while holding the claim lock, so the daily claim budget is read,
-// spent and logged by one prove at a time. A lock whose process is gone,
-// or older than five minutes, is taken over. Throws when another prove
-// holds it for more than a minute.
-export async function withClaimLock<T>(
+// spent and logged by one prove at a time. Throws RoutineLockBusy when
+// another prove holds it for more than a minute.
+export function withClaimLock<T>(
   fn: () => Promise<T>,
   p: Paths = paths(),
-  sleep: (ms: number) => Promise<void> = (ms) =>
-    new Promise((r) => setTimeout(r, ms)),
+  sleep: Sleep = realSleep,
+): Promise<T> {
+  return withRoutineLock(
+    routinePaths(p).claimLock,
+    'another prove of this routine run is still claiming, nothing was claimed',
+    fn,
+    p,
+    sleep,
+  );
+}
+
+// Runs fn while holding the confirm lock, so the daily confirmation budget
+// is read, spent and logged by one tasks outcome at a time. Throws
+// RoutineLockBusy when another one holds it for more than a minute.
+export function withConfirmLock<T>(
+  fn: () => Promise<T>,
+  p: Paths = paths(),
+  sleep: Sleep = realSleep,
+): Promise<T> {
+  return withRoutineLock(
+    routinePaths(p).confirmLock,
+    'another tasks outcome of this routine run is still reporting, nothing was reported',
+    fn,
+    p,
+    sleep,
+  );
+}
+
+// Runs fn while holding the lock file, created exclusively. A lock whose
+// process is gone, or older than five minutes, is taken over. fn must throw
+// rather than end the process, or the lock stays behind until it is stale.
+async function withRoutineLock<T>(
+  file: string,
+  busy: string,
+  fn: () => Promise<T>,
+  p: Paths,
+  sleep: Sleep,
 ): Promise<T> {
   await ensureHome(p);
-  const file = routinePaths(p).claimLock;
   // The token says the lock is still this call's when it is removed.
   const token = randomUUID();
   const text = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token })}\n`;
-  const giveUp = Date.now() + CLAIM_LOCK_WAIT_MS;
+  const giveUp = Date.now() + ROUTINE_LOCK_WAIT_MS;
   while (!(await createExclusive(file, text))) {
     const seen = await readText(file);
-    if (await claimLockStale(file)) {
+    if (await lockFileStale(file)) {
       await takeOver(file, seen);
       continue;
     }
-    if (Date.now() >= giveUp) {
-      throw new Error(
-        'another prove of this routine run is still claiming, nothing was claimed',
-      );
-    }
-    await sleep(CLAIM_LOCK_POLL_MS);
+    if (Date.now() >= giveUp) throw new RoutineLockBusy(busy);
+    await sleep(ROUTINE_LOCK_POLL_MS);
   }
   try {
     return await fn();
@@ -540,10 +582,10 @@ export async function withClaimLock<T>(
   }
 }
 
-async function claimLockStale(file: string): Promise<boolean> {
+async function lockFileStale(file: string): Promise<boolean> {
   try {
     const made = (await stat(file)).mtimeMs;
-    if (Date.now() - made > CLAIM_LOCK_STALE_MS) return true;
+    if (Date.now() - made > ROUTINE_LOCK_STALE_MS) return true;
     const held = z
       .object({ pid: z.number().int() })
       .safeParse(JSON.parse(await readFile(file, 'utf8')));

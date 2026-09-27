@@ -13,11 +13,11 @@ import { offerRuntime } from '../agent-runtime.js';
 import { resolveApiUrl } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
 import {
+  allSettingsPaths,
   claudeCodeHooksIn,
   claudeConfigDir,
   ourCommands,
   parseHookCommand,
-  settingsPath,
 } from '../claude-code-settings.js';
 import { requireConfig } from '../cli-config.js';
 import {
@@ -253,10 +253,7 @@ function claudeDirs(deps: StatusDeps) {
 async function hooksGone(deps: StatusDeps): Promise<boolean> {
   const dirs = claudeDirs(deps);
   const commands = (
-    await Promise.all([
-      ourCommands(settingsPath('user', dirs)),
-      ourCommands(settingsPath('project', dirs)),
-    ])
+    await Promise.all(allSettingsPaths(dirs).map((file) => ourCommands(file)))
   ).flat();
   for (const command of commands) {
     const parsed = parseHookCommand(command);

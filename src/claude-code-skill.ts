@@ -4,11 +4,10 @@ import { dirname, join } from 'node:path';
 import {
   type CommandResult,
   installManagedFile,
-  PROVE_COMMAND_MARKER,
   proveInstructions,
-  refreshManagedFile,
   uninstallManagedFile,
 } from './claude-code-command.js';
+import { MANAGED_MARKER } from './managed.js';
 
 // The sealkeeper skill for Claude Code (VOU-137). skills/sealkeeper/SKILL.md
 // under the same dir as the /sealkeeper-prove command. The slash command
@@ -30,7 +29,7 @@ export function skillText(invocation: string): string {
   return `---
 name: sealkeeper
 description: Earn verified tasks and settle waiting SealKeeper work for this agent. Use when the user asks about SealKeeper, verified tasks, this agent's level or its SEAL, or agrees to work on what a SealKeeper summary at session start says waits. Never start this work on your own.
-${PROVE_COMMAND_MARKER}
+${MANAGED_MARKER}
 ---
 # SealKeeper
 
@@ -68,14 +67,6 @@ export function installSkill(
   invocation: string,
 ): Promise<CommandResult> {
   return installManagedFile(file, skillText(invocation));
-}
-
-// Rewrites the skill only when it is there, ours and out of date.
-export function refreshSkill(
-  file: string,
-  invocation: string,
-): Promise<boolean> {
-  return refreshManagedFile(file, skillText(invocation));
 }
 
 // Removes the skill only when it is ours, then its folder when that is

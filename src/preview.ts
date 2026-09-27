@@ -9,13 +9,16 @@ import { WIRE_FORM } from './taxonomy.js';
 // The pending events exactly as sync would send them. sync signs the JSON
 // of each event as it is read from the log, so JSON.stringify of the same
 // event is the payload inside the signature, byte for byte. Events older
-// than the API accepts are left out, since sync drops them without sending.
+// than the API accepts are left out, since sync drops them without sending,
+// and counted apart in stale (cli-adapters-tasks-11).
 
 // How many events the summary before a sync prints in full.
 export const PREVIEW_SAMPLE = 3;
 
 export type Preview = {
   count: number;
+  // Pending events older than the window, left out of everything else.
+  stale: number;
   // Per day file in send order, how many events of each type.
   days: { file: string; count: number; types: [string, number][] }[];
   // The first PREVIEW_SAMPLE events, in send order.
@@ -43,6 +46,7 @@ export async function readPreview(
   const cutoff = staleCutoff(now.getTime());
   const preview: Preview = {
     count: 0,
+    stale: 0,
     days: [],
     sample: [],
     groups: [],
@@ -51,7 +55,10 @@ export async function readPreview(
   const types: Map<string, number>[] = [];
   for await (const { event, position } of pendingEvents(p, { now })) {
     preview.last = position;
-    if (Date.parse(event.occurred_at) < cutoff) continue;
+    if (Date.parse(event.occurred_at) < cutoff) {
+      preview.stale++;
+      continue;
+    }
     preview.count++;
 
     let day = preview.days.at(-1);
@@ -80,21 +87,39 @@ export async function readPreview(
 // For --dry-run. One JSON line per event under the path of its day file,
 // then the count and what goes on the wire. Needs a full preview.
 export function previewLines(preview: Preview, p: Paths = paths()): string[] {
-  if (preview.count === 0) return ['nothing pending, nothing to send'];
+  if (preview.count === 0) return nothingLines(preview);
   const lines: string[] = [];
   for (const group of preview.groups) {
     lines.push(`${p.logFile(group.file.slice(0, 10))}`);
     for (const event of group.events) lines.push(JSON.stringify(event));
     lines.push('');
   }
-  lines.push(`${pendingText(preview.count)}, nothing sent yet.`, WIRE_FORM);
+  lines.push(
+    [
+      `${pendingText(preview.count)}, nothing sent yet.`,
+      ...(preview.stale > 0 ? [staleText(preview.stale)] : []),
+    ].join(' '),
+    WIRE_FORM,
+  );
   return lines;
+}
+
+// Said for events older than the window, which sync drops unsent.
+export function staleText(n: number): string {
+  return `${n === 1 ? '1 event' : `${n} events`} older than ${EVENT_MAX_AGE_DAYS} days ${n === 1 ? 'is' : 'are'} left out, sync drops ${n === 1 ? 'it' : 'them'} without sending.`;
+}
+
+function nothingLines(preview: Preview): string[] {
+  return [
+    'nothing pending, nothing to send',
+    ...(preview.stale > 0 ? [staleText(preview.stale)] : []),
+  ];
 }
 
 // For the question before a sync. The count per day and type, then the
 // first few events as they are sent, then where to see every one.
 export function summaryLines(preview: Preview, p: Paths = paths()): string[] {
-  if (preview.count === 0) return ['nothing pending, nothing to send'];
+  if (preview.count === 0) return nothingLines(preview);
   const lines = [`pending events by day, in ${p.log}`];
   for (const day of preview.days) {
     const types = day.types.map(([type, n]) => `${type} ${n}`).join(', ');
@@ -115,7 +140,7 @@ export function summaryLines(preview: Preview, p: Paths = paths()): string[] {
     lines.push(`run ${cli('sync --dry-run')} to see every event`, '');
   }
   lines.push(
-    `${pendingText(preview.count)}, nothing sent yet. Events older than ${EVENT_MAX_AGE_DAYS} days are not sent.`,
+    `${pendingText(preview.count)}, nothing sent yet. ${preview.stale > 0 ? staleText(preview.stale) : `Events older than ${EVENT_MAX_AGE_DAYS} days are not sent.`}`,
     WIRE_FORM,
   );
   return lines;

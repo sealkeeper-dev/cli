@@ -66,6 +66,16 @@ const payloads = {
     tool_response: { stdout: SECRET_OUTPUT, stderr: '', interrupted: false },
     tool_use_id: id,
   }),
+  // A tool call that started and failed, as the hooks reference shows it.
+  failure: (id: string, tool = 'Bash', interrupt = false) => ({
+    ...base('PostToolUseFailure'),
+    tool_name: tool,
+    tool_input: { command: SECRET_INPUT, description: 'clean up' },
+    tool_use_id: id,
+    error: `Exit code 1\n${SECRET_OUTPUT}`,
+    is_interrupt: interrupt,
+    duration_ms: 4187,
+  }),
 };
 
 type RunResult = { code: number; out: string; err: string };
@@ -101,7 +111,6 @@ describe('hook claude-code', () => {
     const program = createProgram({
       hook: {
         fetch: fakeFetch,
-        sleep: async () => {},
         readStdin: async () => stdin,
         cachedGoal: async (options) => {
           goalReads.push(options);
@@ -372,7 +381,6 @@ describe('hook claude-code', () => {
         fetch: (async () => {
           throw new TypeError('fetch failed');
         }) as typeof fetch,
-        sleep: async () => {},
         readStdin: async () => JSON.stringify(payloads.sessionEnd()),
       },
     });
@@ -406,7 +414,6 @@ describe('hook claude-code', () => {
     const program = createProgram({
       hook: {
         fetch: fetchFn,
-        sleep: async () => {},
         readStdin: async () => JSON.stringify(payloads.sessionEnd()),
       },
     });
@@ -531,6 +538,41 @@ describe('hook claude-code', () => {
     for (const text of [pre.err, post.err]) {
       expect(text).not.toContain('secret');
     }
+  });
+
+  it('PreToolUse then PostToolUseFailure emits tool.call with ok false and no error text', async () => {
+    await initialise();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
+    await hook(payloads.pre('toolu_04fail'));
+    vi.setSystemTime(new Date('2026-09-23T10:00:02.000Z'));
+    const failed = await hook(payloads.failure('toolu_04fail'));
+    const events = await logged();
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toEqual({
+      tool: 'Bash',
+      duration_ms: 2_000,
+      ok: false,
+    });
+    // The marker is taken, so a failed call leaves none behind.
+    expect(await markers()).toEqual([]);
+    const day = await readFile(paths(home).logFile(dayOf(new Date())), 'utf8');
+    for (const text of [day, failed.err, failed.out]) {
+      expect(text).not.toContain('secret');
+      expect(text).not.toContain('Exit code');
+    }
+  });
+
+  it('a PostToolUseFailure the user interrupted records nothing and clears the marker', async () => {
+    await initialise();
+    await hook(payloads.pre('toolu_05esc'));
+    expect(await markers()).toEqual(['tool.toolu_05esc']);
+    const interrupted = await hook(
+      payloads.failure('toolu_05esc', 'Bash', true),
+    );
+    expect(interrupted.code).toBe(0);
+    expect(await logged()).toEqual([]);
+    expect(await markers()).toEqual([]);
   });
 
   it('PostToolUse without a PreToolUse marker has duration 0', async () => {
