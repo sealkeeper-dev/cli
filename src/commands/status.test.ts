@@ -12,6 +12,7 @@ import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import {
   dormancyLine,
@@ -294,6 +295,48 @@ describe('status', () => {
       expect(piped.err).not.toContain(RUNTIME_UNKNOWN_INTRO);
       expect(patches).toEqual([]);
       expect(await wasAskedRuntime(AGENT_ID, paths(home))).toBe(false);
+    });
+  });
+
+  describe('the operator slug (VOU-187)', () => {
+    // The agent route answers with the slug alice-2, as for an operator
+    // whose login was taken as a slug at backfill.
+    const suffixed = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const url = String(input);
+      if (url === `${API_URL}/v1/agents/${AGENT_ID}`) {
+        return Response.json({
+          ...agentAnswer(2),
+          operator: { login: 'alice', slug: 'alice-2', displayName: 'Alice' },
+          handle: 'alice-2/scout',
+        });
+      }
+      return scoreFetch([])(input, init);
+    }) as typeof fetch;
+
+    it('builds the handle from the slug, stores it and keeps it offline', async () => {
+      const online = await run(suffixed, 'status', '--json');
+      expect(JSON.parse(online.out)).toMatchObject({
+        handle: 'alice-2/scout',
+        profileUrl: 'https://sealkeeper.run/agents/alice-2/scout',
+      });
+      expect(await readOperatorSlug(AGENT_ID, paths(home))).toBe('alice-2');
+
+      const offlineRun = await run(offline, 'status');
+      expect(offlineRun.out.split('\n')).toContain(
+        'handle            alice-2/scout',
+      );
+      expect(offlineRun.out).toContain(
+        'https://sealkeeper.run/agents/alice-2/scout',
+      );
+    });
+
+    it('falls back to the login offline when no slug is stored', async () => {
+      const result = await run(offline, 'status');
+      expect(result.out.split('\n')).toContain('handle            alice/scout');
+      expect(await readOperatorSlug(AGENT_ID, paths(home))).toBeNull();
     });
   });
 

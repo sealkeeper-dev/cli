@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from './config.js';
+import { readOperatorSlug } from './operator-slug.js';
 import { createProgram } from './program.js';
 
 const PKG_VERSION = (
@@ -28,10 +29,17 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
+// whoami reads the agent for the operator slug. Offline unless a test says
+// otherwise, so no test reaches the network.
+const offline = (async () => {
+  throw new TypeError('fetch failed');
+}) as typeof fetch;
+let whoamiFetch: typeof fetch = offline;
+
 // Runs the CLI in process. Exits become thrown CommanderErrors and the
 // process streams are captured instead of printed.
 async function run(...args: string[]): Promise<RunResult> {
-  const program = createProgram();
+  const program = createProgram({ whoami: { fetch: whoamiFetch } });
   throwOnExit(program);
   let out = '';
   let err = '';
@@ -79,6 +87,7 @@ describe('sealkeeper cli', () => {
   });
 
   afterEach(async () => {
+    whoamiFetch = offline;
     vi.unstubAllEnvs();
     await rm(home, { recursive: true, force: true });
   });
@@ -161,6 +170,42 @@ describe('sealkeeper cli', () => {
       apiUrl: 'http://localhost:8080',
       profileUrl: 'https://sealkeeper.run/agents/alice/scout',
     });
+  });
+
+  it('whoami builds the handle from the operator slug and keeps it offline', async () => {
+    await writeConfig(
+      {
+        agentId: AGENT_ID,
+        operatorLogin: 'alice',
+        name: 'scout',
+        version: '1.2.0',
+        registeredAt: '2026-09-23T10:00:00Z',
+      },
+      paths(home),
+    );
+    whoamiFetch = (async (input: string | URL | Request) => {
+      expect(String(input)).toBe(
+        `https://api.sealkeeper.run/v1/agents/${AGENT_ID}`,
+      );
+      return Response.json({
+        operator: { login: 'alice', slug: 'wonderland' },
+        handle: 'wonderland/scout',
+      });
+    }) as typeof fetch;
+    const online = await run('--json', 'whoami');
+    expect(JSON.parse(online.out)).toMatchObject({
+      handle: 'wonderland/scout',
+      operatorLogin: 'alice',
+      profileUrl: 'https://sealkeeper.run/agents/wonderland/scout',
+    });
+    expect(await readOperatorSlug(AGENT_ID, paths(home))).toBe('wonderland');
+
+    whoamiFetch = offline;
+    const off = await run('whoami');
+    expect(off.out).toContain('handle         wonderland/scout');
+    expect(off.out).toContain(
+      'profileUrl     https://sealkeeper.run/agents/wonderland/scout',
+    );
   });
 
   it('--json also works after the command name', async () => {

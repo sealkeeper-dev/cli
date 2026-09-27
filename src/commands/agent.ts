@@ -20,12 +20,14 @@ import { type ApiClient, ApiError } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
 import {
   handleOf,
+  handleUrl,
   type Paths,
   paths,
   profileUrl,
   writeConfig,
 } from '../config.js';
 import { cli } from '../invocation.js';
+import { readOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import { routinePaths } from '../routine.js';
@@ -102,8 +104,11 @@ export function register(
         name: renamed.name,
         operatorLogin: renamed.operator.login,
       });
-      const handle = renamed.handle ?? handleOf(updated);
-      const url = profileUrl(updated);
+      // The slug from the answer is stored, and the one stored before
+      // stands in for an API that sends none.
+      const slug = await refreshOperatorSlug(updated.agentId, renamed);
+      const handle = renamed.handle ?? handleOf(updated, slug);
+      const url = handleUrl(handle);
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({ agentId: updated.agentId, handle, profileUrl: url }),
@@ -220,14 +225,15 @@ export function register(
       const { config, signer, api } = await openTaskSession(this, deps);
       const json = wantsJson(this);
       const p = paths();
-      const handle = handleOf(config);
+      const slug = await readOperatorSlug(config.agentId, p);
+      const handle = handleOf(config, slug);
 
       // With --json stdout carries only the result, so the summary goes to
       // stderr.
       const print = json ? stderr : stdout;
       const fields: [string, string][] = [
         ['handle', handle],
-        ['profile', profileUrl(config)],
+        ['profile', profileUrl(config, slug)],
         ['on SealKeeper', DELETE_ON_SERVER],
         ['on this machine', `${DELETE_ON_MACHINE}, in ${p.home}`],
       ];
@@ -358,6 +364,7 @@ async function removeLocal(p: Paths): Promise<void> {
     p.nudge,
     p.routine,
     p.runtimeQuestion,
+    p.operatorSlug,
     routinePaths(p).log,
     routinePaths(p).lock,
     routinePaths(p).claimLock,

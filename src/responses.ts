@@ -6,6 +6,7 @@ import {
   Dimension,
   Ed25519PublicKey,
   Jws,
+  OperatorSlug,
   SEAL_MAX_TTL_SECONDS,
   Sha256Hex,
   TaskOutcome,
@@ -27,7 +28,13 @@ const Timestamp = z.iso.datetime();
 const Count = z.int().min(0);
 const Seconds = z.int().min(0);
 const Name = z.string().min(1).max(64);
-const Operator = z.object({ login: z.string().min(1).max(39) });
+// slug from an API that sends it (VOU-174). The CLI keeps the last one for
+// the handle offline, see operator-slug.ts. A slug that does not have the
+// shape the API builds reads as absent.
+const Operator = z.object({
+  login: z.string().min(1).max(39),
+  slug: OperatorSlug.optional().catch(undefined),
+});
 
 const AgentCounts = z.object({
   events: Count,

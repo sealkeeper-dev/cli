@@ -8,6 +8,7 @@ import { paths, writeConfig } from '../config.js';
 import { goalActionText, loadGoal } from '../goal.js';
 import { resetInvocation } from '../invocation.js';
 import { COUNTED_RULE } from '../ladder.js';
+import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 
 const API_URL = 'https://api.test';
@@ -185,6 +186,13 @@ describe('sealkeeper goal', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  it('names the agent by the stored operator slug', async () => {
+    await saveOperatorSlug(AGENT_ID, 'alice-2', new Date(), paths(home));
+    const { code, out } = await run(serve(AT_NONE), 'goal');
+    expect(code).toBe(0);
+    expect(out.split('\n')[0]).toBe('SealKeeper goal   alice-2/scout');
   });
 
   it('prints what waits and other operators work at bronze', async () => {

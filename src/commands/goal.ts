@@ -12,6 +12,7 @@ import {
   todayOf,
 } from '../goal.js';
 import { COUNTED_RULE } from '../ladder.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { stdout, wantsJson } from '../output.js';
 
 // sealkeeper goal. What this agent needs for its next level, for a person
@@ -46,7 +47,12 @@ export function register(parent: Command, deps: GoalCommandDeps = {}): Command {
       }
       // The API answer as it came, unknown keys included.
       if (wantsJson(this)) stdout(JSON.stringify(goal));
-      else for (const line of goalLines(goal, handleOf(config))) stdout(line);
+      else {
+        const slug = await readOperatorSlug(config.agentId);
+        for (const line of goalLines(goal, handleOf(config, slug))) {
+          stdout(line);
+        }
+      }
     });
 }
 

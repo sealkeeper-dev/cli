@@ -36,16 +36,17 @@ export const INSECURE_API_URL =
 
 type Named = { operatorLogin: string; name: string };
 
-// The agent's handle, login/name. The API sends it with every answer. The
-// CLI builds its own only from config, for status and whoami, which work
-// offline.
-export function handleOf(config: Named): string {
-  return agentHandle(config.operatorLogin, config.name);
+// The agent's handle, slug/name. The API sends it with every answer. The
+// CLI builds its own for status, whoami and the other commands that work
+// offline, from the operator slug the API last sent, see operator-slug.ts.
+// The login stands in only while no slug is known.
+export function handleOf(config: Named, slug?: string | null): string {
+  return agentHandle(slug ?? config.operatorLogin, config.name);
 }
 
 // The public profile page, at the handle.
-export function profileUrl(config: Named): string {
-  return handleUrl(handleOf(config));
+export function profileUrl(config: Named, slug?: string | null): string {
+  return handleUrl(handleOf(config, slug));
 }
 
 // The public profile page at a handle as the API sent it.
@@ -144,7 +145,8 @@ export function defaultRoutineConfig(): RoutineConfig {
 // written back with it. CLI 0.4.4 and earlier read this file strictly and
 // fail on any key they do not know, and adapters pinned to them would drop
 // every event, so settings added since then live in files of their own,
-// nudge.json and routine.json, which those versions never read.
+// nudge.json, routine.json and operator-slug.json, which those versions
+// never read.
 export const Config = z.looseObject({
   agentId: AgentId,
   operatorLogin: z.string().min(1),
@@ -199,6 +201,9 @@ export type Paths = {
   // Which agent was asked the one time runtime question, see
   // agent-runtime.ts.
   runtimeQuestion: string;
+  // The operator slug the API last sent, for the handle offline, see
+  // operator-slug.ts.
+  operatorSlug: string;
   logFile(day: string): string;
 };
 
@@ -229,6 +234,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     nudge: join(home, 'nudge.json'),
     routine: join(home, 'routine.json'),
     runtimeQuestion: join(home, 'runtime-question.json'),
+    operatorSlug: join(home, 'operator-slug.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

@@ -15,12 +15,12 @@ import {
 } from './routine.js';
 
 // Removes the local session. config.json, cursor.json, credential.json,
-// score.json, inbox.json, post-prompt.json and goal.json go, and the daily
-// routine job when one is installed, since it would run for nobody. The
-// log, nudge.json and the routine's limits and allowlist stay, and so does
-// the key unless --delete-key and --yes are both given. There is no
-// prompt, the --yes flag is the confirmation, and everything removed is
-// printed.
+// score.json, inbox.json, post-prompt.json, goal.json and operator-slug.json
+// go, and the daily routine job when one is installed, since it would run
+// for nobody. The log, nudge.json and the routine's limits and allowlist
+// stay, and so does the key unless --delete-key and --yes are both given.
+// There is no prompt, the --yes flag is the confirmation, and everything
+// removed is printed.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -139,6 +139,7 @@ async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
     p.inbox,
     p.postPrompt,
     p.goal,
+    p.operatorSlug,
     ...(deleteKey ? [p.key] : []),
     p.config,
   ];

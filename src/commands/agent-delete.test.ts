@@ -26,6 +26,7 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { createKey } from '../identity.js';
+import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { appendRoutine } from '../routine.js';
 import { jobName, type Runner } from '../routine-scheduler.js';
@@ -395,6 +396,20 @@ describe('sealkeeper agent delete', () => {
       routineJob: null,
     });
     expect(err).toContain('handle           alice/app');
+    expect(await remaining()).toEqual([]);
+  });
+
+  it('names the agent by the stored operator slug and removes the slug file', async () => {
+    const p = paths(home);
+    await saveOperatorSlug(agentId, 'alice-2', new Date(), p);
+    const { code, out, err } = await run('agent', 'delete', '--yes', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).handle).toBe('alice-2/app');
+    expect(err).toContain('handle           alice-2/app');
+    expect(err).toContain(
+      'profile          https://sealkeeper.run/agents/alice-2/app',
+    );
+    expect(await exists(p.operatorSlug)).toBe(false);
     expect(await remaining()).toEqual([]);
   });
 

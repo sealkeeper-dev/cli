@@ -86,6 +86,7 @@ import {
   readLiveAgent,
 } from '../live-agent.js';
 import { setNudge } from '../nudge.js';
+import { currentOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
 import {
   promptStyled,
   stderr,
@@ -352,26 +353,32 @@ async function init(
   } else {
     const existing = await readConfig(p);
     if (existing !== null) {
+      // One agent read, for the operator slug in the handle, the runtime
+      // question and Next. Offline the slug is the one last stored.
+      const { slug, live: firstLive } = await currentOperatorSlug(
+        existing,
+        deps.fetch,
+        p,
+      );
       if (ui === null) {
-        printIdentity(existing, true);
+        printIdentity(existing, true, slug);
         return;
       }
       const s = ui.out;
       welcome(ui);
       say();
-      say(s.line`${s.tick()} Already set up as ${s.bold(handleOf(existing))}`);
-      say(profileLine(s, profileUrlOf(existing)));
-      await offerVersionMove(existing, deps, ui);
-      // One agent read for the runtime question and Next, made only when
-      // one of them needs it.
-      let liveRead: Promise<LiveAgent | null> | undefined;
-      const readLive = () => {
-        liveRead ??= readLiveAgent(existing, deps.fetch);
-        return liveRead;
-      };
+      say(
+        s.line`${s.tick()} Already set up as ${s.bold(handleOf(existing, slug))}`,
+      );
+      say(profileLine(s, profileUrlOf(existing, slug)));
+      // A moved version has a level of its own, so the agent is read
+      // again for Next.
+      const live = (await offerVersionMove(existing, deps, ui))
+        ? await readLiveAgent(existing, deps.fetch)
+        : firstLive;
       await offerRuntime({
         config: existing,
-        readRuntime: async () => (await readLive())?.runtime,
+        readRuntime: async () => live?.runtime,
         input: deps.stdin?.(),
         fetch: deps.fetch,
         report: runtimeReport(ui),
@@ -385,7 +392,7 @@ async function init(
       // sealkeeper init is always enough.
       const hooks = await offerHooks(deps, ui);
       await offerNudge(hooks, deps, ui, p);
-      printNext(ui.out, hooks, nextStateOf(existing, await readLive()));
+      printNext(ui.out, hooks, nextStateOf(existing, live));
       return;
     }
   }
@@ -547,11 +554,16 @@ async function init(
 
   // The handle is built from the operator slug, which the registration
   // answer leaves out for CLI 0.1.0, so it comes from the agent read. The
-  // login stands in when the API does not answer.
+  // slug is stored for the commands that build the handle offline. With no
+  // answer the one stored for this agent before stands in, from a repeat
+  // registration, and the login only when there is none.
   const live = await readLiveAgent(config, deps.fetch);
-  const handle = live?.handle ?? handleOf(config);
+  const slug = await refreshOperatorSlug(config.agentId, live, p);
+  const handle = live?.handle ?? handleOf(config, slug);
   const profileUrl =
-    live?.handle === undefined ? profileUrlOf(config) : handleUrl(live.handle);
+    live?.handle === undefined
+      ? profileUrlOf(config, slug)
+      : handleUrl(live.handle);
   // What the API has, which differs from what was sent when the key was
   // registered already, since a repeat registration changes nothing.
   const registeredRuntime =
@@ -810,14 +822,14 @@ const VERSION_CHECK_TIMEOUT_MS = 10_000;
 // config.json, which the card and every event carry, with the one SealKeeper
 // has, and offers to move SealKeeper to it. Nothing is asked without a
 // terminal, and an API that cannot be reached skips the question quietly,
-// since registration is already done.
+// since registration is already done. True when the version moved.
 async function offerVersionMove(
   config: Config,
   deps: InitDeps,
   ui: Ui,
-): Promise<void> {
+): Promise<boolean> {
   const input = deps.stdin?.();
-  if (input === undefined || !input.isTTY) return;
+  if (input === undefined || !input.isTTY) return false;
   const api = createApiClient({
     apiUrl: resolveApiUrl({ config: config.apiUrl }),
     fetch: deps.fetch,
@@ -827,10 +839,10 @@ async function offerVersionMove(
   try {
     server = (await api.getAgent(config.agentId)).version;
   } catch (error) {
-    if (error instanceof ApiError) return;
+    if (error instanceof ApiError) return false;
     throw error;
   }
-  if (server === config.version) return;
+  if (server === config.version) return false;
   const e = ui.err;
   const o = ui.out;
   // The server version comes from the API, so it is escaped with the rest.
@@ -839,7 +851,7 @@ async function offerVersionMove(
     say(
       o.line`SealKeeper stays on ${server}. Run ${cli(`agent version ${config.version}`)} to move it later.`,
     );
-    return;
+    return false;
   }
   // Registration is done and the move is optional, so a refusal or a
   // missing key ends only the move. init goes on to the hooks offer.
@@ -860,12 +872,13 @@ async function offerVersionMove(
     note(
       e.line`version not moved, ${reason}. Run ${cli(`agent version ${config.version}`)} to try again.`,
     );
-    return;
+    return false;
   }
   say(
     o.line`${o.tick()} moved SealKeeper from version ${change.previous} to ${change.next}`,
   );
   say(o.line`${inheritLine(change.previous, change.next)}`);
+  return true;
 }
 
 // What init did about the Claude Code hooks. none means there is no Claude

@@ -21,6 +21,7 @@ import {
 } from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, writeCursor } from '../log.js';
+import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { jobName, launchdPath, type Runner } from '../routine-scheduler.js';
 
@@ -175,6 +176,15 @@ describe('logout', () => {
     }
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(`the identity of agent ${agentId} is gone for good`);
+  });
+
+  it('removes the stored operator slug', async () => {
+    await initialise();
+    await saveOperatorSlug(agentId, 'alice-2', new Date(), p);
+    const { code, out } = await run('logout', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out).removed).toContain('operator-slug.json');
+    expect(await exists(p.operatorSlug)).toBe(false);
   });
 
   it('--yes alone keeps the key', async () => {

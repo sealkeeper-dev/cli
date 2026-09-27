@@ -13,6 +13,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
+import { readOperatorSlug, saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 
 const API_URL = 'https://api.test';
@@ -166,6 +167,54 @@ describe('sealkeeper agent rename', () => {
       agentId,
       handle: 'alice/ranger',
       profileUrl: 'https://sealkeeper.run/agents/alice/ranger',
+    });
+  });
+
+  it('stores the slug from the answer and links the handle the API sent', async () => {
+    api.reply = (payload) =>
+      Response.json({
+        id: agentId,
+        name: payload.name,
+        version: '1.0.0',
+        operator: { login: 'alice', slug: 'alice-2', displayName: 'Alice' },
+        createdAt: '2026-09-23T10:00:00.000Z',
+        handle: `alice-2/${payload.name}`,
+        previousName: 'scout',
+      });
+    const { code, out } = await run('agent', 'rename', 'ranger', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toEqual({
+      agentId,
+      handle: 'alice-2/ranger',
+      profileUrl: 'https://sealkeeper.run/agents/alice-2/ranger',
+    });
+    expect(await readOperatorSlug(agentId)).toBe('alice-2');
+    // config.json keeps only the keys CLI 0.4.4 reads.
+    expect(Object.keys((await readConfig()) ?? {}).sort()).toEqual([
+      'agentId',
+      'apiUrl',
+      'name',
+      'operatorLogin',
+      'registeredAt',
+      'version',
+    ]);
+  });
+
+  it('builds the handle from the stored slug when the answer has none', async () => {
+    await saveOperatorSlug(agentId, 'wonderland');
+    api.reply = (payload) =>
+      Response.json({
+        id: agentId,
+        name: payload.name,
+        version: '1.0.0',
+        operator: { login: 'alice' },
+        createdAt: '2026-09-23T10:00:00.000Z',
+      });
+    const { code, out } = await run('agent', 'rename', 'ranger', '--json');
+    expect(code).toBe(0);
+    expect(JSON.parse(out)).toMatchObject({
+      handle: 'wonderland/ranger',
+      profileUrl: 'https://sealkeeper.run/agents/wonderland/ranger',
     });
   });
 

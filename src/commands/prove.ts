@@ -31,6 +31,7 @@ import {
   TEMPLATE_POST_COMMAND,
 } from '../ladder.js';
 import { readLiveAgent } from '../live-agent.js';
+import { refreshOperatorSlug } from '../operator-slug.js';
 import {
   promptStyled,
   stderr,
@@ -320,12 +321,13 @@ async function explain(
     addressedWaiting(config, deps),
     loadGoal({ config, fetch: deps.fetch }),
   ]);
+  const slug = await refreshOperatorSlug(config.agentId, live);
   const s = createStyle(process.stdout);
   const say = (line?: Styled) => stdoutStyled(indent(line));
   const slash = s.bold('/sealkeeper-prove');
   say();
   say(
-    s.line`${s.gold('◉')} ${s.bold('SealKeeper prove')}   ${handleOf(config)}`,
+    s.line`${s.gold('◉')} ${s.bold('SealKeeper prove')}   ${handleOf(config, slug)}`,
   );
   say();
   // Tasks addressed to this agent first, listed and never claimed here.

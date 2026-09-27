@@ -31,6 +31,7 @@ import {
   MISSING_CLIENT_ID,
 } from '../github-device.js';
 import { loadKey } from '../identity.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { stripStyle } from '../style.js';
 import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
@@ -1729,6 +1730,30 @@ describe('sealkeeper init', () => {
         profileUrl: 'https://sealkeeper.run/agents/alice/scout',
       });
       expect(world.fetchUrls.some((u) => u.includes('operator='))).toBe(false);
+    });
+
+    it('stores the slug, and a repeat init shows it online and offline (VOU-187)', async () => {
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const agentId = (await readConfig(paths(home)))?.agentId ?? '';
+      expect(await readOperatorSlug(agentId, paths(home))).toBe('alice-2');
+
+      // Changed on the web since.
+      world = newWorld();
+      world.serverVersion = '0.1.0';
+      world.slug = 'wonderland';
+      const online = await run(world, 'init');
+      expect(online.out).toContain('  ✓ Already set up as wonderland/scout\n');
+      expect(online.out).toContain(
+        '    Profile  https://sealkeeper.run/agents/wonderland/scout\n',
+      );
+
+      // Offline, the last slug stored.
+      world = newWorld();
+      const offline = await run(world, 'init', '--json');
+      expect(JSON.parse(offline.out)).toMatchObject({
+        handle: 'wonderland/scout',
+        profileUrl: 'https://sealkeeper.run/agents/wonderland/scout',
+      });
     });
 
     it('prints the handle from the API with --json', async () => {

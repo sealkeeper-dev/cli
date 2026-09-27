@@ -31,7 +31,10 @@ import {
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
-import { register as registerWhoami } from './commands/whoami.js';
+import {
+  register as registerWhoami,
+  type WhoamiDeps,
+} from './commands/whoami.js';
 import { terminalSafe } from './output.js';
 import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
@@ -84,6 +87,7 @@ type ProgramDeps = {
   agent?: AgentDeps;
   seal?: Partial<SealDeps>;
   routine?: RoutineDeps;
+  whoami?: WhoamiDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -116,7 +120,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerRoutine(program, deps.routine);
   registerRate(program, deps.rate);
   registerAgent(program, deps.agent, deps.routine);
-  registerWhoami(program);
+  registerWhoami(program, deps.whoami);
   registerConfig(program);
   registerLogout(program, deps.routine);
   registerAdapter(program, deps.adapter);

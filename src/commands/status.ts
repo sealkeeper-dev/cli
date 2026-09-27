@@ -45,6 +45,7 @@ import {
   readCursor,
   readDay,
 } from '../log.js';
+import { refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { getScore, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
@@ -77,7 +78,8 @@ const SCORING_EVERY_MS = 15 * 60 * 1000;
 
 type Status = {
   agentId: string;
-  // login/name, from config.
+  // slug/name, from the operator slug the API last sent and the name in
+  // config. login/name while no slug is known.
   handle: string;
   profileUrl: string;
   // Today's UTC day, YYYY-MM-DD.
@@ -207,11 +209,12 @@ async function readStatus(
       loadGoal({ config, fetch: deps.fetch, now, paths: p }),
     ]);
   seen(live);
+  const slug = await refreshOperatorSlug(config.agentId, live, p);
 
   return {
     agentId: config.agentId,
-    handle: handleOf(config),
-    profileUrl: profileUrl(config),
+    handle: handleOf(config, slug),
+    profileUrl: profileUrl(config, slug),
     day,
     ...countEvents(events),
     verifiedTasks: live?.counts?.verifiedTasks ?? null,
