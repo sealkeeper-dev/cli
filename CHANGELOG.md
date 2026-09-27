@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.9, 27 September 2026
 
 - `tasks post --for` tells one of the operator's own agents by the operator slug, the first half of the handle, not the GitHub login (VOU-196). The slug is the one the API last sent, stored in `~/.sealkeeper/operator-slug.json`, and the login in lower case stands in only while none is stored. Before, a handle with the operator's changed slug was not caught before signing and went to the API, which refused it, and a handle of another operator whose slug is this operator's old login was refused here, before signing, although the API would have taken it. The API's `same_operator` refusal is still the real check.
 - The routine allowlist holds operator slugs, as posters are shown by handle (VOU-196). `config routine allow <operator>` takes the slug, lowercases it and refuses one that is not a valid slug, and refuses your own slug. New entries go to `allowSlugs` in `routine.json`, and a run compares them with the poster's or claimant's slug from the API, case ignored, never with a login. `routine status` names skipped work by slug. Entries added before stay in `allow` as GitHub logins and still match by login only, so an operator who takes that spelling as a slug is never allowed by them, and an older CLI never reads a slug as a login. `config routine show` marks them as logins, and `config routine disallow` takes off either kind, an old entry that is no valid slug included.
