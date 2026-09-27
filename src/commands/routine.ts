@@ -26,9 +26,14 @@ import { HIGHEST_ISSUED, loadGoal, shownLevel } from '../goal.js';
 import type { Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import type { TaskResponse } from '../responses.js';
+import {
+  type AgentResponse,
+  operatorSlugOf,
+  type TaskResponse,
+} from '../responses.js';
 import {
   acquireLock,
+  allowedNames,
   appendRoutine,
   budgetOf,
   ensureWorkDir,
@@ -401,7 +406,7 @@ export function preview(
     'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They never post tasks. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
     ...(npx ? [NPX_NOTE] : []),
-    `Allowlist: ${routine.allow.length === 0 ? 'nobody yet' : routine.allow.join(', ')}. Add an operator with ${cli('config routine allow <login>')}.`,
+    `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('config routine allow <operator>')}.`,
     '',
     'Limits',
     ...limitLines(routine.limits).map((l) => `  ${l}`),
@@ -768,28 +773,30 @@ async function pendingConfirmations(
     if (read.nextCursor === null) break;
     cursor = read.nextCursor;
   }
-  const logins = new Map<string, string | undefined>();
+  // Each claimant looked up once, null when the lookup fails.
+  const claimants = new Map<string, AgentResponse | null>();
   for (const task of submitted) {
     if (!awaitingVerdict(task, signer.agentId)) continue;
     const claimant = task.claimantAgentId;
     if (claimant === null) continue;
-    if (!logins.has(claimant)) {
-      let login: string | undefined;
+    if (!claimants.has(claimant)) {
+      let agent: AgentResponse | null = null;
       try {
-        login = (await api.getAgent(claimant)).operator.login;
+        agent = await api.getAgent(claimant);
       } catch {
         // Unknown, so not allowed.
       }
-      logins.set(claimant, login);
+      claimants.set(claimant, agent);
     }
-    const login = logins.get(claimant);
-    if (!isAllowed(routine, login)) {
+    const agent = claimants.get(claimant) ?? null;
+    if (!isAllowed(routine, agent)) {
+      const slug = agent === null ? undefined : operatorSlugOf(agent);
       skipped.push({
         action: 'confirm',
         taskId: task.id,
         reason: 'claimant_not_allowed',
         taskType: task.taskType,
-        ...(login === undefined ? {} : { operator: login }),
+        ...(slug === undefined ? {} : { operator: slug }),
       });
       continue;
     }
@@ -864,6 +871,7 @@ async function status(cmd: Command): Promise<void> {
           confirmed: today.confirms.used,
         },
         allow: routine.allow,
+        allowSlugs: routine.allowSlugs,
         lastRun,
         waiting,
       }),
@@ -887,9 +895,7 @@ async function status(cmd: Command): Promise<void> {
   stdout(
     `Per run   ${routine.limits.minutesPerRun} minutes, ${routine.limits.tokensPerRun.toLocaleString('en-US')} tokens`,
   );
-  stdout(
-    `Allowed   ${routine.allow.length === 0 ? 'nobody yet' : routine.allow.join(', ')}`,
-  );
+  stdout(`Allowed   ${allowedNames(routine)}`);
   stdout(
     lastRun
       ? `Last run  ${lastRun.at}. ${runLine(lastRun)}`

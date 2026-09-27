@@ -24,6 +24,7 @@ import {
 } from './config.js';
 import { readEnv } from './env.js';
 import { dayOf } from './log.js';
+import { slugOfAnswer } from './operator-slug.js';
 
 // The guardrails of sealkeeper routine (VOU-138), shared by the routine
 // command and by the task commands a routine run's agent calls.
@@ -177,7 +178,8 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     action: z.enum(['claim', 'confirm']),
     taskId: z.string(),
     reason: SkipReason,
-    // The poster's or claimant's operator login, when known.
+    // The poster's or claimant's operator slug, when known. A GitHub login
+    // on lines written before VOU-196.
     operator: z.string().optional(),
     taskType: z.string().optional(),
   }),
@@ -310,12 +312,46 @@ export function skippedIds(
 // How far back routine status lists work left for a person.
 export const SKIP_LIST_DAYS = 7;
 
-// The login as the allowlist holds it.
+// A GitHub login or an operator slug, trimmed and lowercased, so two
+// spellings of one compare equal.
 export const normalLogin = (login: string): string =>
   login.trim().toLowerCase();
 
-export function isAllowed(routine: RoutineConfig, login: string | undefined) {
-  return login !== undefined && routine.allow.includes(normalLogin(login));
+// The agent answer isAllowed reads, a poster or a claimant from
+// GET /v1/agents/:id.
+export type AllowedAgent = {
+  handle?: string | null;
+  operator: { login: string; slug?: string | null };
+};
+
+// True when the agent's operator is on the allowlist. An entry in
+// allowSlugs matches the slug the API sent, operator.slug or the first half
+// of the handle, never the login, so an answer without one matches no slug
+// entry. An entry in allow, a GitHub login from before VOU-196, matches the
+// login only, as it did when it was added, so a slug another operator
+// picks never inherits it. Case does not matter on either side. An agent
+// that could not be looked up is not allowed.
+export function isAllowed(
+  routine: RoutineConfig,
+  agent: AllowedAgent | null | undefined,
+): boolean {
+  if (agent === null || agent === undefined) return false;
+  const login = normalLogin(agent.operator.login);
+  if (routine.allow.some((entry) => normalLogin(entry) === login)) return true;
+  const slug = slugOfAnswer(agent);
+  return (
+    slug !== undefined &&
+    routine.allowSlugs.some((entry) => normalLogin(entry) === slug)
+  );
+}
+
+// The allowlist as people read it, slugs first, each login marked as one.
+export function allowedNames(routine: RoutineConfig): string {
+  const names = [
+    ...routine.allowSlugs,
+    ...routine.allow.map((login) => `${login} (GitHub login)`),
+  ];
+  return names.length === 0 ? 'nobody yet' : names.join(', ');
 }
 
 const Lock = z.object({

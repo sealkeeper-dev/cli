@@ -14,7 +14,12 @@ import type { Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
-import type { TaskResponse, TaskSubmissionResponse } from '../responses.js';
+import {
+  type AgentResponse,
+  operatorSlugOf,
+  type TaskResponse,
+  type TaskSubmissionResponse,
+} from '../responses.js';
 import {
   activeRoutineRun,
   appendRoutine,
@@ -278,15 +283,17 @@ async function routineRefusal(
     });
     return `nothing reported. The routine's daily limit of ${budget.cap} confirmations is reached`;
   }
-  let login: string | undefined;
+  let claimant: AgentResponse | null = null;
   if (task.claimantAgentId !== null) {
     try {
-      login = (await api.getAgent(task.claimantAgentId)).operator.login;
+      claimant = await api.getAgent(task.claimantAgentId);
     } catch {
       // Unknown, so not allowed.
     }
   }
-  if (isAllowed(routine, login)) return null;
+  if (isAllowed(routine, claimant)) return null;
+  // The claimant's operator slug, as its handle shows it.
+  const slug = claimant === null ? undefined : operatorSlugOf(claimant);
   await appendRoutine({
     kind: 'skip',
     runId,
@@ -294,9 +301,9 @@ async function routineRefusal(
     taskId: task.id,
     reason: 'claimant_not_allowed',
     taskType: task.taskType,
-    ...(login === undefined ? {} : { operator: login }),
+    ...(slug === undefined ? {} : { operator: slug }),
   });
-  return `nothing reported. ${login ?? 'The claimant'} is not on the routine allowlist, so this outcome waits for a person`;
+  return `nothing reported. ${slug ?? 'The claimant'} is not on the routine allowlist, so this outcome waits for a person`;
 }
 
 // The same checks the API runs, and expiry, done first so nothing is signed

@@ -44,6 +44,7 @@ import { mayAskToPost, recordAskedToPost } from '../post-prompt.js';
 import {
   type AgentResponse,
   agentHandle,
+  operatorSlugOf,
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
@@ -854,7 +855,8 @@ export async function routineCandidates(
     if (task.posterAgentId === agentId) continue;
     const login = await posters.operatorOf(task);
     if (login !== undefined && normalLogin(login) === own) continue;
-    if (isAllowed(routine, login)) {
+    const slug = await posters.slugOf(task);
+    if (isAllowed(routine, await posters.get(task.posterAgentId))) {
       tasks.push(task);
       continue;
     }
@@ -863,7 +865,7 @@ export async function routineCandidates(
       taskId: task.id,
       reason: 'poster_not_allowed',
       taskType: task.taskType,
-      ...(login === undefined ? {} : { operator: login }),
+      ...(slug === undefined ? {} : { operator: slug }),
     });
   }
 
@@ -889,12 +891,14 @@ export async function routineCandidates(
     }
     const login = await operatorOf(task);
     if (login !== undefined && normalLogin(login) === own) continue;
+    // Cached by now, or undefined past the lookup cap.
+    const slug = login === undefined ? undefined : await posters.slugOf(task);
     skipped.push({
       action: 'claim',
       taskId: task.id,
       reason: 'open_task',
       taskType: task.taskType,
-      ...(login === undefined ? {} : { operator: login }),
+      ...(slug === undefined ? {} : { operator: slug }),
     });
   }
   // A stable sort, so tasks of one type keep the order ranked gave them.
@@ -931,9 +935,10 @@ export async function routineHeld(
       continue;
     }
     const login = await posters.operatorOf(task);
+    const slug = await posters.slugOf(task);
     if (
-      login !== undefined &&
-      (normalLogin(login) === own || isAllowed(routine, login))
+      (login !== undefined && normalLogin(login) === own) ||
+      isAllowed(routine, await posters.get(task.posterAgentId))
     ) {
       kept.push(task);
       continue;
@@ -943,7 +948,7 @@ export async function routineHeld(
       taskId: task.id,
       reason: task.assignee ? 'poster_not_allowed' : 'open_task',
       taskType: task.taskType,
-      ...(login === undefined ? {} : { operator: login }),
+      ...(slug === undefined ? {} : { operator: slug }),
     });
   }
   return { tasks: kept, skipped };
@@ -1119,11 +1124,19 @@ export class PosterLookup {
   }
 
   // The poster's operator login from a lookup, undefined when it fails.
+  // The own operator check compares it with the login in config.json.
   async operatorOf(task: TaskResponse): Promise<string | undefined> {
     return (await this.get(task.posterAgentId))?.operator.login;
   }
 
-  // The poster's handle, login/name, or its id when the API does not say.
+  // The poster's operator slug from a lookup, as the handle shows it, to
+  // name the operator of skipped work. undefined when the lookup fails.
+  async slugOf(task: TaskResponse): Promise<string | undefined> {
+    const poster = await this.get(task.posterAgentId);
+    return poster === null ? undefined : operatorSlugOf(poster);
+  }
+
+  // The poster's handle, slug/name, or its id when the API does not say.
   async handle(agentId: string): Promise<string> {
     const agent = await this.get(agentId);
     return agent === null ? agentId : agentHandle(agent);

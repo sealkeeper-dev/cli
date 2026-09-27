@@ -22,6 +22,7 @@ import {
   insideHome,
 } from '../key-guard.js';
 import { POST_WHY } from '../ladder.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
@@ -260,7 +261,10 @@ async function postAndPrint(
   await refuseKeyInTask(cmd, request);
   const { config, signer, api } = await openTaskSession(cmd, deps);
   // The API refuses these too. Said here, nothing is signed for them.
-  if (assignee !== undefined && ownAgent(assignee, config, signer.agentId)) {
+  if (
+    assignee !== undefined &&
+    ownAgent(assignee, await ownSlug(config), signer.agentId)
+  ) {
     cmd.error(sameOperator(assignee));
   }
   let task: TaskResponse;
@@ -437,6 +441,7 @@ export async function guidedPost(
   why = true,
 ): Promise<void> {
   const config = await requireConfig(cmd);
+  const own = { slug: await ownSlug(config), agentId: config.agentId };
   const given = options.for?.trim();
   if (given !== undefined) {
     if (!AgentRef.safeParse(given).success) {
@@ -444,7 +449,7 @@ export async function guidedPost(
         `--for must be a handle operator/name or an agent id, got ${given}`,
       );
     }
-    if (ownAgent(given, config, config.agentId)) cmd.error(sameOperator(given));
+    if (ownAgent(given, own.slug, own.agentId)) cmd.error(sameOperator(given));
   }
   stdout('');
   stdout('Post a task for other agents to solve.');
@@ -469,7 +474,7 @@ export async function guidedPost(
       ? null
       : given !== undefined
         ? given
-        : await askAssignee(input, config);
+        : await askAssignee(input, own);
   if (template === null || task === null || assignee === null) {
     stdout(NOTHING_POSTED);
     return;
@@ -545,7 +550,7 @@ async function askTask(
 // when the input closed or no answer fits after MAX_ASKS tries.
 async function askAssignee(
   input: Input,
-  config: { operatorLogin: string; agentId: string },
+  own: { slug: string; agentId: string },
 ): Promise<string | null> {
   for (let asked = 0; asked < MAX_ASKS; asked++) {
     ask(
@@ -559,7 +564,7 @@ async function askAssignee(
       stdout(`${ref} is not a handle operator/name or an agent id.`);
       continue;
     }
-    if (ownAgent(ref, config, config.agentId)) {
+    if (ownAgent(ref, own.slug, own.agentId)) {
       stdout(`${sameOperator(ref)}.`);
       continue;
     }
@@ -637,20 +642,30 @@ export function postLines(
   return lines;
 }
 
+// The slug of this agent's operator, the first half of its handles. The
+// one the API last sent, stored in operator-slug.json (VOU-187), else the
+// login lowercased, which is the slug every operator starts with.
+async function ownSlug(config: {
+  operatorLogin: string;
+  agentId: string;
+}): Promise<string> {
+  return (
+    (await readOperatorSlug(config.agentId)) ??
+    config.operatorLogin.toLowerCase()
+  );
+}
+
 // True when ref names this agent, by id, or any agent of its operator, by a
-// handle with the operator's login. Logins ignore case, as on GitHub. The
-// login is the one saved in config.json at init, so after a GitHub rename
-// this check misses and the API's same_operator refusal still catches it.
-function ownAgent(
-  ref: string,
-  config: { operatorLogin: string },
-  agentId: string,
-): boolean {
+// handle with the operator's slug. Case does not matter, as in a handle
+// lookup. The slug is the one stored when the API last sent it, so right
+// after a slug change on the web this check can miss until the next answer
+// stores the new one, and the API's same_operator refusal still catches it.
+// That refusal is the real check, this one only saves a signature.
+function ownAgent(ref: string, slug: string, agentId: string): boolean {
   if (ref === agentId) return true;
   const slash = ref.indexOf('/');
   return (
-    slash !== -1 &&
-    ref.slice(0, slash).toLowerCase() === config.operatorLogin.toLowerCase()
+    slash !== -1 && ref.slice(0, slash).toLowerCase() === slug.toLowerCase()
   );
 }
 

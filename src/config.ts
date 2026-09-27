@@ -122,9 +122,17 @@ export type RoutineSchedule = z.infer<typeof RoutineSchedule>;
 // config routine, and then read as the defaults.
 export const RoutineConfig = z.object({
   limits: RoutineLimits.default(() => ({ ...ROUTINE_LIMIT_DEFAULTS })),
-  // GitHub logins, lower case, whose addressed tasks and counterparty
-  // submissions a routine run may take without a person.
+  // The operators whose addressed tasks and counterparty submissions a
+  // routine run may take without a person. allow holds GitHub logins, lower
+  // case, added by CLI 0.4.8 and earlier, and still matches them by login,
+  // as those CLIs do. allowSlugs holds operator slugs, added since VOU-196,
+  // matched by slug. Two keys, so a CLI from before VOU-196 that reads this
+  // file never takes a slug for a login. A slug is chosen on the web and
+  // freed 90 days after a change, so a login entry matched by slug would
+  // let whoever takes that slug in. Those CLIs drop allowSlugs when they
+  // write the file, which leaves fewer operators allowed, never more.
   allow: z.array(z.string().min(1)).default(() => []),
+  allowSlugs: z.array(z.string().min(1)).default(() => []),
   schedule: RoutineSchedule.optional(),
   // Set by routine pause, or by a third failed run in a row. Runs do
   // nothing until routine resume.
@@ -138,7 +146,7 @@ export const RoutineConfig = z.object({
 export type RoutineConfig = z.infer<typeof RoutineConfig>;
 
 export function defaultRoutineConfig(): RoutineConfig {
-  return { limits: { ...ROUTINE_LIMIT_DEFAULTS }, allow: [] };
+  return { limits: { ...ROUTINE_LIMIT_DEFAULTS }, allow: [], allowSlugs: [] };
 }
 
 // config.json. Read loosely, so a key a newer CLI wrote is kept, and
@@ -402,8 +410,9 @@ export async function readRoutineConfig(
   return result.data;
 }
 
+// Takes the input shape, so a key left out is written as its default.
 export async function writeRoutineConfig(
-  routine: RoutineConfig,
+  routine: z.input<typeof RoutineConfig>,
   p: Paths = paths(),
 ): Promise<RoutineConfig> {
   const parsed = RoutineConfig.parse(routine);

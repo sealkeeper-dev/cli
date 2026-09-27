@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { OperatorSlug } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
@@ -9,8 +10,9 @@ import {
 } from '../config.js';
 import { cli } from '../invocation.js';
 import { NUDGE_OFF, NUDGE_ON, setNudge } from '../nudge.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { stdout, wantsJson } from '../output.js';
-import { normalLogin } from '../routine.js';
+import { allowedNames, normalLogin } from '../routine.js';
 import { LIMIT_OPTIONS, limitLines } from './routine.js';
 import { AUTO_SYNC_ON } from './sync.js';
 
@@ -117,14 +119,16 @@ function registerRoutine(parent: Command): void {
       const current = await loadRoutineConfig(this);
       if (wantsJson(this)) {
         stdout(
-          JSON.stringify({ limits: current.limits, allow: current.allow }),
+          JSON.stringify({
+            limits: current.limits,
+            allow: current.allow,
+            allowSlugs: current.allowSlugs,
+          }),
         );
         return;
       }
       for (const line of limitLines(current.limits)) stdout(line);
-      stdout(
-        `Allowed operators: ${current.allow.length === 0 ? 'nobody yet' : current.allow.join(', ')}`,
-      );
+      stdout(`Allowed operators: ${allowedNames(current)}`);
     });
 
   const names = Object.keys(LIMIT_OPTIONS).join(', ');
@@ -162,49 +166,68 @@ function registerRoutine(parent: Command): void {
     .description(
       'Let routine runs take addressed tasks and submissions from an operator',
     )
-    .argument('<login>', 'the operator GitHub login')
-    .action(async function (this: Command, login: string): Promise<void> {
-      await changeAllow(this, login, 'add');
+    .argument('<operator>', 'the operator slug, the first half of its handles')
+    .action(async function (this: Command, operator: string): Promise<void> {
+      await changeAllow(this, operator, 'add');
     });
 
   routine
     .command('disallow')
     .description('Take an operator off the routine allowlist')
-    .argument('<login>', 'the operator GitHub login')
-    .action(async function (this: Command, login: string): Promise<void> {
-      await changeAllow(this, login, 'remove');
+    .argument('<operator>', 'the operator slug, as the allowlist shows it')
+    .action(async function (this: Command, operator: string): Promise<void> {
+      await changeAllow(this, operator, 'remove');
     });
 }
 
-// A GitHub login. Letters, digits and single hyphens, at most 39.
-const LOGIN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
-
+// New entries are operator slugs (VOU-196), as posters are shown by their
+// handle, slug/name, and go to allowSlugs. Entries in allow are GitHub
+// logins added before, still matched by login, never by slug. None is
+// moved across, since a login and a slug of one spelling can belong to two
+// operators. disallow takes a name off both lists, a login that is no slug
+// included.
 async function changeAllow(
   cmd: Command,
   raw: string,
   change: 'add' | 'remove',
 ): Promise<void> {
-  const login = normalLogin(raw);
-  if (!LOGIN.test(login)) cmd.error(`not a GitHub login: ${raw}`);
+  const operator = normalLogin(raw);
   const config = await requireConfig(cmd);
   const current = await loadRoutineConfig(cmd);
-  if (change === 'add' && normalLogin(config.operatorLogin) === login) {
+  const same = (entry: string) => normalLogin(entry) === operator;
+  const listed = current.allow.some(same) || current.allowSlugs.some(same);
+  if (
+    (change === 'add' || !listed) &&
+    !OperatorSlug.safeParse(operator).success
+  ) {
     cmd.error(
-      'tasks between agents of the same operator never count, so your own login is not added',
+      `not an operator slug: ${raw}. A slug is the first half of a handle, lowercase letters, digits and single hyphens`,
+    );
+  }
+  const own =
+    (await readOperatorSlug(config.agentId)) ??
+    normalLogin(config.operatorLogin);
+  if (change === 'add' && own === operator) {
+    cmd.error(
+      'tasks between agents of the same operator never count, so your own operator is not added',
     );
   }
   const allow =
     change === 'add'
-      ? [...new Set([...current.allow, login])].sort()
-      : current.allow.filter((l) => l !== login);
-  await writeRoutineConfig({ ...current, allow });
+      ? current.allow
+      : current.allow.filter((entry) => !same(entry));
+  const allowSlugs =
+    change === 'add'
+      ? [...new Set([...current.allowSlugs, operator])].sort()
+      : current.allowSlugs.filter((entry) => !same(entry));
+  await writeRoutineConfig({ ...current, allow, allowSlugs });
   if (wantsJson(cmd)) {
-    stdout(JSON.stringify({ allow }));
+    stdout(JSON.stringify({ allow, allowSlugs }));
     return;
   }
   stdout(
     change === 'add'
-      ? `${login} is allowed. Routine runs may claim tasks ${login} addresses to this agent and confirm submissions from ${login}.`
-      : `${login} is off the allowlist.`,
+      ? `${operator} is allowed. Routine runs may claim tasks ${operator} addresses to this agent and confirm submissions from ${operator}.`
+      : `${operator} is off the allowlist.`,
   );
 }

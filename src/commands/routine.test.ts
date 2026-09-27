@@ -30,6 +30,7 @@ import {
 } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
+import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import {
@@ -37,6 +38,7 @@ import {
   activeRoutineRun,
   appendRoutine,
   ensureWorkDir,
+  isAllowed,
   type RoutineEntry,
   readLiveLock,
   readRoutine,
@@ -87,10 +89,24 @@ const SEED_AGENT = `${'S'.repeat(42)}A`;
 const BOB_AGENT = `${'B'.repeat(42)}A`;
 // An agent of mallory, never on the allowlist.
 const MALLORY_AGENT = `${'M'.repeat(42)}A`;
+// An agent of carol, whose login is Carol and whose slug was changed to
+// carol-ai on the web (VOU-196).
+const CAROL_AGENT = `${'K'.repeat(42)}A`;
+// An agent of another operator, whose login is dan and whose slug is carol,
+// Carol's login, which Carol gave up as a slug and dan took.
+const DAN_AGENT = `${'D'.repeat(42)}A`;
 const LOGINS: Record<string, string> = {
   [SEED_AGENT]: 'sealkeeper-dev',
   [BOB_AGENT]: 'bob',
   [MALLORY_AGENT]: 'mallory',
+  [CAROL_AGENT]: 'Carol',
+  [DAN_AGENT]: 'dan',
+};
+// The slug each agent answer carries. The rest send none, as an API before
+// slugs, and their slug is the login lowercased.
+const SLUGS: Record<string, string> = {
+  [CAROL_AGENT]: 'carol-ai',
+  [DAN_AGENT]: 'carol',
 };
 const PROGRAM = ['/usr/bin/node', '/opt/sealkeeper/dist/index.js'];
 const INVOCATION = '"/usr/bin/node" "/opt/sealkeeper/dist/index.js"';
@@ -215,7 +231,10 @@ class FakeApi {
         id,
         name: 'x',
         version: '1.0.0',
-        operator: { login: LOGINS[id] ?? 'alice' },
+        operator: {
+          login: LOGINS[id] ?? 'alice',
+          ...(SLUGS[id] === undefined ? {} : { slug: SLUGS[id] }),
+        },
         createdAt: '2026-09-22T00:00:00.000Z',
         operatedBySealKeeper: id === SEED_AGENT,
       });
@@ -1283,6 +1302,102 @@ describe('routine', () => {
       );
     });
 
+    describe('allowlist by operator slug (VOU-196)', () => {
+      const addressedFrom = (poster: string) =>
+        api.add({
+          posterAgentId: poster,
+          assignee: { id: agentId, handle: 'alice/scout' },
+        });
+
+      it('prove claims an addressed task from an operator allowed by slug', async () => {
+        await setRoutine({ allowSlugs: ['carol-ai'] });
+        const fromCarol = addressedFrom(CAROL_AGENT);
+        const fromDan = addressedFrom(DAN_AGENT);
+        const result = await run('prove', '--json');
+        expect(result.code).toBe(0);
+        expect(api.claimed).toEqual([fromCarol.id]);
+        expect(await readRoutine()).toContainEqual(
+          expect.objectContaining({
+            kind: 'skip',
+            taskId: fromDan.id,
+            reason: 'poster_not_allowed',
+            operator: 'carol',
+          }),
+        );
+      });
+
+      it('an old login entry matches while the slug is still the login', async () => {
+        // bob's answer carries no slug, so it is the login lowercased.
+        await setRoutine({ allow: ['bob'] });
+        const fromBob = addressedFrom(BOB_AGENT);
+        expect((await run('prove', '--json')).code).toBe(0);
+        expect(api.claimed).toEqual([fromBob.id]);
+      });
+
+      it('an old login entry keeps matching the login, never a slug of that spelling', async () => {
+        // carol is Carol's login and now dan's slug. The entry was added as
+        // a login, so it still allows Carol and never dan.
+        await setRoutine({ allow: ['carol'] });
+        const fromCarol = addressedFrom(CAROL_AGENT);
+        const fromDan = addressedFrom(DAN_AGENT);
+        expect((await run('prove', '--json')).code).toBe(0);
+        expect(api.claimed).toEqual([fromCarol.id]);
+        expect(await readRoutine()).toContainEqual(
+          expect.objectContaining({
+            kind: 'skip',
+            taskId: fromDan.id,
+            reason: 'poster_not_allowed',
+            operator: 'carol',
+          }),
+        );
+      });
+
+      it('a slug entry never matches a login', async () => {
+        // bob's answer carries no slug and no handle, so no slug entry can
+        // match it, and carol matches dan by slug, not Carol by login.
+        await setRoutine({ allowSlugs: ['bob', 'carol'] });
+        const fromBob = addressedFrom(BOB_AGENT);
+        const fromCarol = addressedFrom(CAROL_AGENT);
+        const fromDan = addressedFrom(DAN_AGENT);
+        expect((await run('prove', '--json')).code).toBe(0);
+        expect(api.claimed).toEqual([fromDan.id]);
+        const skipped = (await readRoutine()).filter((e) => e.kind === 'skip');
+        expect(skipped.map((e) => e.taskId).sort()).toEqual(
+          [fromBob.id, fromCarol.id].sort(),
+        );
+      });
+
+      it('tasks outcome confirms a claimant allowed by slug and names the slug otherwise', async () => {
+        await setRoutine({ allowSlugs: ['Carol-AI'] });
+        const submitted = (claimant: string) =>
+          api.add({
+            posterAgentId: agentId,
+            claimantAgentId: claimant,
+            verification: { kind: 'counterparty' },
+            state: 'submitted',
+            submittedAt: new Date().toISOString(),
+          });
+        const fromDan = submitted(DAN_AGENT);
+        const refused = await run(
+          'tasks',
+          'outcome',
+          fromDan.id,
+          'success',
+          '--yes',
+        );
+        expect(refused.code).toBe(1);
+        expect(refused.err).toContain(
+          'carol is not on the routine allowlist, so this outcome waits for a person',
+        );
+        const fromCarol = submitted(CAROL_AGENT);
+        expect(
+          (await run('tasks', 'outcome', fromCarol.id, 'success', '--yes'))
+            .code,
+        ).toBe(0);
+        expect(api.outcomes).toHaveLength(1);
+      });
+    });
+
     it('prove stops at the daily claim limit', async () => {
       await setRoutine({
         limits: { ...defaultRoutineConfig().limits, claimsPerDay: 2 },
@@ -1647,10 +1762,107 @@ describe('routine', () => {
     const shown = await run('config', 'routine', 'show', '--json');
     expect(JSON.parse(shown.out)).toMatchObject({
       limits: { claimsPerDay: 4 },
-      allow: ['bob'],
+      allow: [],
+      allowSlugs: ['bob'],
     });
     await run('config', 'routine', 'disallow', 'bob');
-    expect((await readRoutineConfig())?.allow).toEqual([]);
+    expect((await readRoutineConfig())?.allowSlugs).toEqual([]);
+  });
+
+  describe('config routine allow takes operator slugs (VOU-196)', () => {
+    it.each([['bob_x'], ['bob--x'], ['bob-'], ['alice/bot'], ['b'.repeat(40)]])(
+      'refuses %s, which is no operator slug',
+      async (value) => {
+        const result = await run('config', 'routine', 'allow', value);
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(`not an operator slug: ${value}`);
+        expect((await readRoutineConfig()).allowSlugs).toEqual([]);
+      },
+    );
+
+    it('refuses the stored own slug and takes the old own login as another slug', async () => {
+      await saveOperatorSlug(agentId, 'alice-dev');
+      const own = await run('config', 'routine', 'allow', 'Alice-Dev');
+      expect(own.code).toBe(1);
+      expect(own.err).toContain('your own operator is not added');
+      const old = await run('config', 'routine', 'allow', 'alice');
+      expect(old.code).toBe(0);
+      expect(old.out).toContain('alice is allowed.');
+      expect((await readRoutineConfig()).allowSlugs).toEqual(['alice']);
+    });
+
+    it('keeps old login entries apart and takes one off whatever its case or shape', async () => {
+      await setRoutine({ allow: ['Old--Login', 'bob'] });
+      const added = await run(
+        'config',
+        'routine',
+        'allow',
+        'carol-ai',
+        '--json',
+      );
+      expect(added.code).toBe(0);
+      expect(JSON.parse(added.out)).toEqual({
+        allow: ['Old--Login', 'bob'],
+        allowSlugs: ['carol-ai'],
+      });
+      const shown = await run('config', 'routine', 'show');
+      expect(shown.out).toContain(
+        'Allowed operators: carol-ai, Old--Login (GitHub login), bob (GitHub login)',
+      );
+      expect(
+        (await run('config', 'routine', 'disallow', 'old--login')).code,
+      ).toBe(0);
+      expect((await run('config', 'routine', 'disallow', 'BOB')).code).toBe(0);
+      expect(
+        (await run('config', 'routine', 'disallow', 'carol-ai')).code,
+      ).toBe(0);
+      const after = await readRoutineConfig();
+      expect(after.allow).toEqual([]);
+      expect(after.allowSlugs).toEqual([]);
+      const missing = await run('config', 'routine', 'disallow', 'x--y');
+      expect(missing.code).toBe(1);
+    });
+
+    it('reads a routine.json from an older CLI, logins in allow only', async () => {
+      await writeFile(
+        paths().routine,
+        `${JSON.stringify({ limits: defaultRoutineConfig().limits, allow: ['bob'] })}\n`,
+      );
+      const read = await readRoutineConfig();
+      expect(read.allow).toEqual(['bob']);
+      expect(read.allowSlugs).toEqual([]);
+    });
+
+    it('matches login entries by login and slug entries by slug, case ignored', () => {
+      const routine = {
+        ...defaultRoutineConfig(),
+        allow: ['Bob'],
+        allowSlugs: ['carol-ai'],
+      };
+      const agent = (login: string, slug?: string, handle?: string) => ({
+        operator: { login, ...(slug === undefined ? {} : { slug }) },
+        ...(handle === undefined ? {} : { handle }),
+      });
+      expect(isAllowed(routine, agent('bob'))).toBe(true);
+      expect(isAllowed(routine, agent('BOB', 'robert'))).toBe(true);
+      // A slug bob taken by another operator is not the login entry bob.
+      expect(isAllowed(routine, agent('mallory', 'bob'))).toBe(false);
+      expect(isAllowed(routine, agent('Carol', 'carol-ai'))).toBe(true);
+      expect(isAllowed(routine, agent('Carol', undefined, 'carol-ai/x'))).toBe(
+        true,
+      );
+      // A login is never read as a slug.
+      expect(isAllowed(routine, agent('carol-ai'))).toBe(false);
+      expect(isAllowed(routine, agent('Carol', 'carol'))).toBe(false);
+      expect(isAllowed(routine, null)).toBe(false);
+      expect(isAllowed(routine, undefined)).toBe(false);
+    });
+
+    it('names the operator in its help', async () => {
+      const help = await run('config', 'routine', 'allow', '--help');
+      expect(help.out).toContain('<operator>');
+      expect(help.out).not.toContain('login');
+    });
   });
 
   it('keeps the working directory out of the CLI home, one per home', () => {

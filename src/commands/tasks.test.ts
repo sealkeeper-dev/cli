@@ -31,6 +31,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
+import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import {
@@ -1478,6 +1479,23 @@ describe('tasks pull, submit and post', () => {
       expect(api.requests).toEqual([]);
     });
 
+    it('checks the guided walk --for against the stored slug (VOU-196)', async () => {
+      await saveOperatorSlug(agentId, 'alice-dev');
+      stdoutTTY = true;
+      const input = answers('1', '', 'y');
+      stdin = input;
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--for',
+        'alice-dev/other',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain(sameOperator('alice-dev/other'));
+      expect(input.reads).toBe(0);
+      expect(api.requests).toEqual([]);
+    });
+
     it('still names a missing option when some are given', async () => {
       const { code, err } = await run('tasks', 'post', '--type', 'summarise');
       expect(code).toBe(1);
@@ -1809,6 +1827,40 @@ describe('tasks pull, submit and post', () => {
         expect(api.requests).toEqual([]);
       },
     );
+
+    describe('own agent by operator slug (VOU-196)', () => {
+      it('refuses a handle with the stored slug after a slug change', async () => {
+        await saveOperatorSlug(agentId, 'alice-dev');
+        const { code, err } = await postFor('Alice-Dev/other');
+        expect(code).toBe(1);
+        expect(err).toBe(`${sameOperator('Alice-Dev/other')}\n`);
+        expect(api.requests).toEqual([]);
+      });
+
+      it('signs for another operator whose slug is this operator login', async () => {
+        await saveOperatorSlug(agentId, 'alice-dev');
+        const { code } = await postFor('alice/writer');
+        expect(code).toBe(0);
+        expect(PostTaskRequest.parse(api.posts()[0]?.payload).assignee).toBe(
+          'alice/writer',
+        );
+      });
+
+      it('falls back to the login lowercased when no slug is stored', async () => {
+        const { code, err } = await postFor('alice/other');
+        expect(code).toBe(1);
+        expect(err).toBe(`${sameOperator('alice/other')}\n`);
+        expect(api.requests).toEqual([]);
+      });
+
+      it('ignores a slug stored for another agent', async () => {
+        await saveOperatorSlug(OTHER_AGENT, 'alice-dev');
+        const { code } = await postFor('alice-dev/writer');
+        expect(code).toBe(0);
+        const refused = await postFor('alice/other');
+        expect(refused.code).toBe(1);
+      });
+    });
 
     it.each([
       [404, 'not_found', noAssignee('bob/writer')],

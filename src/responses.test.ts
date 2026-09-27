@@ -10,12 +10,14 @@ import { createApiClient } from './api.js';
 import {
   AgentRenamedResponse,
   AgentResponse,
+  agentHandle,
   CheckResponse,
   CredentialPayload,
   CredentialResponse,
   ErrorResponse,
   EventsBatchResponse,
   ListTasksResponse,
+  operatorSlugOf,
   RatingResponse,
   runBySealKeeper,
   ScoreResponse,
@@ -517,5 +519,55 @@ describe('runBySealKeeper', () => {
     });
     expect(both.operatedBySealKeeper).toBe(true);
     expect(runBySealKeeper(both)).toBe(true);
+  });
+});
+
+describe('agentHandle and operatorSlugOf (VOU-196)', () => {
+  const name = 'scout';
+  it('takes the handle the API sends', () => {
+    expect(
+      agentHandle({
+        handle: 'alice-dev/scout',
+        operator: { login: 'Alice', slug: 'alice-dev' },
+        name,
+      }),
+    ).toBe('alice-dev/scout');
+  });
+
+  it('builds the handle from operator.slug when an older API sends none', () => {
+    expect(
+      agentHandle({ operator: { login: 'Alice', slug: 'alice-dev' }, name }),
+    ).toBe('alice-dev/scout');
+  });
+
+  it('builds it from the login lowercased when there is no slug either', () => {
+    expect(agentHandle({ operator: { login: 'Alice' }, name })).toBe(
+      'alice/scout',
+    );
+  });
+
+  it('reads the slug from operator.slug, then the handle, then the login', () => {
+    expect(
+      operatorSlugOf({
+        handle: 'other/scout',
+        operator: { login: 'Alice', slug: 'alice-dev' },
+      }),
+    ).toBe('alice-dev');
+    expect(
+      operatorSlugOf({
+        handle: 'alice-dev/scout',
+        operator: { login: 'Alice' },
+      }),
+    ).toBe('alice-dev');
+    expect(operatorSlugOf({ operator: { login: 'Alice' } })).toBe('alice');
+  });
+
+  it('drops a slug that does not have the slug shape, as an answer parses', () => {
+    const parsed = AgentResponse.parse({
+      ...agent,
+      operator: { login: 'Alice', slug: 'Not A Slug' },
+    });
+    expect(parsed.operator.slug).toBeUndefined();
+    expect(operatorSlugOf({ operator: parsed.operator })).toBe('alice');
   });
 });

@@ -63,13 +63,32 @@ export const AgentResponse = z.object({
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
 
-// The agent's handle, slug/name. The API sends it, and an older API that
-// does not is covered by building it from the operator and the name.
+// The agent's handle, slug/name. The live API always sends it. An older
+// API that does not is covered by building it from the operator and the
+// name, with operator.slug when the answer carries one, else the login
+// lowercased, the slug every operator starts with.
 export function agentHandle(
   agent: Pick<AgentResponse, 'handle' | 'operator' | 'name'>,
 ): string {
-  return agent.handle ?? `${agent.operator.login}/${agent.name}`;
+  return agent.handle ?? `${slugOrLogin(agent.operator)}/${agent.name}`;
 }
+
+// The slug of the agent's operator, to name it, as in routine skip lines.
+// operator.slug, else the first half of the handle, else the login
+// lowercased from an API before slugs. The routine allowlist never matches
+// on this, since the last fallback is a login, see isAllowed.
+export function operatorSlugOf(
+  agent: Pick<AgentResponse, 'handle' | 'operator'>,
+): string {
+  if (agent.operator.slug !== undefined) return agent.operator.slug;
+  const first = agent.handle?.split('/')[0];
+  return first !== undefined && OperatorSlug.safeParse(first).success
+    ? first
+    : agent.operator.login.toLowerCase();
+}
+
+const slugOrLogin = (operator: AgentResponse['operator']): string =>
+  operator.slug ?? operator.login.toLowerCase();
 
 // True for an agent SealKeeper runs itself, such as the seed agent. Prefers
 // the new field and falls back to the old one.

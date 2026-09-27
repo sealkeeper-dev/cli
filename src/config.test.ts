@@ -193,7 +193,9 @@ describe('config', () => {
         minutesPerRun: 15,
         tokensPerRun: 300_000,
       },
+      // A login from config.json stays a login, never read as a slug.
       allow: ['bob'],
+      allowSlugs: [],
     });
   });
 
@@ -258,6 +260,7 @@ describe('config', () => {
         tokensPerRun: 300_000,
       },
       allow: [],
+      allowSlugs: [],
     });
     await writeFile(
       p.routine,
