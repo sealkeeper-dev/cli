@@ -8,8 +8,9 @@ import { PassThrough } from 'node:stream';
 import {
   base64urlDecode,
   decodeHeader,
+  decodeTasksCursor,
+  encodeTasksCursor,
   readAudience,
-  type TaskResponse,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -30,6 +31,7 @@ import {
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
+import type { TaskResponse } from '../responses.js';
 import {
   acquireLock,
   activeRoutineRun,
@@ -67,6 +69,16 @@ import type { TasksDeps } from '../tasks.js';
 import { PosterLookup, routineCandidates, seedTypesDone } from './prove.js';
 
 const API_URL = 'https://api.test';
+
+// The fake's cursor, a real one from @sealkeeper/schema, so the CLI's check
+// of it passes. It carries the offset of the next page.
+const pageCursor = (offset: number) =>
+  encodeTasksCursor({
+    atMicros: String(offset),
+    id: '00000000-0000-4000-8000-000000000000',
+  });
+const offsetOf = (raw: string | null) =>
+  raw === null ? 0 : Number(decodeTasksCursor(raw)?.atMicros ?? 0);
 const HOUR = 3_600_000;
 const SEED_AGENT = `${'S'.repeat(42)}A`;
 // An agent of bob, who is put on the allowlist in some tests.
@@ -147,15 +159,41 @@ class FakeApi {
     const url = new URL(String(input));
     const method = init?.method ?? 'GET';
     if (method === 'GET' && url.pathname === '/v1/tasks') {
-      const state = url.searchParams.get('state');
-      const assignee = url.searchParams.get('assignee');
-      const tasks = [...this.tasks.values()].filter((t) => {
+      const q = url.searchParams;
+      const state = q.get('state');
+      const assignee = q.get('assignee');
+      const seed = q.get('seed');
+      const matching = [...this.tasks.values()].filter((t) => {
         if (t.state !== state) return false;
+        // poster, claimant and seed as the API filters them (VOU-208).
+        if (q.has('poster') && t.posterAgentId !== q.get('poster')) {
+          return false;
+        }
+        if (q.has('claimant') && t.claimantAgentId !== q.get('claimant')) {
+          return false;
+        }
+        if (
+          seed !== null &&
+          (t.posterAgentId === SEED_AGENT) !== (seed === 'true')
+        ) {
+          return false;
+        }
         if (assignee !== null) return t.assignee?.id === assignee;
         // state open leaves addressed tasks out, as the API does.
         return state !== 'open' || !t.assignee;
       });
-      return Response.json({ tasks });
+      // In the order added, one page at a time. The cursor is the offset
+      // of the next page.
+      const from = offsetOf(q.get('cursor'));
+      const limit = Number(q.get('limit') ?? 50);
+      return Response.json({
+        tasks: matching.slice(from, from + limit).map((t) => ({
+          ...t,
+          seed: t.posterAgentId === SEED_AGENT,
+        })),
+        nextCursor:
+          from + limit < matching.length ? pageCursor(from + limit) : null,
+      });
     }
     if (
       method === 'GET' &&
@@ -962,6 +1000,59 @@ describe('routine', () => {
       // claim allows included.
       expect(prompt).toContain(ANSWER_RULES);
       expect(prompt).toContain('A claim allows 3 failed submits.');
+    });
+
+    it('finds seed tasks behind 150 older open tasks from another poster', async () => {
+      // VOU-208. The routine read one global page of the 100 oldest, so a
+      // flood of older tasks hid every seed task and runs logged nothing.
+      await installed();
+      const old = new Date(Date.now() - 100 * HOUR).toISOString();
+      for (let i = 0; i < 150; i++) {
+        api.add({ posterAgentId: MALLORY_AGENT, postedAt: old });
+      }
+      const seed = api.add();
+      const client = createApiClient({ apiUrl: API_URL, fetch: api.fetch });
+      const found = await routineCandidates(
+        client,
+        new PosterLookup(client),
+        api.agentId,
+        (await readConfig()) as Config,
+        defaultRoutineConfig(),
+      );
+      expect(found.tasks.map((t) => t.id)).toEqual([seed.id]);
+      // The first page of the flood is still noted for a person.
+      expect(found.skipped).toHaveLength(100);
+      expect(found.skipped[0]).toMatchObject({
+        reason: 'open_task',
+        operator: 'mallory',
+      });
+
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(spawned).toHaveLength(1);
+    });
+
+    it('confirms its own submissions past 100 submitted tasks of other posters', async () => {
+      await installed({ allow: ['bob'] });
+      for (let i = 0; i < 120; i++) {
+        api.add({
+          posterAgentId: MALLORY_AGENT,
+          claimantAgentId: BOB_AGENT,
+          verification: { kind: 'counterparty' },
+          state: 'submitted',
+          submittedAt: new Date().toISOString(),
+        });
+      }
+      const fromBob = api.add({
+        posterAgentId: agentId,
+        claimantAgentId: BOB_AGENT,
+        verification: { kind: 'counterparty' },
+        state: 'submitted',
+        submittedAt: new Date().toISOString(),
+      });
+      await run('routine', 'run');
+      expect(spawned).toHaveLength(1);
+      expect(agents[0]?.input).toContain(`<task id="${fromBob.id}"`);
     });
 
     it('pauses itself after three failed runs in a row, until resume', async () => {

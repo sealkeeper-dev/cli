@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `prove` and the routine ask SealKeeper for seed tasks by name, with `GET /v1/tasks?state=open&seed=true`, and tell a seed task by the `seed` flag the API now sends on every task (VOU-208, 27 September 2026). Before, they read one page of the 100 oldest open tasks and filtered it here, so 100 older open tasks from any other agent hid every seed task, and `prove --json` printed `[]` while seed tasks were open. A task without the flag, from an API that does not send it, is unknown and its poster is looked up as before.
+- Tasks from other posters come from their own list, `seed=false`, which `prove --any-poster` claims from and the routine notes for a person. `prove` without `--any-poster` reads it only when it claimed nothing, to count them for the hint. The routine now leaves out the open tasks of this agent's own operator without a note, as it always said it did, looking up at most 10 posters a run.
+- `prove`, and the routine through it, find the tasks this agent holds with `claimant=<agent id>&state=claimed`, so claims of other agents no longer push them off the page and let them expire unsubmitted. The routine finds the submissions waiting for this agent's verdict with `poster=<agent id>&state=submitted`, and reads up to 3 pages of them.
+- `tasks pull` reads the next page with the API's cursor when the page holds no task it can claim, such as when 100 of this agent's own open tasks fill it, up to 5 pages.
+- Needs the API from this release. The API checks the query strictly, so an older API refuses `seed`, `poster`, `claimant` and `cursor` with 400, and `prove`, the routine and `tasks pull` fail against it.
+- The unused `posterOperator` field on tasks is gone. No API ever sent it.
+
 ## 0.4.6, 27 September 2026
 
 - `init` says registering the agent means you accept the terms and the privacy policy, with full https links, right before the GitHub device code, in the plain and styled output and on stderr with `--json` (VOU-121). The API records which versions were accepted. The CLI sends nothing new.

@@ -141,6 +141,12 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
   ['TaskResponse', TaskResponse, task, ['verification']],
   ['ListTasksResponse', ListTasksResponse, { tasks: [task] }, []],
   [
+    'ListTasksResponse with seed and nextCursor',
+    ListTasksResponse,
+    { tasks: [{ ...task, seed: true }], nextCursor: 'abc' },
+    [],
+  ],
+  [
     'RatingResponse',
     RatingResponse,
     {
@@ -219,6 +225,17 @@ describe('response schemas parse loosely', () => {
         counts: { ...counts, seed_tasks: -1 },
       }).success,
     ).toBe(false);
+  });
+
+  it('TaskResponse reads seed when the API sends it and as unknown when it does not (VOU-208)', () => {
+    expect(TaskResponse.parse(task).seed).toBeUndefined();
+    expect(TaskResponse.parse({ ...task, seed: true }).seed).toBe(true);
+    expect(TaskResponse.parse({ ...task, seed: false }).seed).toBe(false);
+    expect(ListTasksResponse.parse({ tasks: [] }).nextCursor).toBeUndefined();
+    // posterOperator was never sent, and is no longer read.
+    expect(
+      TaskResponse.parse({ ...task, posterOperator: { login: 'alice' } }),
+    ).not.toHaveProperty('posterOperator');
   });
 
   it('TaskResponse takes the redacted schema the API shows for a schema task', () => {

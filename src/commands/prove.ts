@@ -743,24 +743,22 @@ async function claim(
   }
   if (tasks.length >= want) return done();
 
+  // Seed tasks are asked for by name, so older tasks from other posters
+  // never push them off the page (VOU-208). Tasks from other posters are
+  // read only when they may be claimed, with --any-poster, or to count them
+  // for the hint when nothing was claimed.
   let open: TaskResponse[];
+  let others: TaskResponse[] = [];
   try {
-    open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
+    open = await openSeedTasks(api, signer.agentId);
+    if (options.anyPoster) others = await openOtherTasks(api, signer.agentId);
   } catch (error) {
     failOnApiError(cmd, error);
   }
-  // The open list leaves addressed tasks out, and this keeps it so
-  // whatever the server sends.
-  const all = await ranked(
-    posters,
-    open.filter(
-      (task) => task.posterAgentId !== signer.agentId && !task.assignee,
-    ),
-  );
+  const all = await ranked(posters, [...open, ...others]);
   const candidates = options.anyPoster
     ? all.map(({ task }) => task)
     : all.filter(({ seed }) => seed).map(({ task }) => task);
-  skipped = all.length - candidates.length;
   for (const task of candidates) {
     if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
     // A task posted by another agent of the same operator never counts
@@ -771,7 +769,53 @@ async function claim(
     if (await posters.sameOperator(task, config.operatorLogin)) continue;
     if (!(await claimOne(task))) break;
   }
+  // The hint names the open tasks other agents posted. A read that fails
+  // only leaves the hint out.
+  if (!options.anyPoster && tasks.length === 0 && !capped) {
+    try {
+      others = await openOtherTasks(api, signer.agentId);
+    } catch {
+      others = [];
+    }
+    skipped = others.filter((task) => task.seed !== true).length;
+  }
   return done();
+}
+
+// Open seed tasks this agent may claim, oldest first. The API filters on
+// the seed agent, so they come whatever other agents posted before them
+// (VOU-208). Every one is a seed task by the API's word, which stands in
+// for the seed flag an answer may not carry. The open list leaves addressed
+// tasks out, and this keeps it so whatever the server sends. Throws what
+// the API client throws.
+async function openSeedTasks(
+  api: ApiClient,
+  agentId: string,
+): Promise<TaskResponse[]> {
+  const open = await api.listTasks({
+    state: 'open',
+    seed: true,
+    limit: LIST_LIMIT,
+  });
+  return open
+    .filter((task) => task.posterAgentId !== agentId && !task.assignee)
+    .map((task) => ({ ...task, seed: true }));
+}
+
+// Open tasks other agents than the seed agent posted, one page, oldest
+// first, the agent's own left out. Throws what the API client throws.
+async function openOtherTasks(
+  api: ApiClient,
+  agentId: string,
+): Promise<TaskResponse[]> {
+  const open = await api.listTasks({
+    state: 'open',
+    seed: false,
+    limit: LIST_LIMIT,
+  });
+  return open.filter(
+    (task) => task.posterAgentId !== agentId && !task.assignee,
+  );
 }
 
 export const claimLimitReached = (cap: number): string =>
@@ -823,17 +867,27 @@ export async function routineCandidates(
     });
   }
 
-  const open = await api.listTasks({ state: 'open', limit: LIST_LIMIT });
-  const all = await ranked(
-    posters,
-    open.filter((task) => task.posterAgentId !== agentId && !task.assignee),
-  );
+  const all = await ranked(posters, [
+    ...(await openSeedTasks(api, agentId)),
+    ...(await openOtherTasks(api, agentId)),
+  ]);
+  // The own operator check looks posters up through the cache, at most
+  // MAX_POSTER_LOOKUPS of them. A task of a poster past that is noted for a
+  // person with no operator named.
+  const looked = new Set<string>();
+  const operatorOf = async (task: TaskResponse) => {
+    if (!looked.has(task.posterAgentId)) {
+      if (looked.size >= MAX_POSTER_LOOKUPS) return undefined;
+      looked.add(task.posterAgentId);
+    }
+    return posters.operatorOf(task);
+  };
   for (const { task, seed } of all) {
     if (seed) {
       seeds.push(task);
       continue;
     }
-    const login = task.posterOperator?.login;
+    const login = await operatorOf(task);
     if (login !== undefined && normalLogin(login) === own) continue;
     skipped.push({
       action: 'claim',
@@ -864,7 +918,14 @@ export async function routineHeld(
   const kept: TaskResponse[] = [];
   const skipped: RoutineCandidates['skipped'] = [];
   for (const task of tasks) {
-    const poster = await posters.get(task.posterAgentId);
+    if (task.seed === true) {
+      kept.push(task);
+      continue;
+    }
+    // Only a task that does not say is looked up here. One the API marks
+    // as no seed task goes straight to the operator check below.
+    const poster =
+      task.seed === undefined ? await posters.get(task.posterAgentId) : null;
     if (poster !== null && runBySealKeeper(poster)) {
       kept.push(task);
       continue;
@@ -998,12 +1059,18 @@ async function heldTasks(
 }
 
 // The claimed tasks the server says this agent holds, which include claims
-// made on another machine. Throws what the API client throws.
+// made on another machine. The API filters on the claimant, so other
+// agents' claims never push these off the page (VOU-208), and the claim
+// cap keeps them to one page. Throws what the API client throws.
 export async function serverHeld(
   api: ApiClient,
   agentId: string,
 ): Promise<TaskResponse[]> {
-  const claimed = await api.listTasks({ state: 'claimed', limit: LIST_LIMIT });
+  const claimed = await api.listTasks({
+    state: 'claimed',
+    claimant: agentId,
+    limit: LIST_LIMIT,
+  });
   return claimed.filter((task) => task.claimantAgentId === agentId);
 }
 
@@ -1051,11 +1118,8 @@ export class PosterLookup {
     return this.agents.get(agentId) ?? null;
   }
 
-  // The poster's operator login, from the task when the API sends it, else
-  // from a lookup. Undefined when neither says.
+  // The poster's operator login from a lookup, undefined when it fails.
   async operatorOf(task: TaskResponse): Promise<string | undefined> {
-    const onTask = task.posterOperator?.login;
-    if (onTask !== undefined) return onTask;
     return (await this.get(task.posterAgentId))?.operator.login;
   }
 
@@ -1066,20 +1130,16 @@ export class PosterLookup {
   }
 
   // True when the task was posted by an agent of the operator named and
-  // not by the seed agent. The operator on the task is used when the API
-  // sends one, else the poster is looked up. When neither says, the task is
-  // kept, since the server has the last word anyway. A poster is looked up
-  // only when the login matches, and through the same cache ranked uses,
-  // so each poster costs at most one request for both questions.
+  // not by the seed agent. Seed tasks count whoever runs the seed agent, so
+  // a task the API marks as seed needs no lookup. Otherwise the poster is
+  // looked up through the same cache ranked uses, so each poster costs at
+  // most one request for both questions. When the lookup fails, the task is
+  // kept, since the server has the last word anyway.
   async sameOperator(task: TaskResponse, login: string): Promise<boolean> {
-    const own = login.toLowerCase();
-    const onTask = task.posterOperator?.login;
-    if (onTask !== undefined && onTask.toLowerCase() !== own) return false;
+    if (task.seed === true) return false;
     const poster = await this.get(task.posterAgentId);
-    // Seed tasks count whoever runs the seed agent.
     if (poster && runBySealKeeper(poster)) return false;
-    if (onTask !== undefined) return true;
-    return poster?.operator.login.toLowerCase() === own;
+    return poster?.operator.login.toLowerCase() === login.toLowerCase();
   }
 }
 
@@ -1089,21 +1149,25 @@ export function anyPosterHint(n: number): string {
 }
 
 // Seed tasks first, then other tasks the server checks on submit, then
-// counterparty tasks. Oldest first within each. The seed agent is found by
-// asking the API about the posters, since only it knows which one
-// SealKeeper runs.
+// counterparty tasks. Oldest first within each. A task says whether it is a
+// seed task (VOU-208). One from an API that does not say is unknown, and
+// its poster is looked up instead, at most MAX_POSTER_LOOKUPS of them,
+// since only the API knows which agent SealKeeper runs.
 async function ranked(
   posters: PosterLookup,
   open: TaskResponse[],
 ): Promise<{ task: TaskResponse; seed: boolean }[]> {
-  const seed = new Set<string>();
-  const ids = [...new Set(open.map((task) => task.posterAgentId))];
+  const seedPosters = new Set<string>();
+  const unknown = open.filter((task) => task.seed === undefined);
+  const ids = [...new Set(unknown.map((task) => task.posterAgentId))];
   for (const poster of ids.slice(0, MAX_POSTER_LOOKUPS)) {
     const agent = await posters.get(poster);
-    if (agent && runBySealKeeper(agent)) seed.add(poster);
+    if (agent && runBySealKeeper(agent)) seedPosters.add(poster);
   }
+  const isSeed = (task: TaskResponse) =>
+    task.seed ?? seedPosters.has(task.posterAgentId);
   const rank = (task: TaskResponse) => {
-    if (seed.has(task.posterAgentId)) return 0;
+    if (isSeed(task)) return 0;
     return task.verification.kind === 'counterparty' ? 2 : 1;
   };
   return [...open]
@@ -1111,7 +1175,7 @@ async function ranked(
       (a, b) =>
         rank(a) - rank(b) || Date.parse(a.postedAt) - Date.parse(b.postedAt),
     )
-    .map((task) => ({ task, seed: seed.has(task.posterAgentId) }));
+    .map((task) => ({ task, seed: isSeed(task) }));
 }
 
 // One task in full, as tasks show prints it. The spec, the schema when

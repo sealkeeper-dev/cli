@@ -13,10 +13,11 @@ import { join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
+  decodeTasksCursor,
+  encodeTasksCursor,
   PostTaskRequest,
   publicVerification,
   readAudience,
-  type TaskResponse,
   type VerificationSpec,
   verify,
 } from '@sealkeeper/schema';
@@ -26,6 +27,7 @@ import type { Input } from '../ask.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
+import type { TaskResponse } from '../responses.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -64,12 +66,23 @@ import {
 } from './tasks-post.js';
 import {
   MAX_CLAIM_ATTEMPTS,
+  MAX_PULL_PAGES,
   NOTHING_ADDRESSED,
   NOTHING_AVAILABLE,
 } from './tasks-pull.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
 const API_URL = 'https://api.test';
+
+// The fake's cursor, a real one from @sealkeeper/schema, so the CLI's check
+// of it passes. It carries the offset of the next page.
+const pageCursor = (offset: number) =>
+  encodeTasksCursor({
+    atMicros: String(offset),
+    id: '00000000-0000-4000-8000-000000000000',
+  });
+const offsetOf = (raw: string | null) =>
+  raw === null ? 0 : Number(decodeTasksCursor(raw)?.atMicros ?? 0);
 
 // Every signed payload names the API it is for (VOU-111). The fake takes
 // aud off before it parses, and a payload without the right aud fails the
@@ -122,6 +135,8 @@ class FakeApi {
   reports = new Map<string, Map<string, string>>();
   requests: ApiCall[] = [];
   errors: string[] = [];
+  // The query of every GET /v1/tasks.
+  listed: string[] = [];
 
   constructor(readonly agentId: string) {}
 
@@ -170,7 +185,7 @@ class FakeApi {
       // assignee keeps only the tasks addressed to that agent.
       const assignee = url.searchParams.get('assignee');
       const state = url.searchParams.get('state');
-      const tasks = [...this.tasks.values()]
+      const matching = [...this.tasks.values()]
         .filter((t) => t.state === state)
         .filter((t) =>
           assignee
@@ -178,10 +193,16 @@ class FakeApi {
             : state !== 'open' || !t.assignee,
         )
         .filter((t) => !type || t.taskType === type)
-        .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt))
-        .slice(0, Number(url.searchParams.get('limit') ?? 50))
-        .map(shown);
-      return Response.json({ tasks });
+        .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
+      // One page at a time, the cursor the offset of the next (VOU-208).
+      const from = offsetOf(url.searchParams.get('cursor'));
+      const limit = Number(url.searchParams.get('limit') ?? 50);
+      this.listed.push(url.searchParams.toString());
+      return Response.json({
+        tasks: matching.slice(from, from + limit).map(shown),
+        nextCursor:
+          from + limit < matching.length ? pageCursor(from + limit) : null,
+      });
     }
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
     if (method === 'GET' && agent) {
@@ -497,6 +518,33 @@ describe('tasks pull, submit and post', () => {
           payload: { task_id: oldest.id, task_type: 'summarise' },
         },
       ]);
+    });
+
+    it('reads the next page when its own tasks fill the first', async () => {
+      // VOU-208. An agent may have 200 open tasks of its own, more than one
+      // page of 100 holds.
+      const at = (ago: number) => new Date(Date.now() - ago).toISOString();
+      for (let i = 0; i < 150; i++) {
+        api.add({ postedAt: at(9e6 - i), posterAgentId: agentId });
+      }
+      const other = api.add({ postedAt: at(1e6) });
+      const { code, out } = await run('tasks', 'pull', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).task.id).toBe(other.id);
+      expect(api.listed).toEqual([
+        'state=open&limit=100',
+        `state=open&limit=100&cursor=${pageCursor(100)}`,
+      ]);
+    });
+
+    it('stops paging after MAX_PULL_PAGES pages', async () => {
+      for (let i = 0; i < 100 * MAX_PULL_PAGES + 1; i++) {
+        api.add({ posterAgentId: agentId });
+      }
+      const { code, out } = await run('tasks', 'pull', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toEqual({ task: null });
+      expect(api.listed).toHaveLength(MAX_PULL_PAGES);
     });
 
     it('prints the task as text', async () => {

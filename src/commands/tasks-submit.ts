@@ -1,10 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
-import {
-  SubmitTaskRequest,
-  TaskOutcomeRequest,
-  type TaskResponse,
-} from '@sealkeeper/schema';
+import { SubmitTaskRequest, TaskOutcomeRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
@@ -16,6 +12,7 @@ import {
   specAsksFinalLineFeed,
 } from '../line-break.js';
 import { stdout, wantsJson } from '../output.js';
+import type { TaskResponse } from '../responses.js';
 import { activeRoutineRun, appendRoutine } from '../routine.js';
 import {
   defaultTasksDeps,

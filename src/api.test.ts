@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { encodeTasksCursor } from '@sealkeeper/schema';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
@@ -466,5 +467,53 @@ describe('a redirect', () => {
       code: 'redirect',
     });
     expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('listTasksPage', () => {
+  it('sends the filters and the cursor and hands nextCursor back (VOU-208)', async () => {
+    const cursor = encodeTasksCursor({
+      atMicros: '1790000000000000',
+      id: '11111111-1111-4111-8111-111111111111',
+    });
+    const fetchFn = respond(Response.json({ tasks: [], nextCursor: 'next' }));
+    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
+    const page = await api.listTasksPage({
+      state: 'claimed',
+      claimant: AGENT_ID,
+      poster: AGENT_ID,
+      seed: true,
+      limit: 100,
+      cursor,
+    });
+    expect(page).toEqual({ tasks: [], nextCursor: 'next' });
+    const url = new URL(String(vi.mocked(fetchFn).mock.calls[0]?.[0]));
+    expect(url.pathname).toBe('/v1/tasks');
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      state: 'claimed',
+      limit: '100',
+      poster: AGENT_ID,
+      claimant: AGENT_ID,
+      seed: 'true',
+      cursor,
+    });
+  });
+
+  it('reads an answer without nextCursor as the last page', async () => {
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(Response.json({ tasks: [] })),
+    });
+    expect(await api.listTasksPage({ seed: false })).toEqual({
+      tasks: [],
+      nextCursor: null,
+    });
+  });
+
+  it('refuses a cursor the API did not make before sending anything', async () => {
+    const fetchFn = respond(Response.json({ tasks: [] }));
+    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
+    await expect(api.listTasksPage({ cursor: 'nope' })).rejects.toThrow();
+    expect(fetchFn).not.toHaveBeenCalled();
   });
 });

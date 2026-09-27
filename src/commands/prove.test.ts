@@ -13,11 +13,12 @@ import { join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
+  decodeTasksCursor,
+  encodeTasksCursor,
   LEVEL_THRESHOLDS,
   OPERATOR_SILVER_CAP,
   PostTaskRequest,
   readAudience,
-  type TaskResponse,
   verify,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -40,6 +41,7 @@ import {
   recordAskedToPost,
 } from '../post-prompt.js';
 import { createProgram } from '../program.js';
+import type { TaskResponse } from '../responses.js';
 import { stripStyle } from '../style.js';
 import { TEMPLATES } from '../task-templates.js';
 import {
@@ -54,6 +56,16 @@ import {
 } from './prove.js';
 
 const API_URL = 'https://api.test';
+
+// The fake's cursor, a real one from @sealkeeper/schema, so the CLI's check
+// of it passes. It carries the offset of the next page.
+const pageCursor = (offset: number) =>
+  encodeTasksCursor({
+    atMicros: String(offset),
+    id: '00000000-0000-4000-8000-000000000000',
+  });
+const offsetOf = (raw: string | null) =>
+  raw === null ? 0 : Number(decodeTasksCursor(raw)?.atMicros ?? 0);
 
 // Every signed payload names the API it is for (VOU-111). The fake takes
 // aud off before it parses, and a payload without the right aud fails the
@@ -97,8 +109,29 @@ class FakeApi {
   posted: Record<string, unknown>[] = [];
   // The goal answer for the agent, 404 while null.
   goal: Record<string, unknown> | null = null;
+  // Whether task answers carry seed, as the API from VOU-208 does. False
+  // stands for an answer that does not say, which prove reads as unknown.
+  sendSeed = true;
 
   constructor(readonly agentId: string) {}
+
+  // Whether the API would call this poster the seed agent, from the same
+  // answer GET /v1/agents/:id gives.
+  isSeedPoster(id: string): boolean {
+    const recorded = this.agents.get(id);
+    if (!recorded) return id === SEED_AGENT;
+    return Boolean(
+      recorded.operatedBySealKeeper ?? recorded.operatedByVouched ?? false,
+    );
+  }
+
+  // A task as the API sends it.
+  shown(task: TaskResponse): TaskResponse {
+    const { seed: _, ...rest } = task;
+    return this.sendSeed
+      ? { ...rest, seed: this.isSeedPoster(task.posterAgentId) }
+      : rest;
+  }
 
   add(overrides: Partial<TaskResponse> = {}): TaskResponse {
     const task: TaskResponse = {
@@ -135,18 +168,39 @@ class FakeApi {
 
     if (method === 'GET' && url.pathname === '/v1/tasks') {
       // Like the API, the open pool leaves addressed tasks out, and
-      // assignee keeps only the tasks addressed to that agent.
-      const assignee = url.searchParams.get('assignee');
-      const state = url.searchParams.get('state');
-      const tasks = [...this.tasks.values()]
+      // assignee keeps only the tasks addressed to that agent. poster,
+      // claimant and seed filter as the API does (VOU-208). Tasks come in
+      // the order they were added, and the cursor is the offset of the next
+      // page.
+      const q = url.searchParams;
+      const assignee = q.get('assignee');
+      const state = q.get('state');
+      const seed = q.get('seed');
+      const matching = [...this.tasks.values()]
         .filter((t) => t.state === state)
         .filter((t) =>
           assignee
             ? t.assignee?.id === assignee
             : state !== 'open' || !t.assignee,
         )
-        .slice(0, Number(url.searchParams.get('limit') ?? 50));
-      return Response.json({ tasks });
+        .filter((t) => !q.has('poster') || t.posterAgentId === q.get('poster'))
+        .filter(
+          (t) => !q.has('claimant') || t.claimantAgentId === q.get('claimant'),
+        )
+        .filter(
+          (t) =>
+            seed === null ||
+            this.isSeedPoster(t.posterAgentId) === (seed === 'true'),
+        );
+      const from = offsetOf(q.get('cursor'));
+      const limit = Number(q.get('limit') ?? 50);
+      const tasks = matching.slice(from, from + limit);
+      const nextCursor =
+        from + limit < matching.length ? pageCursor(from + limit) : null;
+      return Response.json({
+        tasks: tasks.map((t) => this.shown(t)),
+        nextCursor,
+      });
     }
     if (
       method === 'GET' &&
@@ -189,7 +243,7 @@ class FakeApi {
     const match = url.pathname.match(/^\/v1\/tasks\/([^/]+)(\/claim)?$/);
     const task = this.tasks.get(match?.[1] ?? '');
     if (method === 'GET' && match && !match[2]) {
-      return task ? Response.json(task) : error(404, 'not_found');
+      return task ? Response.json(this.shown(task)) : error(404, 'not_found');
     }
     if (method !== 'POST' || !match?.[2] || !task) {
       return error(404, 'not_found');
@@ -214,7 +268,7 @@ class FakeApi {
       claimedAt: new Date().toISOString(),
     });
     this.claimed.push(task.id);
-    return Response.json(task);
+    return Response.json(this.shown(task));
   }) as typeof fetch;
 }
 
@@ -915,16 +969,59 @@ describe('prove', () => {
     ).toHaveLength(1);
   });
 
-  it('uses the operator on the task when the API sends it', async () => {
+  it('finds seed tasks behind 150 older open tasks from another poster', async () => {
+    // VOU-208. One global page of the 100 oldest held only the flood, so
+    // prove printed [] while seed tasks were open.
     const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
-    const own = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(9) });
-    Object.assign(own, { posterOperator: { login: 'alice' } });
-    const theirs = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(8) });
-    Object.assign(theirs, { posterOperator: { login: 'someone-else' } });
+    for (let i = 0; i < 150; i++) {
+      api.add({ posterAgentId: OTHER_AGENT, postedAt: at(100) });
+    }
+    const seeds = [api.add(), api.add()];
+    const { code, out } = await run('prove', '--count', '2');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual(seeds.map((task) => task.id));
+    expect(jsonIds(out)).toEqual(seeds.map((task) => task.id));
+    // The API said which tasks are seed tasks, so no poster was looked up.
+    expect(
+      api.requests.filter(
+        (r) => r.startsWith('GET /v1/agents/') && !r.includes(agentId),
+      ),
+    ).toEqual([]);
+  });
 
+  it('reads a task that does not say whether it is a seed task as unknown', async () => {
+    // A task from the seed=true list is a seed task by the API's word. One
+    // from the other list that does not say has its poster looked up.
+    api.sendSeed = false;
+    const other = api.add({ posterAgentId: OTHER_AGENT });
+    const seed = api.add();
     const { code } = await run('prove', '--count', '2', '--any-poster');
     expect(code).toBe(0);
-    expect(api.claimed).toEqual([theirs.id]);
+    expect(api.claimed).toEqual([seed.id, other.id]);
+    expect(api.requests).not.toContain(`GET /v1/agents/${SEED_AGENT}`);
+    expect(
+      api.requests.filter((r) => r === `GET /v1/agents/${OTHER_AGENT}`),
+    ).toHaveLength(1);
+  });
+
+  it('finds its own claims past 100 claimed tasks of other agents', async () => {
+    for (let i = 0; i < 120; i++) {
+      api.add({
+        state: 'claimed',
+        claimantAgentId: OTHER_AGENT,
+        claimedAt: new Date().toISOString(),
+      });
+    }
+    const held = api.add({
+      state: 'claimed',
+      claimantAgentId: agentId,
+      claimedAt: new Date().toISOString(),
+    });
+    const open = seedTasks(1);
+    for (const task of open) api.claims.set(task.id, 'claim_cap');
+    const { code, out } = await run('prove', '--count', '1');
+    expect(code).toBe(0);
+    expect(jsonIds(out)).toEqual([held.id]);
   });
 
   it('claims seed tasks when the seed agent belongs to the same operator', async () => {
@@ -939,17 +1036,51 @@ describe('prove', () => {
       operatedBySealKeeper: true,
     });
     const seed = api.add({ posterAgentId: ownSeed, postedAt: at(9) });
-    const stated = api.add({ posterAgentId: ownSeed, postedAt: at(8) });
-    Object.assign(stated, { posterOperator: { login: 'alice' } });
+    const second = api.add({ posterAgentId: ownSeed, postedAt: at(8) });
     const sibling = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(7) });
     const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
 
     const { code } = await run('prove', '--count', '4', '--any-poster');
     expect(code).toBe(0);
-    expect(api.claimed).toEqual([seed.id, stated.id, foreign.id]);
+    expect(api.claimed).toEqual([seed.id, second.id, foreign.id]);
     expect(api.claimed).not.toContain(sibling.id);
-    // One lookup per poster answers both the seed and the operator question.
-    for (const poster of [ownSeed, SIBLING_AGENT, OTHER_AGENT]) {
+    // The API marks seed tasks, so the seed agent is never looked up, and
+    // one lookup per other poster answers the operator question.
+    expect(
+      api.requests.filter((r) => r === `GET /v1/agents/${ownSeed}`),
+    ).toHaveLength(0);
+    for (const poster of [SIBLING_AGENT, OTHER_AGENT]) {
+      expect(
+        api.requests.filter((r) => r === `GET /v1/agents/${poster}`),
+      ).toHaveLength(1);
+    }
+  });
+
+  it('claims seed tasks of an own operator seed agent when answers do not mark them', async () => {
+    api.sendSeed = false;
+    const at = (h: number) => new Date(Date.now() - h * HOUR).toISOString();
+    const ownSeed = `${'Q'.repeat(42)}A`;
+    api.agents.set(ownSeed, {
+      id: ownSeed,
+      name: 'sealkeeper-seed',
+      version: '1.0.0',
+      operator: { login: 'Alice' },
+      createdAt: '2026-09-23T09:44:36.047Z',
+      operatedBySealKeeper: true,
+    });
+    const seed = api.add({ posterAgentId: ownSeed, postedAt: at(9) });
+    const sibling = api.add({ posterAgentId: SIBLING_AGENT, postedAt: at(7) });
+    const foreign = api.add({ posterAgentId: OTHER_AGENT, postedAt: at(6) });
+
+    const { code } = await run('prove', '--count', '3', '--any-poster');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([seed.id, foreign.id]);
+    expect(api.claimed).not.toContain(sibling.id);
+    // The seed task came from the seed=true list, so its poster is never
+    // looked up. One lookup per other poster answers both the seed and the
+    // operator question.
+    expect(api.requests).not.toContain(`GET /v1/agents/${ownSeed}`);
+    for (const poster of [SIBLING_AGENT, OTHER_AGENT]) {
       expect(
         api.requests.filter((r) => r === `GET /v1/agents/${poster}`),
       ).toHaveLength(1);

@@ -111,9 +111,9 @@ export const TaskResponse = z.object({
   verifiedAt: Timestamp.nullable(),
   expiresAt: Timestamp,
   submission: z.string().optional(),
-  // The poster's operator, when the API sends it. prove skips tasks posted
-  // by the operator's own agents, which never count.
-  posterOperator: Operator.optional(),
+  // True when the seed agent posted the task (VOU-208). Absent from an API
+  // before it, and then unknown, so prove looks the poster up as before.
+  seed: z.boolean().optional(),
   // The one agent that can claim an addressed task. Null for an open task
   // and after the assignee was deleted, absent from an API before
   // addressed tasks.
@@ -124,7 +124,16 @@ export const TaskResponse = z.object({
 });
 export type TaskResponse = z.infer<typeof TaskResponse>;
 
-export const ListTasksResponse = z.object({ tasks: z.array(TaskResponse) });
+// nextCursor is the next page's cursor, null on the last page and absent
+// from an API before paging (VOU-208).
+export const ListTasksResponse = z.object({
+  tasks: z.array(TaskResponse),
+  nextCursor: z.string().nullable().optional(),
+});
+export type ListTasksPage = {
+  tasks: TaskResponse[];
+  nextCursor: string | null;
+};
 
 // POST /v1/tasks/:id/submission, the poster's signed read. reports holds
 // each side's current outcome, null until it reports.

@@ -23,6 +23,8 @@ import {
 export const MAX_CLAIM_ATTEMPTS = 5;
 
 const LIST_LIMIT = 100;
+// Pages pull reads at most looking for a task it can claim.
+export const MAX_PULL_PAGES = 5;
 
 export const NOTHING_AVAILABLE = 'no open tasks available';
 export const NOTHING_ADDRESSED = 'no open tasks addressed to this agent';
@@ -56,50 +58,62 @@ export function register(
       await refuseInRoutine(this, 'tasks pull');
       const { signer, api } = await openTaskSession(this, deps);
 
-      // The schema maximum. It is above the per-poster open cap, so an agent
-      // whose own open tasks come first still sees tasks from other agents.
-      // Plain pull reads the open pool, which leaves addressed tasks out.
-      // --addressed reads the tasks addressed to this agent instead.
-      let open: TaskResponse[];
-      try {
-        open = await api.listTasks({
-          state: 'open',
-          taskType: options.type,
-          limit: LIST_LIMIT,
-          ...(options.addressed ? { assignee: signer.agentId } : {}),
-        });
-      } catch (error) {
-        failOnApiError(this, error);
-      }
-
-      // Oldest first. The API already orders by postedAt, this keeps it so
-      // whatever the server does. Own tasks can never be claimed, so they are
-      // skipped without a request, and so are tasks addressed to another
-      // agent, whatever the server sent.
-      const pool = options.addressed
-        ? addressedTo(open, signer.agentId)
-        : open.filter(
-            (task) => task.posterAgentId !== signer.agentId && !task.assignee,
-          );
-      const candidates = pool
-        .filter((task) => !options.type || task.taskType === options.type)
-        .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
-
+      // A page of the schema maximum, oldest first. The per-poster open cap
+      // is 200, so an agent's own open tasks can fill a whole page. pull then
+      // reads the next page with the cursor, up to MAX_PULL_PAGES, until it
+      // has a task to claim. Plain pull reads the open pool, which leaves
+      // addressed tasks out. --addressed reads the tasks addressed to this
+      // agent instead.
       let claimed: TaskResponse | null = null;
       let attempts = 0;
-      for (const task of candidates) {
-        if (attempts >= MAX_CLAIM_ATTEMPTS) break;
-        attempts += 1;
+      let cursor: string | undefined;
+      for (let page = 0; page < MAX_PULL_PAGES; page++) {
+        let open: TaskResponse[];
+        let next: string | null;
         try {
-          const envelope = await signer.sign(
-            ClaimTaskRequest.parse({ taskId: task.id }),
-          );
-          claimed = await api.claimTask(task.id, envelope);
-          break;
+          const read = await api.listTasksPage({
+            state: 'open',
+            taskType: options.type,
+            limit: LIST_LIMIT,
+            ...(options.addressed ? { assignee: signer.agentId } : {}),
+            ...(cursor === undefined ? {} : { cursor }),
+          });
+          open = read.tasks;
+          next = read.nextCursor;
         } catch (error) {
-          if (error instanceof ApiError && isGone(error)) continue;
           failOnApiError(this, error);
         }
+
+        // Oldest first. The API already orders by postedAt, this keeps it
+        // so whatever the server does. Own tasks can never be claimed, so
+        // they are skipped without a request, and so are tasks addressed to
+        // another agent, whatever the server sent.
+        const pool = options.addressed
+          ? addressedTo(open, signer.agentId)
+          : open.filter(
+              (task) => task.posterAgentId !== signer.agentId && !task.assignee,
+            );
+        const candidates = pool
+          .filter((task) => !options.type || task.taskType === options.type)
+          .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
+
+        for (const task of candidates) {
+          if (attempts >= MAX_CLAIM_ATTEMPTS) break;
+          attempts += 1;
+          try {
+            const envelope = await signer.sign(
+              ClaimTaskRequest.parse({ taskId: task.id }),
+            );
+            claimed = await api.claimTask(task.id, envelope);
+            break;
+          } catch (error) {
+            if (error instanceof ApiError && isGone(error)) continue;
+            failOnApiError(this, error);
+          }
+        }
+        if (claimed !== null || attempts >= MAX_CLAIM_ATTEMPTS) break;
+        if (next === null) break;
+        cursor = next;
       }
 
       if (claimed === null) {

@@ -118,6 +118,9 @@ const NOT_HEADLESS: Record<string, string> = {
 
 const FAILURES_TO_PAUSE = 3;
 const LIST_LIMIT = 100;
+// Pages of this agent's submitted tasks a run reads at most. One page
+// holds 100, far more than a run confirms in a day.
+const MAX_SUBMITTED_PAGES = 3;
 
 export function register(
   parent: Command,
@@ -690,10 +693,22 @@ async function pendingConfirmations(
 ): Promise<{ confirm: Confirmable[]; skipped: RoutineCandidates['skipped'] }> {
   const confirm: Confirmable[] = [];
   const skipped: RoutineCandidates['skipped'] = [];
-  const submitted = await api.listTasks({
-    state: 'submitted',
-    limit: LIST_LIMIT,
-  });
+  // Only this agent's own tasks, so submitted tasks of other posters never
+  // push these off the page (VOU-208). Oldest first, up to
+  // MAX_SUBMITTED_PAGES pages.
+  const submitted: TaskResponse[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_SUBMITTED_PAGES; page++) {
+    const read = await api.listTasksPage({
+      state: 'submitted',
+      poster: signer.agentId,
+      limit: LIST_LIMIT,
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    submitted.push(...read.tasks);
+    if (read.nextCursor === null) break;
+    cursor = read.nextCursor;
+  }
   const logins = new Map<string, string | undefined>();
   for (const task of submitted) {
     if (!awaitingVerdict(task, signer.agentId)) continue;

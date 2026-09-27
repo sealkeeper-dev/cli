@@ -16,6 +16,7 @@ import {
   ErrorResponse,
   EventsBatchResponse,
   GoalResponse,
+  type ListTasksPage,
   ListTasksResponse,
   RatingResponse,
   ScoreResponse,
@@ -72,7 +73,15 @@ export type ApiClient = {
   getScore(agentId: string): Promise<ScoreResponse>;
   // GET /v1/agents/:id/goal, parsed loosely with unknown keys kept.
   getGoal(agentId: string): Promise<GoalResponse>;
+  // One page of GET /v1/tasks, the tasks alone.
   listTasks(query?: z.input<typeof ListTasksQuery>): Promise<TaskResponse[]>;
+  // The same with nextCursor, for a caller that pages. cursor is the
+  // nextCursor of the page before, as the API sent it.
+  listTasksPage(
+    query?: Omit<z.input<typeof ListTasksQuery>, 'cursor'> & {
+      cursor?: string;
+    },
+  ): Promise<ListTasksPage>;
   getTask(taskId: string): Promise<TaskResponse>;
   postTask(envelope: string): Promise<TaskResponse>;
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
@@ -183,6 +192,42 @@ export function createApiClient(options: {
     return result.data;
   }
 
+  /*
+   * GET /v1/tasks. The query is checked with the API's own schema before it
+   * is sent, then sent as text. seed, poster and claimant ask the API to
+   * filter, so a flood of older tasks from others cannot push the ones this
+   * CLI wants off the page (VOU-208). An API from before them refuses them
+   * with 400, so this CLI needs the API from the same release.
+   */
+  async function listTasksPage(
+    query: Omit<z.input<typeof ListTasksQuery>, 'cursor'> & {
+      cursor?: string;
+    } = {},
+  ): Promise<ListTasksPage> {
+    const { state, taskType, assignee, poster, claimant, seed, limit } =
+      ListTasksQuery.parse(query);
+    const search = new URLSearchParams({ state, limit: String(limit) });
+    if (taskType !== undefined) search.set('taskType', taskType);
+    // With state open, the tasks addressed to this agent that wait for it.
+    // Without it, open tasks leave addressed ones out.
+    if (assignee !== undefined) search.set('assignee', assignee);
+    if (poster !== undefined) search.set('poster', poster);
+    if (claimant !== undefined) search.set('claimant', claimant);
+    if (seed !== undefined) search.set('seed', String(seed));
+    // The cursor goes back as the API sent it. The parse above checked it.
+    if (query.cursor !== undefined) search.set('cursor', query.cursor);
+    const { status, json, headers } = await request(
+      `/v1/tasks?${search.toString()}`,
+    );
+    if (status !== 200) throw toError(status, json, headers);
+    const result = ListTasksResponse.safeParse(json);
+    if (!result.success) throw toError(status, undefined);
+    return {
+      tasks: result.data.tasks,
+      nextCursor: result.data.nextCursor ?? null,
+    };
+  }
+
   const taskPath = (taskId: string, action = '') =>
     `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
 
@@ -270,20 +315,9 @@ export function createApiClient(options: {
       return result.data;
     },
     async listTasks(query = {}) {
-      const { state, taskType, assignee, limit } = ListTasksQuery.parse(query);
-      const search = new URLSearchParams({ state, limit: String(limit) });
-      if (taskType !== undefined) search.set('taskType', taskType);
-      // With state open, the tasks addressed to this agent that wait for it.
-      // Without it, open tasks leave addressed ones out.
-      if (assignee !== undefined) search.set('assignee', assignee);
-      const { status, json, headers } = await request(
-        `/v1/tasks?${search.toString()}`,
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = ListTasksResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data.tasks;
+      return (await listTasksPage(query)).tasks;
     },
+    listTasksPage,
     getTask: (taskId) => taskRequest(taskPath(taskId), [200]),
     // 201 for a new task, 200 when a retried post returns the existing one.
     postTask: (envelope) => taskRequest('/v1/tasks', [200, 201], envelope),
