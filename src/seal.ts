@@ -1,14 +1,11 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
 import {
-  acceptedIssuer,
   base64urlDecode,
   decodeHeader,
-  parseSealPayload,
-  sealIatProblem,
-  sealVersionProblem,
+  type SealBrokenReason,
   utf8Decode,
-  verify,
+  verifySeal,
   WELL_KNOWN_PATH,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
@@ -53,84 +50,56 @@ export function sealKid(jws: string): string | null {
   }
 }
 
-// Checks in order. The header, then the signature over the exact bytes of
-// header.payload with the key the kid names, then the issuer, then the
-// version, then the shape, then expiry, then iat. Verify first, parse
-// second. A version other than 1 is unsupported, and so is a SEAL without
-// ver once LEGACY_UNTIL has passed, as sealVersionProblem in
-// @sealkeeper/schema says. A version 1 or 2 payload must then match the
-// strict shape, parseSealPayload. The API's POST /v1/seal/verify and the web's
-// checkSeal use the same rules, and the SEAL conformance cases in
-// @sealkeeper/schema hold all three to the same answers.
+// The API's name for each reason, spelled with spaces. expired adds how
+// long ago, below.
+const WORDS: Record<SealBrokenReason, string> = {
+  malformed: 'malformed',
+  unknown_kid: 'unknown kid',
+  bad_signature: 'bad signature',
+  wrong_issuer: 'wrong issuer',
+  unsupported_version: 'unsupported version',
+  expired: 'expired',
+  not_yet_valid: 'not yet valid',
+};
+
+// Checks a SEAL with verifySeal from @sealkeeper/schema, the steps of the
+// standard in order: the header, the key the kid names, the signature over
+// the exact bytes of header.payload, then the issuer, the version, the
+// shape, expiry and iat. Verify first, parse second. The API's POST
+// /v1/seal/verify and the web's checkSeal call the same function, and the
+// SEAL conformance cases in @sealkeeper/schema hold all three to the same
+// answers. This adds how long ago an expired SEAL ran out, and keeps the
+// signed payload of a broken SEAL for what it prints.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
   nowMs: number,
 ): Promise<SealCheck> {
-  const broken = (
-    reason: string,
-    payload: unknown = null,
-    expiresAt: string | null = null,
-  ): SealCheck => ({ valid: false, reason, payload, expiresAt });
-  const nowSec = nowMs / 1000;
-
-  const kid = sealKid(jws);
-  if (kid === null) return broken('malformed');
-  const key = wellKnown.keys.find((k) => k.kid === kid);
-  if (!key) return broken('unknown kid');
-
-  let payload: unknown;
-  try {
-    payload = (await verify(jws, base64urlDecode(key.x))).payload;
-  } catch (error) {
-    // verify checks the signature first and only then parses the payload.
-    return broken(
-      /signature/.test((error as Error).message)
-        ? 'bad signature'
-        : 'malformed',
-    );
+  const r = await verifySeal(wellKnown.keys, jws, nowMs / 1000);
+  if (r.ok) {
+    return {
+      valid: true,
+      reason: null,
+      payload: r.payload,
+      expiresAt: new Date(r.payload.exp * 1000).toISOString(),
+    };
   }
-
-  // The issuer straight after the signature, as in the API and the web, so
-  // a SEAL from another issuer is named wrong issuer whatever its ver or
-  // shape. acceptedIssuer takes sealkeeper.run always and the legacy
-  // issuer only until LEGACY_ISSUER_UNTIL. The shape is only read once
-  // the version is known.
-  const iss =
-    typeof payload === 'object' && payload !== null && 'iss' in payload
-      ? (payload as { iss: unknown }).iss
-      : undefined;
-  if (!acceptedIssuer(iss, nowSec)) {
-    return broken('wrong issuer', payload, expiresAtOf(payload));
-  }
-  if (sealVersionProblem(payload, nowSec) !== null) {
-    return broken('unsupported version', payload);
-  }
-  // A version 1 or 2 SEAL from an accepted issuer has one exact shape, and
-  // the API and the web check it with the strict parser. So does this, so the three
-  // never disagree about one. The loose read below is kept for what it
-  // prints and for the legacy shape.
-  if (hasVer(payload) && !parseSealPayload(payload, nowSec).ok) {
-    return broken('malformed', payload);
-  }
-
-  const claims = SealClaims.safeParse(payload);
-  if (!claims.success) return broken('malformed', payload);
-  const expiresAt = new Date(claims.data.exp * 1000).toISOString();
-  const leftSec = claims.data.exp - nowSec;
-  if (leftSec <= 0) {
-    const minutes = Math.max(1, Math.ceil(-leftSec / 60));
-    return broken(
-      `expired ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`,
+  const payload = r.signed ?? null;
+  const expiresAt = r.payload
+    ? new Date(r.payload.exp * 1000).toISOString()
+    : r.reason === 'wrong_issuer'
+      ? expiresAtOf(payload)
+      : null;
+  if (r.reason === 'expired' && r.payload) {
+    const minutes = Math.max(1, Math.ceil((nowMs / 1000 - r.payload.exp) / 60));
+    return {
+      valid: false,
+      reason: `expired ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`,
       payload,
       expiresAt,
-    );
+    };
   }
-  // exp first, then iat, in the standard's order (sealIatProblem).
-  if (sealIatProblem(claims.data.iat, nowSec) !== null) {
-    return broken('not yet valid', payload, expiresAt);
-  }
-  return { valid: true, reason: null, payload, expiresAt };
+  return { valid: false, reason: WORDS[r.reason], payload, expiresAt };
 }
 
 // The expiry of a payload of any shape, when it carries one in Unix seconds.
@@ -142,10 +111,6 @@ function expiresAtOf(payload: unknown): string | null {
   return typeof exp === 'number' && Number.isFinite(exp) && exp >= 0
     ? new Date(exp * 1000).toISOString()
     : null;
-}
-
-function hasVer(payload: unknown): boolean {
-  return typeof payload === 'object' && payload !== null && 'ver' in payload;
 }
 
 // What a verified SEAL says, one line each, for seal show and seal verify.

@@ -9,10 +9,10 @@ import {
   OperatorSlug,
   SEAL_MAX_TTL_SECONDS,
   Sha256Hex,
+  StoredVersion,
   TaskOutcome,
   TaskState,
   TaskType,
-  Version,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 
@@ -49,7 +49,7 @@ const AgentCounts = z.object({
 export const AgentResponse = z.object({
   id: AgentId,
   name: Name,
-  version: Version,
+  version: StoredVersion,
   operator: Operator,
   createdAt: Timestamp,
   operatedBySealKeeper: z.boolean().optional(),
@@ -174,7 +174,7 @@ export const RatingResponse = z.object({
 export type RatingResponse = z.infer<typeof RatingResponse>;
 
 const ScoreEntry = z.object({
-  version: Version,
+  version: StoredVersion,
   dimension: Dimension,
   value: z.number().min(0).max(1).nullable(),
   windowStart: Timestamp.nullable(),
@@ -212,9 +212,9 @@ const sealClaims = {
   ver: z.int().optional(),
   iat: Seconds,
   exp: Seconds,
-  agent_version: Version.optional(),
+  agent_version: StoredVersion.optional(),
   // agent_version under its old name, sent beside it for one release.
-  version: Version.optional(),
+  version: StoredVersion.optional(),
   level: z.string().optional(),
   // Each score 0 to 1 or null, as the standard says.
   scores: z.record(z.string(), z.number().min(0).max(1).nullable()),

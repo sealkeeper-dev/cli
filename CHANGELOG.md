@@ -31,6 +31,9 @@
 - 27 September 2026. `agent delete` and `logout --delete-key --yes` also remove the agent's folder bindings from `agents.json`, and its home under `~/.sealkeeper/agents` when nothing is left in it (VOU-270). A plain `logout` keeps the binding, since the key stays and `init` brings the same identity back. Before, they removed only the files in the one home.
 - 27 September 2026. `routine install` in a bound folder installs the daily job for that folder's agent, and each agent has a job of its own (VOU-270). The other `routine` commands act on the job of the agent the current folder selects. Before, a machine had one job for its one agent.
 - 27 September 2026. `tasks submit --file` and `tasks post --input @file` refuse any file under `~/.sealkeeper`, where every agent on this machine keeps its key, not only a file in this agent's home (VOU-270). A single agent sees no change, since its home was all of `~/.sealkeeper`.
+- `init`, `agent version` and `emit` refuse a version with a control, format, private use or unassigned character, a line or paragraph separator, or a space at either end, the rule the API now applies to events, registration and version change (VOU-233). Before, the CLI signed and sent such a version.
+- `seal verify` and `check` check a SEAL with `verifySeal` from `@sealkeeper/schema`, the function the API's `POST /v1/seal/verify` and the web call, so the three give one answer for every SEAL (VOU-233). It trims spaces and line breaks around the SEAL first, which `seal verify` already did with its input.
+- A SEAL without `ver`, issued before version 1, reports `unsupported version` at any time (VOU-233). Before, it was valid as legacy until the end of 25 September 2026 UTC.
 
 ## 0.4.8, 27 September 2026
 

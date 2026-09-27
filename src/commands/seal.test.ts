@@ -15,7 +15,6 @@ import {
   generateKeypair,
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
-  LEGACY_UNTIL,
   sign,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -99,7 +98,7 @@ describe('sealkeeper seal', () => {
     };
   }
 
-  // The shape issued before version 1, with no ver.
+  // The shape issued before version 1, with no ver. No longer accepted.
   const legacyClaims = (iat: number) => ({
     iss: 'sealkeeper.run',
     sub: agentId,
@@ -406,33 +405,15 @@ describe('sealkeeper seal', () => {
       });
     });
 
-    it('a SEAL without ver is valid as legacy until the end of 25 September 2026 UTC', async () => {
-      const iat = LEGACY_UNTIL - HOUR;
-      const seal = await sign(legacyClaims(iat), serverKey.privateKey, KID);
-      now = (LEGACY_UNTIL - 1) * 1000;
-      const before = await run(fetchFn, 'seal', 'verify', seal);
-      expect(before.code).toBe(0);
-      const lines = before.out.trimEnd().split('\n');
-      expect(lines.slice(0, 3)).toEqual([
-        'valid SEAL',
-        'level not in this SEAL, it was issued before version 1',
-        'events 12',
-      ]);
-      expect(lines).toContain('verified tasks 1');
-      expect(lines).not.toContain('operator verified no');
-
-      now = LEGACY_UNTIL * 1000;
-      const after = await run(fetchFn, 'seal', 'verify', seal);
-      expect(after.code).toBe(1);
-      expect(after.out.split('\n')[0]).toBe('broken SEAL: unsupported version');
-
-      // Version 1 is valid either side of the cutoff.
-      const v1 = await sign(
-        claims({ iat, exp: iat + 24 * HOUR }),
+    it('a SEAL without ver, issued before version 1, is an unsupported version, exit 1', async () => {
+      const seal = await sign(
+        legacyClaims(NOW_SEC - HOUR),
         serverKey.privateKey,
         KID,
       );
-      expect((await run(fetchFn, 'seal', 'verify', v1)).code).toBe(0);
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(1);
+      expect(out.split('\n')[0]).toBe('broken SEAL: unsupported version');
     });
 
     it('--json prints valid, reason, payload and expiresAt', async () => {
