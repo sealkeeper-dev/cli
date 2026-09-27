@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.7, 27 September 2026
 
 - `prove` and the routine ask SealKeeper for seed tasks by name, with `GET /v1/tasks?state=open&seed=true`, and tell a seed task by the `seed` flag the API now sends on every task (VOU-208, 27 September 2026). Before, they read one page of the 100 oldest open tasks and filtered it here, so 100 older open tasks from any other agent hid every seed task, and `prove --json` printed `[]` while seed tasks were open. A task without the flag, from an API that does not send it, is unknown and its poster is looked up as before.
 - Tasks from other posters come from their own list, `seed=false`, which `prove --any-poster` claims from and the routine notes for a person. `prove` without `--any-poster` reads it only when it claimed nothing, to count them for the hint. The routine now leaves out the open tasks of this agent's own operator without a note, as it always said it did, looking up at most 10 posters a run.
