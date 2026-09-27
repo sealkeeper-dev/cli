@@ -1,5 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { type Event, MAX_EVENTS_PER_BATCH } from '@sealkeeper/schema';
+import {
+  EVENT_MAX_AGE_DAYS,
+  EVENT_MAX_FUTURE_SKEW_SEC,
+  type Event,
+  MAX_EVENTS_PER_BATCH,
+} from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
 import { loadSigner, type Signer } from './identity.js';
@@ -25,16 +30,22 @@ const MAX_BATCH_EVENTS = MAX_EVENTS_PER_BATCH;
 const MAX_BATCH_BYTES = 256 * 1024;
 export const MAX_RATE_LIMIT_WAIT_SEC = 30;
 
-// How old an event's occurred_at may be for the API to accept it. The API
-// has its own EVENT_MAX_AGE_DAYS setting, and @sealkeeper/schema does not
-// export it, so this is the one copy the CLI keeps. Keep the two in step.
-export const EVENT_MAX_AGE_DAYS = 7;
+// How old an event's occurred_at may be for the API to accept it, and how
+// far ahead of the API clock, come from @sealkeeper/schema, the defaults
+// the API runs on.
 // Events are dropped before signing only when they are this much older than
 // the window, so a clock a little off never drops one the API would still
 // take. One that falls between the two is sent and, if the API rejects it,
-// skipped by the per event fallback below.
+// skipped by the per event fallback below. A rejected event that is not
+// within this margin of the old edge was refused as ahead of the API clock,
+// which judgeRefusal below handles.
 const STALE_MARGIN_MS = 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
+// An event logged while this machine clock ran ahead, refused once the clock
+// agrees with the API again, waits until its time comes when that is at most
+// this far off. One further off is skipped, so it cannot hold back the events
+// logged after it for hours or days.
+const FUTURE_WAIT_MS = 3600 * 1000;
 
 type SyncResult = {
   accepted: number;
@@ -115,6 +126,36 @@ async function sendRounds(
   const maxWait = options.maxRateLimitWaitSec ?? MAX_RATE_LIMIT_WAIT_SEC;
   let waited = false;
 
+  // The first response of the run says what time the API has. When this
+  // machine is further ahead than the API accepts, every event it logs now
+  // carries a time the API refuses as future, so the sync stops there and
+  // moves the cursor past nothing it has not sent. A machine behind the API
+  // logs times the API still takes, since it accepts them up to
+  // EVENT_MAX_AGE_DAYS old, so that warns once and the sync goes on. A
+  // response without a Date header says nothing and the sync goes on.
+  // Checked once, after the first round is signed, since that request is
+  // the first response.
+  let clockChecked = false;
+  const checkClock = async () => {
+    if (clockChecked) return;
+    clockChecked = true;
+    const server = options.api.serverDate();
+    if (server === null) return;
+    const aheadMs = now() - server;
+    const skewMs = EVENT_MAX_FUTURE_SKEW_SEC * 1000;
+    if (aheadMs < -skewMs) {
+      warn(behindWarning(-aheadMs));
+      return;
+    }
+    if (aheadMs <= skewMs) return;
+    throw new SyncError(
+      'clock_skew',
+      aheadMessage(aheadMs),
+      await countPending(p),
+      result,
+    );
+  };
+
   // until is null when the preview was empty, so there is nothing to send.
   if (options.until === null) return result;
   const until = options.until;
@@ -132,7 +173,7 @@ async function sendRounds(
       if (!(error instanceof ApiError)) throw error;
       throw new SyncError(
         error.code,
-        stopMessage(error),
+        stopMessage(error, now()),
         await countPending(p),
         result,
       );
@@ -189,8 +230,10 @@ async function sendRounds(
     let envelopes = fitBatch(signed);
 
     // Sends one batch. A rejection at index i > 0 sends the i events before
-    // it on their own. A rejection at index 0 skips that one event. Either
-    // way the next round of the outer loop picks up the rest.
+    // it on their own. A rejection at index 0 skips that event, or stops the
+    // sync and leaves the cursor where it was when waiting or fixing this
+    // machine clock gets it in (judgeRefusal). Otherwise the next round of
+    // the outer loop picks up the rest.
     for (;;) {
       try {
         const sent = await options.api.postEvents(envelopes);
@@ -203,24 +246,38 @@ async function sendRounds(
           all ? last : (fresh[envelopes.length - 1]?.at ?? last),
           new Date(),
         );
+        await checkClock();
         if (lastRound && all) return result;
         break;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
+        // Status 0 means no response came back, so there is no Date to read.
+        if (error.status !== 0) await checkClock();
 
         const index = rejectedIndex(error, envelopes.length);
         if (index === 0) {
-          const id = fresh[0]?.event.event_id;
-          warn(
-            `warning: the API rejected event ${id} (${error.code}), skipped it`,
+          const refusal = judgeRefusal(
+            error,
+            fresh,
+            options.api.serverDate(),
+            now(),
           );
-          result.skipped++;
-          const only = fresh.length === 1;
-          await moveTo(only ? last : (fresh[0]?.at ?? last));
-          if (lastRound && only) return result;
+          if ('stop' in refusal) {
+            throw new SyncError(
+              error.code,
+              refusal.stop,
+              await countPending(p),
+              result,
+            );
+          }
+          warn(refusal.warning);
+          result.skipped += refusal.skip;
+          const all = refusal.skip >= fresh.length;
+          await moveTo(all ? last : (fresh[refusal.skip - 1]?.at ?? last));
+          if (lastRound && all) return result;
           break;
         }
-        if (index !== null) {
+        if (index !== null && index > 0) {
           envelopes = envelopes.slice(0, index);
           continue;
         }
@@ -235,13 +292,95 @@ async function sendRounds(
         }
         throw new SyncError(
           error.code,
-          stopMessage(error),
+          stopMessage(error, now()),
           await countPending(p),
           result,
         );
       }
     }
   }
+}
+
+// What to do with the event the API rejected at index 0. skip moves the
+// cursor past that many leading events for good and warns once. stop ends
+// the sync and moves the cursor past nothing.
+type Refusal = { skip: number; warning: string } | { stop: string };
+
+// A version_limit is never skipped, it clears at the next UTC day. An
+// occurred_at refusal is skipped when the event is near the old edge of the
+// window, where it is too old for the API. The edge is read from serverNow,
+// the Date of the refusal, when there is one, since the API judged the event
+// by its own clock and this one may be behind it. A younger one was refused
+// as ahead of the API clock. When serverNow is missing or this machine clock
+// is further ahead of it than the API accepts, the clock is the likely cause
+// and fixing it is what gets the event in. When this clock agrees with the
+// API or is behind it, it is not ahead now and the event was logged while it
+// ran ahead. The sync then waits
+// for the event's time to come if that is within FUTURE_WAIT_MS, and
+// otherwise skips it together with the events right after it that are as
+// far ahead, in one request.
+function judgeRefusal(
+  error: ApiError,
+  fresh: readonly { event: Event }[],
+  serverNow: number | null,
+  now: number,
+): Refusal {
+  const event = fresh[0]?.event;
+  if (error.code === 'version_limit') return { stop: stopMessage(error, now) };
+  const skipOne = {
+    skip: 1,
+    warning: `warning: the API rejected event ${event?.event_id} (${error.code}), skipped it`,
+  };
+  if (error.code !== 'occurred_at_out_of_window' || !event) return skipOne;
+  const oldEdge = (serverNow ?? now) - EVENT_MAX_AGE_DAYS * DAY_MS;
+  if (Date.parse(event.occurred_at) < oldEdge + STALE_MARGIN_MS) {
+    return skipOne;
+  }
+
+  const skewMs = EVENT_MAX_FUTURE_SKEW_SEC * 1000;
+  if (serverNow === null || now - serverNow > skewMs) {
+    return { stop: stopMessage(error, now) };
+  }
+  // How long until the API accepts e.
+  const waitMs = (e: Event) => Date.parse(e.occurred_at) - skewMs - serverNow;
+  const first = waitMs(event);
+  if (!(first > FUTURE_WAIT_MS)) {
+    return {
+      stop: `the API refused an event logged while this machine clock ran ahead, it accepts it once its time comes, in ${durationText(first)}, sync again then, nothing was skipped`,
+    };
+  }
+  let n = 1;
+  for (; n < fresh.length; n++) {
+    const next = fresh[n]?.event;
+    if (!next || !(waitMs(next) > FUTURE_WAIT_MS)) break;
+  }
+  return {
+    skip: n,
+    warning: `warning: skipped ${n} event${n === 1 ? '' : 's'} logged while this machine clock ran ahead, the API would not accept ${n === 1 ? 'it' : 'them'} for more than ${FUTURE_WAIT_MS / 60_000} minutes`,
+  };
+}
+
+// aheadMs is this machine's time less the API's Date, positive here.
+function aheadMessage(aheadMs: number): string {
+  const secs = Math.round(aheadMs / 1000);
+  return `this machine clock is ${secs} seconds ahead of the API clock, more than the ${EVENT_MAX_FUTURE_SKEW_SEC} the API accepts, check this machine clock and sync again`;
+}
+
+// behindMs is the API's Date less this machine's time, positive here.
+function behindWarning(behindMs: number): string {
+  const secs = Math.round(behindMs / 1000);
+  return `warning: this machine clock is ${secs} seconds behind the API clock, the API still accepts its events since it takes them up to ${EVENT_MAX_AGE_DAYS} days old, check this machine clock`;
+}
+
+// A wait in hours and minutes, rounded up to the minute and at least one.
+function durationText(ms: number): string {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000));
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const parts = [];
+  if (h > 0) parts.push(`${h} hour${h === 1 ? '' : 's'}`);
+  if (m > 0) parts.push(`${m} minute${m === 1 ? '' : 's'}`);
+  return parts.join(' ');
 }
 
 function samePosition(a: LogPosition, b: LogPosition): boolean {
@@ -297,8 +436,12 @@ function rejectedIndex(error: ApiError, size: number): number | null {
   return lowest;
 }
 
-function stopMessage(error: ApiError): string {
+function stopMessage(error: ApiError, now: number): string {
   switch (error.code) {
+    case 'occurred_at_out_of_window':
+      return 'the API refused an event as ahead of its clock, check this machine clock and sync again, nothing was skipped';
+    case 'version_limit':
+      return `this agent started as many new versions today as the API accepts, the limit clears at midnight UTC, in ${durationText(DAY_MS - (now % DAY_MS))}, sync again then`;
     case 'network_error':
     case 'bad_response':
       return error.message;

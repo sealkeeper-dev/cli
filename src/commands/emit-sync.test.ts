@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   decodeHeader,
+  EVENT_MAX_AGE_DAYS,
+  EVENT_MAX_FUTURE_SKEW_SEC,
   Event,
   publicKeyFromAgentId,
   readAudience,
@@ -17,7 +19,7 @@ import { paths, readConfig, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, countPending, readCursor, readDay } from '../log.js';
 import { createProgram } from '../program.js';
-import { EVENT_MAX_AGE_DAYS, MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
+import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
 const API_URL = 'https://api.test';
 
@@ -105,6 +107,13 @@ function fakeFetch(server: Server): typeof fetch {
       headers: reply.headers,
     });
   }) as typeof fetch;
+}
+
+// A 400 that names envelope i the way POST /v1/events does.
+function rejectAt(i: number, code: string, field: string): Reply {
+  return apiError(400, code, [
+    { path: ['envelopes', i, field], code, message: code },
+  ]);
 }
 
 const failingFetch = (async () => {
@@ -555,9 +564,19 @@ describe('emit and sync', () => {
       expect(sleeps).toEqual([]);
     });
 
-    it('skips an event the API rejects by index and sends the rest', async () => {
+    it('skips an event too old for the API at an index and sends the rest', async () => {
       await initialise();
-      const events = await seed(5);
+      // Just inside the margin, so it is sent, and older than the API's
+      // window, so the API refuses it as too old.
+      const edge = new Date(
+        Date.now() - EVENT_MAX_AGE_DAYS * 24 * 3600 * 1000 - 60_000,
+      ).toISOString();
+      const events = [
+        ...(await seed(2)),
+        { ...toolCall(2), occurred_at: edge },
+      ];
+      await appendEvent(events[2] as Event);
+      events.push(...(await seed(2)));
       const bad = events[2]?.event_id;
       server.reply = (batch) => {
         const i = batch.findIndex((e) => e.event_id === bad);
@@ -585,6 +604,301 @@ describe('emit and sync', () => {
         events.filter((e) => e.event_id !== bad).map((e) => e.event_id),
       );
       expect(await countPending()).toBe(0);
+    });
+
+    it('stops on a recent event refused as out of window, a clock ahead, and skips nothing', async () => {
+      await initialise();
+      const events = await seed(3);
+      server.reply = () =>
+        rejectAt(0, 'occurred_at_out_of_window', 'occurred_at');
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toContain('check this machine clock');
+      expect(err).toContain('nothing was skipped');
+      expect(err).toContain('3 events pending');
+      expect(err).not.toContain('skipped it');
+      expect(server.batches).toHaveLength(1);
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect(await countPending()).toBe(3);
+      // Once the clock is right the same events go through.
+      server.reply = accept;
+      expect((await api('sync')).code).toBe(0);
+      expect(server.batches[1]?.map((e) => e.event_id)).toEqual(
+        events.map((e) => e.event_id),
+      );
+      expect(await countPending()).toBe(0);
+    });
+
+    it('sends the events before a recent one refused as out of window and then stops', async () => {
+      await initialise();
+      const events = await seed(3);
+      const ahead = events[1]?.event_id;
+      server.reply = (batch) => {
+        const i = batch.findIndex((e) => e.event_id === ahead);
+        return i === -1
+          ? accept(batch)
+          : rejectAt(i, 'occurred_at_out_of_window', 'occurred_at');
+      };
+      const { code, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(err).toContain('check this machine clock');
+      expect(err).toContain('2 events pending');
+      expect((await readCursor()).lastAcked?.eventId).toBe(events[0]?.event_id);
+    });
+
+    it('emit keeps the event when its sync is refused for a clock ahead', async () => {
+      await initialise();
+      server.reply = () =>
+        rejectAt(0, 'occurred_at_out_of_window', 'occurred_at');
+      const { code, err } = await api(
+        'emit',
+        '--type',
+        'session.start',
+        '--payload',
+        '{"session_id":"s1"}',
+      );
+      expect(code).toBe(0);
+      expect(err).toBe(
+        'warning: sync did not finish, 1 event pending, run npx sealkeeper sync\n',
+      );
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect(await countPending()).toBe(1);
+    });
+
+    it('stops on version_limit at index 0, says when it clears and skips nothing', async () => {
+      await initialise();
+      await seed(2);
+      server.reply = () => rejectAt(0, 'version_limit', 'version');
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toMatch(
+        /the limit clears at midnight UTC, in (\d+ hours? )?\d+ minutes?, sync again then, 2 events pending/,
+      );
+      expect(err).not.toContain('skipped');
+      expect(server.batches).toHaveLength(1);
+      expect((await readCursor()).lastAcked).toBeNull();
+      expect(await countPending()).toBe(2);
+    });
+
+    it('sends the events before a version_limit and keeps the rest', async () => {
+      await initialise();
+      const events = await seed(4);
+      const over = events[2]?.event_id;
+      server.reply = (batch) => {
+        const i = batch.findIndex((e) => e.event_id === over);
+        return i === -1
+          ? accept(batch)
+          : rejectAt(i, 'version_limit', 'version');
+      };
+      const { code, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(err).toContain('midnight UTC');
+      expect(err).toContain('2 events pending');
+      expect((await readCursor()).lastAcked?.eventId).toBe(events[1]?.event_id);
+    });
+
+    describe('with the API clock in the Date header', () => {
+      const NOW = new Date('2026-09-27T10:00:00.000Z');
+      const at = (offsetSec: number) =>
+        new Date(NOW.getTime() + offsetSec * 1000).toUTCString();
+
+      beforeEach(() => {
+        // Only Date is faked, so the local clock stays at NOW and the
+        // offsets below come out in whole seconds.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(NOW);
+      });
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('stops before signing the next round when this machine clock is 400 s ahead of the API', async () => {
+        await initialise();
+        await seed(600);
+        server.reply = (events) => ({
+          ...accept(events),
+          headers: { Date: at(-400) },
+        });
+        const { code, err } = await api('sync');
+        expect(code).toBe(1);
+        expect(err).toContain(
+          `this machine clock is 400 seconds ahead of the API clock, more than the ${EVENT_MAX_FUTURE_SKEW_SEC} the API accepts, check this machine clock and sync again, 100 events pending`,
+        );
+        // The first round was accepted and stays acked. Nothing of the
+        // second was signed or sent.
+        expect(server.batches.map((b) => b.length)).toEqual([500]);
+        expect(server.envelopes).toHaveLength(500);
+        expect(await countPending()).toBe(100);
+      });
+
+      it('warns once and finishes when this machine clock is 400 s behind the API', async () => {
+        await initialise();
+        await seed(600);
+        server.reply = (events) => ({
+          ...accept(events),
+          headers: { Date: at(400) },
+        });
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(0);
+        expect(err).toBe(
+          `warning: this machine clock is 400 seconds behind the API clock, the API still accepts its events since it takes them up to ${EVENT_MAX_AGE_DAYS} days old, check this machine clock\n`,
+        );
+        expect(out).toBe('accepted 600, duplicates 0\n');
+        expect(server.batches.map((b) => b.length)).toEqual([500, 100]);
+        expect(await countPending()).toBe(0);
+      });
+
+      it('skips an event too old by the API clock when this machine clock is 3 hours behind', async () => {
+        await initialise();
+        const behindSec = 3 * 3600;
+        // Two hours inside the old edge by this machine clock, so it is
+        // signed and sent, but an hour past it by the API clock.
+        const old: Event = {
+          ...toolCall(0),
+          occurred_at: new Date(
+            NOW.getTime() -
+              EVENT_MAX_AGE_DAYS * 24 * 3600 * 1000 +
+              2 * 3600_000,
+          ).toISOString(),
+        };
+        await appendEvent(old);
+        await seed(2);
+        server.reply = (events) => {
+          const i = events.findIndex((e) => e.event_id === old.event_id);
+          const reply =
+            i === -1
+              ? accept(events)
+              : rejectAt(i, 'occurred_at_out_of_window', 'occurred_at');
+          return { ...reply, headers: { Date: at(behindSec) } };
+        };
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(0);
+        expect(err).toContain(
+          `warning: the API rejected event ${old.event_id} (occurred_at_out_of_window), skipped it\n`,
+        );
+        expect(out).toBe('accepted 2, duplicates 0, skipped 1\n');
+        expect(await countPending()).toBe(0);
+      });
+
+      it('names the offset and skips nothing when a clock 400 s ahead is refused', async () => {
+        await initialise();
+        await seed(2);
+        server.reply = () => ({
+          ...rejectAt(0, 'occurred_at_out_of_window', 'occurred_at'),
+          headers: { Date: at(-400) },
+        });
+        const { code, err } = await api('sync');
+        expect(code).toBe(1);
+        expect(err).toContain(
+          'this machine clock is 400 seconds ahead of the API clock',
+        );
+        expect(err).toContain('2 events pending');
+        expect(err).not.toContain('skipped');
+        expect((await readCursor()).lastAcked).toBeNull();
+        expect(await countPending()).toBe(2);
+      });
+
+      // An API whose clock agrees with this machine, refusing the first
+      // event stamped more than the skew ahead of it.
+      const refuseAhead = (events: Event[]): Reply => {
+        const limit = NOW.getTime() + EVENT_MAX_FUTURE_SKEW_SEC * 1000;
+        const i = events.findIndex((e) => Date.parse(e.occurred_at) > limit);
+        const reply =
+          i === -1
+            ? accept(events)
+            : rejectAt(i, 'occurred_at_out_of_window', 'occurred_at');
+        return { ...reply, headers: { Date: at(0) } };
+      };
+      const stampedAhead = (sec: number): Event => ({
+        ...toolCall(0),
+        occurred_at: new Date(NOW.getTime() + sec * 1000).toISOString(),
+      });
+
+      it('skips events logged while the clock ran a day ahead once it is right, in one request', async () => {
+        await initialise();
+        const ahead = [
+          stampedAhead(24 * 3600),
+          stampedAhead(24 * 3600 + 1),
+          stampedAhead(24 * 3600 + 2),
+        ];
+        for (const e of ahead) await appendEvent(e);
+        const later = await seed(2);
+        server.reply = refuseAhead;
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(0);
+        expect(err).toBe(
+          'warning: skipped 3 events logged while this machine clock ran ahead, the API would not accept them for more than 60 minutes\n',
+        );
+        expect(out).toBe('accepted 2, duplicates 0, skipped 3\n');
+        expect(server.batches).toHaveLength(2);
+        expect(server.batches[1]?.map((e) => e.event_id)).toEqual(
+          later.map((e) => e.event_id),
+        );
+        expect(await countPending()).toBe(0);
+      });
+
+      it('skips events logged a day ahead when this machine clock is now 400 s behind the API', async () => {
+        await initialise();
+        await appendEvent(stampedAhead(24 * 3600));
+        await seed(2);
+        // The API is 400 s ahead of this machine and refuses what is more
+        // than the skew ahead of its own clock.
+        server.reply = (events) => {
+          const limit =
+            NOW.getTime() + (400 + EVENT_MAX_FUTURE_SKEW_SEC) * 1000;
+          const i = events.findIndex((e) => Date.parse(e.occurred_at) > limit);
+          const reply =
+            i === -1
+              ? accept(events)
+              : rejectAt(i, 'occurred_at_out_of_window', 'occurred_at');
+          return { ...reply, headers: { Date: at(400) } };
+        };
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(0);
+        expect(err).toContain('400 seconds behind the API clock');
+        expect(err).toContain(
+          'warning: skipped 1 event logged while this machine clock ran ahead, the API would not accept it for more than 60 minutes\n',
+        );
+        expect(err).not.toContain('check this machine clock and sync again');
+        expect(out).toBe('accepted 2, duplicates 0, skipped 1\n');
+        expect(await countPending()).toBe(0);
+      });
+
+      it('waits for an event logged a few minutes ahead once the clock is right, and says when', async () => {
+        await initialise();
+        await appendEvent(stampedAhead(600));
+        await seed(1);
+        server.reply = refuseAhead;
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(1);
+        expect(out).toBe('');
+        expect(err).toContain(
+          'the API refused an event logged while this machine clock ran ahead, it accepts it once its time comes, in 5 minutes, sync again then, nothing was skipped, 2 events pending',
+        );
+        expect(err).not.toContain('check this machine clock');
+        expect((await readCursor()).lastAcked).toBeNull();
+        expect(await countPending()).toBe(2);
+      });
+
+      it.each([
+        ['no Date header', null],
+        ['a Date header that does not parse', 'not a date'],
+        ['a Date within the accepted skew', at(EVENT_MAX_FUTURE_SKEW_SEC - 10)],
+      ])('syncs as usual with %s', async (_, date) => {
+        await initialise();
+        await seed(2);
+        server.reply = (events) => ({
+          ...accept(events),
+          ...(date === null ? {} : { headers: { Date: date } }),
+        });
+        const { code, out, err } = await api('sync');
+        expect(code).toBe(0);
+        expect(err).toBe('');
+        expect(out).toBe('accepted 2, duplicates 0\n');
+        expect(await countPending()).toBe(0);
+      });
     });
 
     it('drops 50 stale events before signing and sends 5 fresh ones in one request', async () => {

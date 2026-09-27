@@ -68,6 +68,10 @@ export type ApiClient = {
   registerAgent(envelope: string): Promise<AgentResponse>;
   getAgent(agentId: string): Promise<AgentResponse>;
   postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
+  // The Date header of the last response this client received, in ms since
+  // the epoch. null before any response, or when the last one had no Date
+  // header or one that does not parse.
+  serverDate(): number | null;
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
   getScore(agentId: string): Promise<ScoreResponse>;
@@ -114,6 +118,7 @@ export function createApiClient(options: {
   const fetchFn = options.fetch ?? fetch;
   const apiUrl = options.apiUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  let serverDate: number | null = null;
 
   async function request(path: string, body?: unknown, method?: string) {
     if (!isSecureApiUrl(apiUrl)) {
@@ -148,6 +153,7 @@ export function createApiClient(options: {
         `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
       );
     }
+    serverDate = httpDate(res.headers.get('Date'));
     if (isRedirect(res.status)) throw redirectError(apiUrl, path, res);
     let json: unknown;
     try {
@@ -252,6 +258,7 @@ export function createApiClient(options: {
 
   return {
     apiUrl,
+    serverDate: () => serverDate,
     async registerAgent(envelope) {
       const { status, json } = await request('/v1/agents', { envelope });
       if (status !== 200 && status !== 201) throw toError(status, json);
@@ -360,6 +367,14 @@ export function createApiClient(options: {
       throw toError(status, json, headers);
     },
   };
+}
+
+// An HTTP Date header in ms since the epoch, or null when it is missing or
+// does not parse.
+function httpDate(value: string | null): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 // Only the delay-seconds form. The API never sends an HTTP date.

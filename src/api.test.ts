@@ -179,6 +179,46 @@ describe('postEvents', () => {
   });
 });
 
+describe('serverDate', () => {
+  it('is null before any response and the Date of the last one after', async () => {
+    const date = 'Sun, 27 Sep 2026 10:00:00 GMT';
+    const fetchFn = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json(
+          { accepted: 1, duplicates: 0 },
+          { headers: { Date: date } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { code: 'unknown_agent', message: 'no' } },
+          { status: 401 },
+        ),
+      ) as unknown as typeof fetch;
+    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
+    expect(api.serverDate()).toBeNull();
+    await api.postEvents(['a.b.c']);
+    expect(api.serverDate()).toBe(Date.parse(date));
+    await api.postEvents(['a.b.c']).catch(() => {});
+    expect(api.serverDate()).toBeNull();
+  });
+
+  it('is null for a Date header that does not parse', async () => {
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(
+        Response.json(
+          { accepted: 1, duplicates: 0 },
+          { headers: { Date: 'yesterday' } },
+        ),
+      ),
+    });
+    await api.postEvents(['a.b.c']);
+    expect(api.serverDate()).toBeNull();
+  });
+});
+
 describe('getScore', () => {
   it('gets /v1/agents/<id>/score and parses the scores', async () => {
     const body = { agentId: AGENT_ID, scores: [] };
