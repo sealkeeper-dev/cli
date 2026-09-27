@@ -17,6 +17,7 @@ import {
   encodeTasksCursor,
   LEVEL_THRESHOLDS,
   OPERATOR_SILVER_CAP,
+  OpenTasksRequest,
   PostTaskRequest,
   readAudience,
   verify,
@@ -112,6 +113,11 @@ class FakeApi {
   // Whether task answers carry seed, as the API from VOU-208 does. False
   // stands for an answer that does not say, which prove reads as unknown.
   sendSeed = true;
+  // Open tasks this agent is barred from, left out of the signed open
+  // list. The public GET still lists them.
+  barred = new Set<string>();
+  // False for an API from before POST /v1/tasks/open.
+  openRoute = true;
 
   constructor(readonly agentId: string) {}
 
@@ -158,6 +164,45 @@ class FakeApi {
     return task;
   }
 
+  // One page of the task list. barred leaves out the tasks this agent is
+  // barred from, as the signed open list does (VOU-200).
+  list(q: URLSearchParams, barred = false): Response {
+    // Like the API, the open pool leaves addressed tasks out, and
+    // assignee keeps only the tasks addressed to that agent. poster,
+    // claimant and seed filter as the API does (VOU-208). Tasks come in
+    // the order they were added, and the cursor is the offset of the next
+    // page.
+    const assignee = q.get('assignee');
+    const state = q.get('state');
+    const seed = q.get('seed');
+    const matching = [...this.tasks.values()]
+      .filter((t) => t.state === state)
+      .filter((t) =>
+        assignee
+          ? t.assignee?.id === assignee
+          : state !== 'open' || !t.assignee,
+      )
+      .filter((t) => !q.has('poster') || t.posterAgentId === q.get('poster'))
+      .filter(
+        (t) => !q.has('claimant') || t.claimantAgentId === q.get('claimant'),
+      )
+      .filter(
+        (t) =>
+          seed === null ||
+          this.isSeedPoster(t.posterAgentId) === (seed === 'true'),
+      )
+      .filter((t) => !barred || !this.barred.has(t.id));
+    const from = offsetOf(q.get('cursor'));
+    const limit = Number(q.get('limit') ?? 50);
+    const tasks = matching.slice(from, from + limit);
+    const nextCursor =
+      from + limit < matching.length ? pageCursor(from + limit) : null;
+    return Response.json({
+      tasks: tasks.map((t) => this.shown(t)),
+      nextCursor,
+    });
+  }
+
   fetch: typeof fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -167,40 +212,23 @@ class FakeApi {
     this.requests.push(`${method} ${url.pathname}`);
 
     if (method === 'GET' && url.pathname === '/v1/tasks') {
-      // Like the API, the open pool leaves addressed tasks out, and
-      // assignee keeps only the tasks addressed to that agent. poster,
-      // claimant and seed filter as the API does (VOU-208). Tasks come in
-      // the order they were added, and the cursor is the offset of the next
-      // page.
-      const q = url.searchParams;
-      const assignee = q.get('assignee');
-      const state = q.get('state');
-      const seed = q.get('seed');
-      const matching = [...this.tasks.values()]
-        .filter((t) => t.state === state)
-        .filter((t) =>
-          assignee
-            ? t.assignee?.id === assignee
-            : state !== 'open' || !t.assignee,
-        )
-        .filter((t) => !q.has('poster') || t.posterAgentId === q.get('poster'))
-        .filter(
-          (t) => !q.has('claimant') || t.claimantAgentId === q.get('claimant'),
-        )
-        .filter(
-          (t) =>
-            seed === null ||
-            this.isSeedPoster(t.posterAgentId) === (seed === 'true'),
-        );
-      const from = offsetOf(q.get('cursor'));
-      const limit = Number(q.get('limit') ?? 50);
-      const tasks = matching.slice(from, from + limit);
-      const nextCursor =
-        from + limit < matching.length ? pageCursor(from + limit) : null;
-      return Response.json({
-        tasks: tasks.map((t) => this.shown(t)),
-        nextCursor,
+      return this.list(url.searchParams);
+    }
+    if (method === 'POST' && url.pathname === '/v1/tasks/open') {
+      // An API from before the signed open list answers 404.
+      if (!this.openRoute) return error(404, 'not_found');
+      const body = JSON.parse(String(init?.body)) as { envelope: string };
+      const kid = decodeHeader(body.envelope).kid;
+      if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
+      const payload = OpenTasksRequest.parse(
+        unsigned((await verify(body.envelope, base64urlDecode(kid))).payload),
+      );
+      const q = new URLSearchParams({
+        state: 'open',
+        limit: String(payload.limit),
       });
+      if (payload.seed !== undefined) q.set('seed', String(payload.seed));
+      return this.list(q, true);
     }
     if (
       method === 'GET' &&
@@ -1161,6 +1189,37 @@ describe('prove', () => {
     expect(splitErr(err).text).toBe(
       'An agent can hold at most 10 claimed tasks. Submit the tasks below first.\n',
     );
+  });
+
+  it('never picks the seed tasks it is barred from, however many', async () => {
+    // VOU-200. Six barred tasks at the head of the pool, one more than the
+    // lost claims prove allows, used to leave it with nothing every run.
+    const tasks = seedTasks(8);
+    for (const task of tasks.slice(0, 6)) {
+      api.barred.add(task.id);
+      api.claims.set(task.id, 409);
+    }
+    const { code, out } = await run('prove', '--count', '2');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([tasks[6]?.id, tasks[7]?.id]);
+    expect(jsonIds(out)).toEqual([tasks[6]?.id, tasks[7]?.id]);
+    expect(api.requests).toContain('POST /v1/tasks/open');
+    for (const task of tasks.slice(0, 6)) {
+      expect(api.requests).not.toContain(`POST /v1/tasks/${task.id}/claim`);
+    }
+  });
+
+  it('reads the public list on an older API and moves past a barred task', async () => {
+    api.openRoute = false;
+    const tasks = seedTasks(2);
+    api.barred.add(tasks[0]?.id ?? '');
+    api.claims.set(tasks[0]?.id ?? '', 409);
+    const { code, out } = await run('prove', '--count', '1');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([tasks[1]?.id]);
+    expect(jsonIds(out)).toEqual([tasks[1]?.id]);
+    expect(api.requests).toContain('POST /v1/tasks/open');
+    expect(api.requests).toContain(`POST /v1/tasks/${tasks[0]?.id}/claim`);
   });
 
   it('lists the tasks the server says it holds when the local log does not know them', async () => {

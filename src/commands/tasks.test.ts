@@ -21,6 +21,7 @@ import {
   encodeTasksCursor,
   MAX_SUBMISSION_BYTES,
   MAX_TASK_SPEC_BYTES,
+  OpenTasksRequest,
   PostTaskRequest,
   publicVerification,
   readAudience,
@@ -145,6 +146,16 @@ class FakeApi {
   errors: string[] = [];
   // The query of every GET /v1/tasks.
   listed: string[] = [];
+  // The payload of every signed open list as a query, issuedAt left out
+  // (VOU-200).
+  opened: string[] = [];
+  // Open tasks this agent is barred from, left out of the signed open
+  // list. The public GET still lists them.
+  barred = new Set<string>();
+  // False for an API from before POST /v1/tasks/open.
+  openRoute = true;
+  // Replaces the answer to the signed open list when set.
+  openReply: (() => Response) | null = null;
 
   constructor(readonly agentId: string) {}
 
@@ -168,8 +179,11 @@ class FakeApi {
     return task;
   }
 
+  // The signed POSTs, the open list left out since it is a read.
   posts(): ApiCall[] {
-    return this.requests.filter((r) => r.method === 'POST');
+    return this.requests.filter(
+      (r) => r.method === 'POST' && r.path !== '/v1/tasks/open',
+    );
   }
 
   fetch: typeof fetch = (async (
@@ -187,29 +201,46 @@ class FakeApi {
       verification: publicVerification(t.verification as VerificationSpec),
     });
 
-    if (method === 'GET' && url.pathname === '/v1/tasks') {
-      const type = url.searchParams.get('taskType');
-      // Like the API, the open pool leaves addressed tasks out, and
-      // assignee keeps only the tasks addressed to that agent.
-      const assignee = url.searchParams.get('assignee');
-      const state = url.searchParams.get('state');
+    // Like the API, the open pool leaves addressed tasks out, and assignee
+    // keeps only the tasks addressed to that agent. One page at a time, the
+    // cursor the offset of the next (VOU-208). barred leaves out the tasks
+    // this agent is barred from, as the signed open list does (VOU-200).
+    const page = (q: {
+      state: string | null;
+      assignee?: string | null;
+      type?: string | null;
+      cursor?: string | null;
+      limit?: number;
+      barred?: boolean;
+    }) => {
       const matching = [...this.tasks.values()]
-        .filter((t) => t.state === state)
+        .filter((t) => t.state === q.state)
         .filter((t) =>
-          assignee
-            ? t.assignee?.id === assignee
-            : state !== 'open' || !t.assignee,
+          q.assignee
+            ? t.assignee?.id === q.assignee
+            : q.state !== 'open' || !t.assignee,
         )
-        .filter((t) => !type || t.taskType === type)
+        .filter((t) => !q.type || t.taskType === q.type)
+        .filter((t) => !q.barred || !this.barred.has(t.id))
         .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
-      // One page at a time, the cursor the offset of the next (VOU-208).
-      const from = offsetOf(url.searchParams.get('cursor'));
-      const limit = Number(url.searchParams.get('limit') ?? 50);
-      this.listed.push(url.searchParams.toString());
+      const from = offsetOf(q.cursor ?? null);
+      const limit = q.limit ?? 50;
       return Response.json({
         tasks: matching.slice(from, from + limit).map(shown),
         nextCursor:
           from + limit < matching.length ? pageCursor(from + limit) : null,
+      });
+    };
+
+    if (method === 'GET' && url.pathname === '/v1/tasks') {
+      const q = url.searchParams;
+      this.listed.push(q.toString());
+      return page({
+        state: q.get('state'),
+        assignee: q.get('assignee'),
+        type: q.get('taskType'),
+        cursor: q.get('cursor'),
+        limit: Number(q.get('limit') ?? 50),
       });
     }
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
@@ -245,6 +276,30 @@ class FakeApi {
       (await verify(body.envelope, base64urlDecode(kid))).payload,
     );
     request.payload = payload as Record<string, unknown>;
+
+    if (url.pathname === '/v1/tasks/open') {
+      // An API from before the signed open list answers 404.
+      if (!this.openRoute) return error(404, 'not_found');
+      if (this.openReply) return this.openReply();
+      const q = OpenTasksRequest.parse(payload);
+      const { issuedAt: _, ...sent } = payload as Record<string, unknown>;
+      const cursor = (sent as { cursor?: string }).cursor;
+      this.opened.push(
+        new URLSearchParams(
+          Object.entries(sent).map(([k, v]): [string, string] => [
+            k,
+            String(v),
+          ]),
+        ).toString(),
+      );
+      return page({
+        state: 'open',
+        type: q.taskType,
+        cursor,
+        limit: q.limit,
+        barred: true,
+      });
+    }
 
     if (url.pathname === '/v1/tasks') {
       if (this.postReply) return this.postReply();
@@ -545,10 +600,11 @@ describe('tasks pull, submit and post', () => {
       const { code, out } = await run('tasks', 'pull', '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.listed).toEqual([
-        'state=open&limit=100',
-        `state=open&limit=100&cursor=${pageCursor(100)}`,
+      expect(api.opened).toEqual([
+        'limit=100',
+        `limit=100&cursor=${pageCursor(100)}`,
       ]);
+      expect(api.listed).toEqual([]);
     });
 
     it('stops paging after MAX_PULL_PAGES pages', async () => {
@@ -558,7 +614,7 @@ describe('tasks pull, submit and post', () => {
       const { code, out } = await run('tasks', 'pull', '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out)).toEqual({ task: null });
-      expect(api.listed).toHaveLength(MAX_PULL_PAGES);
+      expect(api.opened).toHaveLength(MAX_PULL_PAGES);
     });
 
     it('prints the task as text', async () => {
@@ -611,11 +667,91 @@ describe('tasks pull, submit and post', () => {
       const { code, out } = await run('tasks', 'pull', '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.requests[0]?.path).toBe('/v1/tasks');
+      expect(api.requests[0]?.path).toBe('/v1/tasks/open');
       expect(api.posts().map((r) => r.path)).toEqual([
         `/v1/tasks/${other.id}/claim`,
       ]);
     });
+
+    it('never claims a task it is barred from, which the signed list leaves out', async () => {
+      // VOU-200. After three failed submits the claim route refuses the
+      // agent with 409 claim_barred until the task expires.
+      const barred = api.add({
+        postedAt: new Date(Date.now() - 9e6).toISOString(),
+      });
+      api.barred.add(barred.id);
+      api.claims.set(barred.id, 409);
+      const other = api.add({});
+      const { code, out } = await run('tasks', 'pull', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).task.id).toBe(other.id);
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${other.id}/claim`,
+      ]);
+      expect(api.listed).toEqual([]);
+    });
+
+    it('reads the public list and moves on past a barred task on an older API', async () => {
+      // An API from before POST /v1/tasks/open answers 404, and its list
+      // still holds the barred task, so the claim gets 409 and pull moves on.
+      api.openRoute = false;
+      const barred = api.add({
+        postedAt: new Date(Date.now() - 9e6).toISOString(),
+      });
+      api.barred.add(barred.id);
+      api.claims.set(barred.id, 409);
+      const other = api.add({ taskType: 'summarise' });
+      const { code, out } = await run(
+        'tasks',
+        'pull',
+        '--type',
+        'summarise',
+        '--json',
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(out).task.id).toBe(other.id);
+      expect(api.requests[0]).toMatchObject({
+        method: 'POST',
+        path: '/v1/tasks/open',
+      });
+      expect(api.listed).toEqual(['state=open&limit=100&taskType=summarise']);
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${barred.id}/claim`,
+        `/v1/tasks/${other.id}/claim`,
+      ]);
+    });
+
+    it('reads the public list once when the signed read refuses the clock', async () => {
+      api.openReply = () => error(400, 'issued_at_out_of_window');
+      const task = api.add({});
+      const { code, out } = await run('tasks', 'pull', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).task.id).toBe(task.id);
+      expect(api.requests[0]).toMatchObject({
+        method: 'POST',
+        path: '/v1/tasks/open',
+      });
+      expect(api.listed).toEqual(['state=open&limit=100']);
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${task.id}/claim`,
+      ]);
+    });
+
+    it.each([
+      [401, 'unknown_agent', 'failed with unknown_agent'],
+      [500, 'internal', 'failed with internal'],
+    ])(
+      'fails on a %i %s from the signed read and never reads the public list',
+      async (status, code, message) => {
+        api.openReply = () => error(status, code);
+        api.add({});
+        const result = await run('tasks', 'pull', '--json');
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(message);
+        expect(api.listed).toEqual([]);
+        expect(api.posts()).toEqual([]);
+      },
+    );
 
     it('reports nothing available as JSON when only own tasks are open', async () => {
       api.add({ posterAgentId: agentId });

@@ -37,7 +37,7 @@ import {
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
-import { createKey } from '../identity.js';
+import { createKey, loadSigner } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { MANAGED_MARKER } from '../managed.js';
 import { saveOperatorSlug } from '../operator-slug.js';
@@ -1133,7 +1133,7 @@ describe('routine', () => {
         new PosterLookup(
           createApiClient({ apiUrl: API_URL, fetch: api.fetch }),
         ),
-        api.agentId,
+        await loadSigner(API_URL),
         (await readConfig()) as Config,
         defaultRoutineConfig(),
         seedTypesDone(await readRoutine()),
@@ -1162,7 +1162,7 @@ describe('routine', () => {
       const found = await routineCandidates(
         client,
         new PosterLookup(client),
-        api.agentId,
+        await loadSigner(API_URL),
         (await readConfig()) as Config,
         defaultRoutineConfig(),
       );

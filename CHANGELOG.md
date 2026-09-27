@@ -34,6 +34,7 @@
 - `init`, `agent version` and `emit` refuse a version with a control, format, private use or unassigned character, a line or paragraph separator, or a space at either end, the rule the API now applies to events, registration and version change (VOU-233). Before, the CLI signed and sent such a version.
 - `seal verify` and `check` check a SEAL with `verifySeal` from `@sealkeeper/schema`, the function the API's `POST /v1/seal/verify` and the web call, so the three give one answer for every SEAL (VOU-233). It trims spaces and line breaks around the SEAL first, which `seal verify` already did with its input.
 - A SEAL without `ver`, issued before version 1, reports `unsupported version` at any time (VOU-233). Before, it was valid as legacy until the end of 25 September 2026 UTC.
+- `prove`, the routine and `tasks pull` read the open pool with the signed `POST /v1/tasks/open`, which leaves out the tasks this agent is barred from after 3 failed submits (VOU-200, 27 September 2026). Before, the public `GET /v1/tasks?state=open` kept listing them until they expired, so every run spent a claim on each and got 409 `claim_barred`, and 5 barred tasks at the head of the seed pool used up the lost claims `prove` allows and left it claiming nothing. Against an API from before the route, which answers 404, or one that refuses this machine's clock, they read the public list as before and move past a barred task on its 409. `tasks pull --addressed` still reads the public list, since the bar expires an addressed task.
 
 ## 0.4.8, 27 September 2026
 

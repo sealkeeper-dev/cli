@@ -22,6 +22,7 @@ import {
   todayLine,
   todayOf,
 } from '../goal.js';
+import type { Signer } from '../identity.js';
 import { clearInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import {
@@ -67,6 +68,7 @@ import {
   defaultTasksDeps,
   failOnApiError,
   openTaskSession,
+  openTasksPage,
   recordEvent,
   type TasksDeps,
   unsubmittedClaims,
@@ -717,7 +719,7 @@ async function claim(
       const found = await routineCandidates(
         api,
         posters,
-        signer.agentId,
+        signer,
         config,
         routine,
         seedTypesDone(entries),
@@ -768,8 +770,8 @@ async function claim(
   let open: TaskResponse[];
   let others: TaskResponse[] = [];
   try {
-    open = await openSeedTasks(api, signer.agentId);
-    if (options.anyPoster) others = await openOtherTasks(api, signer.agentId);
+    open = await openSeedTasks(api, signer);
+    if (options.anyPoster) others = await openOtherTasks(api, signer);
   } catch (error) {
     failOnApiError(cmd, error);
   }
@@ -791,7 +793,7 @@ async function claim(
   // only leaves the hint out.
   if (!options.anyPoster && tasks.length === 0 && !capped) {
     try {
-      others = await openOtherTasks(api, signer.agentId);
+      others = await openOtherTasks(api, signer);
     } catch {
       others = [];
     }
@@ -802,37 +804,37 @@ async function claim(
 
 // Open seed tasks this agent may claim, oldest first. The API filters on
 // the seed agent, so they come whatever other agents posted before them
-// (VOU-208). Every one is a seed task by the API's word, which stands in
-// for the seed flag an answer may not carry. The open list leaves addressed
-// tasks out, and this keeps it so whatever the server sends. Throws what
-// the API client throws.
+// (VOU-208), and leaves out the ones this agent is barred from (VOU-200).
+// Every one is a seed task by the API's word, which stands in for the seed
+// flag an answer may not carry. The open list leaves addressed tasks out,
+// and this keeps it so whatever the server sends. Throws what the API
+// client throws.
 async function openSeedTasks(
   api: ApiClient,
-  agentId: string,
+  signer: Signer,
 ): Promise<TaskResponse[]> {
-  const open = await api.listTasks({
-    state: 'open',
+  const { tasks } = await openTasksPage(api, signer, {
     seed: true,
     limit: LIST_LIMIT,
   });
-  return open
-    .filter((task) => task.posterAgentId !== agentId && !task.assignee)
+  return tasks
+    .filter((task) => task.posterAgentId !== signer.agentId && !task.assignee)
     .map((task) => ({ ...task, seed: true }));
 }
 
 // Open tasks other agents than the seed agent posted, one page, oldest
-// first, the agent's own left out. Throws what the API client throws.
+// first, the agent's own and the ones it is barred from left out. Throws
+// what the API client throws.
 async function openOtherTasks(
   api: ApiClient,
-  agentId: string,
+  signer: Signer,
 ): Promise<TaskResponse[]> {
-  const open = await api.listTasks({
-    state: 'open',
+  const { tasks } = await openTasksPage(api, signer, {
     seed: false,
     limit: LIST_LIMIT,
   });
-  return open.filter(
-    (task) => task.posterAgentId !== agentId && !task.assignee,
+  return tasks.filter(
+    (task) => task.posterAgentId !== signer.agentId && !task.assignee,
   );
 }
 
@@ -858,11 +860,12 @@ export type RoutineCandidates = {
 export async function routineCandidates(
   api: ApiClient,
   posters: PosterLookup,
-  agentId: string,
+  signer: Signer,
   config: Config,
   routine: RoutineConfig,
   done: ReadonlyMap<string, number> = new Map(),
 ): Promise<RoutineCandidates> {
+  const { agentId } = signer;
   const own = normalLogin(config.operatorLogin);
   const tasks: TaskResponse[] = [];
   const seeds: TaskResponse[] = [];
@@ -887,8 +890,8 @@ export async function routineCandidates(
   }
 
   const all = await ranked(posters, [
-    ...(await openSeedTasks(api, agentId)),
-    ...(await openOtherTasks(api, agentId)),
+    ...(await openSeedTasks(api, signer)),
+    ...(await openOtherTasks(api, signer)),
   ]);
   // The own operator check looks posters up through the cache, at most
   // MAX_POSTER_LOOKUPS of them. A task of a poster past that is noted for a

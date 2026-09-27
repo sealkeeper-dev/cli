@@ -12,6 +12,7 @@ import {
   failOnApiError,
   handleOrId,
   openTaskSession,
+  openTasksPage,
   printFields,
   recordEvent,
   type TasksDeps,
@@ -61,9 +62,11 @@ export function register(
       // A page of the schema maximum, oldest first. The per-poster open cap
       // is 200, so an agent's own open tasks can fill a whole page. pull then
       // reads the next page with the cursor, up to MAX_PULL_PAGES, until it
-      // has a task to claim. Plain pull reads the open pool, which leaves
-      // addressed tasks out. --addressed reads the tasks addressed to this
-      // agent instead.
+      // has a task to claim. Plain pull reads the open pool as this agent
+      // sees it, which leaves addressed tasks out and the ones it is barred
+      // from (VOU-200). --addressed reads the tasks addressed to this agent
+      // instead. The bar expires an addressed task, so none of those is
+      // barred.
       let claimed: TaskResponse | null = null;
       let attempts = 0;
       let cursor: string | undefined;
@@ -71,13 +74,18 @@ export function register(
         let open: TaskResponse[];
         let next: string | null;
         try {
-          const read = await api.listTasksPage({
-            state: 'open',
+          const query = {
             taskType: options.type,
             limit: LIST_LIMIT,
-            ...(options.addressed ? { assignee: signer.agentId } : {}),
             ...(cursor === undefined ? {} : { cursor }),
-          });
+          };
+          const read = options.addressed
+            ? await api.listTasksPage({
+                ...query,
+                state: 'open',
+                assignee: signer.agentId,
+              })
+            : await openTasksPage(api, signer, query);
           open = read.tasks;
           next = read.nextCursor;
         } catch (error) {

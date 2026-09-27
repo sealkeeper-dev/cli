@@ -111,6 +111,9 @@ export type ApiClient = {
       cursor?: string;
     },
   ): Promise<ListTasksPage>;
+  // POST /v1/tasks/open, signed. The open pool as this agent sees it, less
+  // the tasks it is barred from (VOU-200).
+  listOpenTasks(envelope: string): Promise<ListTasksPage>;
   getTask(taskId: string): Promise<TaskResponse>;
   postTask(envelope: string): Promise<TaskResponse>;
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
@@ -214,6 +217,16 @@ export function createApiClient(options: {
       ...(envelope === undefined ? {} : { body: { envelope } }),
     });
 
+  // A page of tasks from GET /v1/tasks or POST /v1/tasks/open, nextCursor
+  // null on the last page.
+  async function taskPage(
+    path: string,
+    options?: RequestOptions,
+  ): Promise<ListTasksPage> {
+    const page = await call(path, ListTasksResponse, options);
+    return { tasks: page.tasks, nextCursor: page.nextCursor ?? null };
+  }
+
   /*
    * GET /v1/tasks. The query is checked with the API's own schema before it
    * is sent, then sent as text. seed, poster and claimant ask the API to
@@ -238,11 +251,7 @@ export function createApiClient(options: {
     if (seed !== undefined) search.set('seed', String(seed));
     // The cursor goes back as the API sent it. The parse above checked it.
     if (query.cursor !== undefined) search.set('cursor', query.cursor);
-    const page = await call(
-      `/v1/tasks?${search.toString()}`,
-      ListTasksResponse,
-    );
-    return { tasks: page.tasks, nextCursor: page.nextCursor ?? null };
+    return taskPage(`/v1/tasks?${search.toString()}`);
   }
 
   return {
@@ -270,6 +279,10 @@ export function createApiClient(options: {
       return (await listTasksPage(query)).tasks;
     },
     listTasksPage,
+    // Signed, the envelope as the whole body, the same page as GET
+    // /v1/tasks.
+    listOpenTasks: (envelope) =>
+      taskPage('/v1/tasks/open', { body: { envelope } }),
     getTask: (taskId) => taskCall(taskPath(taskId), [200]),
     // 201 for a new task, 200 when a retried post returns the existing one.
     postTask: (envelope) => taskCall('/v1/tasks', [200, 201], envelope),

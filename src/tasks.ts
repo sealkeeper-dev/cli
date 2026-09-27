@@ -1,6 +1,8 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
+import { OpenTasksRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
+import type { z } from 'zod';
 import {
   type ApiClient,
   ApiError,
@@ -14,7 +16,11 @@ import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
-import { agentHandle, type TaskResponse } from './responses.js';
+import {
+  agentHandle,
+  type ListTasksPage,
+  type TaskResponse,
+} from './responses.js';
 
 // What tasks pull, claim, submit, post and show and prove share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
@@ -127,6 +133,34 @@ export async function handleOrId(
   } catch {
     return agentId;
   }
+}
+
+// One page of the open pool as this agent sees it (VOU-200). The signed
+// POST /v1/tasks/open leaves out the tasks it is barred from, which a claim
+// would only get 409 claim_barred for. An API from before that route
+// answers 404, and one that refuses this machine's clock answers
+// issued_at_out_of_window, so either reads the public GET
+// /v1/tasks?state=open instead, which still lists them and costs a 409 per
+// barred task. The cursor goes back as the API sent it. Throws what the
+// API client throws.
+export async function openTasksPage(
+  api: ApiClient,
+  signer: Signer,
+  query: Omit<z.input<typeof OpenTasksRequest>, 'issuedAt'>,
+): Promise<ListTasksPage> {
+  const request = { ...query, issuedAt: new Date().toISOString() };
+  OpenTasksRequest.parse(request);
+  try {
+    return await api.listOpenTasks(await signer.sign(request));
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      !(error.status === 404 || error.code === 'issued_at_out_of_window')
+    ) {
+      throw error;
+    }
+  }
+  return api.listTasksPage({ ...query, state: 'open' });
 }
 
 // The tasks in a GET /v1/tasks?assignee= answer that are really addressed

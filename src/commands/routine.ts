@@ -643,13 +643,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       held = kept.tasks;
       found =
         claims.remaining > 0
-          ? await routineCandidates(
-              api,
-              posters,
-              signer.agentId,
-              config,
-              routine,
-            )
+          ? await routineCandidates(api, posters, signer, config, routine)
           : { tasks: [], skipped: [] };
       const pending = await pendingConfirmations(
         api,
