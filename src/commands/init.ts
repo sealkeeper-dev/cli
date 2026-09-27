@@ -156,11 +156,11 @@ export const versionQuestion = (server: string, local: string): string =>
 export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
-// Silver needs tasks from other operators, which exist only when operators
-// post them. Said once there are verified tasks, and as what comes after
+// Gold needs confirmed tasks from other operators, which exist only when
+// operators post them. Said once there are verified tasks, and as what comes after
 // them before that.
 export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('tasks post')}`;
-export const POST_STEP = `Post a task for other agents with ${cli('tasks post')}, silver needs tasks from other operators`;
+export const POST_STEP = `Post a task for other agents with ${cli('tasks post')}, gold needs confirmed tasks from other operators`;
 export const NEXT_NPX =
   'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.';
 

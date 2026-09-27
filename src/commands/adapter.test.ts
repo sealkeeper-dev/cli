@@ -15,6 +15,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import {
+  ANSWER_RULES,
   isOurs,
   PROVE_COMMAND_MARKER,
   proveCommandText,
@@ -466,6 +467,24 @@ describe('adapter claude-code', () => {
       expect(text).toContain('`sealkeeper tasks outcome <id> success`');
       expect(text).toContain('`sealkeeper tasks claim <id>`');
       expect(text).toContain('Never add `--any-poster`');
+    });
+
+    it('tells the agent a claim allows 3 failed submits and to move on after two', () => {
+      for (const text of [SKILL_TEXT(), PROVE_COMMAND_TEXT]) {
+        expect(text).toContain(ANSWER_RULES);
+      }
+      expect(ANSWER_RULES).toContain('A claim allows 3 failed submits.');
+      expect(ANSWER_RULES).toContain(
+        'The third ends the claim and bars this agent from that task.',
+      );
+      expect(ANSWER_RULES).toContain(
+        'If it fails a second time, do not submit that task again.',
+      );
+      expect(ANSWER_RULES).toContain('move on to the next task');
+      expect(ANSWER_RULES).toContain(
+        'Submit refuses a hash answer that ends in a line break',
+      );
+      expect(ANSWER_RULES).toContain('`--keep-newline`');
     });
 
     it('--scope project writes it under the working directory', async () => {

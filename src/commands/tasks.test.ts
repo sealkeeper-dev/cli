@@ -14,6 +14,7 @@ import {
   base64urlDecode,
   decodeHeader,
   PostTaskRequest,
+  publicVerification,
   readAudience,
   type TaskResponse,
   type VerificationSpec,
@@ -98,7 +99,10 @@ type ApiCall = {
 
 // An in-memory stand-in for the task routes. Every signed write is verified
 // against the key named by its kid, which must be the local agent, and the
-// payload taskId must match the task in the path.
+// payload taskId must match the task in the path. Like the API, only the
+// poster's post and signed submission read carry the full spec, and every
+// other answer the public one, so a hash task's digest reaches no claimant.
+// Submit checks a hash answer and answers a mismatch with a 422.
 class FakeApi {
   tasks = new Map<string, TaskResponse>();
   // GET /v1/agents/:id answers, by agent id. Missing is bob/writer, or a
@@ -121,9 +125,7 @@ class FakeApi {
 
   constructor(readonly agentId: string) {}
 
-  add(
-    overrides: Partial<TaskResponse> & { verification?: VerificationSpec },
-  ): TaskResponse {
+  add(overrides: Partial<TaskResponse>): TaskResponse {
     const task: TaskResponse = {
       id: randomUUID(),
       posterAgentId: OTHER_AGENT,
@@ -156,6 +158,12 @@ class FakeApi {
     const request: ApiCall = { method, path: url.pathname };
     this.requests.push(request);
 
+    // What every answer but the poster's own shows.
+    const shown = (t: TaskResponse): TaskResponse => ({
+      ...t,
+      verification: publicVerification(t.verification as VerificationSpec),
+    });
+
     if (method === 'GET' && url.pathname === '/v1/tasks') {
       const type = url.searchParams.get('taskType');
       // Like the API, the open pool leaves addressed tasks out, and
@@ -171,7 +179,8 @@ class FakeApi {
         )
         .filter((t) => !type || t.taskType === type)
         .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt))
-        .slice(0, Number(url.searchParams.get('limit') ?? 50));
+        .slice(0, Number(url.searchParams.get('limit') ?? 50))
+        .map(shown);
       return Response.json({ tasks });
     }
     const agent = url.pathname.match(/^\/v1\/agents\/([^/]+)$/);
@@ -195,7 +204,7 @@ class FakeApi {
       const task = this.tasks.get(match[1] ?? '');
       if (!task) return error(404, 'not_found');
       // The public read, like the API's, leaves the submission out.
-      const { submission: _, ...publicTask } = task;
+      const { submission: _, ...publicTask } = shown(task);
       return Response.json(publicTask);
     }
 
@@ -245,10 +254,17 @@ class FakeApi {
           claimantAgentId: this.agentId,
           claimedAt: new Date().toISOString(),
         });
-        return Response.json(task);
+        return Response.json(shown(task));
       }
       case 'submit': {
         if (this.submitReply) return this.submitReply();
+        if (
+          task.verification.kind === 'hash' &&
+          sha256(String(request.payload.submission)) !==
+            task.verification.sha256
+        ) {
+          return error(422, 'verification_failed', 'hash_mismatch');
+        }
         const now = new Date().toISOString();
         Object.assign(task, {
           submittedAt: now,
@@ -257,7 +273,7 @@ class FakeApi {
             ? { state: 'submitted' }
             : { state: 'verified', verifiedAt: now }),
         });
-        return Response.json(task);
+        return Response.json(shown(task));
       }
       case 'outcome': {
         if (this.outcomeReply) return this.outcomeReply();
@@ -271,7 +287,7 @@ class FakeApi {
             verifiedAt: new Date().toISOString(),
           });
         }
-        return Response.json(task);
+        return Response.json(shown(task));
       }
       case 'submission': {
         this.submissionReads += 1;
@@ -468,6 +484,8 @@ describe('tasks pull, submit and post', () => {
         expiresAt: oldest.expiresAt,
         spec: { words: 100 },
       });
+      // A claimant never sees the digest.
+      expect(task.verification).toEqual({ kind: 'hash' });
       expect(api.posts().map((r) => r.path)).toEqual([
         `/v1/tasks/${oldest.id}/claim`,
       ]);
@@ -705,7 +723,7 @@ describe('tasks pull, submit and post', () => {
       });
     }
 
-    it('refuses a hash mismatch locally and sends nothing', async () => {
+    it('leaves a hash answer to the server, which it never sees the digest of', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
       const { code, err } = await run(
         'tasks',
@@ -715,14 +733,20 @@ describe('tasks pull, submit and post', () => {
         'wrong',
       );
       expect(code).toBe(1);
-      expect(err).toContain('does not match the expected hash');
-      expect(err).toContain(sha256('wrong'));
-      expect(api.posts()).toEqual([]);
+      expect(err).toContain('verification failed: hash_mismatch');
+      expect(err).not.toContain(sha256('right'));
+      expect(api.posts()).toHaveLength(1);
       expect(await logged()).toEqual([]);
     });
 
     it('submits a matching hash from a file and prints verified', async () => {
-      const task = claimed({ kind: 'hash', sha256: sha256('the answer\n') });
+      const task = api.add({
+        verification: { kind: 'hash', sha256: sha256('the answer\n') },
+        spec: { output: 'The answer, and end with exactly one line feed.' },
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
       // Outside the SealKeeper home, which submit refuses to read from.
       const file = `${home}-answer.txt`;
       await writeFile(file, 'the answer\n');
@@ -735,6 +759,7 @@ describe('tasks pull, submit and post', () => {
       ).finally(() => rm(file, { force: true }));
       expect(code).toBe(0);
       expect(out).toContain('state  verified');
+      expect(out).not.toContain(sha256('the answer\n'));
       expect(api.posts()).toHaveLength(1);
       expect(api.posts()[0]?.payload).toEqual({
         taskId: task.id,
@@ -746,6 +771,64 @@ describe('tasks pull, submit and post', () => {
           payload: { task_id: task.id, task_type: 'summarise' },
         },
       ]);
+    });
+
+    it('refuses a hash answer that ends in a line break, sending nothing', async () => {
+      const task = claimed({ kind: 'hash', sha256: sha256('Oslo') });
+      const file = `${home}-answer.txt`;
+      await writeFile(file, 'Oslo\n');
+      const fromFile = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--file',
+        file,
+      ).finally(() => rm(file, { force: true }));
+      expect(fromFile.code).toBe(1);
+      expect(fromFile.err).toContain('the answer ends in a line break');
+      expect(fromFile.err).toContain('a claim allows 3 failed submits');
+      expect(fromFile.err).toContain('add --keep-newline to send it as is');
+      const crlf = await run('tasks', 'submit', task.id, '--text', 'Oslo\r\n');
+      expect(crlf.code).toBe(1);
+      expect(crlf.err).toContain('the answer ends in a line break');
+      expect(api.posts()).toEqual([]);
+      expect(await logged()).toEqual([]);
+    });
+
+    it('sends a hash answer with its line break as is under --keep-newline', async () => {
+      const task = claimed({ kind: 'hash', sha256: sha256('Oslo\n') });
+      const { code, out } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'Oslo\n',
+        '--keep-newline',
+      );
+      expect(code).toBe(0);
+      expect(out).toContain('state  verified');
+      expect(api.posts()[0]?.payload).toEqual({
+        taskId: task.id,
+        submission: 'Oslo\n',
+      });
+    });
+
+    it('leaves the line break of a counterparty or schema answer alone', async () => {
+      const counterparty = claimed({ kind: 'counterparty' });
+      expect(
+        (await run('tasks', 'submit', counterparty.id, '--text', 'done\n'))
+          .code,
+      ).toBe(0);
+      const schema = claimed({
+        kind: 'schema',
+        jsonSchema: { type: 'object' },
+      });
+      expect(
+        (await run('tasks', 'submit', schema.id, '--text', '{}\n')).code,
+      ).toBe(0);
+      expect(api.posts().map((r) => r.path)).toContain(
+        `/v1/tasks/${schema.id}/submit`,
+      );
     });
 
     it('refuses invalid JSON for a schema task locally', async () => {

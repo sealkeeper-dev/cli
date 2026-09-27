@@ -1,5 +1,11 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { AgentName, Level, OperatorSlug, Runtime } from '@sealkeeper/schema';
+import {
+  AgentName,
+  LEVEL_RANK,
+  Level,
+  OperatorSlug,
+  Runtime,
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 import { isRedirect, redirectError, resolveApiUrl } from './api.js';
 import { type Config, isSecureApiUrl } from './config.js';
@@ -24,7 +30,7 @@ export const LiveAgent = z.object({
     .object({
       dormant_days: z.int().min(0).nullable(),
       // The scoring window's evidence counts, as of the last run. prove
-      // reads the ones silver needs.
+      // --json carries them in progress.
       counts: z
         .object({
           server_checked_tasks: z.int().min(0),
@@ -34,7 +40,7 @@ export const LiveAgent = z.object({
         .optional()
         .catch(undefined),
       // The counted evidence the level read (VOU-139), from an API that
-      // sends it. prove reads silver's clauses from it when it is there.
+      // sends it. prove reads the task counts from it when it is there.
       counted: z
         .object({
           server_checked_tasks: z.int().min(0),
@@ -129,7 +135,11 @@ export async function operatorAgentCount(
   }
 }
 
-// True for bronze, silver and gold.
+// True for bronze and every level above it, by rank.
 export function atBronzeOrAbove(level: Level | null | undefined): boolean {
-  return level === 'bronze' || level === 'silver' || level === 'gold';
+  return (
+    level !== null &&
+    level !== undefined &&
+    LEVEL_RANK[level] >= LEVEL_RANK.bronze
+  );
 }

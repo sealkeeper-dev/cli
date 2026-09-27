@@ -101,6 +101,85 @@ const AT_SILVER = answer({
   today: { counted: 14, remaining: 6 },
 });
 
+// Gold as an API with the ladder (VOU-184) answers it. nextLevel stays null
+// at gold, and platinum is reserved.
+const AT_GOLD = answer({
+  level: 'gold',
+  nextLevel: null,
+  ladder: [
+    { level: 'none', state: 'reached' },
+    { level: 'bronze', state: 'reached' },
+    { level: 'silver', state: 'reached' },
+    { level: 'gold', state: 'reached' },
+    { level: 'platinum', state: 'reserved' },
+  ],
+  thresholds: [],
+  steps: [],
+  actions: [],
+});
+
+// Silver with every gold count met and no verified operator.
+const ONE_STEP_FROM_GOLD = answer({
+  level: 'silver',
+  nextLevel: 'gold',
+  ladder: [
+    { level: 'none', state: 'reached' },
+    { level: 'bronze', state: 'reached' },
+    { level: 'silver', state: 'reached' },
+    { level: 'gold', state: 'next' },
+    { level: 'platinum', state: 'reserved' },
+  ],
+  thresholds: [
+    {
+      name: 'operator_verified',
+      current: 0,
+      required: 1,
+      met: false,
+      raw: null,
+    },
+  ],
+  steps: [
+    { code: 'operator_verified', done: false, progress: null },
+    {
+      code: 'confirmed_operators',
+      done: true,
+      progress: { current: 3, required: 3 },
+    },
+    {
+      code: 'confirmed_tasks',
+      done: true,
+      progress: { current: 25, required: 25 },
+    },
+    {
+      code: 'clean_days',
+      done: true,
+      progress: { current: 180, required: 180 },
+    },
+    {
+      code: 'history_days',
+      done: true,
+      progress: { current: 60, required: 60 },
+    },
+    {
+      code: 'history_span_days',
+      done: true,
+      progress: { current: 90, required: 90 },
+    },
+    {
+      code: 'verified_tasks',
+      done: true,
+      progress: { current: 200, required: 200 },
+    },
+    {
+      code: 'reliability',
+      done: true,
+      progress: { current: 0.97, required: 0.95 },
+    },
+    { code: 'safety', done: true, progress: { current: 0.96, required: 0.95 } },
+  ],
+  actions: [{ code: 'operator_unverified', count: null }],
+});
+
 describe('sealkeeper goal', () => {
   let home: string;
   let requests: string[];
@@ -168,6 +247,7 @@ describe('sealkeeper goal', () => {
         'SealKeeper goal   alice/scout',
         '',
         'Level none. Next bronze.',
+        'Ladder  bronze next > silver > gold > platinum coming later',
         '',
         '  threshold              current       raw  required  met',
         '  verified_tasks              13        20        25  no',
@@ -218,7 +298,10 @@ describe('sealkeeper goal', () => {
     resetInvocation();
     const { code, out } = await run(serve(AT_SILVER), 'goal');
     expect(code).toBe(0);
-    expect(out).toContain('Level silver. Next gold.\n');
+    expect(out).toContain(
+      'Level silver. Next gold.\nLadder  bronze reached > silver reached > gold next > platinum coming later\n',
+    );
+    // An API from before the checklist sends no steps, so the table stays.
     expect(out).toContain(
       '  operator_verified         0                   1  no\n',
     );
@@ -228,12 +311,103 @@ describe('sealkeeper goal', () => {
       '  Get 300 more counterparty tasks confirmed by other operators. sealkeeper prove --any-poster\n',
     );
     expect(out).toContain(
-      '  Needs a verified operator identity, which is not open yet.\n',
+      '  Needs a verified operator. Your operator verifies a domain with a DNS TXT record at https://sealkeeper.run/me/account.\n',
     );
   });
 
+  it('at gold says it is the highest level issued today and platinum comes later', async () => {
+    const { code, out } = await run(serve(AT_GOLD), 'goal');
+    expect(code).toBe(0);
+    expect(out).toBe(
+      [
+        'SealKeeper goal   alice/scout',
+        '',
+        'Level gold, the highest level issued today.',
+        'Ladder  bronze reached > silver reached > gold reached > platinum coming later',
+        'Platinum is coming later. The standard names it and SealKeeper does not issue it yet.',
+        '',
+        'Nothing to do right now.',
+        '',
+        'As of the scoring run at 2026-09-25T10:15:00.000Z.',
+        '',
+      ].join('\n'),
+    );
+    expect(out).not.toContain('top level');
+  });
+
+  it('shows platinum as coming later at gold from an API before the ladder', async () => {
+    const old = Object.fromEntries(
+      Object.entries(AT_GOLD).filter(([k]) => k !== 'ladder' && k !== 'steps'),
+    );
+    const { out } = await run(serve(old), 'goal');
+    expect(out).toContain('Level gold, the highest level issued today.\n');
+    expect(out).toContain(
+      'Ladder  bronze reached > silver reached > gold reached > platinum coming later\n',
+    );
+    expect(out).toContain('Platinum is coming later.');
+  });
+
+  it('shows the gold checklist and names the one step left', async () => {
+    const { code, out } = await run(serve(ONE_STEP_FROM_GOLD), 'goal');
+    expect(code).toBe(0);
+    expect(out).toContain(
+      [
+        'Level silver. Next gold.',
+        'Ladder  bronze reached > silver reached > gold next > platinum coming later',
+        '',
+        'Gold checklist',
+        '  [ ] Verified operator, a domain checked by DNS TXT',
+        '  [x] Other operators behind confirmed tasks, 3 of 3',
+        '  [x] Confirmed tasks, no template or routine, 25 of 25',
+        '  [x] Safety record, 180 of 180 days',
+        '  [x] Active on 60 of 60 days',
+        '  [x] Record spans, 90 of 90 days',
+        '  [x] Counted verified tasks, 200 of 200',
+        '  [x] Reliability, 0.97 of 0.95',
+        '  [x] Safety, 0.96 of 0.95',
+        '',
+        'One step left for gold. Verified operator, a domain checked by DNS TXT.',
+        '',
+        'Next',
+        '  Needs a verified operator. Your operator verifies a domain with a DNS TXT record at https://sealkeeper.run/me/account.',
+      ].join('\n'),
+    );
+    // The checklist stands in for the table.
+    expect(out).not.toContain('threshold');
+  });
+
+  it('shows the checklist progress while several steps are open', async () => {
+    const early = {
+      ...ONE_STEP_FROM_GOLD,
+      steps: [
+        {
+          code: 'clean_days',
+          done: false,
+          progress: { current: 72, required: 180 },
+        },
+        {
+          code: 'history_days',
+          done: false,
+          progress: { current: 41, required: 60 },
+        },
+        { code: 'new_rule', done: false, progress: null },
+      ],
+    };
+    const { out } = await run(serve(early), 'goal');
+    expect(out).toContain('  [ ] Safety record, 72 of 180 days\n');
+    expect(out).toContain('  [ ] Active on 41 of 60 days\n');
+    expect(out).toContain('  [ ] New rule\n');
+    expect(out).not.toContain('One step left');
+  });
+
   it('prints the API answer as it came with --json', async () => {
-    for (const goal of [AT_NONE, AT_BRONZE, AT_SILVER]) {
+    for (const goal of [
+      AT_NONE,
+      AT_BRONZE,
+      AT_SILVER,
+      AT_GOLD,
+      ONE_STEP_FROM_GOLD,
+    ]) {
       const { code, out } = await run(serve(goal), 'goal', '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out)).toEqual(goal);
@@ -243,9 +417,16 @@ describe('sealkeeper goal', () => {
 
   it('reads a level it does not know and a count that is not whole, and shows neither', async () => {
     const newer = answer({
-      level: 'platinum',
+      level: 'diamond',
       nextLevel: 'diamond\u001b[2J',
       thresholds: [],
+      // A ladder level and a state this CLI does not know are left out.
+      ladder: [
+        { level: 'bronze', state: 'reached' },
+        { level: 'diamond\u001b[2J', state: 'next' },
+        { level: 'gold', state: 'glowing' },
+        { level: 'platinum', state: 'reserved' },
+      ],
       actions: [{ code: 'claim_tasks', count: 2.5 }],
       pending: { addressed: 0, outcomes: 0, posterOutcomes: 1 },
     });
@@ -253,7 +434,9 @@ describe('sealkeeper goal', () => {
     expect(err).toBe('');
     expect(code).toBe(0);
     expect(out).toContain('Level unknown. Next unknown.');
-    expect(out).not.toContain('platinum');
+    expect(out).toContain('Ladder  bronze reached > platinum coming later\n');
+    expect(out).not.toContain('diamond');
+    expect(out).not.toContain('glowing');
     expect(out).toContain(
       "Verify more tasks posted by other operators' agents.",
     );
@@ -418,6 +601,35 @@ describe('goalActionText', () => {
     expect(goalActionText({ code: 'rate_peers', count: null }).text).toBe(
       'Next step rate_peers.',
     );
+  });
+
+  it('says what the new level steps need, with the day a hold ends', () => {
+    expect(goalActionText({ code: 'clean_days', count: 108 })).toEqual({
+      text: 'Keep a clean safety record for 108 more days. Gold needs 180 days since the first accepted event or the last incident, whichever is later.',
+      command: null,
+    });
+    expect(
+      goalActionText({
+        code: 'operator_silver_cap',
+        count: 12,
+        until: '2026-10-08T09:00:00.000Z',
+      }).text,
+    ).toBe(
+      "Every silver threshold holds, and this operator's agents took all 5 silver slots of the last 30 days. The agent stays at bronze until one frees in 12 days, on 2026-10-08.",
+    );
+    expect(
+      goalActionText({
+        code: 'operator_verification_lapsing',
+        count: 1,
+        until: '2026-10-01T00:00:00.000Z',
+      }).text,
+    ).toBe(
+      "The operator's domain record was missing at its last check. Verification lapses in 1 day, on 2026-10-01, unless the TXT record is back. Gold needs it.",
+    );
+    // An API that sends no until still reads.
+    expect(
+      goalActionText({ code: 'operator_silver_cap', count: 3 }).text,
+    ).toContain('in 3 days.');
   });
 
   it('says what a report as poster is for', () => {

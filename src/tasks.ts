@@ -113,8 +113,8 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// Lowercase hex sha256 of the UTF-8 bytes of the text, the same digest the
-// API checks a hash task against.
+// Lowercase hex sha256 of the UTF-8 bytes of the text. tasks outcome signs it
+// as the evidence hash of the submission the poster read.
 export function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }

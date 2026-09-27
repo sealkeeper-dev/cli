@@ -42,7 +42,8 @@ export type CheckThresholds = {
   maxIncidents?: number | undefined;
   minReliability?: number | undefined;
   minSafety?: number | undefined;
-  // Bronze when left out. none asks for no level.
+  // Bronze when left out. none asks for no level. These are the levels
+  // issued today. Platinum is reserved and joins them when it is issued.
   minLevel?: 'none' | 'bronze' | 'silver' | 'gold' | undefined;
 };
 
@@ -55,8 +56,8 @@ export type CheckOptions = {
 
 // One check. min checks pass when actual >= required, max checks when
 // actual <= required. actual is null when the agent has no value yet, and a
-// null never passes. minLevel compares levels, none below bronze, silver
-// and gold, with the level in the SEAL as actual. seal is sent only when
+// null never passes. minLevel compares levels by rank, none lowest, with
+// the level in the SEAL as actual. seal is sent only when
 // the SEAL is withheld after 90 dormant days, required present and actual
 // withheld, and fails. The names today are seal, minVerified,
 // maxIncidents, minReliability, minSafety and minLevel. name

@@ -16,6 +16,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApiClient } from '../api.js';
 import type { Input } from '../ask.js';
+import { ANSWER_RULES } from '../claude-code-command.js';
 import {
   type Config,
   defaultRoutineConfig,
@@ -115,7 +116,8 @@ class FakeApi {
       assignee: null,
       taskType: 'json_extract',
       spec: { instruction: 'Return the value at a.', input: '{"a":1}' },
-      verification: { kind: 'hash', sha256: 'a'.repeat(64) },
+      // The public spec, as every read but the poster's shows it.
+      verification: { kind: 'hash' },
       state: 'open',
       postedAt: new Date(Date.now() - HOUR).toISOString(),
       claimedAt: null,
@@ -956,6 +958,10 @@ describe('routine', () => {
       expect(prompt.indexOf('tasks outcome <id> success')).toBeLessThan(
         prompt.indexOf('sk prove --json'),
       );
+      // The same answer rules as /sealkeeper-prove, the 3 failed submits a
+      // claim allows included.
+      expect(prompt).toContain(ANSWER_RULES);
+      expect(prompt).toContain('A claim allows 3 failed submits.');
     });
 
     it('pauses itself after three failed runs in a row, until resume', async () => {

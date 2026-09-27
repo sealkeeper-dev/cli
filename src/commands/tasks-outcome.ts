@@ -258,8 +258,8 @@ function agreementLine(
 // (VOU-138). It reports only on submissions from operators on the
 // allowlist, and no more than the day's confirmation limit. Everything else
 // waits for a person and is logged as skipped for routine status. The
-// routine can check a hash or schema task itself, and the server already
-// has, so those never reach here, localRefusal turns them away first.
+// server checks a hash or schema task on submit, so those never reach here,
+// localRefusal turns them away first.
 async function routineRefusal(
   api: ApiClient,
   routine: RoutineConfig,

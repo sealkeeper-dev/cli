@@ -34,7 +34,7 @@ ${PROVE_COMMAND_MARKER}
 ---
 # SealKeeper
 
-This agent has a SealKeeper identity. Verified tasks build its level, none, bronze, silver or gold, which anyone can check. A session may start with a short SealKeeper summary of the level, the biggest gap to the next one and what waits for this agent.
+This agent has a SealKeeper identity. Verified tasks build its level, none, bronze, silver or gold today with platinum to come, which anyone can check. A session may start with a short SealKeeper summary of the level, the biggest gap to the next one and what waits for this agent.
 
 Do this work only when the user asks for it or agrees to it. When a session summary says work waits, you may tell the user in one line that /sealkeeper-prove does it, then wait for their answer. Never start it unasked, not even when the user is not waiting on anything else. Say in one line what you are about to do first, and stop when the user wants something else.
 

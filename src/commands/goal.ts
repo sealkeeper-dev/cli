@@ -7,6 +7,11 @@ import {
   fetchGoal,
   type GoalResponse,
   goalActionLine,
+  goalStepText,
+  HIGHEST_ISSUED,
+  type LadderRow,
+  ladderOf,
+  reservedOf,
   shownLevel,
   todayLine,
   todayOf,
@@ -61,23 +66,46 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // 0.9 as 0.90, counts as they are.
 const num = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
-// The terminal view. Where the agent stands, a table of the next level's
-// thresholds with the raw count beside each counted one, the day's counted
-// tasks, the next steps with their commands, what waits, and the run the
-// numbers come from.
+// The terminal view. Where the agent stands and the ladder, with platinum
+// as coming later. Below gold, a table of the next level's thresholds with
+// the raw count beside each counted one. Toward gold, gold's checklist
+// (VOU-184) and the one step left when only one is. An API from before the
+// checklist gets the table there too. Then the day's counted tasks, the
+// next steps with their commands, what waits, and the run the numbers come
+// from.
 export function goalLines(
   goal: GoalResponse,
   handle: string,
   now: Date = new Date(),
 ): string[] {
   const lines = [`SealKeeper goal   ${handle}`, ''];
+  const ladder = ladderOf(goal);
+  const reserved = reservedOf(ladder);
   if (goal.nextLevel === null) {
-    lines.push(`Level ${shownLevel(goal.level)}, the top level.`);
+    lines.push(`Level ${shownLevel(goal.level)}, ${HIGHEST_ISSUED}.`);
   } else {
     lines.push(
       `Level ${shownLevel(goal.level)}. Next ${shownLevel(goal.nextLevel)}.`,
-      '',
     );
+  }
+  if (ladder.length > 0) lines.push(ladderLine(ladder));
+  if (goal.nextLevel === null && reserved.length > 0) {
+    lines.push(
+      `${cap(reserved.join(' and '))} ${reserved.length === 1 ? 'is' : 'are'} coming later. The standard names ${reserved.length === 1 ? 'it' : 'them'} and SealKeeper does not issue ${reserved.length === 1 ? 'it' : 'them'} yet.`,
+    );
+  }
+  const steps = goal.steps ?? [];
+  if (goal.nextLevel === 'gold' && steps.length > 0) {
+    lines.push('', 'Gold checklist');
+    for (const step of steps) {
+      lines.push(`  ${step.done ? '[x]' : '[ ]'} ${goalStepText(step)}`);
+    }
+    const open = steps.filter((step) => !step.done);
+    if (open.length === 1 && open[0] !== undefined) {
+      lines.push('', `One step left for gold. ${goalStepText(open[0])}.`);
+    }
+  } else if (goal.nextLevel !== null) {
+    lines.push('');
     const width = Math.max(
       'threshold'.length,
       ...goal.thresholds.map((t) => t.name.length),
@@ -125,4 +153,20 @@ export function goalLines(
       : `As of the scoring run at ${goal.asOf}.`,
   );
   return lines;
+}
+
+const LADDER_WORD: Record<LadderRow['state'], string> = {
+  reached: ' reached',
+  next: ' next',
+  locked: '',
+  reserved: ' coming later',
+};
+
+// The ladder on one line, lowest first and none left out, as in "Ladder
+// bronze reached > silver next > gold > platinum coming later".
+function ladderLine(ladder: LadderRow[]): string {
+  const shown = ladder
+    .filter((s) => s.level !== 'none')
+    .map((s) => `${s.level}${LADDER_WORD[s.state]}`);
+  return `Ladder  ${shown.join(' > ')}`;
 }

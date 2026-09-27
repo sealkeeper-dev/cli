@@ -1827,7 +1827,7 @@ describe('sealkeeper init', () => {
       expect(next(result.out)).toEqual([
         '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
         '2  8 of 25 verified tasks toward bronze',
-        '3  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
+        '3  Post a task for other agents with npx sealkeeper tasks post, gold needs confirmed tasks from other operators',
       ]);
     });
 
@@ -1840,7 +1840,7 @@ describe('sealkeeper init', () => {
         '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Level bronze, with 30 verified tasks',
-        '4  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
+        '4  Post a task for other agents with npx sealkeeper tasks post, gold needs confirmed tasks from other operators',
       ]);
       expect(bronzeLine(55, 'silver')).toBe(
         'Level silver, with 55 verified tasks',
@@ -1854,7 +1854,7 @@ describe('sealkeeper init', () => {
         '1  Have your agent run npx sealkeeper prove --json to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  2 of 25 verified tasks toward bronze',
-        '4  Post a task for other agents with npx sealkeeper tasks post, silver needs tasks from other operators',
+        '4  Post a task for other agents with npx sealkeeper tasks post, gold needs confirmed tasks from other operators',
       ]);
     });
 

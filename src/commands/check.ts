@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { Level } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, resolveApiUrl } from '../api.js';
 import { describeCheck, fetchCheck } from '../check.js';
@@ -46,7 +47,7 @@ export function register(
     .option('--min-safety <x>', 'safety needed, 0 to 1')
     .option(
       '--min-level <level>',
-      'level needed, none, bronze, silver or gold, default bronze',
+      `level needed, one of the levels issued today, ${Level.options.join(', ')}, default bronze`,
     )
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();

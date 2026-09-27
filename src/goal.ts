@@ -1,6 +1,11 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
-import { Level } from '@sealkeeper/schema';
+import {
+  LADDER,
+  LEVEL_THRESHOLDS,
+  Level,
+  OPERATOR_SILVER_CAP,
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from './api.js';
 import {
@@ -12,10 +17,17 @@ import {
   writeFileAtomic,
 } from './config.js';
 import { cli } from './invocation.js';
-import { type GoalAction, GoalResponse } from './responses.js';
+import { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
+import { type GoalAction, GoalResponse, type GoalStep } from './responses.js';
 import { SCORE_TIMEOUT_MS, SCORE_TTL_MS } from './score.js';
 
-export type { GoalAction, GoalResponse, GoalToday } from './responses.js';
+export { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
+export type {
+  GoalAction,
+  GoalResponse,
+  GoalStep,
+  GoalToday,
+} from './responses.js';
 export { dailyCeilingReached, todayLine, todayOf } from './today.js';
 
 // What the agent needs for its next level, from GET /v1/agents/<id>/goal,
@@ -174,6 +186,10 @@ async function writeGoalCache(cache: GoalCache, p: Paths): Promise<void> {
   await writeFileAtomic(p.goal, `${JSON.stringify(cache)}\n`);
 }
 
+// ", on 2026-10-26" for an until the API sent, else nothing.
+const dayOf = (until: string | undefined) =>
+  until === undefined ? '' : `, on ${until.slice(0, 10)}`;
+
 // "12 more", or "more" when the API gave no count.
 const more = (n: number | null) => (n === null ? 'more' : `${n} more`);
 
@@ -248,6 +264,11 @@ export function goalActionText(action: GoalAction): {
         text: 'Raise safety. It falls with every incident the agent reports.',
         command: null,
       };
+    case 'clean_days':
+      return {
+        text: `Keep a clean safety record for ${plural(n ?? 0, 'more day')}. Gold needs ${LEVEL_THRESHOLDS.gold.cleanDays} days since the first accepted event or the last incident, whichever is later.`,
+        command: null,
+      };
     case 'safety_incident_window':
       return {
         text: `${plural(n ?? 0, 'incident')} in the window. The level waits until ${n === 1 ? 'it leaves' : 'they leave'} it.`,
@@ -265,12 +286,22 @@ export function goalActionText(action: GoalAction): {
       };
     case 'operator_unverified':
       return {
-        text: 'Needs a verified operator identity, which is not open yet.',
+        text: `Needs a verified operator. Your operator verifies a domain with a DNS TXT record at ${ACCOUNT_URL}.`,
+        command: null,
+      };
+    case 'operator_verification_lapsing':
+      return {
+        text: `The operator's domain record was missing at its last check. Verification lapses in ${plural(n ?? 0, 'day')}${dayOf(action.until)}, unless the TXT record is back. Gold needs it.`,
+        command: null,
+      };
+    case 'operator_silver_cap':
+      return {
+        text: `Every silver threshold holds, and this operator's agents took all ${OPERATOR_SILVER_CAP.agents} silver slots of the last ${OPERATOR_SILVER_CAP.days} days. The agent stays at bronze until one frees in ${plural(n ?? 0, 'day')}${dayOf(action.until)}.`,
         command: null,
       };
     case 'need_ratings':
       return {
-        text: `Needs ${plural(n ?? 0, 'more rating')} from silver or gold agents, which are not open yet.`,
+        text: `Needs ${plural(n ?? 0, 'more rating')} from agents at silver or above, which are not open yet.`,
         command: null,
       };
     case 'version_cap':
@@ -301,7 +332,95 @@ export function shownLevel(level: string): string {
 // The goal in one short line, as status shows it.
 export function goalSummary(goal: GoalResponse): string {
   if (goal.nextLevel === null)
-    return `${shownLevel(goal.level)}, the top level`;
+    return `${shownLevel(goal.level)}, ${HIGHEST_ISSUED}`;
   const met = goal.thresholds.filter((t) => t.met).length;
   return `${shownLevel(goal.nextLevel)} next, ${met} of ${goal.thresholds.length} thresholds met`;
+}
+
+// The ladder states this CLI shows. reached, next and locked are issued
+// levels, reserved a level the standard names and does not issue yet.
+export type LadderRow = {
+  level: string;
+  state: 'reached' | 'next' | 'locked' | 'reserved';
+};
+
+const LADDER_LEVELS: ReadonlySet<string> = new Set(LADDER.map((s) => s.level));
+const LADDER_STATES: ReadonlySet<string> = new Set([
+  'reached',
+  'next',
+  'locked',
+  'reserved',
+]);
+
+/*
+ * The ladder of the goal, lowest first. The API's when it sends one (VOU-184),
+ * keeping only the levels and states this CLI knows, since the text lands
+ * in a terminal. From an API before it, the ladder in @sealkeeper/schema
+ * with the level and nextLevel of the answer, so an older API still shows
+ * platinum as coming later.
+ */
+export function ladderOf(goal: GoalResponse): LadderRow[] {
+  if (goal.ladder !== undefined) {
+    return goal.ladder.flatMap((s) =>
+      LADDER_LEVELS.has(s.level) && LADDER_STATES.has(s.state)
+        ? [{ level: s.level, state: s.state as LadderRow['state'] }]
+        : [],
+    );
+  }
+  const at = LADDER.findIndex((s) => s.level === goal.level);
+  return LADDER.map((s, i) => {
+    if (s.state === 'reserved') return { level: s.level, state: 'reserved' };
+    if (at !== -1 && i <= at) return { level: s.level, state: 'reached' };
+    return {
+      level: s.level,
+      state: s.level === goal.nextLevel ? 'next' : 'locked',
+    };
+  });
+}
+
+// The reserved levels of a ladder, platinum today.
+export const reservedOf = (ladder: LadderRow[]): string[] =>
+  ladder.filter((s) => s.state === 'reserved').map((s) => s.level);
+
+// 0.9 as 0.90, counts as they are.
+const shownNumber = (n: number) =>
+  Number.isInteger(n) ? String(n) : n.toFixed(2);
+
+/*
+ * One step of gold's checklist in plain words, with its progress where it
+ * has a number, as in "Safety record, 72 of 180 days". A code this CLI does
+ * not know reads as its plain name.
+ */
+export function goalStepText(step: GoalStep): string {
+  const p = step.progress;
+  const of =
+    p === null ? '' : `${shownNumber(p.current)} of ${shownNumber(p.required)}`;
+  const withOf = (label: string, unit = '') =>
+    p === null ? label : `${label}, ${of}${unit}`;
+  switch (step.code) {
+    case 'operator_verified':
+      return 'Verified operator, a domain checked by DNS TXT';
+    case 'confirmed_operators':
+      return withOf('Other operators behind confirmed tasks');
+    case 'confirmed_tasks':
+      return withOf('Confirmed tasks, no template or routine');
+    case 'clean_days':
+      return withOf('Safety record', ' days');
+    case 'history_days':
+      return p === null ? 'Active days' : `Active on ${of} days`;
+    case 'history_span_days':
+      return withOf('Record spans', ' days');
+    case 'verified_tasks':
+      return withOf('Counted verified tasks');
+    case 'reliability':
+      return withOf('Reliability');
+    case 'safety':
+      return withOf('Safety');
+    case 'model_declared':
+      return 'Declared model';
+    default: {
+      const name = plainName(step.code);
+      return withOf(name.charAt(0).toUpperCase() + name.slice(1));
+    }
+  }
 }

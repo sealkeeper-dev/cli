@@ -16,6 +16,7 @@ import {
   type GoalResponse,
   type GoalToday,
   goalActionLine,
+  HIGHEST_ISSUED,
   loadGoal,
   shownLevel,
   todayLine,
@@ -99,8 +100,8 @@ import { isGone, NOTHING_AVAILABLE } from './tasks-pull.js';
 // as any other operator's, so the operator decides.
 //
 // After the claims every run says what bronze, silver and gold need, where
-// the agent stands and that tasks from other operators, which silver and
-// gold need, only exist when operators post them. --json puts the same
+// the agent stands and that confirmed tasks from other operators, which
+// gold needs, only exist when operators post them. --json puts the same
 // into the one JSON line on stderr, so an agent can offer to post. In a
 // terminal, --post then walks the operator through tasks post, and without
 // it prove offers that walk once the agent has a verified task, at most
@@ -482,7 +483,7 @@ export function proveGoalLines(
 ): string[] {
   const head =
     goal.nextLevel === null
-      ? `Level ${shownLevel(goal.level)}, the top level.`
+      ? `Level ${shownLevel(goal.level)}, ${HIGHEST_ISSUED}.`
       : `Level ${shownLevel(goal.level)}. Next ${shownLevel(goal.nextLevel)}.`;
   const today = todayOf(goal, now);
   return [

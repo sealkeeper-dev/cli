@@ -10,6 +10,11 @@ import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey, insideHome } from '../key-guard.js';
+import {
+  endsInLineBreak,
+  MAX_FAILED_SUBMITS,
+  specAsksFinalLineFeed,
+} from '../line-break.js';
 import { stdout, wantsJson } from '../output.js';
 import { activeRoutineRun, appendRoutine } from '../routine.js';
 import {
@@ -18,13 +23,12 @@ import {
   openTaskSession,
   printFields,
   recordEvent,
-  sha256Hex,
   type TasksDeps,
 } from '../tasks.js';
 
 export const AWAITING_POSTER = 'the poster must confirm the outcome';
 
-type SubmitOptions = { file?: string; text?: string };
+type SubmitOptions = { file?: string; text?: string; keepNewline?: boolean };
 
 export function register(
   parent: Command,
@@ -35,6 +39,10 @@ export function register(
     .description('Submit the result for a claimed task')
     .option('--file <path>', 'read the submission from a file')
     .option('--text <string>', 'the submission as a string')
+    .option(
+      '--keep-newline',
+      'send a hash answer that ends in a line break as is',
+    )
     .action(async function (
       this: Command,
       id: string,
@@ -63,16 +71,22 @@ export function register(
         failOnApiError(this, error);
       }
 
-      // The same checks the server runs, done first so a bad submission is
-      // never signed or sent.
+      // A schema task needs JSON, checked first so a submission that is not
+      // JSON is never signed or sent. A hash task's digest goes only to its
+      // poster, so the server alone checks a hash answer and says so with a
+      // 422. Each failed submit costs one of the tries a claim allows, so a
+      // hash answer with the line break most editors add is refused here
+      // unless the spec asks for one or --keep-newline says to send it.
       const { verification } = task;
-      if (verification.kind === 'hash') {
-        const actual = sha256Hex(submission);
-        if (actual !== verification.sha256) {
-          this.error(
-            `submission does not match the expected hash, nothing was sent\n  expected sha256 ${verification.sha256}\n  submission sha256 ${actual}`,
-          );
-        }
+      if (
+        verification.kind === 'hash' &&
+        options.keepNewline !== true &&
+        endsInLineBreak(submission) &&
+        !specAsksFinalLineFeed(task.spec)
+      ) {
+        this.error(
+          `the answer ends in a line break, which almost always fails a hash task, and a claim allows ${MAX_FAILED_SUBMITS} failed submits. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
+        );
       }
       if (verification.kind === 'schema') {
         try {

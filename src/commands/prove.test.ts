@@ -14,6 +14,7 @@ import {
   base64urlDecode,
   decodeHeader,
   LEVEL_THRESHOLDS,
+  OPERATOR_SILVER_CAP,
   PostTaskRequest,
   readAudience,
   type TaskResponse,
@@ -110,7 +111,8 @@ class FakeApi {
         input: '{"orders":[{"id":1}]}',
         output: 'The number only.',
       },
-      verification: { kind: 'hash', sha256: 'a'.repeat(64) },
+      // The public spec, as every read but the poster's shows it.
+      verification: { kind: 'hash' },
       state: 'open',
       postedAt: new Date(Date.now() - HOUR).toISOString(),
       claimedAt: null,
@@ -433,7 +435,7 @@ describe('prove', () => {
           '  Other agents   have the agent run npx sealkeeper prove --json',
           '',
           `  ${LEVELS_LINE}`,
-          `  This agent has 8 verified tasks, no level yet. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.`,
+          `  This agent has 8 verified tasks, no level yet. ${POST_WHY} Post one with npx sealkeeper tasks post.`,
           '',
           '',
         ].join('\n'),
@@ -452,7 +454,9 @@ describe('prove', () => {
       );
     });
 
-    it('says the level, and the silver side only when there is a standing', async () => {
+    // Silver has no clause on other operators' work since VOU-172, so the
+    // sentence says the level only. The silver counts stay in progress.
+    it('says the level', async () => {
       standing(31, 'bronze');
       const { out } = await run('prove');
       expect(out).toContain(
@@ -470,7 +474,7 @@ describe('prove', () => {
           },
         }),
       ).toBe(
-        'This agent has 90 verified tasks, level gold. As of the last scoring run, toward silver it has 120 of 100 checked or confirmed, from 7 of 5 other operators, 30 of 25 confirmed.',
+        'This agent has 90 verified tasks, level gold, the highest level issued today.',
       );
       expect(
         standingSentence({ verifiedTasks: 1, level: null, silver: null }),
@@ -479,7 +483,10 @@ describe('prove', () => {
 
     it('says what bronze, silver and gold need, from the schema', () => {
       expect(LEVELS_LINE).toBe(
-        'Bronze 25 counted tasks over 3 days. Silver 200, 100 from 5 other operators, 25 confirmed. Gold 1000, 250 confirmed from 25 other operators.',
+        'Bronze 25 counted tasks over 3 days. Silver 200 over 30 days, seed tasks included, for at most 5 new agents per operator in 30 days. Gold 200, 25 confirmed from 3 other operators, 180 clean days and an operator verified by a DNS TXT record on its domain. Platinum comes later.',
+      );
+      expect(POST_WHY).toBe(
+        'Seed tasks count at every level, and gold also needs confirmed tasks from other operators, which only exist when operators post them.',
       );
     });
 
@@ -504,6 +511,15 @@ describe('prove', () => {
       );
       expect(out).not.toContain('Raise reliability');
       expect(out).not.toContain('verified so far');
+    });
+
+    it('says gold is the highest level issued today, never the top', async () => {
+      standing(400, 'gold');
+      await withHooks();
+      api.goal = goalAnswer(agentId, 'gold', null, []);
+      const { out } = await run('prove');
+      expect(out).toContain('  Level gold, the highest level issued today.\n');
+      expect(out).not.toContain('top level');
     });
 
     it('shows the goal at bronze and at silver', async () => {
@@ -590,7 +606,7 @@ describe('prove', () => {
           "See a task's spec and submit line with npx sealkeeper tasks show <id>.",
           '',
           LEVELS_LINE,
-          "SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.",
+          `SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. ${POST_WHY} Post one with npx sealkeeper tasks post.`,
           '',
         ].join('\n'),
       );
@@ -605,7 +621,7 @@ describe('prove', () => {
       expect(err).toBe('');
       expect(out).toBe(
         `no open tasks available. New seed tasks are posted every 15 minutes, try again later.\n\n${LEVELS_LINE}\n`.concat(
-          "SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. Seed tasks stop at bronze, and other operators' tasks only exist when operators post them. Post one with npx sealkeeper tasks post.\n",
+          `SealKeeper did not say how many tasks this agent has verified, so where it stands is not known right now. ${POST_WHY} Post one with npx sealkeeper tasks post.\n`,
         ),
       );
       expect(api.claimed).toEqual([]);
@@ -990,11 +1006,8 @@ describe('prove', () => {
         instruction:
           'Normalise the CSV in input. The first line is the header row.',
       },
-      verification: {
-        kind: 'hash',
-        sha256:
-          '041e8c01ad5a354797249fe6d8e0667bc06632dc4704a071ce810cf5b4cf4d01',
-      },
+      // As a claimant reads it, without the digest.
+      verification: { kind: 'hash' },
     });
 
     const { code, out } = await run('prove', '--count', '1');
@@ -1227,8 +1240,11 @@ describe('prove', () => {
           },
         },
         levels: LEVEL_THRESHOLDS,
+        operatorSilverCap: OPERATOR_SILVER_CAP,
+        verifyOperator:
+          'Gold needs a verified operator. The operator adds a DNS TXT record to a domain at https://sealkeeper.run/me/account.',
         post: {
-          why: `This agent has 12 verified tasks, no level yet. As of the last scoring run, toward silver it has 3 of 100 checked or confirmed, from 2 of 5 other operators, 1 of 25 confirmed. ${POST_WHY}`,
+          why: `This agent has 12 verified tasks, no level yet. ${POST_WHY}`,
           ask: 'Offer your operator to post a task for other agents. Show the template and its input first, and post only after a clear yes.',
           templates: TEMPLATES.map((t) => ({
             id: t.id,
@@ -1356,7 +1372,7 @@ describe('prove', () => {
       expect(code).toBe(0);
       expect(api.claimed).toHaveLength(1);
       expect(out).toContain(
-        `\n\n${LEVELS_LINE}\nThis agent has 5 verified tasks, no level yet. As of the last scoring run, toward silver it has 0 of 100 checked or confirmed, from 0 of 5 other operators, 0 of 25 confirmed. ${POST_WHY} Post one with npx sealkeeper tasks post.\n`,
+        `\n\n${LEVELS_LINE}\nThis agent has 5 verified tasks, no level yet. ${POST_WHY} Post one with npx sealkeeper tasks post.\n`,
       );
       expect(err).toBe(`${POST_OFFER} [y/N] `);
       expect(api.posted).toEqual([]);
@@ -1505,6 +1521,8 @@ describe('prove', () => {
         'next',
         'progress',
         'levels',
+        'operatorSilverCap',
+        'verifyOperator',
         'post',
         'limited',
       ]);

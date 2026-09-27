@@ -92,8 +92,9 @@ describe('goalSummary', () => {
   });
 
   it('at gold, or with every threshold met, says only the level and what waits', () => {
+    // Gold is the highest level issued today, never the top of the ladder.
     expect(goalSummary(goal({ level: 'gold', nextLevel: null }), RUN)).toEqual([
-      'SealKeeper. Level gold.',
+      'SealKeeper. Level gold, the highest level issued today.',
     ]);
     expect(
       goalSummary(
@@ -145,7 +146,33 @@ describe('goalSummary', () => {
       }),
       RUN,
     );
-    expect(first).toBe('SealKeeper. Level none, 1 of 2 threshold to bronze.');
+    // A level it does not know is unknown, never none.
+    expect(first).toBe(
+      'SealKeeper. Level unknown, 1 of 2 threshold to bronze.',
+    );
+  });
+
+  it('reads platinum as a level and a yes or no threshold by name', () => {
+    expect(
+      goalSummary(goal({ level: 'platinum', nextLevel: null }), RUN)[0],
+    ).toBe('SealKeeper. Level platinum, the highest level issued today.');
+    expect(
+      goalSummary(goal({ level: 'diamond', nextLevel: null }), RUN)[0],
+    ).toBe('SealKeeper. Level unknown.');
+    // One step from gold, the missing step is named rather than 0 of 1.
+    expect(
+      goalSummary(
+        goal({
+          level: 'silver',
+          nextLevel: 'gold',
+          thresholds: [
+            { name: 'clean_days', current: 180, required: 180, met: true },
+            { name: 'operator_verified', current: 0, required: 1, met: false },
+          ],
+        }),
+        RUN,
+      )[0],
+    ).toBe('SealKeeper. Level silver, operator verified needed for gold.');
   });
 
   it('never points at open tasks from other posters', () => {

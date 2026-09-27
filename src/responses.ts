@@ -86,9 +86,10 @@ export const EventsBatchResponse = z.object({
 export type EventsBatchResponse = z.infer<typeof EventsBatchResponse>;
 
 // Size limits are the API's business when it stores a task. Reading one
-// back only needs the shape.
+// back only needs the shape. A hash task carries its sha256 only in the
+// poster's own post and submission read, every other read leaves it out.
 const VerificationSpec = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('hash'), sha256: Sha256Hex }),
+  z.object({ kind: z.literal('hash'), sha256: Sha256Hex.optional() }),
   z.object({
     kind: z.literal('schema'),
     jsonSchema: z.record(z.string(), z.unknown()),
@@ -369,11 +370,35 @@ export type GoalThreshold = z.infer<typeof GoalThreshold>;
 
 // A count that does not read, such as a fraction, reads as none rather
 // than failing the whole answer.
+// until, from an API that sends it, is when the step clears by itself,
+// such as the day an operator silver slot frees.
 export const GoalAction = z.looseObject({
   code: z.string(),
   count: Count.nullable().catch(null),
+  until: Timestamp.optional().catch(undefined),
 });
 export type GoalAction = z.infer<typeof GoalAction>;
+
+// One level of the ladder (VOU-184), lowest first. level and state are any
+// string, so a level or state a newer API adds still reads. goal.ts shows
+// only the ones it knows.
+export const GoalLadderStep = z.looseObject({
+  level: z.string(),
+  state: z.string(),
+});
+export type GoalLadderStep = z.infer<typeof GoalLadderStep>;
+
+// One item of gold's checklist (VOU-184). code is the gold threshold it
+// stands for, progress current of required, null for a flag.
+export const GoalStep = z.looseObject({
+  code: z.string(),
+  done: z.boolean(),
+  progress: z
+    .looseObject({ current: z.number(), required: z.number() })
+    .nullable()
+    .catch(null),
+});
+export type GoalStep = z.infer<typeof GoalStep>;
 
 export const GoalResponse = z.looseObject({
   agentId: AgentId,
@@ -383,6 +408,12 @@ export const GoalResponse = z.looseObject({
   level: z.string(),
   nextLevel: z.string().nullable(),
   thresholds: z.array(GoalThreshold),
+  // The ladder and gold's checklist, from an API that sends them. An API
+  // from before them, or a shape this CLI does not read, leaves them out,
+  // and goal falls back to the thresholds and the ladder in
+  // @sealkeeper/schema.
+  ladder: z.array(GoalLadderStep).optional().catch(undefined),
+  steps: z.array(GoalStep).optional().catch(undefined),
   actions: z.array(GoalAction),
   // posterOutcomes, from an API that sends it, counts the tasks this agent
   // posted whose outcome waits for its report. outcomes counts its own

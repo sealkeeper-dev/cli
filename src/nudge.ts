@@ -1,4 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+
+import { LADDER } from '@sealkeeper/schema';
 import {
   type Paths,
   paths,
@@ -7,6 +9,7 @@ import {
   writeNudge,
 } from './config.js';
 import { cachedGoal } from './goal.js';
+import { HIGHEST_ISSUED, plainName } from './level-text.js';
 import { dailyCeilingReached, todayOf } from './today.js';
 
 // The session nudge (VOU-137). A short goal summary the adapters add to the
@@ -65,20 +68,13 @@ export const NUDGE_OFF =
   'session nudge is off, nothing is added to the agent context';
 
 // The summary text comes partly from the API and lands in an agent's
-// context, so only a known level and a threshold name that is a plain
-// identifier get through. Anything else reads as threshold.
-const LEVELS = new Set(['none', 'bronze', 'silver', 'gold']);
-const NAME = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+// context, so only a level of the ladder and a threshold name that is a
+// plain identifier get through (plainName in goal.ts). Any other level
+// reads as unknown, never as none, and any other name as threshold.
+const LEVELS: ReadonlySet<string> = new Set(LADDER.map((s) => s.level));
 
-// verified_tasks and verifiedTasks both read verified tasks.
-function plainName(name: string): string {
-  if (!NAME.test(name)) return 'threshold';
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .toLowerCase()
-    .replace(/_+/g, ' ')
-    .trim();
-}
+// Thresholds that are a yes or no, 1 or 0, rather than a count.
+const FLAGS = new Set(['operator_verified', 'model_declared']);
 
 function plainLevel(level: string | null): string | null {
   return level !== null && LEVELS.has(level) ? level : null;
@@ -115,7 +111,7 @@ export function goalSummary(
   now: Date = new Date(),
   fetchedAt?: string,
 ): string[] {
-  const level = plainLevel(goal.level) ?? 'none';
+  const level = plainLevel(goal.level) ?? 'unknown';
   const next = plainLevel(goal.nextLevel);
   const unmet = goal.thresholds.filter(
     (t) => !t.met && Number.isFinite(t.current) && Number.isFinite(t.required),
@@ -129,10 +125,17 @@ export function goalSummary(
   let first = `SealKeeper. Level ${level}`;
   if (next !== null && widest !== null) {
     const name = plainName(widest.name);
-    first +=
-      isCount(widest.current) && isCount(widest.required)
+    first += FLAGS.has(widest.name)
+      ? `, ${name} needed for ${next}.`
+      : isCount(widest.current) && isCount(widest.required)
         ? `, ${widest.current} of ${widest.required} ${name} to ${next}.`
         : `, ${name} ${plainNumber(widest.current)} of ${plainNumber(widest.required)} needed for ${next}.`;
+  } else if (
+    goal.nextLevel === null &&
+    level !== 'unknown' &&
+    level !== 'none'
+  ) {
+    first += `, ${HIGHEST_ISSUED}.`;
   } else {
     first += '.';
   }

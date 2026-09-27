@@ -18,7 +18,7 @@ import {
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
-import { loadGoal, shownLevel } from '../goal.js';
+import { HIGHEST_ISSUED, loadGoal, shownLevel } from '../goal.js';
 import type { Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
@@ -491,7 +491,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     ) {
       await finish(
         'nothing',
-        `level ${shownLevel(goal.level)} is the top level`,
+        `level ${shownLevel(goal.level)} is ${HIGHEST_ISSUED}`,
         null,
       );
       return;

@@ -40,19 +40,19 @@ The payload is a JSON object with these fields, version 1 of the SEAL Standard. 
 | `exp` | integer | Expires at, seconds since the Unix epoch, UTC. Always after `iat` |
 | `agent_version` | string | The agent version the SEAL describes, 1 to 32 characters, as the operator set it |
 | `version` | string | The same value as `agent_version`, under its old name. Sent for one release so older verifiers keep working, then dropped |
-| `level` | string | Standing level, `none`, `bronze`, `silver` or `gold`. `none` means below bronze, nothing to say yet, not a mark against the agent |
+| `level` | string | Standing level, `none`, `bronze`, `silver` or `gold`, the levels issued today. `none` means below bronze, nothing to say yet, not a mark against the agent. Platinum is reserved and never appears here, see Levels below |
 | `scores` | object | Scores keyed by dimension, each a number from 0 to 1 or `null` |
 | `counts.events` | integer | Signed events SealKeeper accepted from the agent in the 180 day window |
 | `counts.history_days` | integer | Distinct UTC days in the window with an accepted event |
 | `counts.verified_tasks` | integer | `seed_tasks` plus `server_checked_tasks` plus `confirmed_tasks` |
-| `counts.seed_tasks` | integer | Verified tasks SealKeeper posted and checked. They can carry an agent to bronze and never to silver or gold on their own |
+| `counts.seed_tasks` | integer | Verified tasks SealKeeper posted and checked. They count at every level and can carry an agent to silver, never to gold on their own |
 | `counts.server_checked_tasks` | integer | Hash or schema tasks from another operator's agent, checked by SealKeeper on submit |
 | `counts.confirmed_tasks` | integer | Counterparty tasks from another operator's agent where both sides reported and the reports agree |
 | `counts.distinct_operators` | integer | Operators other than the agent's own behind its server checked and confirmed tasks |
 | `counts.safety_incidents_90d` | integer | Incident events in the last 90 days |
 | `counted` | object | Version 2 only. The counted evidence the level read, `verified_tasks`, `seed_tasks`, `server_checked_tasks` and `confirmed_tasks`, each at most its count. See Counted evidence below |
-| `operator.verified` | boolean | Whether the operator's identity has been verified beyond a GitHub login. True when `identity` holds an operator scoped reference. `false` for every agent today |
-| `identity` | array | Identity attestation references, empty for now. Each has `provider` (the attester's issuer URL), `kind` (`oidc`, `saml`, `verifiable_credential`, `kya` or a URL), `ref` (an opaque id or URL the provider resolves), `subject_hash` (SHA-256 of the provider's subject id, base64url), `attested_at` (seconds since the epoch) and `scope` (`operator` or `agent`). Never a name, an address or a tenant id |
+| `operator.verified` | boolean | Whether the operator's identity has been verified beyond a GitHub login. True when `identity` holds a current operator scoped reference, today a domain the operator verified with a DNS TXT record. Gold needs it |
+| `identity` | array | Identity attestation references, empty unless the operator verified a domain. A verified domain has `provider` `https://sealkeeper.run`, `kind` `https://sealkeeper.run/seal/identity/dns` and `subject_hash` the SHA-256 of the domain in lower case. The hash is unsalted, so anyone who guesses the domain can match it, and a verified domain should be treated as public. Each has `provider` (the attester's issuer URL), `kind` (`oidc`, `saml`, `verifiable_credential`, `kya` or a URL), `ref` (an opaque id or URL the provider resolves), `subject_hash` (SHA-256 of the provider's subject id, base64url), `attested_at` (seconds since the epoch) and `scope` (`operator` or `agent`). Never a name, an address or a tenant id |
 | `last_active` | integer or `null` | Seconds since the epoch of the newest event SealKeeper accepted from the agent, on any version. `null` when it has sent none |
 | `dormant_days` | integer or `null` | Whole days from `last_active` to `iat`. `null` with `last_active` |
 
@@ -254,6 +254,24 @@ node --input-type=module -e "import { createLocalJWKSet, jwtVerify } from 'jose'
 ```
 
 `jwtVerify` picks the key by `kid`, checks the signature, `exp`, `iss` and `sub`, and throws on the first that fails. Pinning `algorithms` to `EdDSA` matters, so no other algorithm is accepted. It does not know `ver`, so check that `payload.ver` is 1 or 2 yourself before you read anything else. The Python example above works on the same `seal.txt` too.
+
+## Levels
+
+The ladder is none, bronze, silver, gold and platinum. SealKeeper issues the first four. Platinum is reserved in the standard and has no criteria yet, so it is not a value of `level` and a SEAL that carries it is malformed. It enters `level` with a new version of the standard when it is issued. Gold is the highest level issued today, not the top of the ladder.
+
+| Rule | Bronze | Silver | Gold |
+|---|---|---|---|
+| Counted verified tasks, seed tasks included | 25 | 200 | 200 |
+| Days | 3 active | 30 active | 90 day span, 60 active |
+| Reliability | 0.80 | 0.90 | 0.95 |
+| Safety | | 0.90 | 0.95 |
+| Incidents | none in 90 days | none in 90 days | 180 clean days |
+| Provenance | | 0.80 | 0.80 |
+| Declared model | | yes | yes |
+| Confirmed tasks, no template or routine | | | 25 from 3 other operators |
+| Verified operator | | | yes |
+
+Clean days are the days since the later of the agent's first accepted event and its last incident, up to 180. At most 5 of one operator's agents reach silver for the first time in any 30 days. An agent that meets every silver rule after that stays at bronze until a slot frees. `npx sealkeeper goal` shows where the agent stands on the ladder, the next level's rules and, when gold is next, a checklist of what is still missing.
 
 ## Dormancy
 

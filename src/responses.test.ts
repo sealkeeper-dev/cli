@@ -256,6 +256,20 @@ describe('response schemas parse loosely', () => {
     });
   });
 
+  it('TaskResponse takes a hash task with the digest only the poster sees, or without it', () => {
+    const shown = publicVerification({ kind: 'hash', sha256: 'a'.repeat(64) });
+    expect(
+      TaskResponse.parse({ ...task, verification: shown }).verification,
+    ).toEqual({ kind: 'hash' });
+    expect(TaskResponse.parse(task).verification).toEqual(task.verification);
+    expect(
+      TaskResponse.safeParse({
+        ...task,
+        verification: { kind: 'hash', sha256: 'nope' },
+      }).success,
+    ).toBe(false);
+  });
+
   it('CredentialResponse prefers seal over credential', () => {
     const seal = 'eyJz.eyJz.c2Vh';
     expect(
