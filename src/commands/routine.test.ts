@@ -68,6 +68,7 @@ import {
 } from '../routine-scheduler.js';
 import type { TasksDeps } from '../tasks.js';
 import { PosterLookup, routineCandidates, seedTypesDone } from './prove.js';
+import { NPX_NOTE } from './routine.js';
 
 const API_URL = 'https://api.test';
 
@@ -324,6 +325,8 @@ describe('routine', () => {
   let agentId: string;
   let api: FakeApi;
   let platform: NodeJS.Platform;
+  // The CLI's node and script paths the job points at.
+  let jobProgram: string[];
   let tty: boolean;
   let answer: string | null;
   // The scheduler calls, as file and args joined.
@@ -377,7 +380,7 @@ describe('routine', () => {
         uid: () => 501,
         stdin: () => input,
         findAgent: async () => CLAUDE,
-        cli: () => ({ program: PROGRAM, invocation: INVOCATION }),
+        cli: () => ({ program: jobProgram, invocation: INVOCATION }),
         msPerMinute: 20,
       },
     });
@@ -445,6 +448,7 @@ describe('routine', () => {
     vi.stubEnv('XDG_CACHE_HOME', join(home, 'cache'));
     resetInvocation();
     platform = 'linux';
+    jobProgram = PROGRAM;
     tty = false;
     answer = null;
     calls = [];
@@ -482,6 +486,19 @@ describe('routine', () => {
       expect(result.err).toContain('nothing installed');
       expect(calls.map((c) => c.line)).not.toContain('crontab -');
       expect((await readRoutineConfig()).schedule).toBeUndefined();
+    });
+
+    it('says in the preview when the CLI runs from the npx cache', async () => {
+      const script =
+        '/home/alice/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
+      jobProgram = [PROGRAM[0] as string, script];
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(NPX_NOTE);
+      expect(result.out).toContain(script);
+      jobProgram = PROGRAM;
+      const stable = await run('routine', 'install');
+      expect(stable.out).not.toContain(NPX_NOTE);
     });
 
     it('installs nothing when the answer is no', async () => {

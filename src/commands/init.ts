@@ -57,8 +57,10 @@ import {
   type Paths,
   paths,
   profileUrl as profileUrlOf,
+  type RoutineConfig,
   readConfig,
   readNudge,
+  readRoutineConfig,
   writeConfig,
 } from '../config.js';
 import { isDirectory, tildePath } from '../files.js';
@@ -96,6 +98,7 @@ import {
   wantsJson,
 } from '../output.js';
 import { refusal } from '../refusal.js';
+import { SchedulerError } from '../routine-scheduler.js';
 import { createStyle, indent, type Style, type Styled } from '../style.js';
 import { describeTaxonomy } from '../taxonomy.js';
 import { VERSION } from '../version.js';
@@ -111,6 +114,18 @@ import {
   INSTALL_COMMAND,
   skillLine,
 } from './adapter.js';
+import {
+  DEFAULT_TIME,
+  defaultRoutineDeps,
+  finishInstall,
+  INSTALL_QUESTION,
+  installedLine,
+  NPX_NOTE,
+  type PreparedInstall,
+  prepareInstall,
+  preview,
+  type RoutineDeps,
+} from './routine.js';
 import { printIdentity } from './whoami.js';
 
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
@@ -145,6 +160,18 @@ export const NUDGE_INTRO =
   'The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.';
 export const NUDGE_NOT_ON = `Session nudge off. Run ${cli('config nudge on')} to turn it on later.`;
 export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
+// The daily routine, offered after the hooks when claude is on PATH. It
+// spends the operator's tokens unattended, so no is the default, and yes
+// shows what routine install would write before anything is written.
+export const ROUTINE_INTRO = [
+  `A daily job can start Claude Code headless at ${DEFAULT_TIME} to earn verified tasks on its own,`,
+  'within limits you set. It shows what it will write before it runs anything.',
+];
+export const ROUTINE_QUESTION = 'Set up the daily routine now? [y/N] ';
+export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine install')} to set it up later.`;
+export const ROUTINE_TIME_LINE = `Change the time with ${cli('routine install --time HH:MM')}.`;
+export const routinePresentLine = (time: string): string =>
+  `Daily routine at ${time}`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
 // What bronze asks for, from the thresholds the scoring job applies.
 export const BRONZE = LEVEL_THRESHOLDS.bronze;
@@ -266,6 +293,7 @@ function apiErrorMessage(error: ApiError): string {
 export function register(
   parent: Command,
   deps: InitDeps = defaultInitDeps,
+  routineDeps: RoutineDeps = defaultRoutineDeps,
 ): Command {
   return parent
     .command('init')
@@ -283,7 +311,7 @@ export function register(
     .option('--force', 'regenerate the key and register again')
     .action(async function (this: Command, options: InitOptions) {
       try {
-        await init(this, options, deps);
+        await init(this, options, deps, routineDeps);
       } catch (error) {
         if (
           error instanceof ApiError ||
@@ -332,6 +360,7 @@ async function init(
   cmd: Command,
   options: InitOptions,
   deps: InitDeps,
+  routineDeps: RoutineDeps,
 ): Promise<void> {
   const json = wantsJson(cmd);
   const p = paths();
@@ -393,6 +422,7 @@ async function init(
       // sealkeeper init is always enough.
       const hooks = await offerHooks(deps, ui);
       await offerNudge(hooks, deps, ui, p);
+      await offerRoutine(hooks, deps, routineDeps, ui);
       printNext(ui.out, hooks, nextStateOf(existing, live));
       return;
     }
@@ -607,6 +637,7 @@ async function init(
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
+  await offerRoutine(hooks, deps, routineDeps, ui);
   printNext(ui.out, hooks, nextStateOf(config, live));
 }
 
@@ -710,6 +741,95 @@ async function offerNudge(
   await setNudge(on, p);
   const s = ui.out;
   say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
+}
+
+// Offers the daily routine when Claude Code is set up here, claude is on
+// PATH and a person can answer. One with a job installed already is named
+// and nothing is asked. Yes prints the same preview routine install prints
+// and asks once more before the job is written, so nothing lands on the
+// scheduler unseen. No, the default, is not stored, so a repeat init asks
+// again the way it asks about the hooks. A machine where the routine
+// cannot be installed, no claude on PATH or a scheduler that cannot be
+// read, hears nothing, since init has nothing to offer it.
+async function offerRoutine(
+  hooks: HooksResult,
+  deps: InitDeps,
+  routineDeps: RoutineDeps,
+  ui: Ui,
+): Promise<void> {
+  if (hooks === 'none') return;
+  const input = deps.stdin?.();
+  if (input === undefined || !input.isTTY) return;
+  const e = ui.err;
+  const o = ui.out;
+  let current: RoutineConfig;
+  try {
+    current = await readRoutineConfig();
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    note(e.line`${error.message}`);
+    return;
+  }
+  if (current.schedule !== undefined) {
+    say(o.line`${o.tick()} ${routinePresentLine(current.schedule.time)}`);
+    return;
+  }
+  let prepared: PreparedInstall | string;
+  try {
+    prepared = await prepareInstall(routineDeps, DEFAULT_TIME, current);
+  } catch (error) {
+    if (!(error instanceof SchedulerError)) throw error;
+    return;
+  }
+  if (typeof prepared === 'string') return;
+  note();
+  note(e.bold('Daily routine'));
+  for (const text of ROUTINE_INTRO) note(e.line`${text}`);
+  if (prepared.npx) note(e.line`${NPX_NOTE}`);
+  if ((await askRoutine(input, ui)) !== 'yes') {
+    say(o.line`${ROUTINE_NOT_INSTALLED}`);
+    return;
+  }
+  say();
+  for (const text of preview(
+    prepared.plan,
+    DEFAULT_TIME,
+    prepared.agentCommand,
+    current,
+    prepared.npx,
+  )) {
+    say(o.line`${text}`);
+  }
+  const [confirm = ''] = INSTALL_QUESTION.split(' [y/N]');
+  promptStyled(indent(e.line`${confirm} ${e.dim('[y/N]')} `));
+  if (!isYes(await input.readLine())) {
+    say(o.line`${ROUTINE_NOT_INSTALLED}`);
+    return;
+  }
+  try {
+    await finishInstall(prepared, DEFAULT_TIME);
+  } catch (error) {
+    if (!(error instanceof SchedulerError)) throw error;
+    note(e.line`${error.message}`);
+    say(o.line`${ROUTINE_NOT_INSTALLED}`);
+    return;
+  }
+  say(o.line`${o.tick()} ${installedLine(DEFAULT_TIME)}`);
+  say(o.line`${o.dim(ROUTINE_TIME_LINE)}`);
+}
+
+// The routine question, no by default. An answer that is not yes or no
+// asks again, up to HOOKS_MAX_ASKS questions, and then counts as no.
+async function askRoutine(input: Input, ui: Ui): Promise<'yes' | 'no'> {
+  const e = ui.err;
+  const [question = ''] = ROUTINE_QUESTION.split(' [y/N]');
+  for (let asked = 0; asked < HOOKS_MAX_ASKS; asked++) {
+    const again = asked === 0 ? '' : 'Please answer y or n. ';
+    promptStyled(indent(e.line`${again}${question} ${e.dim('[y/N]')} `));
+    const answer = readYesNo(await input.readLine(), 'no');
+    if (answer !== 'unclear') return answer;
+  }
+  return 'no';
 }
 
 // A short account of what leaves this machine, on stderr where the full

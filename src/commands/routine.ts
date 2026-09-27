@@ -5,7 +5,11 @@ import { join } from 'node:path';
 import type { Command } from 'commander';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
-import { cliInvocation, cliProgram } from '../claude-code-settings.js';
+import {
+  cliInvocation,
+  cliProgram,
+  isNpxCopy,
+} from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
   type Paths,
@@ -199,6 +203,93 @@ const cliOf = (deps: RoutineDeps) =>
 
 // install
 
+// Everything install needs before it asks, so init can offer the same
+// install after the Claude Code hooks. A string is the reason nothing can
+// be installed, said as is. A scheduler that cannot be read throws a
+// SchedulerError, and a broken routine.json a ConfigError.
+export type PreparedInstall = {
+  plan: Plan;
+  agentCommand: string;
+  current: RoutineConfig;
+  env: SchedulerEnv;
+  run: Runner;
+  // Whether this CLI runs from the npx cache, which the job would point at.
+  npx: boolean;
+};
+
+export const NO_CLAUDE =
+  'claude was not found on PATH. Install Claude Code first, the routine starts it as claude -p';
+
+export async function prepareInstall(
+  deps: RoutineDeps,
+  time: string,
+  current?: RoutineConfig,
+): Promise<PreparedInstall | string> {
+  const run = deps.run ?? execRunner;
+  const env = schedulerEnv(deps);
+  const agentCommand = await (deps.findAgent ?? ((n) => findOnPath(n)))(
+    'claude',
+  );
+  if (agentCommand === null) return NO_CLAUDE;
+  const { program } = cliOf(deps);
+  if (program.length === 0) return 'Run this from the sealkeeper CLI';
+  const routine = current ?? (await readRoutineConfig());
+  const p = paths();
+  const job = defaultJob(p, env);
+  const scheduler = await detectScheduler(env, run);
+  const plan = await planInstall(
+    scheduler,
+    job,
+    {
+      time,
+      program: [...program, 'routine', 'run'],
+      env: jobEnv(),
+      home: p.home,
+      outFile: routinePaths(p).out,
+    },
+    env,
+    run,
+  );
+  return {
+    plan,
+    agentCommand,
+    current: routine,
+    env,
+    run,
+    npx: isNpxCopy(program[1]),
+  };
+}
+
+// Writes the job the preview showed and records it in routine.json. A job
+// from an earlier install under another name or scheduler goes first, so
+// there is only ever one. Throws a SchedulerError when the scheduler
+// refuses.
+export async function finishInstall(
+  prepared: PreparedInstall,
+  time: string,
+): Promise<RoutineSchedule> {
+  const { plan, current, env, run } = prepared;
+  const old = current.schedule;
+  if (old && (old.job !== plan.job || old.scheduler !== plan.scheduler)) {
+    await removeJob(old, env, run);
+  }
+  await applyPlan(plan, run);
+  const schedule: RoutineSchedule = {
+    time,
+    scheduler: plan.scheduler,
+    agent: 'claude-code',
+    agentCommand: prepared.agentCommand,
+    job: plan.job,
+    files: plan.files.map((f) => f.path),
+    installedAt: new Date().toISOString(),
+  };
+  await writeRoutineConfig({ ...current, schedule });
+  return schedule;
+}
+
+export const installedLine = (time: string): string =>
+  `Routine installed. It runs every day at ${time}. See it with ${cli('routine status')}, stop it with ${cli('routine pause')} or ${cli('routine remove')}.`;
+
 async function install(
   cmd: Command,
   deps: RoutineDeps,
@@ -218,46 +309,23 @@ async function install(
   }
   await requireConfig(cmd);
   const current = await loadRoutineConfig(cmd);
-  const run = deps.run ?? execRunner;
-  const env = schedulerEnv(deps);
-  const agentCommand = await (deps.findAgent ?? ((n) => findOnPath(n)))(
-    'claude',
-  );
-  if (agentCommand === null) {
-    cmd.error(
-      'nothing installed. claude was not found on PATH. Install Claude Code first, the routine starts it as claude -p',
-    );
-  }
-  const { program } = cliOf(deps);
-  if (program.length === 0) {
-    cmd.error('nothing installed. Run this from the sealkeeper CLI');
-  }
-
-  const p = paths();
-  const job = defaultJob(p, env);
-  let plan: Plan;
+  let prepared: PreparedInstall | string;
   try {
-    const scheduler = await detectScheduler(env, run);
-    plan = await planInstall(
-      scheduler,
-      job,
-      {
-        time: options.time,
-        program: [...program, 'routine', 'run'],
-        env: jobEnv(),
-        home: p.home,
-        outFile: routinePaths(p).out,
-      },
-      env,
-      run,
-    );
+    prepared = await prepareInstall(deps, options.time, current);
   } catch (error) {
     if (error instanceof SchedulerError) cmd.error(error.message);
     throw error;
   }
+  if (typeof prepared === 'string') cmd.error(`nothing installed. ${prepared}`);
 
   const print = json ? stderr : stdout;
-  for (const line of preview(plan, options.time, agentCommand, current)) {
+  for (const line of preview(
+    prepared.plan,
+    options.time,
+    prepared.agentCommand,
+    current,
+    prepared.npx,
+  )) {
     print(line);
   }
 
@@ -268,43 +336,27 @@ async function install(
         `nothing installed. There is no terminal to ask, so run ${cli('routine install')} --yes after reading the preview above`,
       );
     }
-    process.stderr.write('Install this daily routine? [y/N] ');
+    process.stderr.write(INSTALL_QUESTION);
     if (!isYes(await input.readLine())) cmd.error('nothing installed');
   }
 
+  let schedule: RoutineSchedule;
   try {
-    // A job from an earlier install under another name or scheduler goes
-    // first, so there is only ever one.
-    const old = current.schedule;
-    if (old && (old.job !== plan.job || old.scheduler !== plan.scheduler)) {
-      await removeJob(old, env, run);
-    }
-    await applyPlan(plan, run);
+    schedule = await finishInstall(prepared, options.time);
   } catch (error) {
     if (error instanceof SchedulerError) cmd.error(error.message);
     throw error;
   }
-
-  const schedule: RoutineSchedule = {
-    time: options.time,
-    scheduler: plan.scheduler,
-    agent: 'claude-code',
-    agentCommand,
-    job: plan.job,
-    files: plan.files.map((f) => f.path),
-    installedAt: new Date().toISOString(),
-  };
-  await writeRoutineConfig({ ...current, schedule });
   if (json) {
     stdout(
       JSON.stringify({ installed: true, schedule, limits: current.limits }),
     );
     return;
   }
-  stdout(
-    `Routine installed. It runs every day at ${options.time}. See it with ${cli('routine status')}, stop it with ${cli('routine pause')} or ${cli('routine remove')}.`,
-  );
+  stdout(installedLine(options.time));
 }
+
+export const INSTALL_QUESTION = 'Install this daily routine? [y/N] ';
 
 // The job name install gives this CLI home.
 const defaultJob = (p: Paths, env: SchedulerEnv): string =>
@@ -330,11 +382,17 @@ function jobEnv(): Record<string, string> {
 export const NO_SETTINGS_NOTE =
   "The routine's Claude Code runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it.";
 
+// Said in the preview, and by init before its question, when the CLI runs
+// from the npx cache. The job points at that copy, and npm can clear it.
+export const NPX_NOTE =
+  'This CLI runs from the npx cache, which npm can clear, and the job points at this copy. For a job that keeps working, run npm i -g sealkeeper and then sealkeeper routine install.';
+
 export function preview(
   plan: Plan,
   time: string,
   agentCommand: string,
   routine: RoutineConfig,
+  npx = false,
 ): string[] {
   const lines = [
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
@@ -342,6 +400,7 @@ export function preview(
     '',
     'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They never post tasks. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
+    ...(npx ? [NPX_NOTE] : []),
     `Allowlist: ${routine.allow.length === 0 ? 'nobody yet' : routine.allow.join(', ')}. Add an operator with ${cli('config routine allow <login>')}.`,
     '',
     'Limits',

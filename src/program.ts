@@ -108,7 +108,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
       writeErr: (text) => process.stderr.write(terminalSafe(text)),
     });
 
-  registerInit(program, deps.init);
+  registerInit(program, deps.init, deps.routine);
   registerEmit(program, deps.sync);
   registerSync(program, deps.sync);
   registerCard(program, deps.card);
