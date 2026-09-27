@@ -1,11 +1,15 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { readFile } from 'node:fs/promises';
-import { SubmitTaskRequest, TaskOutcomeRequest } from '@sealkeeper/schema';
+import {
+  MAX_SUBMISSION_BYTES,
+  SubmitTaskRequest,
+  TaskOutcomeRequest,
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
+import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
-import { containsPrivateKey, insideHome } from '../key-guard.js';
+import { containsPrivateKey } from '../key-guard.js';
 import {
   endsInLineBreak,
   MAX_FAILED_SUBMITS,
@@ -25,7 +29,12 @@ import {
 
 export const AWAITING_POSTER = 'the poster must confirm the outcome';
 
-type SubmitOptions = { file?: string; text?: string; keepNewline?: boolean };
+type SubmitOptions = {
+  file?: string;
+  text?: string;
+  keepNewline?: boolean;
+  allowOutsideCwd?: boolean;
+};
 
 export function register(
   parent: Command,
@@ -34,11 +43,18 @@ export function register(
   return parent
     .command('submit <id>')
     .description('Submit the result for a claimed task')
-    .option('--file <path>', 'read the submission from a file')
+    .option(
+      '--file <path>',
+      'read the submission from a file in the current directory',
+    )
     .option('--text <string>', 'the submission as a string')
     .option(
       '--keep-newline',
       'send a hash answer that ends in a line break as is',
+    )
+    .option(
+      '--allow-outside-cwd',
+      'let --file read a file outside the current directory, never in a routine run',
     )
     .action(async function (
       this: Command,
@@ -52,7 +68,8 @@ export function register(
         this.error(`task id must be a UUID, got ${id}`);
       }
       const submission =
-        options.text ?? (await readSubmission(this, options.file));
+        options.text ??
+        (await readSubmission(this, options.file ?? '', options));
       await refuseKeyMaterial(this, submission);
       const request = SubmitTaskRequest.safeParse({ taskId: id, submission });
       if (!request.success) this.error(z.prettifyError(request.error));
@@ -171,21 +188,25 @@ export function register(
 }
 
 // Task specs come from other agents and an agent may follow what one says.
-// A spec that asks for the key file, or for the key pasted into an answer,
-// must never get it. Files under the SealKeeper home are refused outright,
-// and so is any submission that contains the private key.
-async function readSubmission(cmd: Command, file: string | undefined) {
-  const home = await insideHome(file ?? '');
-  if (home !== null) {
-    cmd.error(
-      `refusing to submit ${file}, it is inside ${home}, which holds this agent's private key`,
-    );
-  }
-  try {
-    return await readFile(file ?? '', 'utf8');
-  } catch (error) {
-    cmd.error(`could not read ${file}: ${(error as Error).message}`);
-  }
+// A spec that asks for the key file, a token or the key pasted into an
+// answer must never get it. The file must pass the rules in file-guard.ts,
+// which refuse the SealKeeper home, hidden folders of the user's home, a
+// file outside the current directory without --allow-outside-cwd, anything
+// outside .sealkeeper-answers in a routine run and a file too large to send.
+// refuseKeyMaterial then refuses any submission that contains the key.
+async function readSubmission(
+  cmd: Command,
+  file: string,
+  options: SubmitOptions,
+): Promise<string> {
+  const read = await readGuardedFile(file, {
+    maxBytes: MAX_SUBMISSION_BYTES,
+    refusing: 'refusing to submit',
+    what: 'the answer file',
+    allowOutsideCwd: options.allowOutsideCwd === true,
+  });
+  if ('error' in read) cmd.error(read.error);
+  return read.text;
 }
 
 async function refuseKeyMaterial(cmd: Command, submission: string) {

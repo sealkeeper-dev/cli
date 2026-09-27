@@ -2,10 +2,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   chmod,
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
+  realpath,
   rm,
+  symlink,
+  truncate,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -15,6 +19,7 @@ import {
   decodeHeader,
   decodeTasksCursor,
   encodeTasksCursor,
+  MAX_SUBMISSION_BYTES,
   PostTaskRequest,
   publicVerification,
   readAudience,
@@ -56,6 +61,7 @@ import {
   assigneeCap,
   assigneeOperatorCap,
   KEY_IN_TASK,
+  MAX_INPUT_FILE_BYTES,
   NO_OPTIONS_JSON,
   NO_TERMINAL,
   NOT_POSTED,
@@ -373,6 +379,9 @@ describe('tasks pull, submit and post', () => {
   let stdoutTTY = false;
   // Files a test wrote next to the home, removed after it.
   let onCleanup: string[] = [];
+  // The current directory the commands see. The temp folder, so the files
+  // tests write next to the home count as inside it (VOU-229).
+  let cwd: string;
 
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
@@ -436,9 +445,12 @@ describe('tasks pull, submit and post', () => {
     stdin = undefined;
     stdoutTTY = false;
     onCleanup = [];
+    cwd = tmpdir();
+    vi.spyOn(process, 'cwd').mockImplementation(() => cwd);
   });
 
   afterEach(async () => {
+    vi.mocked(process.cwd).mockRestore();
     for (const file of onCleanup) await rm(file, { force: true });
     expect(api.errors).toEqual([]);
     vi.unstubAllEnvs();
@@ -1006,6 +1018,173 @@ describe('tasks pull, submit and post', () => {
       expect(err).toContain('exactly one of');
       expect(api.requests).toEqual([]);
     });
+
+    describe('which files --file reads (VOU-229)', () => {
+      // A folder of its own for each test, removed after it.
+      let dir: string;
+      beforeEach(async () => {
+        dir = await realpath(
+          await mkdtemp(join(tmpdir(), 'sealkeeper-vou229-')),
+        );
+      });
+      afterEach(async () => {
+        await rm(dir, { recursive: true, force: true });
+      });
+
+      async function fileIn(folder: string, name: string, text: string) {
+        await mkdir(folder, { recursive: true });
+        const file = join(folder, name);
+        await writeFile(file, text);
+        return file;
+      }
+
+      it('in a routine run reads only from .sealkeeper-answers in the current directory', async () => {
+        vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
+        cwd = join(dir, 'work');
+        const task = claimed({ kind: 'counterparty' });
+        const outside = await fileIn(cwd, 'answer.txt', 'outside');
+        const refused = await run(
+          'tasks',
+          'submit',
+          task.id,
+          '--file',
+          outside,
+        );
+        expect(refused.code).toBe(1);
+        expect(refused.err).toContain(`refusing to submit ${outside}`);
+        expect(refused.err).toContain(join(cwd, '.sealkeeper-answers'));
+        // The flag changes nothing in a routine run.
+        const flagged = await run(
+          'tasks',
+          'submit',
+          task.id,
+          '--file',
+          outside,
+          '--allow-outside-cwd',
+        );
+        expect(flagged.code).toBe(1);
+        expect(api.posts()).toEqual([]);
+
+        await fileIn(join(cwd, '.sealkeeper-answers'), 'a.txt', 'inside');
+        const read = await run(
+          'tasks',
+          'submit',
+          task.id,
+          '--file',
+          '.sealkeeper-answers/a.txt',
+        );
+        expect(read.err).toBe('');
+        expect(read.code).toBe(0);
+        expect(api.posts()[0]?.payload).toEqual({
+          taskId: task.id,
+          submission: 'inside',
+        });
+      });
+
+      it('refuses a symlink from .sealkeeper-answers to a file outside it', async () => {
+        vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
+        cwd = join(dir, 'work');
+        const task = claimed({ kind: 'counterparty' });
+        const secret = await fileIn(dir, 'secret.txt', 'secret');
+        await mkdir(join(cwd, '.sealkeeper-answers'), { recursive: true });
+        const link = join(cwd, '.sealkeeper-answers', 'a.txt');
+        await symlink(secret, link);
+        const { code, err } = await run(
+          'tasks',
+          'submit',
+          task.id,
+          '--file',
+          link,
+        );
+        expect(code).toBe(1);
+        expect(err).toContain(`refusing to submit ${link}`);
+        expect(api.posts()).toEqual([]);
+      });
+
+      it('never reads a hidden folder of the home, even inside the current directory or with the flag', async () => {
+        const userHome = join(dir, 'home');
+        vi.stubEnv('HOME', userHome);
+        vi.stubEnv('USERPROFILE', userHome);
+        cwd = userHome;
+        const task = claimed({ kind: 'counterparty' });
+        const token = await fileIn(
+          join(userHome, '.config', 'gh'),
+          'hosts.yml',
+          'oauth_token: gho_x',
+        );
+        const ssh = await fileIn(join(userHome, '.ssh'), 'id_ed25519', 'key');
+        for (const file of [token, ssh, '.config/gh/hosts.yml']) {
+          for (const extra of [[], ['--allow-outside-cwd']]) {
+            const { code, err } = await run(
+              'tasks',
+              'submit',
+              task.id,
+              '--file',
+              file,
+              ...extra,
+            );
+            expect(code, file).toBe(1);
+            expect(err).toContain('a hidden file or folder in your home');
+          }
+        }
+        expect(api.posts()).toEqual([]);
+      });
+
+      it('refuses a file outside the current directory unless --allow-outside-cwd is given', async () => {
+        cwd = join(dir, 'work');
+        await mkdir(cwd);
+        const task = claimed({ kind: 'counterparty' });
+        const file = await fileIn(join(dir, 'elsewhere'), 'answer.txt', 'done');
+        const refused = await run('tasks', 'submit', task.id, '--file', file);
+        expect(refused.code).toBe(1);
+        expect(refused.err).toContain('outside the current directory');
+        expect(refused.err).toContain('--allow-outside-cwd');
+        expect(api.posts()).toEqual([]);
+        const allowed = await run(
+          'tasks',
+          'submit',
+          task.id,
+          '--file',
+          file,
+          '--allow-outside-cwd',
+        );
+        expect(allowed.code).toBe(0);
+        expect(api.posts()[0]?.payload).toEqual({
+          taskId: task.id,
+          submission: 'done',
+        });
+      });
+
+      it('refuses a file over the size cap, a folder and a device before reading them', async () => {
+        cwd = dir;
+        const task = claimed({ kind: 'counterparty' });
+        // Sparse, so it takes no room on disk and reading it would take long.
+        const big = join(dir, 'big.txt');
+        await writeFile(big, '');
+        await truncate(big, 1024 ** 3);
+        const tooBig = await run('tasks', 'submit', task.id, '--file', big);
+        expect(tooBig.code).toBe(1);
+        expect(tooBig.err).toContain(
+          `it is ${1024 ** 3} bytes and the most allowed is ${MAX_SUBMISSION_BYTES}`,
+        );
+        const folder = await run('tasks', 'submit', task.id, '--file', dir);
+        expect(folder.code).toBe(1);
+        expect(folder.err).toContain('it is not a regular file');
+        if (process.platform !== 'win32') {
+          const zero = await run(
+            'tasks',
+            'submit',
+            task.id,
+            '--file',
+            '/dev/zero',
+            '--allow-outside-cwd',
+          );
+          expect(zero.code).toBe(1);
+          expect(zero.err).toContain('it is not a regular file');
+        }
+        expect(api.posts()).toEqual([]);
+      });
+    });
   });
 
   describe('post', () => {
@@ -1331,6 +1510,58 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(err).toContain(message);
       expect(api.requests).toEqual([]);
+    });
+
+    it('reads --input @file under the same rules as tasks submit --file (VOU-229)', async () => {
+      const dir = await realpath(
+        await mkdtemp(join(tmpdir(), 'sealkeeper-vou229-')),
+      );
+      try {
+        const userHome = join(dir, 'home');
+        vi.stubEnv('HOME', userHome);
+        vi.stubEnv('USERPROFILE', userHome);
+        cwd = join(dir, 'work');
+        await mkdir(cwd, { recursive: true });
+        await mkdir(join(userHome, '.aws'), { recursive: true });
+        const hidden = join(userHome, '.aws', 'credentials');
+        await writeFile(hidden, 'aws_secret_access_key = x');
+        const outside = join(dir, 'text.txt');
+        await writeFile(outside, 'The harbor opens at dawn. '.repeat(10));
+        const big = join(cwd, 'big.txt');
+        await writeFile(big, '');
+        await truncate(big, MAX_INPUT_FILE_BYTES + 1);
+        const post = (file: string, ...extra: string[]) =>
+          run(
+            'tasks',
+            'post',
+            '--template',
+            'summarise',
+            '--input',
+            `@${file}`,
+            '--yes',
+            ...extra,
+          );
+
+        const secret = await post(hidden, '--allow-outside-cwd');
+        expect(secret.code).toBe(1);
+        expect(secret.err).toContain(`refusing to read ${hidden}`);
+        expect(secret.err).toContain('a hidden file or folder in your home');
+        const tooBig = await post(big);
+        expect(tooBig.code).toBe(1);
+        expect(tooBig.err).toContain(
+          `the most allowed is ${MAX_INPUT_FILE_BYTES}`,
+        );
+        const away = await post(outside);
+        expect(away.code).toBe(1);
+        expect(away.err).toContain('outside the current directory');
+        expect(api.requests).toEqual([]);
+
+        const allowed = await post(outside, '--allow-outside-cwd');
+        expect(allowed.code).toBe(0);
+        expect(api.posts()).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
     });
 
     it('refuses a template without --yes and without a terminal, before anything else', async () => {

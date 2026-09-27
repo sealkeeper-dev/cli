@@ -1,8 +1,8 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import {
   AgentRef,
+  MAX_TASK_SPEC_BYTES,
   PostTaskRequest,
   TASK_DEFAULT_TTL_HOURS,
   TASK_MAX_TTL_DAYS,
@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { type Input, readYesNo } from '../ask.js';
 import { requireConfig } from '../cli-config.js';
+import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
 import {
   containsPrivateKey,
@@ -67,6 +68,7 @@ type PostOptions = {
   verify?: string;
   template?: string;
   input?: string;
+  allowOutsideCwd?: boolean;
   yes?: boolean;
   expiresHours?: string;
   for?: string;
@@ -122,6 +124,10 @@ export function register(
     .option(
       '--input <text>',
       'the input for --template, as text or @file, for the templates that take one',
+    )
+    .option(
+      '--allow-outside-cwd',
+      'let --input @file read a file outside the current directory',
     )
     .option('--yes', 'post a --template task without asking, for agents')
     .option(
@@ -319,7 +325,7 @@ async function templatePost(
   }
   let text: string | undefined;
   if (options.input !== undefined) {
-    const read = await readTextArg(options.input);
+    const read = await readTextArg(options.input, options.allowOutsideCwd);
     if ('error' in read) cmd.error(read.error);
     text = read.text;
   }
@@ -372,29 +378,35 @@ const draftOf = (task: TemplateTask): Draft => ({
   verification: task.verification,
 });
 
-// Text given inline, or @path for a file's contents. A file inside the
-// SealKeeper home is never read, and text holding the private key is
-// refused, since the text becomes a public spec.
+// The most bytes an --input file may hold. Twice the spec cap leaves room
+// for the Windows line ends a template drops, and a file larger than that
+// could never fit in a spec.
+export const MAX_INPUT_FILE_BYTES = 2 * MAX_TASK_SPEC_BYTES;
+
+// Text given inline, or @path for a file's contents. The file must pass
+// the rules in file-guard.ts, the same as tasks submit --file, so nothing
+// in the SealKeeper home or a hidden folder of the user's home is read,
+// nothing outside the current directory without --allow-outside-cwd and
+// nothing larger than MAX_INPUT_FILE_BYTES. Text holding the private key
+// is refused, since the text becomes a public spec.
 async function readTextArg(
   value: string,
+  allowOutsideCwd = false,
 ): Promise<{ text: string } | { error: string }> {
   if (!value.startsWith('@')) {
     return (await containsPrivateKey(value))
       ? { error: KEY_IN_TASK }
       : { text: value };
   }
-  const file = value.slice(1);
-  const home = await insideHome(file);
-  if (home !== null) return { error: keyFile(file, home) };
-  try {
-    const text = await readFile(file, 'utf8');
-    if (await containsPrivateKey(text)) return { error: KEY_IN_TASK };
-    return { text };
-  } catch (error) {
-    return {
-      error: `could not read the input file ${file}, ${(error as Error).message}`,
-    };
-  }
+  const read = await readGuardedFile(value.slice(1), {
+    maxBytes: MAX_INPUT_FILE_BYTES,
+    refusing: 'refusing to read',
+    what: 'the input file',
+    allowOutsideCwd,
+  });
+  if ('error' in read) return read;
+  if (await containsPrivateKey(read.text)) return { error: KEY_IN_TASK };
+  return read;
 }
 
 // A question on stderr, with the answer typed after it.
@@ -421,7 +433,7 @@ export async function guidedPost(
   cmd: Command,
   deps: TasksDeps,
   input: Input,
-  options: Pick<PostOptions, 'expiresHours' | 'for'> = {},
+  options: Pick<PostOptions, 'expiresHours' | 'for' | 'allowOutsideCwd'> = {},
   why = true,
 ): Promise<void> {
   const config = await requireConfig(cmd);
@@ -448,7 +460,10 @@ export async function guidedPost(
   stdout('');
 
   const template = await askTemplate(input);
-  const task = template === null ? null : await askTask(input, template);
+  const task =
+    template === null
+      ? null
+      : await askTask(input, template, options.allowOutsideCwd);
   const assignee =
     task === null
       ? null
@@ -495,6 +510,7 @@ async function askTemplate(input: Input): Promise<Template | null> {
 async function askTask(
   input: Input,
   template: Template,
+  allowOutsideCwd = false,
 ): Promise<TemplateTask | null> {
   if (template.input === 'none') return template.make(undefined);
   const hint = template.inputHint ?? 'the input';
@@ -510,7 +526,7 @@ async function askTask(
     if (value === '') {
       return template.input === 'optional' ? template.make(undefined) : null;
     }
-    const read = await readTextArg(value);
+    const read = await readTextArg(value, allowOutsideCwd);
     if ('error' in read) {
       stdout(`${read.error}.`);
       continue;
