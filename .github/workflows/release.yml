@@ -1,11 +1,13 @@
-# Publishes the CLI to npm when a GitHub release is published on this
-# repository. See docs/release.md in the monorepo, Moving to Trusted
-# Publishing.
+# Stages the CLI on npm when a GitHub release is published on this
+# repository. A maintainer then approves the stage on npmjs.com, and only
+# then is the version public. See docs/release.md in the monorepo, Moving
+# to Trusted Publishing.
 #
-# There is no npm token. npm accepts the publish through a short lived OIDC
+# There is no npm token. npm accepts the upload through a short lived OIDC
 # token from this workflow (Trusted Publishing), and attaches a provenance
 # attestation that points at this run. On npmjs.com the package's trusted
-# publisher is this repository, this file and the npm environment.
+# publisher is this repository, this file and the npm environment, with
+# direct npm publish left off, so this workflow can only stage.
 name: Release
 
 on:
@@ -51,7 +53,6 @@ jobs:
           fi
       - run: npm ci
       # prepublishOnly runs lint, typecheck, the tests and the build first.
-      # A pre-release goes to the next dist-tag, never to latest.
-      - run: npm publish --provenance --access public --tag "$DIST_TAG"
-        env:
-          DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+      # This uploads the version as a stage and publishes nothing. The
+      # maintainer approves it with npm stage approve, see docs/release.md.
+      - run: npm stage publish . --provenance --access public
