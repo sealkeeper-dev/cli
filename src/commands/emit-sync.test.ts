@@ -736,6 +736,28 @@ describe('emit and sync', () => {
       expect(sleeps).toEqual([]);
     });
 
+    it('shows the API message for a limit longer than it waits, as at the daily cap', async () => {
+      await initialise();
+      await seed(1);
+      server.reply = () => ({
+        status: 429,
+        body: {
+          error: {
+            code: 'rate_limited',
+            message:
+              'Daily cap of 50000 events per agent reached, it resets at the end of the UTC day',
+          },
+        },
+        headers: { 'Retry-After': String(3 * 3600 + 60) },
+      });
+      const { code, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(sleeps).toEqual([]);
+      expect(err).toContain(
+        'the API is rate limiting this agent for 3 hours 1 minute, it says Daily cap of 50000 events per agent reached, it resets at the end of the UTC day, 1 event pending',
+      );
+    });
+
     it('skips an event too old for the API at an index and sends the rest', async () => {
       await initialise();
       // Just inside the margin, so it is sent, and older than the API's

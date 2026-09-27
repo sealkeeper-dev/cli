@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { Command } from 'commander';
 import { type Paths, paths, readConfig } from '../config.js';
 import { exists } from '../files.js';
+import { deleteKey as removeKey } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { SchedulerError } from '../routine-scheduler.js';
@@ -14,12 +15,15 @@ import {
   uninstallJob,
 } from './routine.js';
 
-// Removes the local session. config.json, cursor.json, cursor-offset.json,
-// credential.json, score.json, inbox.json, post-prompt.json, goal.json and
-// operator-slug.json go, and the daily routine job when one is installed,
-// since it would run for nobody. The log, nudge.json and the routine's
-// limits and allowlist stay, and so does the key unless --delete-key and
-// --yes are both given. There is no prompt, the --yes flag is the
+// Removes the local session. config.json, credential.json, score.json,
+// inbox.json, post-prompt.json, goal.json and operator-slug.json go, and
+// the daily routine job when one is installed, since it would run for
+// nobody. nudge.json and the routine's limits and allowlist stay. The key,
+// the log and the cursor stay too, so a later init brings the same
+// identity back and sync goes on where it was. --delete-key with --yes
+// also deletes the key, every copy of it (key.<time>.bak and key.<id>.tmp),
+// the log and the cursor, as agent delete does, so a new key never signs
+// the events the old one logged. There is no prompt, the --yes flag is the
 // confirmation, and everything removed is printed.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
@@ -49,15 +53,20 @@ export function register(
         // After a plain logout only the key and the log are left. The key
         // must still be deletable then, or no command could remove it.
         if (deleteKey && (await exists(p.key))) {
-          const removed = await removeSession(p, true);
+          const { removed, keyCopies } = await removeSession(p, true);
           if (json) {
             stdout(
-              JSON.stringify({ loggedOut: false, removed, keyDeleted: true }),
+              JSON.stringify({
+                loggedOut: false,
+                removed,
+                keyDeleted: true,
+                keyCopies,
+              }),
             );
           } else {
-            stdout(
-              `deleted the key at ${p.key}, the identity of this agent is gone for good`,
-            );
+            for (const line of deletedKeyLines(p, 'this agent', keyCopies)) {
+              stdout(line);
+            }
           }
           return;
         }
@@ -79,7 +88,7 @@ export function register(
       if (options.deleteKey && !options.yes) {
         this.error(
           [
-            `--delete-key would delete the key at ${p.key} along with the local session.`,
+            `--delete-key would delete the key at ${p.key}, any copies of it and the log at ${p.log} along with the local session.`,
             `The identity of ${identity} would be gone for good and its track record could not be extended.`,
             `Nothing was deleted. Run ${cli('logout --delete-key --yes')} to go ahead.`,
           ].join('\n'),
@@ -99,7 +108,7 @@ export function register(
         }
         throw error;
       }
-      const removed = await removeSession(p, deleteKey);
+      const { removed, keyCopies } = await removeSession(p, deleteKey);
 
       if (json) {
         stdout(
@@ -107,6 +116,7 @@ export function register(
             loggedOut: true,
             removed,
             keyDeleted: deleteKey,
+            ...(deleteKey ? { keyCopies } : {}),
             routineJob,
           }),
         );
@@ -117,9 +127,9 @@ export function register(
         for (const line of jobLines(routineJob)) stdout(line);
       }
       if (deleteKey) {
-        stdout(
-          `deleted the key at ${p.key}, the identity of ${identity} is gone for good`,
-        );
+        for (const line of deletedKeyLines(p, identity, keyCopies)) {
+          stdout(line);
+        }
       } else {
         stdout(
           `kept the key at ${p.key} and the log at ${p.log}, run ${cli('init')} to sign in again`,
@@ -128,26 +138,51 @@ export function register(
     });
 }
 
-// Removes the session files and, when asked, the key. config.json goes last
-// so a run cut short can be repeated. Returns the names of the files that
-// existed.
-async function removeSession(p: Paths, deleteKey: boolean): Promise<string[]> {
+// What logout --delete-key says it deleted. Each copy of the key is named
+// by its full path, since each held the private seed.
+function deletedKeyLines(
+  p: Paths,
+  identity: string,
+  keyCopies: string[],
+): string[] {
+  return [
+    `deleted the key at ${p.key}, the identity of ${identity} is gone for good`,
+    ...keyCopies.map((file) => `deleted the key copy at ${file}`),
+    `deleted the log at ${p.log}`,
+  ];
+}
+
+// Removes the session files and, when asked, the key with its copies, the
+// cursor and the log. A kept key keeps the cursor, so sync goes on where it
+// was after the next init. config.json goes last so a run cut short can be
+// repeated. removed names the files and folders that existed, keyCopies
+// the full paths of the key copies deleted.
+async function removeSession(
+  p: Paths,
+  deleteKey: boolean,
+): Promise<{ removed: string[]; keyCopies: string[] }> {
   const targets = [
-    p.cursor,
-    p.cursorOffset,
     p.credential,
     p.score,
     p.inbox,
     p.postPrompt,
     p.goal,
     p.operatorSlug,
-    ...(deleteKey ? [p.key] : []),
-    p.config,
+    ...(deleteKey ? [p.cursor, p.cursorOffset, p.log] : []),
   ];
   const removed: string[] = [];
-  for (const target of targets) {
+  const remove = async (target: string) => {
     if (await exists(target)) removed.push(basename(target));
-    await rm(target, { force: true });
+    await rm(target, { recursive: true, force: true });
+  };
+  for (const target of targets) await remove(target);
+  let keyCopies: string[] = [];
+  if (deleteKey) {
+    const hadKey = await exists(p.key);
+    keyCopies = await removeKey(p);
+    if (hadKey) removed.push(basename(p.key));
+    removed.push(...keyCopies.map((file) => basename(file)));
   }
-  return removed;
+  await remove(p.config);
+  return { removed, keyCopies };
 }

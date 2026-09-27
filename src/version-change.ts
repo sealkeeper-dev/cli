@@ -32,7 +32,7 @@ export async function changeVersion(options: {
     version: options.version,
     issuedAt: new Date().toISOString(),
   });
-  const agent = await options.api.changeAgentVersion(
+  const agent = await options.api.patchAgent(
     options.config.agentId,
     await options.signer.sign(request),
   );

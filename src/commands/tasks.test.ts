@@ -20,6 +20,7 @@ import {
   decodeTasksCursor,
   encodeTasksCursor,
   MAX_SUBMISSION_BYTES,
+  MAX_TASK_SPEC_BYTES,
   PostTaskRequest,
   publicVerification,
   readAudience,
@@ -1577,6 +1578,81 @@ describe('tasks pull, submit and post', () => {
         const allowed = await post(outside, '--allow-outside-cwd');
         expect(allowed.code).toBe(0);
         expect(api.posts()).toHaveLength(1);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads --spec and --verify schema: files under the same rules (VOU-241)', async () => {
+      const dir = await realpath(
+        await mkdtemp(join(tmpdir(), 'sealkeeper-vou241-')),
+      );
+      try {
+        const userHome = join(dir, 'home');
+        vi.stubEnv('HOME', userHome);
+        vi.stubEnv('USERPROFILE', userHome);
+        cwd = join(dir, 'work');
+        await mkdir(cwd, { recursive: true });
+        await mkdir(join(userHome, '.config'), { recursive: true });
+        const hidden = join(userHome, '.config', 'spec.json');
+        await writeFile(hidden, '{"source":"x"}');
+        const outside = join(dir, 'spec.json');
+        await writeFile(outside, '{"source":"https://example.com"}');
+        const schema = join(dir, 'schema.json');
+        await writeFile(schema, '{"type":"object"}');
+        const big = join(cwd, 'big.json');
+        await writeFile(big, '');
+        await truncate(big, MAX_TASK_SPEC_BYTES + 1);
+        const post = (spec: string, verify: string, ...extra: string[]) =>
+          run(
+            'tasks',
+            'post',
+            '--type',
+            'extract',
+            '--spec',
+            spec,
+            '--verify',
+            verify,
+            ...extra,
+          );
+        const inline = '{"source":"https://example.com"}';
+
+        const secret = await post(
+          `@${hidden}`,
+          'counterparty',
+          '--allow-outside-cwd',
+        );
+        expect(secret.code).toBe(1);
+        expect(secret.err).toContain(`refusing to read ${hidden}`);
+        expect(secret.err).toContain('a hidden file or folder in your home');
+        const tooBig = await post(`@${big}`, 'counterparty');
+        expect(tooBig.code).toBe(1);
+        expect(tooBig.err).toContain(
+          `the most allowed is ${MAX_TASK_SPEC_BYTES}`,
+        );
+        const folder = await post(`@${cwd}`, 'counterparty');
+        expect(folder.code).toBe(1);
+        expect(folder.err).toContain('it is not a regular file');
+        const away = await post(`@${outside}`, 'counterparty');
+        expect(away.code).toBe(1);
+        expect(away.err).toContain('outside the current directory');
+        const awaySchema = await post(inline, `schema:@${schema}`);
+        expect(awaySchema.code).toBe(1);
+        expect(awaySchema.err).toContain(`refusing to read ${schema}`);
+        expect(api.requests).toEqual([]);
+
+        const allowed = await post(
+          `@${outside}`,
+          `schema:@${schema}`,
+          '--allow-outside-cwd',
+        );
+        expect(allowed.code).toBe(0);
+        const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+        expect(payload.spec).toEqual({ source: 'https://example.com' });
+        expect(payload.verification).toEqual({
+          kind: 'schema',
+          jsonSchema: { type: 'object' },
+        });
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

@@ -26,6 +26,10 @@ import { SealClaims, WellKnown } from './responses.js';
 // Cached keys are fetched again once they are older than this, or sooner
 // when a SEAL names a kid they do not have.
 export const KEYS_MAX_AGE_MS = 24 * 3600 * 1000;
+// When the API cannot be reached, cached keys stand in until they are this
+// old. A key SealKeeper has since withdrawn is trusted at most this long
+// offline.
+export const KEYS_OFFLINE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const KEYS_TIMEOUT_MS = 10_000;
 
 export type SealCheck = {
@@ -261,8 +265,12 @@ function parseWellKnown(raw: string): WellKnown | null {
   }
 }
 
+// origin is the origin of the API URL the keys came from, so keys fetched
+// from one API are never used to check a SEAL for another. A cache written
+// before it existed does not parse and is fetched again.
 const CachedKeys = z.object({
   v: z.literal(1),
+  origin: z.string().min(1),
   fetchedAt: z.iso.datetime(),
   wellKnown: WellKnown,
 });
@@ -276,38 +284,56 @@ type LoadKeysOptions = {
   kid: string;
 };
 
-// The cached keys while they are under a day old and know the kid.
-// Otherwise fetches them from the API and caches them. When the fetch fails
-// it falls back to cached keys that know the kid, with one line on stderr.
-// Throws KeysError when there are no usable keys at all.
+// The cached keys while they came from the same API origin, are under a
+// day old and know the kid. Otherwise fetches them from the API and caches
+// them with that origin. When the fetch fails it falls back to cached keys
+// from the same origin that know the kid and are under
+// KEYS_OFFLINE_MAX_AGE_MS old, with one line on stderr. A copy dated later
+// than now is never used. Throws KeysError
+// when there are no usable keys at all.
 export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
-  const cached = await readCachedKeys(options.paths);
-  const knowsKid = (w: WellKnown) => w.keys.some((k) => k.kid === options.kid);
-  if (
-    cached &&
-    options.nowMs - Date.parse(cached.fetchedAt) < KEYS_MAX_AGE_MS &&
-    knowsKid(cached.wellKnown)
-  ) {
-    return cached.wellKnown;
-  }
-
   const api = createApiClient({
     apiUrl: options.apiUrl,
     fetch: options.fetch,
     timeoutMs: KEYS_TIMEOUT_MS,
   });
+  const origin = originOf(api.apiUrl);
+  const read = await readCachedKeys(options.paths);
+  const cached =
+    read !== null &&
+    read.origin === origin &&
+    read.wellKnown.keys.some((k) => k.kid === options.kid)
+      ? read
+      : null;
+  // A copy stamped later than now was fetched while the clock ran ahead, so
+  // its age is unknown. It counts as too old for both limits and is fetched
+  // again.
+  const fetchedMs = cached ? Date.parse(cached.fetchedAt) : 0;
+  const future = cached !== null && fetchedMs > options.nowMs;
+  const age = future
+    ? Number.POSITIVE_INFINITY
+    : cached
+      ? options.nowMs - fetchedMs
+      : 0;
+  if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;
+
   let fresh: WellKnown;
   try {
     fresh = await api.getWellKnown();
   } catch (error) {
-    if (cached && knowsKid(cached.wellKnown)) {
+    if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) {
       stderr(
         `warning: could not fetch the SealKeeper keys, using the copy fetched at ${cached.fetchedAt}`,
       );
       return cached.wellKnown;
     }
+    const stale = !cached
+      ? ''
+      : future
+        ? `, and the copy fetched at ${cached.fetchedAt} is dated in the future`
+        : `, and the copy fetched at ${cached.fetchedAt} is more than ${KEYS_OFFLINE_MAX_AGE_MS / (24 * 3600 * 1000)} days old`;
     throw new KeysError(
-      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}`,
+      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}${stale}`,
     );
   }
 
@@ -317,6 +343,7 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
       options.paths.wellKnown,
       `${JSON.stringify({
         v: 1,
+        origin,
         fetchedAt: new Date(options.nowMs).toISOString(),
         wellKnown: fresh,
       })}\n`,
@@ -326,6 +353,16 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
     // A home that cannot be written only costs a fetch next time.
   }
   return fresh;
+}
+
+// The origin of an API URL, or the URL itself when it does not parse, in
+// which case the fetch fails anyway.
+function originOf(apiUrl: string): string {
+  try {
+    return new URL(apiUrl).origin;
+  } catch {
+    return apiUrl;
+  }
 }
 
 async function readCachedKeys(

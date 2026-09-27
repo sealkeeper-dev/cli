@@ -302,18 +302,37 @@ export async function countPendingLines(
 }
 
 // The events appended on one UTC day, in line order. An empty list when the
-// day has no file.
+// day has no file. Warnings go through options.warn, stderr when unset.
 export async function readDay(
   date: string,
   p: Paths = paths(),
+  options: Pick<ReadOptions, 'warn'> = {},
 ): Promise<Event[]> {
   const events: Event[] = [];
   for await (const entry of fileEntries(
     p.logFile(Day.parse(date)),
     0,
-    stderr,
+    options.warn ?? stderr,
   )) {
     events.push(entry.event);
+  }
+  return events;
+}
+
+// The events of the day file for first and of every later day file, in
+// append order. After a clock that ran ahead was put back, new events land
+// in the newest day file, whose name is still in the future, so a read of
+// "today" has to run through it, not stop at the day of now.
+export async function readDaysFrom(
+  first: string,
+  p: Paths = paths(),
+  options: Pick<ReadOptions, 'warn'> = {},
+): Promise<Event[]> {
+  const from = `${Day.parse(first)}.jsonl`;
+  const events: Event[] = [];
+  for (const name of await listDayFiles(p)) {
+    if (name < from) continue;
+    events.push(...(await readDay(name.slice(0, 10), p, options)));
   }
   return events;
 }
@@ -348,6 +367,33 @@ export async function* pendingEvents(
     }
     yield* fileEntries(path, start, warn);
   }
+}
+
+// Moves the cursor past every event in the log, for a new key that must
+// never sign and send the events an old key logged, as after init --force.
+// A cursor.json that does not parse is replaced. Returns how many events
+// were still waiting to be sent.
+export async function cursorToEnd(
+  p: Paths = paths(),
+  now: Date = new Date(),
+): Promise<number> {
+  try {
+    await readCursor(p);
+  } catch (error) {
+    if (!(error instanceof CursorError)) throw error;
+    await rm(p.cursor, { force: true });
+    await rm(p.cursorOffset, { force: true });
+  }
+  let last: LogPosition | null = null;
+  let skipped = 0;
+  for await (const entry of pendingEvents(p, { now, warn: () => {} })) {
+    last = entry.position;
+    skipped++;
+  }
+  if (last !== null) {
+    await writeCursor({ v: CURSOR_VERSION, lastAcked: last }, p);
+  }
+  return skipped;
 }
 
 // Moves the cursor past the day files too old to send. Every read already

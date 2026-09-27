@@ -29,7 +29,7 @@ import {
 // anything reads it, with the loose schemas in responses.ts, so a field the
 // API adds later never breaks this CLI.
 
-const API_URL_ENV = 'SEALKEEPER_API_URL';
+export const API_URL_ENV = 'SEALKEEPER_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
 
 type ApiIssue = ErrorIssue;
@@ -63,8 +63,33 @@ export function resolveApiUrl(
   );
 }
 
+// What a request got back. json is undefined when the body is not JSON.
+export type RawResponse = { status: number; json: unknown; headers: Headers };
+
+export type RequestOptions = {
+  // Sent as the JSON body. A request with a body is a POST unless method
+  // says otherwise.
+  body?: unknown;
+  method?: string;
+  // Overrides the client's timeout for this request.
+  timeoutMs?: number;
+};
+
 export type ApiClient = {
   apiUrl: string;
+  // One request to path, with the rules every request follows. https only,
+  // or http to this machine, a redirect is never followed and throws an
+  // ApiError naming the new address, and a request that gets no answer
+  // throws network_error. Any status comes back as it is.
+  request(path: string, options?: RequestOptions): Promise<RawResponse>;
+  // request, then the answer parsed with schema. A status outside ok
+  // (200 when left out) or a body that does not parse throws an ApiError,
+  // with Retry-After kept.
+  call<S extends z.ZodType>(
+    path: string,
+    schema: S,
+    options?: RequestOptions & { ok?: number[] },
+  ): Promise<z.output<S>>;
   registerAgent(envelope: string): Promise<AgentResponse>;
   getAgent(agentId: string): Promise<AgentResponse>;
   postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
@@ -98,11 +123,9 @@ export type ApiClient = {
     envelope: string,
   ): Promise<TaskSubmissionResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
-  renameAgent(agentId: string, envelope: string): Promise<AgentResponse>;
-  // PATCH /v1/agents/:id with a signed { version, issuedAt }.
-  changeAgentVersion(agentId: string, envelope: string): Promise<AgentResponse>;
-  // PATCH /v1/agents/:id with a signed { runtime, issuedAt }.
-  changeAgentRuntime(agentId: string, envelope: string): Promise<AgentResponse>;
+  // PATCH /v1/agents/:id, which renames the agent, moves its version or
+  // sets its runtime, whichever the signed payload asks for.
+  patchAgent(agentId: string, envelope: string): Promise<AgentResponse>;
   // DELETE /v1/agents/:id, signed. deleted on 204, gone on 404. Anything
   // else throws.
   deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
@@ -120,7 +143,10 @@ export function createApiClient(options: {
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   let serverDate: number | null = null;
 
-  async function request(path: string, body?: unknown, method?: string) {
+  async function request(
+    path: string,
+    { body, method, timeoutMs: timeout }: RequestOptions = {},
+  ): Promise<RawResponse> {
     if (!isSecureApiUrl(apiUrl)) {
       throw new ApiError(
         0,
@@ -144,7 +170,7 @@ export function createApiClient(options: {
         // registration, to wherever the server points. manual hands the
         // redirect back unfollowed, so the new address can be named.
         redirect: 'manual',
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(timeout ?? timeoutMs),
       });
     } catch (error) {
       throw new ApiError(
@@ -164,39 +190,29 @@ export function createApiClient(options: {
     return { status: res.status, json, headers: res.headers };
   }
 
-  // A task route. ok lists the statuses that carry a task, anything else is
-  // an error. Signed writes send the envelope as the whole body.
-  async function taskRequest(
+  async function call<S extends z.ZodType>(
     path: string,
-    ok: number[],
-    envelope?: string,
-  ): Promise<TaskResponse> {
-    const { status, json, headers } = await request(
-      path,
-      envelope === undefined ? undefined : { envelope },
-    );
-    if (!ok.includes(status)) throw toError(status, json, headers);
-    const result = TaskResponse.safeParse(json);
-    if (!result.success) throw toError(status, undefined);
+    schema: S,
+    { ok = [200], ...rest }: RequestOptions & { ok?: number[] } = {},
+  ): Promise<z.output<S>> {
+    const { status, json, headers } = await request(path, rest);
+    if (!ok.includes(status)) throw apiErrorOf(status, json, headers);
+    const result = schema.safeParse(json);
+    if (!result.success) throw apiErrorOf(status, undefined, headers);
     return result.data;
   }
 
-  // PATCH /v1/agents/:id, which renames the agent, moves its version or
-  // sets its runtime, whichever the signed payload asks for.
-  async function patchAgent(
-    agentId: string,
-    envelope: string,
-  ): Promise<AgentResponse> {
-    const { status, json, headers } = await request(
-      `/v1/agents/${encodeURIComponent(agentId)}`,
-      { envelope },
-      'PATCH',
-    );
-    if (status !== 200) throw toError(status, json, headers);
-    const result = AgentResponse.safeParse(json);
-    if (!result.success) throw toError(status, undefined);
-    return result.data;
-  }
+  const agentPath = (agentId: string, action = '') =>
+    `/v1/agents/${encodeURIComponent(agentId)}${action}`;
+  const taskPath = (taskId: string, action = '') =>
+    `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
+  // A task route. ok lists the statuses that carry a task. Signed writes
+  // send the envelope as the whole body.
+  const taskCall = (path: string, ok: number[], envelope?: string) =>
+    call(path, TaskResponse, {
+      ok,
+      ...(envelope === undefined ? {} : { body: { envelope } }),
+    });
 
   /*
    * GET /v1/tasks. The query is checked with the API's own schema before it
@@ -222,151 +238,94 @@ export function createApiClient(options: {
     if (seed !== undefined) search.set('seed', String(seed));
     // The cursor goes back as the API sent it. The parse above checked it.
     if (query.cursor !== undefined) search.set('cursor', query.cursor);
-    const { status, json, headers } = await request(
+    const page = await call(
       `/v1/tasks?${search.toString()}`,
+      ListTasksResponse,
     );
-    if (status !== 200) throw toError(status, json, headers);
-    const result = ListTasksResponse.safeParse(json);
-    if (!result.success) throw toError(status, undefined);
-    return {
-      tasks: result.data.tasks,
-      nextCursor: result.data.nextCursor ?? null,
-    };
-  }
-
-  const taskPath = (taskId: string, action = '') =>
-    `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
-
-  function toError(status: number, json: unknown, headers?: Headers): ApiError {
-    const parsed = ErrorResponse.safeParse(json);
-    if (parsed.success) {
-      const { code, message, issues } = parsed.data.error;
-      return new ApiError(
-        status,
-        code,
-        message,
-        issues,
-        retryAfter(headers?.get('Retry-After')),
-      );
-    }
-    return new ApiError(
-      status,
-      'bad_response',
-      `the SealKeeper API returned an unexpected response (HTTP ${status})`,
-    );
+    return { tasks: page.tasks, nextCursor: page.nextCursor ?? null };
   }
 
   return {
     apiUrl,
+    request,
+    call,
     serverDate: () => serverDate,
-    async registerAgent(envelope) {
-      const { status, json } = await request('/v1/agents', { envelope });
-      if (status !== 200 && status !== 201) throw toError(status, json);
-      const agent = AgentResponse.safeParse(json);
-      if (!agent.success) throw toError(status, undefined);
-      return agent.data;
-    },
+    registerAgent: (envelope) =>
+      call('/v1/agents', AgentResponse, {
+        body: { envelope },
+        ok: [200, 201],
+      }),
     // The public agent answer, with live counts and operatedBySealKeeper.
-    async getAgent(agentId) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}`,
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const agent = AgentResponse.safeParse(json);
-      if (!agent.success) throw toError(status, undefined);
-      return agent.data;
-    },
-    async postEvents(envelopes) {
-      const { status, json, headers } = await request('/v1/events', {
-        envelopes,
-      });
-      if (status !== 200) throw toError(status, json, headers);
-      const result = EventsBatchResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
+    getAgent: (agentId) => call(agentPath(agentId), AgentResponse),
+    postEvents: (envelopes) =>
+      call('/v1/events', EventsBatchResponse, { body: { envelopes } }),
     // GET /v1/agents/:id/seal. /credential is the old path of the same
     // answer, kept by the API for one release.
-    async getCredential(agentId) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}/seal`,
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = CredentialResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
-    async getWellKnown() {
-      const { status, json, headers } = await request(WELL_KNOWN_PATH);
-      if (status !== 200) throw toError(status, json, headers);
-      const result = WellKnown.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
-    async getScore(agentId) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}/score`,
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = ScoreResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
-    async getGoal(agentId) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}/goal`,
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = GoalResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
+    getCredential: (agentId) =>
+      call(agentPath(agentId, '/seal'), CredentialResponse),
+    getWellKnown: () => call(WELL_KNOWN_PATH, WellKnown),
+    getScore: (agentId) => call(agentPath(agentId, '/score'), ScoreResponse),
+    getGoal: (agentId) => call(agentPath(agentId, '/goal'), GoalResponse),
     async listTasks(query = {}) {
       return (await listTasksPage(query)).tasks;
     },
     listTasksPage,
-    getTask: (taskId) => taskRequest(taskPath(taskId), [200]),
+    getTask: (taskId) => taskCall(taskPath(taskId), [200]),
     // 201 for a new task, 200 when a retried post returns the existing one.
-    postTask: (envelope) => taskRequest('/v1/tasks', [200, 201], envelope),
+    postTask: (envelope) => taskCall('/v1/tasks', [200, 201], envelope),
     claimTask: (taskId, envelope) =>
-      taskRequest(taskPath(taskId, '/claim'), [200], envelope),
+      taskCall(taskPath(taskId, '/claim'), [200], envelope),
     submitTask: (taskId, envelope) =>
-      taskRequest(taskPath(taskId, '/submit'), [200], envelope),
+      taskCall(taskPath(taskId, '/submit'), [200], envelope),
     postOutcome: (taskId, envelope) =>
-      taskRequest(taskPath(taskId, '/outcome'), [200], envelope),
-    async readSubmission(taskId, envelope) {
-      const { status, json, headers } = await request(
-        taskPath(taskId, '/submission'),
-        { envelope },
-      );
-      if (status !== 200) throw toError(status, json, headers);
-      const result = TaskSubmissionResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
-    async postRating(envelope) {
-      const { status, json, headers } = await request('/v1/ratings', {
-        envelope,
-      });
-      if (status !== 200) throw toError(status, json, headers);
-      const result = RatingResponse.safeParse(json);
-      if (!result.success) throw toError(status, undefined);
-      return result.data;
-    },
-    renameAgent: (agentId, envelope) => patchAgent(agentId, envelope),
-    changeAgentVersion: (agentId, envelope) => patchAgent(agentId, envelope),
-    changeAgentRuntime: (agentId, envelope) => patchAgent(agentId, envelope),
+      taskCall(taskPath(taskId, '/outcome'), [200], envelope),
+    readSubmission: (taskId, envelope) =>
+      call(taskPath(taskId, '/submission'), TaskSubmissionResponse, {
+        body: { envelope },
+      }),
+    postRating: (envelope) =>
+      call('/v1/ratings', RatingResponse, { body: { envelope } }),
+    patchAgent: (agentId, envelope) =>
+      call(agentPath(agentId), AgentResponse, {
+        body: { envelope },
+        method: 'PATCH',
+      }),
     async deleteAgent(agentId, envelope) {
-      const { status, json, headers } = await request(
-        `/v1/agents/${encodeURIComponent(agentId)}`,
-        { envelope },
-        'DELETE',
-      );
+      const { status, json, headers } = await request(agentPath(agentId), {
+        body: { envelope },
+        method: 'DELETE',
+      });
       if (status === 204) return 'deleted';
       if (status === 404) return 'gone';
-      throw toError(status, json, headers);
+      throw apiErrorOf(status, json, headers);
     },
   };
+}
+
+// The ApiError for an answer the caller cannot use. The API's own code,
+// message and issues when the body is its error shape, with the
+// Retry-After of a 429, else bad_response.
+export function apiErrorOf(
+  status: number,
+  json: unknown,
+  headers?: Headers,
+): ApiError {
+  const parsed = ErrorResponse.safeParse(json);
+  if (parsed.success) {
+    const { code, message, issues } = parsed.data.error;
+    return new ApiError(
+      status,
+      code,
+      message,
+      issues,
+      retryAfter(headers?.get('Retry-After')),
+    );
+  }
+  return new ApiError(
+    status,
+    'bad_response',
+    `the SealKeeper API returned an unexpected response (HTTP ${status})`,
+  );
 }
 
 // An HTTP Date header in ms since the epoch, or null when it is missing or

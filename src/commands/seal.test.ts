@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
-import { KEYS_MAX_AGE_MS } from '../seal.js';
+import { KEYS_MAX_AGE_MS, KEYS_OFFLINE_MAX_AGE_MS } from '../seal.js';
 import type { SealDeps } from './seal.js';
 import { NO_SEAL } from './seal-show.js';
 
@@ -638,6 +638,7 @@ describe('sealkeeper seal', () => {
       const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
       expect(cache).toEqual({
         v: 1,
+        origin: API_URL,
         fetchedAt: new Date(NOW).toISOString(),
         wellKnown: published(),
       });
@@ -687,6 +688,100 @@ describe('sealkeeper seal', () => {
       expect(code).toBe(0);
       expect(out.split('\n')[0]).toBe('valid SEAL');
       expect(err).toMatch(/^warning: could not fetch the SealKeeper keys/);
+    });
+
+    it('never uses keys cached from another API origin (cli-core-7)', async () => {
+      await run(fetchFn, 'seal', 'verify', await currentSeal());
+      const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+      await writeFile(
+        paths().wellKnown,
+        JSON.stringify({ ...cache, origin: 'https://other.test' }),
+      );
+      const offlineRun = await run(
+        offline,
+        'seal',
+        'verify',
+        await currentSeal(),
+      );
+      expect(offlineRun.code).toBe(2);
+      expect(offlineRun.err).not.toContain('using the copy');
+
+      requests = [];
+      expect(
+        (await run(fetchFn, 'seal', 'verify', await currentSeal())).code,
+      ).toBe(0);
+      expect(requests).toEqual([WELL_KNOWN]);
+      const rewritten = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+      expect(rewritten.origin).toBe(API_URL);
+    });
+
+    it('fetches again over a cache from before the origin was kept', async () => {
+      await run(fetchFn, 'seal', 'verify', await currentSeal());
+      const { origin: _, ...old } = JSON.parse(
+        await readFile(paths().wellKnown, 'utf8'),
+      );
+      await writeFile(paths().wellKnown, JSON.stringify(old));
+      requests = [];
+      expect(
+        (await run(fetchFn, 'seal', 'verify', await currentSeal())).code,
+      ).toBe(0);
+      expect(requests).toEqual([WELL_KNOWN]);
+    });
+
+    it('falls back offline to cached keys only up to 7 days old', async () => {
+      await run(fetchFn, 'seal', 'verify', await currentSeal());
+      expect(KEYS_OFFLINE_MAX_AGE_MS).toBe(7 * 24 * 3600 * 1000);
+      now = NOW + KEYS_OFFLINE_MAX_AGE_MS - 60_000;
+      const inside = await run(
+        offline,
+        'seal',
+        'verify',
+        await currentSealAt(now),
+      );
+      expect(inside.code).toBe(0);
+      expect(inside.err).toMatch(
+        /^warning: could not fetch the SealKeeper keys/,
+      );
+
+      now = NOW + KEYS_OFFLINE_MAX_AGE_MS + 60_000;
+      const past = await run(
+        offline,
+        'seal',
+        'verify',
+        await currentSealAt(now),
+      );
+      expect(past.code).toBe(2);
+      expect(past.err).toContain(`is more than 7 days old`);
+    });
+
+    it('refetches cached keys dated in the future and never falls back to them', async () => {
+      await run(fetchFn, 'seal', 'verify', await currentSeal());
+      const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+      const ahead = new Date(NOW + 3 * KEYS_OFFLINE_MAX_AGE_MS).toISOString();
+      await writeFile(
+        paths().wellKnown,
+        JSON.stringify({ ...cache, fetchedAt: ahead }),
+      );
+
+      const offlineRun = await run(
+        offline,
+        'seal',
+        'verify',
+        await currentSeal(),
+      );
+      expect(offlineRun.code).toBe(2);
+      expect(offlineRun.err).not.toContain('using the copy');
+      expect(offlineRun.err).toContain(
+        `the copy fetched at ${ahead} is dated in the future`,
+      );
+
+      requests = [];
+      expect(
+        (await run(fetchFn, 'seal', 'verify', await currentSeal())).code,
+      ).toBe(0);
+      expect(requests).toEqual([WELL_KNOWN]);
+      const rewritten = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+      expect(rewritten.fetchedAt).toBe(new Date(NOW).toISOString());
     });
 
     it('reads the SEAL from stdin when the argument is -', async () => {

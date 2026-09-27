@@ -98,6 +98,10 @@ type SyncOptions = {
   // Where warnings go. stderr by default. The background sync, which runs
   // inside someone else's agent, passes one that prints nothing.
   warn?: (text: string) => void;
+  // Called before each round, before each request of a round and before a
+  // rate limit wait. The sync lock passes one that stamps the lock file, so
+  // a long sync keeps it.
+  onRound?: () => Promise<void>;
 };
 
 export function pendingText(count: number): string {
@@ -209,6 +213,7 @@ async function sendRounds(
     if (options.deadline !== undefined && now() >= options.deadline) {
       return result;
     }
+    await options.onRound?.();
     const pending = await readPending(MAX_BATCH_EVENTS, p, reading());
     let lastRound = false;
     if (until) {
@@ -260,6 +265,9 @@ async function sendRounds(
     // machine clock gets it in (judgeRefusal). Otherwise the next round of
     // the outer loop picks up the rest.
     for (;;) {
+      // Stamped before every attempt too, since one round can post several
+      // times, with split retries and a rate limit wait between them.
+      await options.onRound?.();
       try {
         const sent = await options.api.postEvents(envelopes);
         result.accepted += sent.accepted;
@@ -311,13 +319,14 @@ async function sendRounds(
           const wait = error.retryAfterSec ?? maxWait;
           if (wait <= maxWait) {
             waited = true;
+            await options.onRound?.();
             await options.sleep(wait * 1000);
             continue;
           }
         }
         throw new SyncError(
           error.code,
-          stopMessage(error, now()),
+          stopMessage(error, now(), maxWait),
           await countPending(p),
           result,
         );
@@ -461,7 +470,11 @@ function rejectedIndex(error: ApiError, size: number): number | null {
   return lowest;
 }
 
-function stopMessage(error: ApiError, now: number): string {
+// maxWaitSec is the longest Retry-After this sync would wait for. A
+// rate_limited refusal past it is not a burst the next try gets through,
+// such as the daily event cap, so the API's own message says why and when
+// it clears.
+function stopMessage(error: ApiError, now: number, maxWaitSec = 0): string {
   switch (error.code) {
     case 'occurred_at_out_of_window':
       return 'the API refused an event as ahead of its clock, check this machine clock and sync again, nothing was skipped';
@@ -472,8 +485,14 @@ function stopMessage(error: ApiError, now: number): string {
       return error.message;
     case 'unknown_agent':
       return `the API does not know this agent, run ${cli('init')}`;
-    case 'rate_limited':
-      return 'the API is rate limiting this agent, try again later';
+    case 'rate_limited': {
+      const wait = error.retryAfterSec;
+      if (wait === null || wait <= maxWaitSec) {
+        return 'the API is rate limiting this agent, try again later';
+      }
+      const said = error.message.trim().replace(/\.$/, '');
+      return `the API is rate limiting this agent for ${durationText(wait * 1000)}, it says ${said}`;
+    }
     case 'wrong_audience':
       return `the API refused events signed for another address, check apiUrl, ${error.message}`;
     default:

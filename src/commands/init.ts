@@ -22,7 +22,12 @@ import {
   RUNTIME_RULES,
   recordRuntimeAsked,
 } from '../agent-runtime.js';
-import { ApiError, createApiClient, resolveApiUrl } from '../api.js';
+import {
+  API_URL_ENV,
+  ApiError,
+  createApiClient,
+  resolveApiUrl,
+} from '../api.js';
 import {
   cleanAnswer,
   type Input,
@@ -53,6 +58,7 @@ import {
   Config,
   ConfigError,
   DEFAULT_AGENT_VERSION,
+  DEFAULT_API_URL,
   handleOf,
   handleUrl,
   INSECURE_API_URL,
@@ -65,6 +71,7 @@ import {
   readRoutineConfig,
   writeConfig,
 } from '../config.js';
+import { readEnv } from '../env.js';
 import { isDirectory, tildePath } from '../files.js';
 import { repoName } from '../git-remote.js';
 import {
@@ -89,6 +96,7 @@ import {
   operatorAgentCount,
   readLiveAgent,
 } from '../live-agent.js';
+import { cursorToEnd } from '../log.js';
 import { setNudge } from '../nudge.js';
 import { currentOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
 import {
@@ -138,6 +146,17 @@ export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to
 // records which versions were accepted, the CLI never sends them (VOU-121).
 export const CONSENT =
   'Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).';
+
+// Said by init --force when the log held events the old key never sent.
+export function leftBehindLine(n: number): string {
+  return `${n} unsent event${n === 1 ? '' : 's'} of the old key ${n === 1 ? 'stays' : 'stay'} in the log and ${n === 1 ? 'is' : 'are'} never sent under the new key.`;
+}
+
+// Said on stderr before the device flow when the API is not the SealKeeper
+// one, since the GitHub token goes to it (cli-core-3).
+export function otherApiLine(apiUrl: string): string {
+  return `This sign in sends your GitHub token to the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
+}
 
 // The human output. The welcome box, then the name and the runtime, the
 // terms and the sign in, the registration, what leaves this machine, the Claude Code hooks and what to
@@ -473,24 +492,46 @@ async function init(
   if (!Config.shape.apiUrl.safeParse(apiUrl).success) {
     cmd.error(`invalid API URL ${apiUrl}, ${INSECURE_API_URL}`);
   }
+  // A URL from SEALKEEPER_API_URL alone is used for this run and never
+  // saved, so config.json keeps the old URL or the default, and a variable
+  // left set in one shell does not bind the agent to that API for good.
+  // --api-url is saved.
+  const savedApiUrl =
+    !options.apiUrl?.trim() && readEnv(API_URL_ENV) !== undefined
+      ? previous?.apiUrl
+      : apiUrl;
 
   // With --force the old config describes the old key, so it goes as soon as
   // the new key exists. A failed registration then leaves a key and no
   // config, and a plain init picks up from there. The old key is kept in a
   // backup file, named below.
+  // The log may hold events the old key logged and never sent, so the
+  // cursor moves past them and the new key never signs them as its own.
+  // The same holds for a plain init that makes a key on the spot, as in a
+  // home an older logout --delete-key left with the log and no cursor. A
+  // key made here never owns events already in the log.
   let agentId: string;
   let backup: string | undefined;
+  let leftBehind = 0;
   if (options.force) {
     const created = await createKey({ force: true }, p);
     agentId = created.agentId;
     backup = created.backup;
-    if (backup !== undefined && ui === null) {
+    leftBehind = await cursorToEnd(p);
+    if (ui === null && backup !== undefined) {
       stderr(`the old key is kept at ${backup}`);
     }
     await rm(p.config, { force: true });
   } else {
-    agentId = ((await loadKey(p)) ?? (await createKey({}, p))).agentId;
+    const loaded = await loadKey(p);
+    if (loaded !== null) {
+      agentId = loaded.agentId;
+    } else {
+      agentId = (await createKey({}, p)).agentId;
+      leftBehind = await cursorToEnd(p);
+    }
   }
+  if (ui === null && leftBehind > 0) stderr(leftBehindLine(leftBehind));
 
   let prompt: ((url: string, code: string) => void) | undefined;
   if (ui !== null) {
@@ -499,6 +540,10 @@ async function init(
     if (backup !== undefined) {
       note();
       note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
+    }
+    if (leftBehind > 0) {
+      note();
+      note(s.line`${leftBehindLine(leftBehind)}`);
     }
   }
 
@@ -528,11 +573,19 @@ async function init(
   }
 
   // The terms, right before the device code. On stderr with the device flow
-  // prompts, so --json output stays one object.
+  // prompts, so --json output stays one object. Before them, the API the
+  // token goes to when it is not the SealKeeper one.
+  const otherApi =
+    new URL(apiUrl).origin === DEFAULT_API_URL ? null : otherApiLine(apiUrl);
   if (ui === null) {
+    if (otherApi !== null) stderr(otherApi);
     stderr(CONSENT);
   } else {
     const s = ui.err;
+    if (otherApi !== null) {
+      note();
+      note(s.line`${otherApi}`);
+    }
     note();
     note(s.dim(CONSENT));
     note();
@@ -574,7 +627,9 @@ async function init(
       operatorLogin: agent.operator.login,
       name: agent.name,
       version: agent.version,
-      apiUrl: api.apiUrl,
+      ...(savedApiUrl === undefined
+        ? {}
+        : { apiUrl: savedApiUrl.replace(/\/+$/, '') }),
       registeredAt: agent.createdAt,
     },
     p,
@@ -613,7 +668,7 @@ async function init(
         name: config.name,
         version: config.version,
         runtime: registeredRuntime,
-        apiUrl: config.apiUrl,
+        apiUrl: api.apiUrl,
         profileUrl,
         nextSteps: nextSteps(hooks, deps),
       }),

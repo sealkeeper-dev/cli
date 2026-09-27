@@ -1,4 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+
+import { randomUUID } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
@@ -23,6 +25,7 @@ import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
 import { proveCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
+  DEFAULT_API_URL,
   paths,
   readConfig,
   readNudge,
@@ -37,6 +40,7 @@ import {
   MISSING_CLIENT_ID,
 } from '../github-device.js';
 import { loadKey } from '../identity.js';
+import { appendEvent, countPending } from '../log.js';
 import { isManaged } from '../managed.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
@@ -56,6 +60,7 @@ import {
   HOOKS_NOT_INSTALLED,
   HOOKS_QUESTION,
   isYesByDefault,
+  leftBehindLine,
   NEXT_HOOKS,
   NEXT_NPX,
   NEXT_POST,
@@ -66,6 +71,7 @@ import {
   NUDGE_INTRO,
   NUDGE_NOT_ON,
   nameQuestion,
+  otherApiLine,
   ROUTINE_INTRO,
   ROUTINE_NOT_INSTALLED,
   ROUTINE_QUESTION,
@@ -255,7 +261,11 @@ function fakeFetch(world: World): typeof fetch {
     }
     const agentRoute =
       /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
-    if (agentRoute && world.agentMovedTo !== undefined && !init.method) {
+    if (
+      agentRoute &&
+      world.agentMovedTo !== undefined &&
+      (init.method ?? 'GET') === 'GET'
+    ) {
       return new Response(null, {
         status: 301,
         headers: {
@@ -471,12 +481,13 @@ describe('sealkeeper init', () => {
         version: '0.1.0',
       },
     ]);
+    // The API URL came from SEALKEEPER_API_URL alone, so it is not saved.
     expect(await readConfig(paths(home))).toEqual({
       agentId,
       operatorLogin: 'alice',
       name: 'scout',
       version: '0.1.0',
-      apiUrl: API_URL,
+      apiUrl: DEFAULT_API_URL,
       registeredAt: '2026-09-23T10:00:00.000Z',
     });
     expect((await stat(paths(home).key)).mode & 0o777).toBe(0o600);
@@ -574,6 +585,56 @@ describe('sealkeeper init', () => {
     const result = await run(world, 'init', '--api-url', API_URL);
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
+  });
+
+  it('uses SEALKEEPER_API_URL for the run but never saves it (cli-core-3)', async () => {
+    const result = await run(world, 'init', '--json');
+    expect(result.code).toBe(0);
+    expect(world.fetchUrls).toContain(`${API_URL}/v1/agents`);
+    expect(JSON.parse(result.out)).toMatchObject({ apiUrl: API_URL });
+    expect((await readConfig(paths(home)))?.apiUrl).toBe(DEFAULT_API_URL);
+  });
+
+  it('keeps the old URL under --force when SEALKEEPER_API_URL is set', async () => {
+    vi.stubEnv('SEALKEEPER_API_URL', '');
+    expect((await run(world, 'init', '--api-url', API_URL)).code).toBe(0);
+    vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+    world = newWorld();
+    expect((await run(world, 'init', '--force')).code).toBe(0);
+    expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
+  });
+
+  it('names the API origin on stderr before the device code when it is not SealKeeper', async () => {
+    const result = await run(world, 'init', '--api-url', API_URL);
+    expect(result.code).toBe(0);
+    const line = otherApiLine(API_URL);
+    expect(line).toBe(
+      'This sign in sends your GitHub token to the API at https://api.test, not https://api.sealkeeper.run.',
+    );
+    const lines = result.err.split('\n');
+    const warned = lines.indexOf(`  ${line}`);
+    const device = lines.findIndex((l) =>
+      l.includes('Open https://github.com/login/device'),
+    );
+    expect(warned).toBeGreaterThanOrEqual(0);
+    expect(warned).toBeLessThan(device);
+    expect(result.out).not.toContain(line);
+
+    world = newWorld();
+    await rm(paths(home).config, { force: true });
+    const json = await run(world, 'init', '--json');
+    const jsonLines = json.err.split('\n');
+    expect(jsonLines.indexOf(line)).toBeGreaterThanOrEqual(0);
+    expect(jsonLines.indexOf(line)).toBeLessThan(jsonLines.indexOf(CONSENT));
+  });
+
+  it('says nothing about the API when it is SealKeeper', async () => {
+    vi.stubEnv('SEALKEEPER_API_URL', '');
+    // The fake world answers only api.test, so the registration fails after
+    // the device flow. The sign in is what this test looks at.
+    const result = await run(world, 'init', '--json');
+    expect(result.err).toContain(CONSENT);
+    expect(result.err).not.toContain('This sign in sends your GitHub token');
   });
 
   it('signs the registration for the origin of --api-url', async () => {
@@ -740,6 +801,90 @@ describe('sealkeeper init', () => {
     );
   });
 
+  it('--force starts the cursor at the end of the log (cli-core-6)', async () => {
+    expect((await run(world, 'init')).code).toBe(0);
+    const logged = (n: number) => ({
+      event_id: randomUUID(),
+      type: 'tool.call' as const,
+      occurred_at: new Date().toISOString(),
+      version: '0.1.0',
+      payload: { tool: 'Bash', duration_ms: n, ok: true },
+    });
+    await appendEvent(logged(1), paths(home));
+    await appendEvent(logged(2), paths(home));
+    expect(await countPending(paths(home))).toBe(2);
+
+    world = newWorld();
+    const result = await run(world, 'init', '--force');
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(`  ${leftBehindLine(2)}\n`);
+    expect(leftBehindLine(2)).toBe(
+      '2 unsent events of the old key stay in the log and are never sent under the new key.',
+    );
+    expect(await countPending(paths(home))).toBe(0);
+    // What the new key logs is sent as usual.
+    await appendEvent(logged(3), paths(home));
+    expect(await countPending(paths(home))).toBe(1);
+
+    world = newWorld();
+    const again = await run(world, 'init', '--force', '--json');
+    expect(again.code).toBe(0);
+    expect(again.err).toContain(`${leftBehindLine(1)}\n`);
+    expect(await countPending(paths(home))).toBe(0);
+  });
+
+  it('a plain init that makes a key starts the cursor at the end of the log', async () => {
+    // A home an older logout --delete-key left behind, with the log and no
+    // cursor and no key.
+    const logged = (n: number) => ({
+      event_id: randomUUID(),
+      type: 'tool.call' as const,
+      occurred_at: new Date().toISOString(),
+      version: '0.1.0',
+      payload: { tool: 'Bash', duration_ms: n, ok: true },
+    });
+    await appendEvent(logged(1), paths(home));
+    await appendEvent(logged(2), paths(home));
+    await rm(paths(home).cursor, { force: true });
+    expect(await loadKey(paths(home))).toBeNull();
+    expect(await countPending(paths(home))).toBe(2);
+
+    const result = await run(world, 'init');
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(`  ${leftBehindLine(2)}\n`);
+    expect(await countPending(paths(home))).toBe(0);
+    // What the new key logs is sent as usual.
+    await appendEvent(logged(3), paths(home));
+    expect(await countPending(paths(home))).toBe(1);
+
+    // A key already there owns its log, so a plain init that loads it
+    // leaves the cursor alone.
+    await rm(paths(home).config, { force: true });
+    world = newWorld();
+    const again = await run(world, 'init', '--json');
+    expect(again.code).toBe(0);
+    expect(again.err).not.toContain('unsent event');
+    expect(await countPending(paths(home))).toBe(1);
+  });
+
+  it('a plain init with --json names the events left behind on stderr', async () => {
+    await appendEvent(
+      {
+        event_id: randomUUID(),
+        type: 'tool.call' as const,
+        occurred_at: new Date().toISOString(),
+        version: '0.1.0',
+        payload: { tool: 'Bash', duration_ms: 1, ok: true },
+      },
+      paths(home),
+    );
+    const result = await run(world, 'init', '--json');
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(`${leftBehindLine(1)}\n`);
+    expect(result.out).not.toContain('unsent event');
+    expect(await countPending(paths(home))).toBe(0);
+  });
+
   it('--force with --json names the kept key on stderr as before', async () => {
     expect((await run(world, 'init')).code).toBe(0);
     world = newWorld();
@@ -750,7 +895,7 @@ describe('sealkeeper init', () => {
   });
 
   it('--force re-registers against the API URL in the existing config', async () => {
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--api-url', API_URL)).code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
 
     vi.stubEnv('SEALKEEPER_API_URL', '');
@@ -769,7 +914,9 @@ describe('sealkeeper init', () => {
     world = newWorld();
     const result = await run(world, 'init', '--force');
     expect(result.code).toBe(0);
-    expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
+    expect(world.registrations).toHaveLength(1);
+    // SEALKEEPER_API_URL was used and not saved, and there was no old URL.
+    expect((await readConfig(paths(home)))?.apiUrl).toBe(DEFAULT_API_URL);
   });
 
   it('exits 1 naming the env var when there is no client id', async () => {
@@ -2199,6 +2346,8 @@ describe('sealkeeper init', () => {
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
+          This sign in sends your GitHub token to the API at https://api.test, not https://api.sealkeeper.run.
+
           Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
 
           Sign in with GitHub

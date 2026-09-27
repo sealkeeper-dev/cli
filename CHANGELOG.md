@@ -15,6 +15,16 @@
 - The sync preview and `sync --dry-run` say how many pending events are older than 7 days and left out, since sync drops them without sending (VOU-238).
 - `rate` says a rate limit and a refused request time with the same lines as every other signed command (VOU-238).
 - The help for `check --max-incidents` says incidents in the last 90 days, and the README says both counts read 0 until the agent's first scoring run (VOU-241).
+- `init` names the origin of the API on stderr before the GitHub sign in when it is not `https://api.sealkeeper.run`, since the GitHub token goes to it, and no longer saves a URL that came only from `SEALKEEPER_API_URL`, so the config keeps the old URL or the default. `--api-url` is saved as before (VOU-237).
+- `logout` keeps the cursor with the key and the log, so sync goes on where it was after the next `init`. `logout --delete-key --yes` also deletes the log and the cursor, as `agent delete` does, and `init --force` starts the cursor at the end of the log and says how many unsent events of the old key stay behind, so a new key never sends the old agent's events as its own. A plain `init` that makes a new key does the same, as in a home an older `logout --delete-key` left with the log and no key, where the next `sync` used to sign up to 7 days of the old agent's events under the new key (VOU-237).
+- `agent delete` and `logout --delete-key --yes` delete every copy of the key, `key.<time>.bak` from `init --force` and a leftover `key.<id>.tmp`, and name each one. Before, they left the copies and said the identity was gone for good (VOU-237).
+- `seal verify` and `check` use the cached SealKeeper keys only for the API origin they were fetched from, and offline only while the copy is under 7 days old (VOU-237).
+- The private key guard of `tasks submit` and `tasks post` also finds the seed as standard base64, with or without padding, as hex in any case, and the key file line in base64 (VOU-237).
+- `sync` stopped by a rate limit longer than it waits, such as the daily event cap, says for how long and repeats the API's message, which says the cap clears at the end of the UTC day. Before, it said only to try again later (VOU-237).
+- `tasks post --spec @file` and `--verify schema:@file` read only files that pass the rules of `--input @file`, with `--allow-outside-cwd`, and at most 16384 bytes. Before, they read any file outside the SealKeeper home (VOU-237).
+- Outside a routine run, a project below a hidden folder of the home, such as `~/.config/tool/project`, can submit and post files from its own directory. It counts as a project when a `.git` folder or file or a `package.json` sits in the current directory or a parent of it that is still below the hidden folder, so running from `~/.config/gh` or `~/.config/gcloud` still reads nothing there. A refusal for a hidden folder says a file in `.sealkeeper-answers` is always read and names the project markers (VOU-237).
+- `status` and `prove` count claims, submissions and today's events in the newest day file after a clock that ran ahead was put back. Before, they missed everything logged since (VOU-237).
+- A `sync` that runs longer than 2 minutes keeps its lock fresh between rounds, so an automatic sync never joins it, and a sync only ever removes a lock it holds (VOU-237).
 
 ## 0.4.8, 27 September 2026
 

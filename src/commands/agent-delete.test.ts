@@ -257,7 +257,7 @@ describe('sealkeeper agent delete', () => {
         'handle           alice/app',
         'profile          https://sealkeeper.run/agents/alice/app',
         'on SealKeeper    the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
-        `on this machine  the key, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache, in ${home}`,
+        `on this machine  the key and any copies of it, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache, in ${home}`,
         'deleted alice/app',
         '',
       ].join('\n'),
@@ -352,6 +352,22 @@ describe('sealkeeper agent delete', () => {
     expect(await remaining()).toEqual([]);
   });
 
+  it('deletes every copy of the key and names each (cli-core-13)', async () => {
+    const p = paths(home);
+    const bak = join(home, 'key.2026-09-20T10-00-00-000Z.bak');
+    const tmp = join(home, `key.${'0'.repeat(8)}.tmp`);
+    await writeFile(bak, 'old seed\n');
+    await writeFile(tmp, 'seed\n');
+    const { code, out } = await run('agent', 'delete', '--yes');
+    expect(code).toBe(0);
+    expect(out).toContain(
+      `deleted the key copy at ${tmp}\ndeleted the key copy at ${bak}\ndeleted alice/app\n`,
+    );
+    expect(await exists(bak)).toBe(false);
+    expect(await exists(tmp)).toBe(false);
+    expect(await exists(p.key)).toBe(false);
+  });
+
   it('keeps every local file when the API fails', async () => {
     for (const status of [500, 403]) {
       api.deleteStatus = status;
@@ -395,6 +411,7 @@ describe('sealkeeper agent delete', () => {
     expect(JSON.parse(out)).toEqual({
       handle: 'alice/app',
       deleted: true,
+      keyCopies: [],
       routineJob: null,
     });
     expect(err).toContain('handle           alice/app');

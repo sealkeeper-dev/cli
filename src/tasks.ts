@@ -1,6 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import type { Command } from 'commander';
 import {
   type ApiClient,
@@ -13,7 +12,7 @@ import { requireConfig } from './cli-config.js';
 import { type Config, type Paths, paths } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
-import { dayOf, readDay } from './log.js';
+import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
 import { agentHandle, type TaskResponse } from './responses.js';
 
@@ -82,30 +81,6 @@ export async function recordEvent(input: EmitInput): Promise<void> {
     stderr(
       `warning: could not record ${input.type} in the local log: ${(error as Error).message}`,
     );
-  }
-}
-
-// A JSON argument given inline or as @path to a file.
-export async function readJsonArg(
-  cmd: Command,
-  value: string,
-  label: string,
-): Promise<unknown> {
-  let text = value;
-  if (value.startsWith('@')) {
-    const file = value.slice(1);
-    try {
-      text = await readFile(file, 'utf8');
-    } catch (error) {
-      cmd.error(
-        `could not read ${label} file ${file}: ${(error as Error).message}`,
-      );
-    }
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    cmd.error(`${label} is not valid JSON`);
   }
 }
 
@@ -181,13 +156,15 @@ export async function unsubmittedClaims(
   p: Paths = paths(),
 ): Promise<string[]> {
   const claimed = new Set<string>();
-  for (let i = CLAIM_LOOKBACK_DAYS - 1; i >= 0; i--) {
-    const day = dayOf(new Date(now.getTime() - i * DAY_MS));
-    for (const event of await readDay(day, p)) {
-      if (event.type === 'task.claimed') claimed.add(event.payload.task_id);
-      if (event.type === 'task.submitted') {
-        claimed.delete(event.payload.task_id);
-      }
+  const first = dayOf(
+    new Date(now.getTime() - (CLAIM_LOOKBACK_DAYS - 1) * DAY_MS),
+  );
+  // Through the newest day file, which after a clock rollback is named for
+  // a day still to come and holds the latest claims and submissions.
+  for (const event of await readDaysFrom(first, p)) {
+    if (event.type === 'task.claimed') claimed.add(event.payload.task_id);
+    if (event.type === 'task.submitted') {
+      claimed.delete(event.payload.task_id);
     }
   }
   return [...claimed];

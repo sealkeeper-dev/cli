@@ -241,7 +241,7 @@ export async function changeRuntime(options: {
     runtime: options.runtime,
     issuedAt: new Date().toISOString(),
   });
-  return options.api.changeAgentRuntime(
+  return options.api.patchAgent(
     options.agentId,
     await options.signer.sign(request),
   );

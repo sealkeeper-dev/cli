@@ -2,7 +2,7 @@
 import { constants } from 'node:fs';
 import { open, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { insideHome } from './key-guard.js';
 import { activeRoutineRun } from './routine.js';
 
@@ -18,7 +18,13 @@ import { activeRoutineRun } from './routine.js';
 // - nothing inside the SealKeeper home, which holds the private key
 // - in a routine run, nothing outside <cwd>/.sealkeeper-answers
 // - otherwise nothing in a hidden file or folder at the top of the user's
-//   home, such as .ssh, .config, .aws or .gnupg, whatever the flags
+//   home, such as .ssh, .config, .aws or .gnupg, whatever the flags,
+//   except a file inside the current directory when that directory is a
+//   project below such a folder, as a checkout under ~/.config is. It is a
+//   project when a .git (folder or file) or a package.json sits in it or in
+//   a parent of it that is still below the hidden folder. So ~/.config/gh
+//   or ~/.config/gcloud stays closed when run from inside it. The answers
+//   folder is always read
 // - otherwise nothing outside the current directory, unless the caller
 //   passed allowOutsideCwd
 // - only a regular file, never a device, a fifo or a folder
@@ -59,6 +65,30 @@ function hiddenInHome(userHome: string, target: string): string | null {
   return top.startsWith('.') ? resolve(userHome, top) : null;
 }
 
+// The files that make a folder a project, for the exception above.
+const PROJECT_MARKERS = ['.git', 'package.json'];
+
+// True when cwd, or a parent of it strictly below hidden, holds a project
+// marker. hidden itself never counts, so a marker in ~/.config opens
+// nothing.
+async function projectBelow(hidden: string, cwd: string): Promise<boolean> {
+  for (let dir = cwd; dir !== hidden && within(hidden, dir); ) {
+    for (const marker of PROJECT_MARKERS) {
+      if (await exists(resolve(dir, marker))) return true;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return false;
+}
+
+const exists = (path: string) =>
+  stat(path).then(
+    () => true,
+    () => false,
+  );
+
 // The text of file when the rules above allow it, else why not, in one
 // line. Nothing is read from a refused file.
 export async function readGuardedFile(
@@ -96,13 +126,21 @@ export async function readGuardedFile(
       );
     }
   } else if (!within(answers, target)) {
-    const hidden = hiddenInHome(
-      await real(rules.userHome ?? homedir()),
-      target,
-    );
-    if (hidden !== null) {
+    const userHome = await real(rules.userHome ?? homedir());
+    const hidden = hiddenInHome(userHome, target);
+    // A project below a hidden folder, never the folder itself, so running
+    // in ~/.ssh does not open ~/.ssh and running in ~/.config/gh does not
+    // open ~/.config/gh.
+    const cwdHidden = hiddenInHome(userHome, cwd);
+    const ownProject =
+      hidden !== null &&
+      cwdHidden !== null &&
+      cwd !== cwdHidden &&
+      within(cwd, target) &&
+      (await projectBelow(cwdHidden, cwd));
+    if (hidden !== null && !ownProject) {
       return refuse(
-        `it is inside ${hidden}, a hidden file or folder in your home that can hold keys and tokens`,
+        `it is inside ${hidden}, a hidden file or folder in your home that can hold keys and tokens. A file in ${answers} is always read, and a project below a hidden folder, one with a .git or a package.json, reads its own files`,
       );
     }
     if (rules.allowOutsideCwd !== true && !within(cwd, target)) {

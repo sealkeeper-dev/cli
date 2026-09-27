@@ -127,10 +127,11 @@ export async function gatedSync(
       now,
       deadline: start + options.deadlineMs,
       warn: options.warn,
+      onRound: () => keepLock(p, now),
     });
     return 'synced';
   } finally {
-    await rm(join(p.home, LOCK_FILE), { force: true });
+    await releaseLock(p);
   }
 }
 
@@ -142,9 +143,11 @@ export class SyncBusyError extends Error {
 // Runs send under the lock the gated sync takes, so a sync a person started
 // never runs next to a gated one and moves the cursor back. It waits for a
 // gated sync that holds the lock, up to waitMs, and then throws
-// SyncBusyError. The throttle does not apply.
+// SyncBusyError. The throttle does not apply. send gets keepLock, which it
+// calls between rounds, so a sync that runs longer than LOCK_STALE_MS is
+// never taken for a dead one.
 export async function withSyncLock<T>(
-  send: () => Promise<T>,
+  send: (keepLock: () => Promise<void>) => Promise<T>,
   options: { paths?: Paths; now?: () => number; waitMs?: number } = {},
 ): Promise<T> {
   const p = options.paths ?? paths();
@@ -159,10 +162,37 @@ export async function withSyncLock<T>(
     await delay(LOCK_POLL_MS);
   }
   try {
-    return await send();
+    return await send(() => keepLock(p, now));
   } finally {
-    await rm(join(p.home, LOCK_FILE), { force: true });
+    await releaseLock(p);
   }
+}
+
+// True when the lock file names this process.
+async function holdsLock(file: string): Promise<boolean> {
+  try {
+    const pid = Number.parseInt((await readFile(file, 'utf8')).trim(), 10);
+    return pid === process.pid;
+  } catch {
+    return false;
+  }
+}
+
+// Stamps the lock with now, while it is still this process's. A lock
+// another process took over after this one was held up is left alone.
+async function keepLock(p: Paths, now: () => number): Promise<void> {
+  const file = join(p.home, LOCK_FILE);
+  if (!(await holdsLock(file))) return;
+  const at = now() / 1000;
+  await utimes(file, at, at).catch(() => {});
+}
+
+// Removes the lock only when it is still this process's, so a sync that
+// lost its lock to a takeover never frees the lock of the one that took
+// it.
+async function releaseLock(p: Paths): Promise<void> {
+  const file = join(p.home, LOCK_FILE);
+  if (await holdsLock(file)) await rm(file, { force: true });
 }
 
 async function recentlyStarted(p: Paths, now: number): Promise<boolean> {

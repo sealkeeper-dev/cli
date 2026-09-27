@@ -43,7 +43,7 @@ import {
   countPending,
   dayOf,
   readCursor,
-  readDay,
+  readDaysFrom,
 } from '../log.js';
 import { refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
@@ -199,7 +199,8 @@ async function readStatus(
   });
   const [events, pending, cursor, score, live, unsubmitted, inbox, goal] =
     await Promise.all([
-      readDay(day, p),
+      // From today through the newest day file, see readDaysFrom.
+      readDaysFrom(day, p),
       countPending(p, { now }),
       readCursor(p),
       scorePromise,

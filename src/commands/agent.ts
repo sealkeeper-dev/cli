@@ -26,6 +26,7 @@ import {
   profileUrl,
   writeConfig,
 } from '../config.js';
+import { deleteKey } from '../identity.js';
 import { cli } from '../invocation.js';
 import { readOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
@@ -61,7 +62,7 @@ const defaultAgentDeps: AgentDeps = {
 const DELETE_ON_SERVER =
   'the agent, its events, the tasks it posted, its claims, its scores and its SEAL';
 const DELETE_ON_MACHINE =
-  'the key, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache';
+  'the key and any copies of it, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache';
 
 // The agent's own identity on SealKeeper. Its name and its version.
 export function register(
@@ -90,7 +91,7 @@ export function register(
       });
       let renamed: AgentResponse;
       try {
-        renamed = await api.renameAgent(
+        renamed = await api.patchAgent(
           config.agentId,
           await signer.sign(request),
         );
@@ -303,7 +304,7 @@ export function register(
           `the daily routine job could not be removed: ${error.message}. Run ${cli('routine remove')} to try again`,
         );
       }
-      await removeLocal(p);
+      const keyCopies = await removeLocal(p);
       if (routineJob !== null && !json) {
         for (const line of jobLines(routineJob)) stdout(line);
       }
@@ -312,6 +313,7 @@ export function register(
           JSON.stringify({
             handle,
             deleted: true,
+            keyCopies,
             routineJob,
             ...(routineJobError === null ? {} : { routineJobError }),
           }),
@@ -323,6 +325,7 @@ export function register(
           `${handle} was already gone from SealKeeper, removed the files on this machine`,
         );
       }
+      for (const file of keyCopies) stdout(`deleted the key copy at ${file}`);
       stdout(`deleted ${handle}`);
     });
 
@@ -352,8 +355,9 @@ async function stillRegistered(
 
 // Everything under the SealKeeper home that belongs to this agent. The home
 // directory itself stays. config.json goes last, so a run cut short leaves
-// a config that still names the agent.
-async function removeLocal(p: Paths): Promise<void> {
+// a config that still names the agent. Returns the full paths of the key
+// copies (key.<time>.bak, key.<id>.tmp) it deleted with the key.
+async function removeLocal(p: Paths): Promise<string[]> {
   for (const target of [
     p.credential,
     p.wellKnown,
@@ -374,9 +378,10 @@ async function removeLocal(p: Paths): Promise<void> {
     p.cursorOffset,
     p.sessions,
     p.log,
-    p.key,
-    p.config,
   ]) {
     await rm(target, { recursive: true, force: true });
   }
+  const copies = await deleteKey(p);
+  await rm(p.config, { force: true });
+  return copies;
 }

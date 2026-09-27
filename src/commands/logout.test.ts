@@ -19,7 +19,7 @@ import {
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
-import { createKey } from '../identity.js';
+import { createKey, loadKey } from '../identity.js';
 import { appendEvent, writeCursor } from '../log.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
@@ -89,7 +89,7 @@ describe('logout', () => {
   // A full local session. Config, key, cursor, credential, score, inbox,
   // the post prompt time and a log.
   async function initialise(): Promise<void> {
-    ({ agentId } = await createKey({}, p));
+    ({ agentId } = (await loadKey(p)) ?? (await createKey({}, p)));
     await writeConfig(
       {
         agentId,
@@ -119,7 +119,6 @@ describe('logout', () => {
 
   const SESSION = () => [
     p.config,
-    p.cursor,
     p.credential,
     p.score,
     p.inbox,
@@ -137,16 +136,17 @@ describe('logout', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('removes the six session files and keeps the key and the log', async () => {
+  it('removes the session files and keeps the key, the log and the cursor', async () => {
     await initialise();
     const { code, out, err } = await run('logout');
     expect(code).toBe(0);
     expect(err).toBe('');
     for (const file of SESSION()) expect(await exists(file)).toBe(false);
     expect(await exists(p.key)).toBe(true);
+    expect(await exists(p.cursor)).toBe(true);
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(
-      'logged out, removed cursor.json, credential.json, score.json, inbox.json, post-prompt.json, config.json',
+      'logged out, removed credential.json, score.json, inbox.json, post-prompt.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
     expect(out).toContain('run npx sealkeeper init to sign in again');
@@ -167,15 +167,51 @@ describe('logout', () => {
     }
   });
 
-  it('--delete-key --yes removes the key too and keeps the log', async () => {
+  it('--delete-key --yes removes the key, the cursor and the log too (cli-core-6)', async () => {
     await initialise();
     const { code, out } = await run('logout', '--delete-key', '--yes');
     expect(code).toBe(0);
-    for (const file of [...SESSION(), p.key]) {
+    for (const file of [...SESSION(), p.key, p.cursor, p.log]) {
       expect(await exists(file)).toBe(false);
     }
-    expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(`the identity of agent ${agentId} is gone for good`);
+    expect(out).toContain(`deleted the log at ${p.log}\n`);
+  });
+
+  it('--delete-key --yes removes every copy of the key and names each (cli-core-13)', async () => {
+    await initialise();
+    // Two forced keys leave the first two behind as backups.
+    const first = await createKey({ force: true }, p);
+    await new Promise((done) => setTimeout(done, 5));
+    const second = await createKey({ force: true }, p);
+    const tmp = `${p.key}.${randomUUID()}.tmp`;
+    await writeFile(tmp, 'seed\n');
+    // Not a copy of the key, so it stays.
+    await writeFile(join(home, 'keyring.bak'), 'other\n');
+    const copies = [first.backup, second.backup, tmp].sort();
+    const { code, out } = await run(
+      'logout',
+      '--delete-key',
+      '--yes',
+      '--json',
+    );
+    expect(code).toBe(0);
+    const printed = JSON.parse(out);
+    expect(printed.keyCopies).toEqual(copies);
+    expect(printed.removed).toEqual(
+      expect.arrayContaining([
+        'key',
+        ...copies.map((c) => c?.slice(home.length + 1)),
+      ]),
+    );
+    for (const file of copies) expect(await exists(String(file))).toBe(false);
+    expect(await exists(join(home, 'keyring.bak'))).toBe(true);
+
+    await initialise();
+    const again = await createKey({ force: true }, p);
+    const text = await run('logout', '--delete-key', '--yes');
+    expect(text.out).toContain(`deleted the key copy at ${again.backup}\n`);
+    expect(await exists(String(again.backup))).toBe(false);
   });
 
   it('removes the stored operator slug', async () => {
@@ -187,10 +223,22 @@ describe('logout', () => {
     expect(await exists(p.operatorSlug)).toBe(false);
   });
 
-  it('removes the cursor offset file', async () => {
+  it('keeps the cursor offset file with the key, and removes it with the key', async () => {
     await initialise();
     await writeFile(p.cursorOffset, '{}\n');
-    const { code, out } = await run('logout', '--json');
+    const kept = await run('logout', '--json');
+    expect(kept.code).toBe(0);
+    expect(JSON.parse(kept.out).removed).not.toContain('cursor-offset.json');
+    expect(await exists(p.cursorOffset)).toBe(true);
+
+    await initialise();
+    await writeFile(p.cursorOffset, '{}\n');
+    const { code, out } = await run(
+      'logout',
+      '--delete-key',
+      '--yes',
+      '--json',
+    );
     expect(code).toBe(0);
     expect(JSON.parse(out).removed).toContain('cursor-offset.json');
     expect(await exists(p.cursorOffset)).toBe(false);
@@ -209,13 +257,7 @@ describe('logout', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       loggedOut: true,
-      removed: [
-        'cursor.json',
-        'score.json',
-        'inbox.json',
-        'post-prompt.json',
-        'config.json',
-      ],
+      removed: ['score.json', 'inbox.json', 'post-prompt.json', 'config.json'],
       keyDeleted: false,
       routineJob: null,
     });
@@ -336,10 +378,11 @@ describe('logout', () => {
     expect(code).toBe(0);
     expect(err).toBe('');
     expect(out).toBe(
-      `deleted the key at ${p.key}, the identity of this agent is gone for good\n`,
+      `deleted the key at ${p.key}, the identity of this agent is gone for good\ndeleted the log at ${p.log}\n`,
     );
     expect(await exists(p.key)).toBe(false);
-    expect(await readdir(p.log)).toHaveLength(1);
+    expect(await exists(p.log)).toBe(false);
+    expect(await exists(p.cursor)).toBe(false);
   });
 
   it('without config, --delete-key alone keeps the key and exits 0', async () => {

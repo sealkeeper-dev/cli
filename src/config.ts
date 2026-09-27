@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { AgentId, agentHandle } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { readEnv } from './env.js';
-import { exists, readIfExists } from './files.js';
+import { readIfExists } from './files.js';
 
 export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
@@ -175,10 +175,6 @@ export const Config = z.looseObject({
 export type Config = z.infer<typeof Config>;
 type ConfigInput = z.input<typeof Config>;
 
-// Keys an earlier build of this release wrote to config.json, which now
-// live in their own files. readConfig moves them out once.
-const MOVED_KEYS = ['nudge', 'routine'] as const;
-
 export class ConfigError extends Error {
   override name = 'ConfigError';
 }
@@ -260,8 +256,7 @@ export async function ensureHome(p: Paths = paths()): Promise<void> {
 
 // Returns null when there is no config yet. Throws ConfigError when the file
 // exists but is not valid JSON or does not match the schema. Keys this
-// version does not know are kept. A nudge or routine key an earlier build
-// wrote is moved to its own file first, see moveSettings.
+// version does not know are kept.
 export async function readConfig(p: Paths = paths()): Promise<Config | null> {
   const raw = await readIfExists(p.config);
   if (raw === null) return null;
@@ -279,85 +274,19 @@ export async function readConfig(p: Paths = paths()): Promise<Config | null> {
       `Invalid config at ${p.config}:\n${z.prettifyError(result.error)}`,
     );
   }
-  return moveSettings(result.data, p);
+  return result.data;
 }
 
 // Validates, then writes config.json atomically. Keys the config was read
-// with are kept, except nudge and routine, which move to their own files
-// first, see moveOut. A key whose file could not be written stays, so it
-// is never lost.
+// with are kept.
 export async function writeConfig(
   input: ConfigInput,
   p: Paths = paths(),
 ): Promise<Config> {
   await ensureHome(p);
-  const config = await moveOut(Config.parse(input), p);
+  const config = Config.parse(input);
   await writeFileAtomic(p.config, `${JSON.stringify(config, null, 2)}\n`);
   return config;
-}
-
-// Where each key that lives in a file of its own goes.
-const MOVED_FILE = {
-  nudge: (p: Paths) => p.nudge,
-  routine: (p: Paths) => p.routine,
-} as const satisfies Record<(typeof MOVED_KEYS)[number], (p: Paths) => string>;
-
-// Writes nudge and routine from config to nudge.json and routine.json,
-// each created exclusively, so a file already there always wins. The
-// routine goes as it was, and readRoutineConfig says what is wrong with it
-// when it does not read. Returns the config without the keys whose file
-// now exists. A key whose file could not be written is kept.
-async function moveOut(config: Config, p: Paths): Promise<Config> {
-  const out: Config = { ...config };
-  for (const key of MOVED_KEYS) {
-    if (!(key in out)) continue;
-    const file = MOVED_FILE[key](p);
-    const value = key === 'nudge' ? { on: out.nudge } : out.routine;
-    const valid = key !== 'nudge' || typeof out.nudge === 'boolean';
-    try {
-      if (valid && !(await exists(file))) {
-        await createFile(file, `${JSON.stringify(value, null, 2)}\n`);
-      }
-    } catch {
-      // Kept in config.json, and the next read tries again.
-    }
-    if (!valid || (await exists(file))) delete out[key];
-  }
-  return out;
-}
-
-// Creates file with mode 600, failing when it is already there. Another
-// process that wrote it first wins.
-async function createFile(file: string, text: string): Promise<void> {
-  let handle: Awaited<ReturnType<typeof open>>;
-  try {
-    handle = await open(file, 'wx', 0o600);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
-    throw error;
-  }
-  try {
-    await handle.writeFile(text, 'utf8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-// The one time move of nudge and routine out of config.json, for a home an
-// earlier build of this release wrote. config.json is rewritten only after
-// the new files are in place, and a key that could not move stays where it
-// was, so nothing is lost and the next read tries again.
-async function moveSettings(config: Config, p: Paths): Promise<Config> {
-  if (!MOVED_KEYS.some((key) => key in config)) return config;
-  try {
-    const moved = await moveOut(config, p);
-    if (MOVED_KEYS.every((key) => key in moved)) return config;
-    await writeFileAtomic(p.config, `${JSON.stringify(moved, null, 2)}\n`);
-    return moved;
-  } catch {
-    return config;
-  }
 }
 
 const NudgeFile = z.looseObject({ on: z.boolean() });

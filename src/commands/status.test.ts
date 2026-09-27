@@ -469,6 +469,23 @@ describe('status', () => {
       );
     });
 
+    it('counts claims and today in the newest day file after a clock rollback', async () => {
+      // A claim logged while the clock ran two days ahead names a day file
+      // still to come. The claim after the rollback lands there too.
+      const ahead = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
+      await appendEvent(
+        event('task.claimed', { task_id: randomUUID(), task_type: 'lint' }),
+        paths(home),
+        ahead,
+      );
+      await claimOnly();
+      const json = JSON.parse(
+        (await run(scoreFetch([], 0), 'status', '--json')).out,
+      );
+      expect(json).toMatchObject({ unsubmittedClaims: 2 });
+      expect(json.counts['task.claimed']).toBe(2);
+    });
+
     it('uses one line for a single unsubmitted claim', async () => {
       await claimOnly();
       expect((await run(scoreFetch([], 0), 'status')).out).toContain(

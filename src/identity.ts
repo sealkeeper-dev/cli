@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { link, open, rename, rm, stat } from 'node:fs/promises';
+import { link, open, readdir, rename, rm, stat } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { getPublicKeyAsync } from '@noble/ed25519';
 import {
   type AgentId,
@@ -97,6 +98,36 @@ async function backupKey(p: Paths): Promise<string | undefined> {
     throw error;
   }
   return backup;
+}
+
+// The copies of the key createKey leaves beside it, key.<time>.bak from
+// --force and key.<uuid>.tmp from a run cut short, as full paths in name
+// order. Each holds a private seed, so deleting the key deletes them too.
+export async function keyCopies(p: Paths = paths()): Promise<string[]> {
+  const dir = dirname(p.key);
+  const name = basename(p.key);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  return names
+    .filter(
+      (n) =>
+        n.startsWith(`${name}.`) && (n.endsWith('.bak') || n.endsWith('.tmp')),
+    )
+    .sort()
+    .map((n) => join(dir, n));
+}
+
+// Deletes the key and every copy keyCopies finds. Returns the full paths of
+// the copies that were there, so the caller can name them.
+export async function deleteKey(p: Paths = paths()): Promise<string[]> {
+  const copies = await keyCopies(p);
+  for (const file of [...copies, p.key]) await rm(file, { force: true });
+  return copies;
 }
 
 // Returns null when there is no key file. Throws KeyError when the file is not

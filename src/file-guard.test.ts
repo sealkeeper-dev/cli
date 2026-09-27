@@ -107,6 +107,79 @@ describe('readGuardedFile (VOU-229)', () => {
     });
   });
 
+  it('reads a project of its own below a hidden home folder, outside a routine only (VOU-241)', async () => {
+    const project = join(userHome, '.config', 'tool', 'project');
+    const own = await write(join(project, 'answer.txt'), 'own');
+    await fs.mkdir(join(project, '.git'), { recursive: true });
+    const sibling = await write(
+      join(userHome, '.config', 'gh', 'hosts.yml'),
+      't',
+    );
+    const at = { ...rules, cwd: project };
+    expect(await readGuardedFile(own, at)).toEqual({ text: 'own' });
+    // The rest of the hidden folder stays closed, also with the flag.
+    const refused = await readGuardedFile(sibling, {
+      ...at,
+      allowOutsideCwd: true,
+    });
+    expect((refused as { error: string }).error).toContain(
+      'a hidden file or folder in your home',
+    );
+    expect((refused as { error: string }).error).toContain(
+      `A file in ${join(project, ANSWERS_DIR)} is always read`,
+    );
+    // A routine run still reads only the answers folder.
+    const routine = await readGuardedFile(own, { ...at, routine: true });
+    expect(routine).toHaveProperty('error');
+    const answer = await write(join(project, ANSWERS_DIR, 'a.txt'), 'a');
+    expect(await readGuardedFile(answer, { ...at, routine: true })).toEqual({
+      text: 'a',
+    });
+  });
+
+  it('reads a project below a hidden folder marked by a package.json in a parent', async () => {
+    const root = join(userHome, '.local', 'src', 'app');
+    await write(join(root, 'package.json'), '{}');
+    const sub = join(root, 'packages', 'cli');
+    const own = await write(join(sub, 'answer.txt'), 'own');
+    expect(await readGuardedFile(own, { ...rules, cwd: sub })).toEqual({
+      text: 'own',
+    });
+    // A .git file, as a worktree or a submodule has, marks a project too.
+    const worktree = join(userHome, '.cache', 'wt');
+    await write(join(worktree, '.git'), 'gitdir: /elsewhere\n');
+    const inTree = await write(join(worktree, 'a.txt'), 'wt');
+    expect(await readGuardedFile(inTree, { ...rules, cwd: worktree })).toEqual({
+      text: 'wt',
+    });
+  });
+
+  it('refuses the files of a credential folder below a hidden home folder, run from inside it', async () => {
+    const gh = join(userHome, '.config', 'gh');
+    const hosts = await write(join(gh, 'hosts.yml'), 'oauth_token: t');
+    const read = await readGuardedFile(hosts, { ...rules, cwd: gh });
+    expect((read as { error: string }).error).toContain(
+      'a hidden file or folder in your home',
+    );
+    expect((read as { error: string }).error).toContain(
+      'one with a .git or a package.json',
+    );
+    // A marker in the hidden folder itself opens nothing below it.
+    await write(join(userHome, '.config', 'package.json'), '{}');
+    expect(await readGuardedFile(hosts, { ...rules, cwd: gh })).toHaveProperty(
+      'error',
+    );
+  });
+
+  it('keeps a hidden home folder closed when it is the current directory itself', async () => {
+    const ssh = join(userHome, '.ssh');
+    const key = await write(join(ssh, 'id_ed25519'), 'k');
+    const read = await readGuardedFile(key, { ...rules, cwd: ssh });
+    expect((read as { error: string }).error).toContain(
+      'a hidden file or folder in your home',
+    );
+  });
+
   it('reads the answers folder of a current directory that is the home', async () => {
     const answer = await write(join(userHome, ANSWERS_DIR, 'a.txt'), 'a');
     expect(await readGuardedFile(answer, { ...rules, cwd: userHome })).toEqual({

@@ -107,8 +107,8 @@ export function register(
       // to one of them and moves the cursor back. It skips their throttle,
       // so a person can always send now.
       try {
-        result = await withSyncLock(() =>
-          syncEvents({ api, sleep: deps.sleep, until }),
+        result = await withSyncLock((keepLock) =>
+          syncEvents({ api, sleep: deps.sleep, until, onRound: keepLock }),
         );
       } catch (error) {
         if (

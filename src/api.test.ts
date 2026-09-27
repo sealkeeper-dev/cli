@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { encodeTasksCursor } from '@sealkeeper/schema';
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import {
   ApiError,
   createApiClient,
@@ -78,6 +79,24 @@ describe('registerAgent', () => {
       status: 403,
       code: 'account_too_new',
       message: 'too new',
+    });
+  });
+
+  it('keeps the Retry-After of a 429 (cli-core-11)', async () => {
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(
+        Response.json(
+          { error: { code: 'rate_limited', message: 'Too many requests' } },
+          { status: 429, headers: { 'Retry-After': '42' } },
+        ),
+      ),
+    });
+    const error = await api.registerAgent('a.b.c').catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      status: 429,
+      code: 'rate_limited',
+      retryAfterSec: 42,
     });
   });
 
@@ -555,5 +574,73 @@ describe('listTasksPage', () => {
     const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
     await expect(api.listTasksPage({ cursor: 'nope' })).rejects.toThrow();
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+});
+
+describe('the request helper (cli-core-11)', () => {
+  it('patches an agent through one patchAgent', async () => {
+    const fetchFn = respond(Response.json(AGENT));
+    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
+    expect(await api.patchAgent(AGENT_ID, 'a.b.c')).toEqual(AGENT);
+    expect(fetchFn).toHaveBeenCalledWith(
+      `https://api.test/v1/agents/${AGENT_ID}`,
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ envelope: 'a.b.c' }),
+        redirect: 'manual',
+      }),
+    );
+  });
+
+  it('parses with the schema given and turns a bad status into ApiError', async () => {
+    const schema = z.object({ n: z.number() });
+    const ok = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(Response.json({ n: 1 })),
+    });
+    expect(await ok.call('/v1/x', schema)).toEqual({ n: 1 });
+    const bad = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(Response.json({ n: 'one' })),
+    });
+    await expect(bad.call('/v1/x', schema)).rejects.toMatchObject({
+      code: 'bad_response',
+    });
+    const refused = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(
+        Response.json(
+          { error: { code: 'rate_limited', message: 'slow down' } },
+          { status: 429, headers: { 'Retry-After': '7' } },
+        ),
+      ),
+    });
+    await expect(refused.call('/v1/x', schema)).rejects.toMatchObject({
+      status: 429,
+      retryAfterSec: 7,
+    });
+  });
+
+  it('takes a timeout per request over the client one', async () => {
+    const seen: (AbortSignal | null | undefined)[] = [];
+    const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+      seen.push(init?.signal);
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(new Error('timed out')),
+        );
+      });
+    }) as typeof fetch;
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: fetchFn,
+      timeoutMs: 60_000,
+    });
+    const started = Date.now();
+    await expect(api.request('/v1/x', { timeoutMs: 20 })).rejects.toMatchObject(
+      { code: 'network_error' },
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(seen).toHaveLength(1);
   });
 });

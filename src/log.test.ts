@@ -28,11 +28,13 @@ import {
   CursorError,
   countPending,
   countPendingLines,
+  cursorToEnd,
   LOG_RETENTION_DAYS,
   pendingEvents,
   pruneLog,
   readCursor,
   readDay,
+  readDaysFrom,
   readPending,
   skipStaleDays,
   writeCursor,
@@ -294,6 +296,37 @@ describe('log', () => {
     await seedTwoDays();
     await writeFile(paths().logFile(DAY2), '{"v":1', { flag: 'a' });
     expect(await countPendingLines()).toBe(5);
+  });
+
+  it('sends the warnings of a day read through the warn option', async () => {
+    await append(event(DAY2, 1));
+    await appendFile(paths().logFile(DAY2), 'not json\n{"v":1,"eve');
+    const seen: string[] = [];
+    await readDay(DAY2, paths(), { warn: (text) => seen.push(text) });
+    expect(seen).toHaveLength(2);
+    expect(seen.some((w) => w.includes('partial'))).toBe(true);
+    expect(warnings()).toEqual([]);
+  });
+
+  it('reads from one day through the newest day file', async () => {
+    const { day1, day2 } = await seedTwoDays();
+    const later = event(TODAY, 9);
+    await append(later, '2026-09-30');
+    expect(ids(await readDaysFrom(DAY2))).toEqual(ids([...day2, later]));
+    expect(ids(await readDaysFrom(DAY1))).toEqual(
+      ids([...day1, ...day2, later]),
+    );
+    expect(await readDaysFrom('2026-10-01')).toEqual([]);
+  });
+
+  it('moves the cursor to the end of the log, also past a broken cursor', async () => {
+    await seedTwoDays();
+    expect(await cursorToEnd()).toBe(5);
+    expect(await countPending()).toBe(0);
+    expect(await cursorToEnd()).toBe(0);
+    await writeFile(paths().cursor, '{ nope');
+    expect(await cursorToEnd()).toBe(5);
+    expect(await countPending()).toBe(0);
   });
 
   it('reads one day', async () => {

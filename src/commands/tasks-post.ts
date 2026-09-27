@@ -40,7 +40,6 @@ import {
   isJsonObject,
   openTaskSession,
   printFields,
-  readJsonArg,
   type TasksDeps,
 } from '../tasks.js';
 
@@ -128,7 +127,7 @@ export function register(
     )
     .option(
       '--allow-outside-cwd',
-      'let --input @file read a file outside the current directory',
+      'let --input, --spec and --verify schema: read an @file outside the current directory',
     )
     .option('--yes', 'post a --template task without asking, for agents')
     .option(
@@ -195,9 +194,18 @@ async function explicitPost(
   if (options.verify.startsWith('schema:')) {
     await refuseHomeFile(cmd, options.verify.slice('schema:'.length));
   }
-  const spec = await readJsonArg(cmd, options.spec, '--spec');
+  const spec = await readJsonArg(
+    cmd,
+    options.spec,
+    '--spec',
+    options.allowOutsideCwd,
+  );
   if (!isJsonObject(spec)) cmd.error('--spec must be a JSON object');
-  const verification = await parseVerify(cmd, options.verify);
+  const verification = await parseVerify(
+    cmd,
+    options.verify,
+    options.allowOutsideCwd,
+  );
   const draft: Draft = {
     taskType: options.type,
     spec,
@@ -381,6 +389,34 @@ const draftOf = (task: TemplateTask): Draft => ({
   spec: { ...task.spec },
   verification: task.verification,
 });
+
+// A JSON argument given inline or as @path to a file, for --spec and
+// --verify schema:. The file must pass the rules in file-guard.ts, as
+// --input @file does, and hold at most MAX_TASK_SPEC_BYTES, the most a spec
+// may be.
+async function readJsonArg(
+  cmd: Command,
+  value: string,
+  label: string,
+  allowOutsideCwd = false,
+): Promise<unknown> {
+  let text = value;
+  if (value.startsWith('@')) {
+    const read = await readGuardedFile(value.slice(1), {
+      maxBytes: MAX_TASK_SPEC_BYTES,
+      refusing: 'refusing to read',
+      what: `the ${label} file`,
+      allowOutsideCwd,
+    });
+    if ('error' in read) cmd.error(read.error);
+    text = read.text;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    cmd.error(`${label} is not valid JSON`);
+  }
+}
 
 // The most bytes an --input file may hold. Twice the spec cap leaves room
 // for the Windows line ends a template drops, and a file larger than that
@@ -693,6 +729,7 @@ export function postRefusal(
 async function parseVerify(
   cmd: Command,
   value: string,
+  allowOutsideCwd = false,
 ): Promise<VerificationSpec> {
   if (value === 'counterparty') return { kind: 'counterparty' };
   if (value.startsWith('hash:')) {
@@ -707,6 +744,7 @@ async function parseVerify(
       cmd,
       value.slice('schema:'.length),
       'schema',
+      allowOutsideCwd,
     );
     if (!isJsonObject(jsonSchema))
       cmd.error('the schema must be a JSON object');

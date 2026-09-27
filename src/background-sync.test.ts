@@ -12,6 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createApiClient } from './api.js';
 import {
   BACKGROUND_SYNC_INTERVAL_MS,
   backgroundSync,
@@ -25,6 +26,7 @@ import {
 import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { appendEvent, countPending, writeCursor } from './log.js';
+import { syncEvents } from './sync.js';
 
 const API_URL = 'https://api.test';
 
@@ -338,6 +340,100 @@ describe('background sync', () => {
       await expect(
         withSyncLock(async () => {}, { paths: p, waitMs: 0 }),
       ).rejects.toThrow(join(home, LOCK_FILE));
+    });
+
+    it('keeps the lock fresh between rounds of a long sync', async () => {
+      await initialise(true);
+      // Two rounds, since a round sends at most 500 events.
+      for (let i = 0; i < 501; i++) await appendEvent(toolCall(), p);
+      const lock = join(home, LOCK_FILE);
+      const stamps: number[] = [];
+      // Each request takes three quarters of the stale age by the clock, so
+      // the two together take longer than it, and a gated sync tries to get
+      // in during each of them.
+      const slow = (async (url: unknown, init?: RequestInit) => {
+        clock += (LOCK_STALE_MS * 3) / 4;
+        stamps.push((await stat(lock)).mtimeMs);
+        resetBackgroundSyncThrottle();
+        expect(await run()).toBe('locked');
+        return accepting(url as string, init);
+      }) as typeof fetch;
+      const result = await withSyncLock(
+        (keepLock) =>
+          syncEvents({
+            api: createApiClient({ apiUrl: API_URL, fetch: slow }),
+            sleep: async () => {},
+            paths: p,
+            now,
+            onRound: keepLock,
+          }),
+        { paths: p, now },
+      );
+      expect(result.accepted).toBe(501);
+      expect(stamps).toHaveLength(2);
+      // The second round stamped the lock with the clock after the first
+      // request.
+      expect(stamps[1]).toBeGreaterThan(stamps[0] ?? 0);
+      await expect(stat(lock)).rejects.toThrow();
+    }, 30_000);
+
+    it('stamps the lock before each request and before a rate limit wait inside one round', async () => {
+      await initialise(true);
+      await appendEvent(toolCall(), p);
+      const order: string[] = [];
+      let posts = 0;
+      const limited = (async (url: unknown, init?: RequestInit) => {
+        order.push('post');
+        posts++;
+        if (posts === 1) {
+          return Response.json(
+            { error: { code: 'rate_limited', message: 'rate_limited' } },
+            { status: 429, headers: { 'Retry-After': '1' } },
+          );
+        }
+        return accepting(url as string, init);
+      }) as typeof fetch;
+      const result = await syncEvents({
+        api: createApiClient({ apiUrl: API_URL, fetch: limited }),
+        sleep: async () => {
+          order.push('sleep');
+        },
+        paths: p,
+        now,
+        onRound: async () => {
+          order.push('stamp');
+        },
+      });
+      expect(result.accepted).toBe(1);
+      // The round start, then a stamp before the first post, before the wait
+      // and before the retry. The last stamp starts the next round, which
+      // finds nothing pending.
+      expect(order).toEqual([
+        'stamp',
+        'stamp',
+        'post',
+        'stamp',
+        'sleep',
+        'stamp',
+        'post',
+        'stamp',
+      ]);
+    });
+
+    it('never touches or removes a lock another process took over', async () => {
+      const lock = join(home, LOCK_FILE);
+      const other = deadPid();
+      const old = (Date.now() - 60_000) / 1000;
+      await withSyncLock(
+        async (keepLock) => {
+          await writeFile(lock, `${other}\n`);
+          await utimes(lock, old, old);
+          await keepLock();
+        },
+        { paths: p },
+      );
+      const left = await stat(lock);
+      expect(Math.round(left.mtimeMs / 1000)).toBe(Math.round(old));
     });
 
     it('keeps a gated sync out while it holds the lock', async () => {

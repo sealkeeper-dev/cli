@@ -8,18 +8,15 @@ import {
   type Level,
   OperatorSlug,
 } from '@sealkeeper/schema';
-import { ApiError, redirectError, resolveApiUrl } from './api.js';
-import { INSECURE_API_URL, isSecureApiUrl, paths } from './config.js';
+import { ApiError, apiErrorOf, createApiClient, resolveApiUrl } from './api.js';
+import { paths } from './config.js';
 import {
   AgentRenamedResponse,
   type Check,
   CheckResponse,
-  ErrorResponse,
   type WellKnown,
 } from './responses.js';
 import { checkSeal, loadKeys, sealKid } from './seal.js';
-
-const REQUEST_TIMEOUT_MS = 30_000;
 
 // Every value optional. The API defaults minVerified to 1, maxIncidents
 // to 0 and minLevel to bronze. minLevel none asks for no level.
@@ -98,75 +95,45 @@ export async function fetchCheck(
 ): Promise<CheckResponse> {
   const { slug, name } = parseHandle(handle);
   const search = checkSearch(thresholds);
-  const apiUrl = (options.apiUrl?.trim() || resolveApiUrl({})).replace(
-    /\/+$/,
-    '',
-  );
-  if (!isSecureApiUrl(apiUrl)) {
-    throw new ApiError(
-      0,
-      'insecure_api_url',
-      `refusing the SealKeeper API at ${apiUrl}, ${INSECURE_API_URL}`,
-    );
-  }
   const fetchFn = options.fetch ?? fetch;
-  const url = `${apiUrl}/v1/check/${encodeURIComponent(slug)}/${encodeURIComponent(name)}${search}`;
+  const api = createApiClient({
+    apiUrl: options.apiUrl?.trim() || resolveApiUrl({}),
+    fetch: fetchFn,
+    ...(options.timeoutMs === undefined
+      ? {}
+      : { timeoutMs: options.timeoutMs }),
+  });
+  // A redirect is never followed. It ends the check with the new address.
+  const { status, json, headers } = await api.request(
+    `/v1/check/${encodeURIComponent(slug)}/${encodeURIComponent(name)}${search}`,
+  );
 
-  let res: Response;
-  try {
-    res = await fetchFn(url, {
-      headers: { Accept: 'application/json' },
-      // Never followed. A redirect ends the check with the new address.
-      redirect: 'manual',
-      signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    throw new ApiError(
-      0,
-      'network_error',
-      `could not reach the SealKeeper API at ${apiUrl}: ${(error as Error).message}`,
-    );
-  }
-  if (res.status >= 300 && res.status < 400) {
-    throw redirectError(apiUrl, url.slice(apiUrl.length), res);
-  }
-  let json: unknown;
-  try {
-    json = await res.json();
-  } catch {
-    json = undefined;
-  }
-
-  if (res.status === 200) {
+  if (status === 200) {
     const parsed = CheckResponse.safeParse(json);
     if (parsed.success) {
-      await trustedPass(parsed.data, `${slug}/${name}`, apiUrl, fetchFn);
+      await trustedPass(parsed.data, `${slug}/${name}`, api.apiUrl, fetchFn);
       return parsed.data;
     }
   }
   const renamed = AgentRenamedResponse.safeParse(json);
-  if (res.status === 404 && renamed.success) {
+  if (status === 404 && renamed.success) {
     throw new ApiError(
       404,
       'renamed',
       `${slug}/${name} is now ${renamed.data.handle}`,
     );
   }
-  const error = ErrorResponse.safeParse(json);
-  if (error.success) {
-    const { code, message } = error.data.error;
+  const error = apiErrorOf(status, json, headers);
+  if (error.code === 'not_found') {
     throw new ApiError(
-      res.status,
-      code,
-      code === 'not_found' ? `no agent ${slug}/${name}` : message,
-      error.data.error.issues,
+      error.status,
+      error.code,
+      `no agent ${slug}/${name}`,
+      error.issues,
+      error.retryAfterSec,
     );
   }
-  throw new ApiError(
-    res.status,
-    'bad_response',
-    `the SealKeeper API returned an unexpected response (HTTP ${res.status})`,
-  );
+  throw error;
 }
 
 // A pass that callers act on, as assertTrusted does, needs more than the

@@ -7,8 +7,8 @@ import {
   Runtime,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
-import { isRedirect, redirectError, resolveApiUrl } from './api.js';
-import { type Config, isSecureApiUrl } from './config.js';
+import { ApiError, createApiClient, resolveApiUrl } from './api.js';
+import type { Config } from './config.js';
 import { stderr } from './output.js';
 import { SCORE_TIMEOUT_MS } from './score.js';
 
@@ -85,27 +85,27 @@ export async function readLiveAgent(
   config: Pick<Config, 'agentId' | 'apiUrl'>,
   fetchFn: typeof fetch,
 ): Promise<LiveAgent | null> {
-  const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
-  // Its own request rather than the API client, for the loose parse, with
-  // the same rules as every other request.
-  if (!isSecureApiUrl(apiUrl)) return null;
-  const path = `/v1/agents/${encodeURIComponent(config.agentId)}`;
+  // The loose LiveAgent parse, through the client's one request helper.
   try {
-    const res = await fetchFn(`${apiUrl}${path}`, {
-      headers: { Accept: 'application/json' },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
-    });
-    if (isRedirect(res.status)) {
-      stderr(redirectError(apiUrl, path, res).message);
-      return null;
+    return await shortClient(config, fetchFn).call(
+      `/v1/agents/${encodeURIComponent(config.agentId)}`,
+      LiveAgent,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'redirect') {
+      stderr(error.message);
     }
-    if (res.status !== 200) return null;
-    const parsed = LiveAgent.safeParse(await res.json());
-    return parsed.success ? parsed.data : null;
-  } catch {
     return null;
   }
+}
+
+// A client with the score's two second limit.
+function shortClient(config: Pick<Config, 'apiUrl'>, fetchFn: typeof fetch) {
+  return createApiClient({
+    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    fetch: fetchFn,
+    timeoutMs: SCORE_TIMEOUT_MS,
+  });
 }
 
 // How many agents the operator with this slug has, counting at most two,
@@ -116,20 +116,12 @@ export async function operatorAgentCount(
   slug: string,
   fetchFn: typeof fetch,
 ): Promise<number | null> {
-  const apiUrl = resolveApiUrl({ config: config.apiUrl }).replace(/\/+$/, '');
-  if (!isSecureApiUrl(apiUrl)) return null;
-  const path = `/v1/agents?operator=${encodeURIComponent(slug)}&limit=2`;
   try {
-    const res = await fetchFn(`${apiUrl}${path}`, {
-      headers: { Accept: 'application/json' },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(SCORE_TIMEOUT_MS),
-    });
-    if (res.status !== 200) return null;
-    const parsed = z
-      .object({ agents: z.array(z.unknown()) })
-      .safeParse(await res.json());
-    return parsed.success ? parsed.data.agents.length : null;
+    const { agents } = await shortClient(config, fetchFn).call(
+      `/v1/agents?operator=${encodeURIComponent(slug)}&limit=2`,
+      z.object({ agents: z.array(z.unknown()) }),
+    );
+    return agents.length;
   } catch {
     return null;
   }
