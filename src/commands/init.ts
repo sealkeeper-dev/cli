@@ -113,21 +113,22 @@ import {
 } from './adapter.js';
 import { printIdentity } from './whoami.js';
 
-// NOTHING_SENT and CONSENT are what a --json run prints on stderr, next to
-// the full taxonomy block. The human output says less, see below.
+// NOTHING_SENT is what a --json run prints on stderr, next to the full
+// taxonomy block. The human output says less, see below.
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
+// Said right before the GitHub device code, in every form, and on stderr
+// with --json. Full https links, so terminals make them clickable. The API
+// records which versions were accepted, the CLI never sends them (VOU-121).
 export const CONSENT =
-  'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.';
+  'Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).';
 
-// The human output. The welcome box, then the terms, the sign in, the
-// registration, what leaves this machine, the Claude Code hooks and what to
+// The human output. The welcome box, then the name and the runtime, the
+// terms and the sign in, the registration, what leaves this machine, the Claude Code hooks and what to
 // do next.
 export const TAGLINE = [
   'Prove your agent. A signed, portable track record',
   'anyone can check offline.',
 ];
-export const TERMS =
-  'By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.';
 export const SHARED_SUMMARY = [
   'Tool names, durations, outcomes, session boundaries and token counts,',
   'each signed with your key. Never prompts, tool inputs or outputs,',
@@ -459,19 +460,14 @@ async function init(
     agentId = ((await loadKey(p)) ?? (await createKey({}, p))).agentId;
   }
 
-  // On stderr with the device flow prompts, so --json output stays one object.
   let prompt: ((url: string, code: string) => void) | undefined;
-  if (ui === null) {
-    stderr(CONSENT);
-  } else {
+  if (ui !== null) {
     const s = ui.err;
     welcome(ui);
     if (backup !== undefined) {
       note();
       note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
     }
-    note();
-    note(s.dim(TERMS));
   }
 
   // The name and the runtime, asked where a person can answer, before the
@@ -499,8 +495,14 @@ async function init(
     askedRuntime = true;
   }
 
-  if (ui !== null) {
+  // The terms, right before the device code. On stderr with the device flow
+  // prompts, so --json output stays one object.
+  if (ui === null) {
+    stderr(CONSENT);
+  } else {
     const s = ui.err;
+    note();
+    note(s.dim(CONSENT));
     note();
     note(s.bold('Sign in with GitHub'));
     // The URL and the code come from GitHub, so the style functions escape

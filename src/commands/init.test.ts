@@ -62,7 +62,6 @@ import {
   runtimeNameNudge,
   SHARED_SUMMARY,
   TAGLINE,
-  TERMS,
   versionQuestion,
 } from './init.js';
 
@@ -437,31 +436,39 @@ describe('sealkeeper init', () => {
     await expectNoTokenAnywhere(result);
   });
 
-  it('names the terms and the privacy policy on stderr before the device flow', async () => {
+  it('says registering accepts the terms and the privacy policy, right before the device code', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
-    expect(TERMS).toBe(
-      'By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.',
+    expect(CONSENT).toBe(
+      'Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).',
     );
     const lines = result.err.split('\n');
-    const consent = lines.indexOf(`  ${TERMS}`);
+    const consent = lines.indexOf(`  ${CONSENT}`);
     const device = lines.findIndex((l) =>
       l.includes('Open https://github.com/login/device'),
     );
     expect(consent).toBeGreaterThanOrEqual(0);
-    expect(device).toBeGreaterThan(consent);
-    expect(result.out).not.toContain(TERMS);
-    expect(result.err).not.toContain(CONSENT);
+    // Only the blank line and the sign in heading sit between them.
+    expect(lines.slice(consent + 1, device)).toEqual([
+      '',
+      '  Sign in with GitHub',
+    ]);
+    expect(result.err.split(CONSENT)).toHaveLength(2);
+    expect(result.out).not.toContain(CONSENT);
   });
 
-  it('with --json keeps the consent line off stdout', async () => {
+  it('with --json says it on stderr before the device code and keeps it off stdout', async () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
-    expect(CONSENT).toBe(
-      'By continuing you accept https://sealkeeper.run/terms and https://sealkeeper.run/privacy.',
+    expect(result.out).not.toContain(CONSENT);
+    const lines = result.err.split('\n');
+    const consent = lines.indexOf(CONSENT);
+    const device = lines.findIndex((l) =>
+      l.includes('https://github.com/login/device'),
     );
-    expect(result.err).toContain(CONSENT);
+    expect(consent).toBeGreaterThanOrEqual(0);
+    expect(device).toBeGreaterThan(consent);
   });
 
   it('says in short what leaves this machine on stderr and sends no events', async () => {
@@ -659,7 +666,7 @@ describe('sealkeeper init', () => {
     expect(result.out).toContain(
       '    Profile  https://sealkeeper.run/agents/alice/scout\n',
     );
-    expect(result.err).not.toContain(TERMS);
+    expect(result.err).not.toContain(CONSENT);
     expect(result.out).not.toContain('operatorLogin');
     // Only the read of the verified count for Next. No sign in.
     expect(world.fetchUrls).toEqual([
@@ -1917,11 +1924,11 @@ describe('sealkeeper init', () => {
           Prove your agent. A signed, portable track record
           anyone can check offline.
 
-          By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.
-
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
+          Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
+
           Sign in with GitHub
           Open https://github.com/login/device and enter ABCD-1234
           ✓ Signed in as alice
@@ -2003,7 +2010,12 @@ describe('sealkeeper init', () => {
       expect(plain).toContain(`│ ◉ SealKeeper v${VERSION}`);
       for (const text of TAGLINE) expect(plain).toContain(`│ ${text}`);
       expect(plain).toContain(
-        '  Open https://github.com/login/device and enter ABCD-1234',
+        [
+          `  ${CONSENT}`,
+          '',
+          '  Sign in with GitHub',
+          '  Open https://github.com/login/device and enter ABCD-1234',
+        ].join('\n'),
       );
       expect(plain).toContain(`  Mastra or OpenClaw  ${ADAPTERS_URL}`);
     });

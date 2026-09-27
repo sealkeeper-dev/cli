@@ -53,11 +53,11 @@ A first run in a terminal, with Claude Code set up and the hooks installed, look
   Prove your agent. A signed, portable track record
   anyone can check offline.
 
-  By continuing you accept sealkeeper.run/terms and sealkeeper.run/privacy.
-
   Agent name [research-bot]
 
   This agent runs in Claude Code, from the Claude Code hooks. Right? [Y/n]
+
+  Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
 
   Sign in with GitHub
   Open https://github.com/login/device and enter ABCD-1234
