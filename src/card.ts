@@ -14,6 +14,7 @@ import {
   CredentialError,
   getCredential,
 } from './credential.js';
+import { makeHandshakeQuietly } from './handshake.js';
 import { stderr } from './output.js';
 
 // card show and card write build the same card, and the seal commands read
@@ -34,9 +35,12 @@ export const NO_CREDENTIAL =
 
 const CardUrl = AgentCard.shape.url.unwrap();
 
+// handshake is the agent's signed handshake (VB-6), carried beside the SEAL
+// in the current extension's params, or null when there is none.
 function buildCard(
   config: Config,
   credential: Credential | null,
+  handshake: string | null,
   url?: string,
 ): AgentCard {
   const profile = idProfileUrl(config.agentId);
@@ -47,8 +51,11 @@ function buildCard(
     ...(url === undefined ? {} : { url }),
     version: config.version,
     // ext/seal/v1 and the old ext/credential/v1, the same SEAL in both.
+    // The handshake goes on ext/seal/v1 only.
     capabilities: {
-      extensions: credential ? sealExtensions(credential.credential) : [],
+      extensions: credential
+        ? sealExtensions(credential.credential, handshake ?? undefined)
+        : [],
     },
     skills: [],
   });
@@ -68,7 +75,12 @@ export async function loadCard(
   }
   const { config, credential } = await loadSeal(cmd, deps, fresh);
   if (credential === null) stderr(NO_CREDENTIAL);
-  return buildCard(config, credential, url);
+  // A fresh handshake each time the card is built, over the fingerprint
+  // sync or prove last wrote, so it is refreshed whenever card write runs.
+  // None when there is no fingerprint yet. Only beside a SEAL.
+  const handshake =
+    credential === null ? null : await makeHandshakeQuietly(Date.now());
+  return buildCard(config, credential, handshake, url);
 }
 
 // The agent's config and current SEAL, from the cache or the API, the same

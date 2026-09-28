@@ -15,13 +15,16 @@ import {
   type VerifiedCredentialPayload as CredentialPayload,
   decodeHeader,
   generateKeypair,
+  partHash,
   SEAL_EXTENSION_URIS,
   sign,
+  verifyHandshake,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_CREDENTIAL } from '../card.js';
 import { paths, writeConfig } from '../config.js';
+import { recordCapture } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 
@@ -485,5 +488,79 @@ describe('card show and card write', () => {
     expect(code).toBe(0);
     expect(extensionCredential(AgentCard.parse(JSON.parse(out)))).toBeDefined();
     expect(server.requests).toHaveLength(2);
+  });
+
+  // The handshake beside the SEAL (VB-6), on ext/seal/v1 only.
+  describe('the handshake', () => {
+    const capture = async (tools: string) => {
+      const fp = await recordCapture(
+        paths(),
+        {
+          model_set: await partHash(agentId, 'claude-sonnet-4-5'),
+          prompt: 'not_declared',
+          tools: await partHash(agentId, tools),
+          framework: 'not_declared',
+        },
+        Math.floor(Date.now() / 1000),
+      );
+      if (fp === null) throw new Error('nothing recorded');
+      return fp;
+    };
+
+    const handshakeOf = (card: AgentCard) => {
+      const [current, ...legacy] = card.capabilities.extensions;
+      for (const e of legacy) expect(e.params).not.toHaveProperty('handshake');
+      const params = current?.params as { handshake?: string } | undefined;
+      return params?.handshake;
+    };
+
+    it('card write embeds a handshake over the current fingerprint', async () => {
+      const fp = await capture('mcp:github');
+      const { code, card } = await writeCard();
+      expect(code).toBe(0);
+      const handshake = handshakeOf(AgentCard.parse(JSON.parse(card)));
+      if (handshake === undefined) throw new Error('no handshake');
+      const v = await verifyHandshake(handshake, agentId, Date.now() / 1000);
+      if (!v.ok) throw new Error(v.reason);
+      expect(v.payload).toMatchObject({
+        sub: agentId,
+        fingerprint: fp.hash,
+        at: fp.captured_at,
+      });
+    });
+
+    it('card write refreshes it on every run', async () => {
+      await capture('mcp:github');
+      const first = handshakeOf(
+        AgentCard.parse(JSON.parse((await writeCard()).card)),
+      );
+      const fp = await capture('mcp:github\nmcp:linear');
+      const second = handshakeOf(
+        AgentCard.parse(JSON.parse((await writeCard()).card)),
+      );
+      expect(second).toBeDefined();
+      expect(second).not.toBe(first);
+      const v = await verifyHandshake(second ?? '', agentId, Date.now() / 1000);
+      expect(v.ok && v.payload.fingerprint).toBe(fp.hash);
+    });
+
+    it('card show carries it too, and neither carries one without a fingerprint', async () => {
+      const bare = await run(fetchFn, 'card', 'show');
+      expect(
+        handshakeOf(AgentCard.parse(JSON.parse(bare.out))),
+      ).toBeUndefined();
+      await capture('mcp:github');
+      const shown = await run(fetchFn, 'card', 'show');
+      expect(handshakeOf(AgentCard.parse(JSON.parse(shown.out)))).toBeDefined();
+    });
+
+    it('carries none when there is no SEAL', async () => {
+      await capture('mcp:github');
+      const { code, out } = await run(unreachable, 'card', 'show');
+      expect(code).toBe(0);
+      expect(AgentCard.parse(JSON.parse(out)).capabilities.extensions).toEqual(
+        [],
+      );
+    });
   });
 });

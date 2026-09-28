@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
 import type { CardDeps } from '../card.js';
+import { register as registerHandshake } from './seal-handshake.js';
 import { register as registerShow } from './seal-show.js';
 import { register as registerVerify } from './seal-verify.js';
 import { register as registerWrite } from './seal-write.js';
@@ -35,6 +36,7 @@ export function register(
   const seal = parent
     .command('seal')
     .description("The agent's SEAL, Signed Evidence of Agent Legitimacy");
+  registerHandshake(seal, all);
   registerShow(seal, all);
   registerVerify(seal, all);
   registerWrite(seal, all);

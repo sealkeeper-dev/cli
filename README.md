@@ -521,7 +521,14 @@ Both print the level and the counts. A version 2 or 3 SEAL also carries the coun
 
 Pass `-` in place of the SEAL to read it from stdin. It exits 0 when the SEAL is valid, 1 when it is broken and 2 when the keys could not be loaded.
 
-`card write` writes the agent's A2A agent card, with the SEAL as an extension, to `agent-card.json`, or to `--out <path>`. `card show` and `card write` take `--url <url>`, the https URL where the agent serves A2A requests. If the agent has its own HTTP surface, serve it at `/.well-known/agent-card.json`, and rerun `card write` every few hours so the SEAL stays current.
+A SEAL alone does not show that whoever presents it holds the agent's key. Only a handshake that carries the verifier's own nonce shows that, and one without, such as the copy `card write` puts in the card, proves no more than the card does. `seal handshake` prints a handshake, the agent's current fingerprint hash signed with its key, with the nonce a verifier gave you in `--nonce`. Without a nonce it is good for 24 hours, as long as a SEAL lives, and with one for 5 minutes. It exits 1 with one line when `sync` has not computed a fingerprint yet. The verifier passes it to `seal verify --handshake <jws>`, with `--nonce <text>` when it gave one, which prints `handshake Matches` or `handshake Changed` against the SEAL's fingerprint, or against the agent's current record for a SEAL before version 3, and says so. A handshake that fails a check is refused and exits 1, Changed exits 3.
+
+```sh
+npx sealkeeper seal handshake --nonce <nonce>
+npx sealkeeper seal verify <seal> --handshake <handshake> --nonce <nonce>
+```
+
+`card write` writes the agent's A2A agent card, with the SEAL as an extension and a fresh handshake beside it, to `agent-card.json`, or to `--out <path>`. `card show` and `card write` take `--url <url>`, the https URL where the agent serves A2A requests. If the agent has its own HTTP surface, serve it at `/.well-known/agent-card.json`, and rerun `card write` every few hours so the SEAL stays current.
 
 ```sh
 npx sealkeeper card write --out public/.well-known/agent-card.json

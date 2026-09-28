@@ -15,21 +15,27 @@ import {
   generateKeypair,
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
+  partHash,
   sign,
+  signHandshake,
+  verifyHandshake,
   WELL_KNOWN_URL,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_API_URL, paths, writeConfig } from '../config.js';
-import { createKey } from '../identity.js';
+import { recordCapture } from '../fingerprint.js';
+import { createKey, loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import {
   ISSUER_ORIGIN,
   KEYS_MAX_AGE_MS,
   KEYS_OFFLINE_MAX_AGE_MS,
   keysBaseUrl,
+  recordApiUrl,
 } from '../seal.js';
 import type { SealDeps } from './seal.js';
+import { NO_FINGERPRINT } from './seal-handshake.js';
 import { NO_SEAL } from './seal-show.js';
 
 const API_URL = 'https://api.test';
@@ -1167,5 +1173,414 @@ describe('sealkeeper seal', () => {
         KID,
       );
     }
+  });
+
+  // The handshake (VB-6). seal handshake signs the fingerprint sync last
+  // wrote, and seal verify --handshake checks it beside the SEAL. The
+  // issuer writes version 1, which carries no fingerprint, so the check
+  // reads the agent answer from the API and says so.
+  describe('handshake', () => {
+    const AGENT = () => `${API_URL}/v1/agents/${agentId}`;
+    // The fingerprint hash the agent answer holds for the agent, null for
+    // none.
+    let recordHash: string | null;
+    let withRecord: typeof fetch;
+
+    const capture = async (tools: string) => {
+      const fp = await recordCapture(
+        paths(),
+        {
+          model_set: await partHash(agentId, 'claude-sonnet-4-5'),
+          prompt: 'not_declared',
+          tools: await partHash(agentId, tools),
+          framework: await partHash(agentId, 'claude-code@2.1.283'),
+        },
+        NOW_SEC - 60,
+      );
+      if (fp === null) throw new Error('nothing recorded');
+      return fp;
+    };
+
+    const handshake = async (...args: string[]) => {
+      const r = await run(withRecord, 'seal', 'handshake', ...args);
+      expect(r.code).toBe(0);
+      return r.out.trim();
+    };
+
+    const lastLines = (out: string, n: number) =>
+      out.trimEnd().split('\n').slice(-n);
+
+    // A version 3 payload carrying hash as its fingerprint.
+    const v3 = (hash: string | null) => {
+      const { version: _v, ...rest } = claims();
+      return {
+        ...rest,
+        ver: 3,
+        counts: {
+          ...rest.counts,
+          posted_tasks: 0,
+          posted_distinct_operators: 0,
+          posted_confirmed_tasks: 0,
+        },
+        counted: {
+          verified_tasks: 17,
+          seed_tasks: 17,
+          server_checked_tasks: 0,
+          confirmed_tasks: 0,
+          posted_tasks: 0,
+          posted_confirmed_tasks: 0,
+        },
+        fingerprint: hash === null ? null : { hash, at: NOW_SEC - 3600 },
+        state: 'matches',
+      };
+    };
+
+    const NOTE =
+      "compared with the issuer's current record, the SEAL carries no fingerprint until version 3";
+
+    beforeEach(async () => {
+      await writeConfig({
+        agentId,
+        operatorLogin: 'alice',
+        name: 'summariser',
+        version: '1.0.0',
+        apiUrl: API_URL,
+        registeredAt: new Date(NOW).toISOString(),
+      });
+      recordHash = null;
+      withRecord = (async (input: string | URL | Request) => {
+        if (String(input) === AGENT()) {
+          requests.push(String(input));
+          return Response.json({
+            fingerprint:
+              recordHash === null
+                ? null
+                : {
+                    hash: recordHash,
+                    at: new Date(NOW - 60_000).toISOString(),
+                    parts: {
+                      model_set: 'declared',
+                      prompt: 'not_declared',
+                      tools: 'declared',
+                      framework: 'declared',
+                    },
+                  },
+          });
+        }
+        return fetchFn(input);
+      }) as typeof fetch;
+    });
+
+    it('seal handshake exits 1 with one line when there is no fingerprint', async () => {
+      const { code, out, err } = await run(withRecord, 'seal', 'handshake');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${NO_FINGERPRINT}\n`);
+    });
+
+    it('seal handshake signs the current fingerprint, with the nonce', async () => {
+      const fp = await capture('mcp:github');
+      expect(
+        await verifyHandshake(await handshake(), agentId, NOW_SEC),
+      ).toEqual({
+        ok: true,
+        payload: {
+          sub: agentId,
+          fingerprint: fp.hash,
+          at: fp.captured_at,
+          iat: NOW_SEC,
+        },
+      });
+      const withNonce = await handshake('--nonce', 'check 42');
+      expect(
+        (await verifyHandshake(withNonce, agentId, NOW_SEC, 'check 42')).ok,
+      ).toBe(true);
+      const json = JSON.parse(await handshake('--json'));
+      expect(json.payload).toMatchObject({
+        sub: agentId,
+        fingerprint: fp.hash,
+      });
+      expect((await verifyHandshake(json.handshake, agentId, NOW_SEC)).ok).toBe(
+        true,
+      );
+    });
+
+    it('seal handshake refuses a nonce over 64 characters', async () => {
+      await capture('mcp:github');
+      const { code, err } = await run(
+        withRecord,
+        'seal',
+        'handshake',
+        '--nonce',
+        'n'.repeat(65),
+      );
+      expect(code).toBe(1);
+      expect(err).toContain('--nonce must be 1 to 64 printable ASCII');
+    });
+
+    it('a version 1 SEAL falls back to the agent answer and says so', async () => {
+      recordHash = (await capture('mcp:github')).hash;
+      const { code, out, err } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--handshake',
+        await handshake(),
+      );
+      expect(err).toBe('');
+      expect(code).toBe(0);
+      expect(lastLines(out, 3)).toEqual([
+        'Expires in 24 hours 0 minutes',
+        'handshake Matches',
+        NOTE,
+      ]);
+      expect(requests).toContain(AGENT());
+    });
+
+    it('reads Changed when the tools changed since the record', async () => {
+      recordHash = (await capture('mcp:github')).hash;
+      await capture('mcp:github\nmcp:linear');
+      const { code, out } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--handshake',
+        await handshake(),
+      );
+      expect(code).toBe(3);
+      expect(lastLines(out, 2)).toEqual(['handshake Changed', NOTE]);
+    });
+
+    it('compares a version 3 SEAL with its own fingerprint, without the API', async () => {
+      const fp = await capture('mcp:github');
+      const hs = await handshake();
+      const verifyWith = async (hash: string | null) =>
+        run(
+          withRecord,
+          'seal',
+          'verify',
+          await sign(v3(hash), serverKey.privateKey, KID),
+          '--handshake',
+          hs,
+        );
+      const matched = await verifyWith(fp.hash);
+      expect(matched.code).toBe(0);
+      expect(lastLines(matched.out, 1)).toEqual(['handshake Matches']);
+      const changed = await verifyWith(
+        'BHAfx6dALmCdt3aXz-g6iAjLLGDurK95DZm15ZjIVZg',
+      );
+      expect(changed.code).toBe(3);
+      expect(lastLines(changed.out, 1)).toEqual(['handshake Changed']);
+      const none = await verifyWith(null);
+      expect(none.code).toBe(3);
+      expect(lastLines(none.out, 1)).toEqual([
+        'handshake valid, no fingerprint on record to compare with',
+      ]);
+      expect(requests).not.toContain(AGENT());
+    });
+
+    it('refuses a handshake signed by another key', async () => {
+      const fp = await capture('mcp:github');
+      recordHash = fp.hash;
+      const other = await generateKeypair();
+      const forged = await signHandshake(
+        other.privateKey,
+        agentId,
+        fp,
+        NOW_SEC,
+      );
+      const { code, out } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--handshake',
+        forged,
+      );
+      expect(code).toBe(1);
+      expect(lastLines(out, 1)).toEqual(['handshake refused: bad signature']);
+      expect(requests).not.toContain(AGENT());
+    });
+
+    it('refuses a wrong nonce', async () => {
+      recordHash = (await capture('mcp:github')).hash;
+      const hs = await handshake('--nonce', 'check-1');
+      stdin = await currentSeal();
+      const verifyWith = (nonce: string) =>
+        run(
+          withRecord,
+          'seal',
+          'verify',
+          '--handshake',
+          hs,
+          '--nonce',
+          nonce,
+          '--json',
+          '-',
+        );
+      const right = await verifyWith('check-1');
+      expect(right.code).toBe(0);
+      expect(JSON.parse(right.out).handshake).toEqual({
+        valid: true,
+        result: 'matches',
+        against: 'record',
+      });
+      const wrong = await verifyWith('check-2');
+      expect(wrong.code).toBe(1);
+      expect(JSON.parse(wrong.out)).toMatchObject({
+        valid: true,
+        handshake: { valid: false, reason: 'nonce_mismatch' },
+      });
+    });
+
+    it('takes a card copy 6 hours old and refuses one 25 hours old or a nonce 6 minutes old', async () => {
+      const fp = await capture('mcp:github');
+      recordHash = fp.hash;
+      const key = await loadKey();
+      if (key === null) throw new Error('no key');
+      const signedAgo = (seconds: number, nonce?: string) =>
+        signHandshake(
+          key.privateKey,
+          agentId,
+          { hash: fp.hash, captured_at: NOW_SEC - seconds - 600 },
+          NOW_SEC - seconds,
+          nonce,
+        );
+      const verifyWith = async (hs: string, ...more: string[]) =>
+        run(
+          withRecord,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--handshake',
+          hs,
+          ...more,
+        );
+      const card = await verifyWith(await signedAgo(6 * HOUR));
+      expect(card.code).toBe(0);
+      expect(lastLines(card.out, 2)).toEqual(['handshake Matches', NOTE]);
+      const old = await verifyWith(await signedAgo(25 * HOUR));
+      expect(old.code).toBe(1);
+      expect(lastLines(old.out, 1)).toEqual([
+        'handshake refused: signed outside its window, 5 minutes with a nonce and 24 hours without',
+      ]);
+      // A live challenge, the nonce, gets 5 minutes.
+      const hs = await handshake('--nonce', 'check-1');
+      now = NOW + 301_000;
+      const late = await verifyWith(hs, '--nonce', 'check-1');
+      expect(late.code).toBe(1);
+      expect(lastLines(late.out, 1)).toEqual([
+        'handshake refused: signed outside its window, 5 minutes with a nonce and 24 hours without',
+      ]);
+    });
+
+    it('does not check a handshake beside a broken SEAL', async () => {
+      await capture('mcp:github');
+      const { code, out } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        tamper(await currentSeal()),
+        '--handshake',
+        await handshake(),
+      );
+      expect(code).toBe(1);
+      expect(out).not.toContain('handshake');
+    });
+
+    it('with --offline a version 1 SEAL has no record to compare with and exits 2', async () => {
+      recordHash = (await capture('mcp:github')).hash;
+      const seal = await currentSeal();
+      expect((await run(withRecord, 'seal', 'verify', seal)).code).toBe(0);
+      requests = [];
+      const { code, err } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        seal,
+        '--offline',
+        '--handshake',
+        await handshake(),
+      );
+      expect(code).toBe(2);
+      expect(err).toContain('the SEAL carries no fingerprint until version 3');
+      expect(requests).toEqual([]);
+    });
+
+    // The record comes from the API paired with where the keys came from,
+    // never from another issuer's API.
+    it('reads the record from the local API for a production issuer SEAL checked against it', async () => {
+      // The CLI points at a local API, which signs with its own key under
+      // the production issuer, so its keys and its record come from it.
+      recordHash = (await capture('mcp:github')).hash;
+      const { code, out } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--handshake',
+        await handshake(),
+      );
+      expect(code).toBe(0);
+      expect(lastLines(out, 2)).toEqual(['handshake Matches', NOTE]);
+      expect(requests).toEqual([WELL_KNOWN, AGENT()]);
+      expect(recordApiUrl(API_URL, 'sealkeeper.run')).toBe(API_URL);
+    });
+
+    it('reads the record of a production SEAL from the production API, never the issuer domain', async () => {
+      vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+      const fp = await capture('mcp:github');
+      const productionAgent = `${DEFAULT_API_URL}/v1/agents/${agentId}`;
+      const production = (async (input: string | URL | Request) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === WELL_KNOWN_URL) return Response.json(published());
+        if (url === productionAgent) {
+          return Response.json({
+            fingerprint: {
+              hash: fp.hash,
+              at: new Date(NOW - 60_000).toISOString(),
+              parts: {
+                model_set: 'declared',
+                prompt: 'not_declared',
+                tools: 'declared',
+                framework: 'declared',
+              },
+            },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch;
+      const hs = (await run(production, 'seal', 'handshake')).out.trim();
+      const { code, out } = await run(
+        production,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--handshake',
+        hs,
+      );
+      expect(code).toBe(0);
+      expect(lastLines(out, 2)).toEqual(['handshake Matches', NOTE]);
+      expect(requests).toEqual([WELL_KNOWN_URL, productionAgent]);
+      expect(recordApiUrl(DEFAULT_API_URL, 'sealkeeper.run')).toBe(
+        DEFAULT_API_URL,
+      );
+    });
+
+    it('--nonce needs --handshake', async () => {
+      const { code, err } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+        '--nonce',
+        'check-1',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain('--nonce needs --handshake');
+    });
   });
 });

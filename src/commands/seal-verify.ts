@@ -1,8 +1,19 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { WELL_KNOWN_PATH } from '@sealkeeper/schema';
+import {
+  HANDSHAKE_NONCE_MAX,
+  HandshakeNonce,
+  type SealPayload,
+  WELL_KNOWN_PATH,
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { resolveApiUrl } from '../api.js';
 import { paths } from '../config.js';
+import {
+  checkHandshakeLine,
+  type HandshakeLine,
+  RecordError,
+  recordFromApi,
+} from '../handshake.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import type { WellKnown } from '../responses.js';
 import {
@@ -14,6 +25,7 @@ import {
   keysOrigin,
   loadKeys,
   readKeysFile,
+  recordApiUrl,
   type SealCheck,
   sealIssuer,
   sealKid,
@@ -24,8 +36,12 @@ import type { SealDeps } from './seal.js';
 
 // Exit codes. 0 a valid SEAL, 1 a broken or expired one, 2 the keys could
 // not be loaded, which with --offline means the cache has no usable copy.
+// With --handshake, 0 only when it also reads Matches, 1 when it is
+// refused, 2 when the issuer's record could not be read, and 3 when it
+// reads Changed or there is no fingerprint to compare with.
 const EXIT_BROKEN = 1;
 const EXIT_NO_KEYS = 2;
+const EXIT_NOT_MATCHED = 3;
 
 // Needs no key, no init and no account. The keys come from --keys, or from
 // the keys document (WELL_KNOWN_PATH) through a cache in the home. A SEAL
@@ -46,11 +62,34 @@ export function register(parent: Command, deps: SealDeps): Command {
       '--offline',
       `use the cached keys only, exit 2 when there are none or they are more than ${KEYS_OFFLINE_MAX_AGE_MS / (24 * 3600 * 1000)} days old`,
     )
+    .option(
+      '--handshake <jws>',
+      'the agent handshake to check beside the SEAL, prints Matches or Changed',
+    )
+    .option(
+      '--nonce <text>',
+      'the nonce you gave the agent, the handshake must carry it',
+    )
     .action(async function (
       this: Command,
       input: string,
-      options: { keys?: string; offline?: boolean },
+      options: {
+        keys?: string;
+        offline?: boolean;
+        handshake?: string;
+        nonce?: string;
+      },
     ): Promise<void> {
+      if (options.nonce !== undefined) {
+        if (options.handshake === undefined) {
+          this.error('--nonce needs --handshake');
+        }
+        if (!HandshakeNonce.safeParse(options.nonce).success) {
+          this.error(
+            `--nonce must be 1 to ${HANDSHAKE_NONCE_MAX} printable ASCII characters`,
+          );
+        }
+      }
       const seal = (input === '-' ? await deps.readStdin() : input).trim();
       const nowMs = deps.now();
 
@@ -101,8 +140,54 @@ export function register(parent: Command, deps: SealDeps): Command {
         }
       }
 
+      // The handshake beside a valid SEAL. A SEAL before version 3 carries
+      // no fingerprint, so it is compared with the agent answer from the
+      // API paired with where the keys came from (recordApiUrl), which
+      // --keys and --offline never fetch.
+      let handshake: HandshakeLine | null = null;
+      if (result.valid && options.handshake !== undefined) {
+        const fetchesNothing =
+          options.keys !== undefined || options.offline === true;
+        const pointed = resolveApiUrl({ config: await configApiUrl() });
+        const recordUrl = fetchesNothing
+          ? null
+          : recordApiUrl(pointed, sealIssuer(seal));
+        const refuse = (message: string) => async () => {
+          throw new RecordError(message);
+        };
+        try {
+          const { out } = await checkHandshakeLine({
+            handshake: options.handshake,
+            seal: result.payload as SealPayload,
+            nowMs,
+            ...(options.nonce === undefined ? {} : { nonce: options.nonce }),
+            record: fetchesNothing
+              ? refuse(
+                  'the SEAL carries no fingerprint until version 3, and --keys and --offline fetch no record to compare with',
+                )
+              : recordUrl === null
+                ? refuse(
+                    `the SEAL carries no fingerprint until version 3, and its keys came from ${keysOrigin(pointed, sealIssuer(seal))}, not the API this CLI points at, ${pointed}`,
+                  )
+                : recordFromApi(recordUrl, deps.fetch),
+          });
+          handshake = out;
+        } catch (error) {
+          if (error instanceof RecordError) {
+            this.error(error.message, { exitCode: EXIT_NO_KEYS });
+          }
+          throw error;
+        }
+      }
+
       if (wantsJson(this)) {
-        stdout(JSON.stringify(result));
+        stdout(
+          JSON.stringify(
+            handshake === null
+              ? result
+              : { ...result, handshake: handshake.json },
+          ),
+        );
       } else {
         stdout(result.valid ? 'valid SEAL' : `broken SEAL: ${result.reason}`);
         // What it says only for a valid SEAL. A broken one shows the raw
@@ -116,7 +201,16 @@ export function register(parent: Command, deps: SealDeps): Command {
         if (result.valid && result.expiresAt !== null) {
           stdout(expiresInText(result.expiresAt, nowMs));
         }
+        for (const line of handshake?.lines ?? []) stdout(line);
       }
       if (!result.valid) process.exitCode = EXIT_BROKEN;
+      else if (handshake !== null && !handshake.json.valid) {
+        process.exitCode = EXIT_BROKEN;
+      } else if (
+        handshake?.json.valid === true &&
+        handshake.json.result !== 'matches'
+      ) {
+        process.exitCode = EXIT_NOT_MATCHED;
+      }
     });
 }

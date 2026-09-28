@@ -317,6 +317,21 @@ export function keysOrigin(apiUrl: string, iss: string | null): string {
   return originOf(keysBaseUrl(apiUrl, iss));
 }
 
+// The API whose agent answer is the record a handshake is compared with
+// beside a SEAL before version 3 (VB-6), paired with the origin the SEAL's
+// keys came from, keysOrigin, so the record and the keys come from one
+// issuer. The issuer's own domain pairs with the production API, any other
+// keys origin with that API itself. null when that API is not the one this
+// CLI points at, and seal verify then refuses to read a record.
+export function recordApiUrl(
+  apiUrl: string,
+  iss: string | null,
+): string | null {
+  const keys = keysOrigin(apiUrl, iss);
+  const paired = keys === ISSUER_ORIGIN ? originOf(DEFAULT_API_URL) : keys;
+  return paired === originOf(apiUrl) ? apiUrl : null;
+}
+
 const DAYS = (ms: number) => ms / (24 * 3600 * 1000);
 
 // The cached keys while they came from the same origin, are under a day old

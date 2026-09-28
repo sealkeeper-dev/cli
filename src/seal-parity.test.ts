@@ -11,13 +11,17 @@ import {
   generateKeypair,
   parseSealPayload,
   type SealBrokenReason,
+  type SealPayload,
   sign,
 } from '@sealkeeper/schema';
 import {
+  type HandshakeConformance,
+  handshakeConformanceCases,
   type SealConformance,
   sealConformanceCases,
 } from '@sealkeeper/schema/conformance';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { checkHandshakeLine } from './handshake.js';
 import { checkSeal } from './seal.js';
 
 const KID = 'sealkeeper-parity-1';
@@ -267,5 +271,36 @@ describe('seal verify against the SEAL conformance cases', () => {
       );
       expect(r).toMatchObject({ valid: false, reason: 'wrong issuer' });
     }
+  });
+});
+
+// The handshake conformance cases (VB-6), each beside the suite's version 3
+// SEAL, through checkSeal and then checkHandshakeLine, what seal verify
+// --handshake runs. The API and the web run the same cases.
+describe('seal verify --handshake against the handshake conformance cases', () => {
+  let hs: HandshakeConformance;
+  beforeAll(async () => {
+    hs = await handshakeConformanceCases();
+  });
+
+  it('gives the expected answer for every case', async () => {
+    const answers = await Promise.all(
+      hs.cases.map(async (c) => {
+        const nowMs = (c.nowSeconds ?? hs.nowSeconds) * 1000;
+        const seal = await checkSeal(hs.seal, hs.wellKnown as never, nowMs);
+        if (!seal.valid) throw new Error(`SEAL ${seal.reason}`);
+        const { out } = await checkHandshakeLine({
+          handshake: c.jws,
+          seal: seal.payload as SealPayload,
+          nowMs,
+          ...(c.nonce === undefined ? {} : { nonce: c.nonce }),
+          record: async () => {
+            throw new Error('read the record for a version 3 SEAL');
+          },
+        });
+        return [c.name, out.json.valid ? out.json.result : out.json.reason];
+      }),
+    );
+    expect(answers).toEqual(hs.cases.map((c) => [c.name, c.expected]));
   });
 });
