@@ -28,6 +28,7 @@ import { createKey, loadKey } from '../identity.js';
 import { appendEvent, writeCursor } from '../log.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
+import { copyPaths } from '../routine-copy.js';
 import { jobName, launchdPath, type Runner } from '../routine-scheduler.js';
 
 type RunResult = { code: number; out: string; err: string };
@@ -350,11 +351,17 @@ describe('logout', () => {
       },
       p,
     );
+    // The last run's transcript goes with the copy (RS-10).
+    const transcript = copyPaths(p).transcript;
+    await mkdir(dirname(transcript), { recursive: true });
+    await writeFile(transcript, '{"type":"result"}\n');
     const { code, out } = await run('logout');
     expect(code).toBe(0);
     expect(out).toContain('removed the daily routine job');
+    expect(out).toContain(`removed ${transcript}`);
     expect(calls).toEqual([`launchctl bootout gui/501/${job}`]);
     expect(await exists(plist)).toBe(false);
+    expect(await exists(transcript)).toBe(false);
     const routine = await readRoutineConfig(p);
     expect(routine.schedule).toBeUndefined();
     expect(routine.allow).toEqual(['bob']);

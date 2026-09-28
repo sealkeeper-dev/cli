@@ -1,7 +1,8 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { spawn } from 'node:child_process';
+import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { ANSWER_RULES, UNTRUSTED_SPEC_RULES } from './claude-code-command.js';
 import type { TaskResponse } from './responses.js';
 import type { RunPost } from './routine.js';
@@ -11,9 +12,9 @@ import type { RunPost } from './routine.js';
 // the run can count tokens as they are reported and stop the agent at the
 // token cap or the wall clock, whichever comes first.
 //
-// Claude Code may use only the tools listed in allowedTools. Its Bash rules
-// allow the few sealkeeper commands the prompt names, spelled with the
-// CLI's own invocation, and nothing else. What the CLI then does is held to
+// Claude Code may write files only in its working folder and run only the
+// commands in allowedTools, the few sealkeeper commands the prompt names,
+// spelled with the CLI's own invocation. What the CLI then does is held to
 // the routine rules by SEALKEEPER_ROUTINE_RUN, see routine.ts. None of the
 // operator's own Claude Code settings apply, see claudeArgs.
 
@@ -25,6 +26,9 @@ export type AgentSpec = {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   tokenCap: number;
+  // Where to keep the agent's stream-json as received, replaced at each run
+  // (RS-10). Never printed. capBytes is for tests.
+  transcript?: { path: string; capBytes?: number };
 };
 
 export type AgentResult = {
@@ -125,6 +129,10 @@ export function runAgent(
       return;
     }
     const usage = new UsageCounter();
+    const transcript =
+      spec.transcript === undefined
+        ? null
+        : Transcript.open(spec.transcript.path, spec.transcript.capBytes);
     let stoppedFor: AgentResult['stoppedFor'] = null;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -140,6 +148,7 @@ export function runAgent(
 
     let buffer = '';
     child.stdout?.on('data', (chunk: Buffer | string) => {
+      transcript?.write(chunk);
       buffer += String(chunk);
       let newline = buffer.indexOf('\n');
       while (newline !== -1) {
@@ -155,6 +164,7 @@ export function runAgent(
     const finish = (result: AgentResult) => {
       if (settled) return;
       settled = true;
+      transcript?.close();
       clearTimeout(clock);
       if (killTimer) clearTimeout(killTimer);
       resolve(result);
@@ -172,6 +182,88 @@ export function runAgent(
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(spec.input);
   });
+}
+
+// The size a transcript is cut at, the cut line included.
+export const TRANSCRIPT_CAP_BYTES = 8 * 1024 * 1024;
+
+// The last line of a transcript that was cut, one JSON object like the
+// lines before it.
+export const TRANSCRIPT_CUT_LINE = JSON.stringify({
+  type: 'sealkeeper',
+  note: 'The transcript was cut at 8 MB. The rest of the run is not in it.',
+});
+
+// The last run's stream-json, written as it arrives to a file of mode 600
+// that each run replaces (RS-10). Once the next chunk would pass the cap, it
+// writes that chunk up to its last whole line that fits and the cut line,
+// then nothing more. A file that cannot be opened or written leaves the run
+// without a transcript, never stops it.
+export class Transcript {
+  private fd: number | null;
+  private written = 0;
+  private lastByte = 10;
+
+  private constructor(
+    fd: number,
+    private readonly cap: number,
+  ) {
+    this.fd = fd;
+  }
+
+  static open(
+    path: string,
+    cap: number = TRANSCRIPT_CAP_BYTES,
+  ): Transcript | null {
+    try {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      const fd = openSync(path, 'w', 0o600);
+      // A file left by an earlier run keeps its mode through the truncate.
+      fchmodSync(fd, 0o600);
+      return new Transcript(fd, cap);
+    } catch {
+      return null;
+    }
+  }
+
+  write(chunk: Buffer | string): void {
+    if (this.fd === null) return;
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    const room = this.cap - this.written - TRANSCRIPT_CUT_LINE.length - 2;
+    try {
+      if (bytes.length <= room) {
+        this.put(bytes);
+        return;
+      }
+      const end = bytes.subarray(0, Math.max(0, room)).lastIndexOf(10);
+      if (end >= 0) this.put(bytes.subarray(0, end + 1));
+      this.put(
+        Buffer.from(
+          `${this.lastByte === 10 ? '' : '\n'}${TRANSCRIPT_CUT_LINE}\n`,
+        ),
+      );
+    } catch {
+      // Nothing more is kept.
+    }
+    this.close();
+  }
+
+  close(): void {
+    if (this.fd === null) return;
+    try {
+      closeSync(this.fd);
+    } catch {
+      // Closed already.
+    }
+    this.fd = null;
+  }
+
+  private put(bytes: Buffer): void {
+    if (this.fd === null || bytes.length === 0) return;
+    writeSync(this.fd, bytes);
+    this.written += bytes.length;
+    this.lastByte = bytes[bytes.length - 1] ?? this.lastByte;
+  }
 }
 
 const notStarted = (error: string): AgentResult => ({
@@ -248,9 +340,19 @@ const num = (value: unknown) =>
 // run. --setting-sources with an empty list loads no user, project or
 // local settings file, so no default permission mode, allow rule or hook
 // from them. --strict-mcp-config with no --mcp-config starts no MCP
-// server. --permission-mode default asks before any tool not allowed
-// below, and with nobody to ask, the tool is refused. --tools leaves only
-// Bash, Read and Write in the session, and allowedTools is the only grant.
+// server. --tools leaves only Bash, Read and Write in the session.
+//
+// --permission-mode acceptEdits accepts file writes inside the working
+// folder, which is the routine's own cache folder, see routineWorkDir, and
+// nowhere else (RS-11). A Write or Read allow rule grants nothing in a
+// headless session, every write was refused with nobody to ask, so a run
+// solved its tasks and submitted none. tasks submit in a run reads answers
+// only from .sealkeeper-answers there, see file-guard.ts. acceptEdits also
+// lets plain file commands such as touch or rm run on paths inside that
+// folder, which can reach nothing a Write could not. Any path outside it,
+// any network command and every other command is refused, with nobody to
+// ask, unless an allow rule below names it. routine-smoke.test.ts checks
+// this against a real claude.
 export function claudeArgs(
   invocation: string,
   post: RunPost | null = null,
@@ -261,7 +363,7 @@ export function claudeArgs(
     'stream-json',
     '--verbose',
     '--permission-mode',
-    'default',
+    'acceptEdits',
     '--setting-sources',
     '',
     '--strict-mcp-config',
@@ -275,8 +377,10 @@ export function claudeArgs(
   ];
 }
 
-// The only tools the headless agent may use without a person. The Bash
-// rules match the commands the prompt gives, spelled with invocation. post
+// The only commands the headless agent may run without a person. The Bash
+// rules match the commands the prompt gives, spelled with invocation, and
+// the run sets SEALKEEPER_INVOCATION to the same invocation, so every submit
+// command prove prints matches the submit rule exactly. post
 // is what the run chose to post, and only then is its exact post command
 // allowed (POST-7), the adoption in its category when it adopts (RT-12),
 // else the template post.
@@ -290,8 +394,6 @@ export function allowedTools(
     `Bash(${invocation} tasks outcome:*)`,
     ...(post === null ? [] : [`Bash(${invocation} ${postCommand(post)})`]),
     `Bash(${invocation} status:*)`,
-    'Write(./.sealkeeper-answers/**)',
-    'Read(./.sealkeeper-answers/**)',
   ];
 }
 

@@ -11,7 +11,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   base64urlDecode,
   DeleteAgentRequest,
@@ -35,6 +35,7 @@ import { createKey } from '../identity.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { appendRoutine } from '../routine.js';
+import { copyPaths } from '../routine-copy.js';
 import { jobName, type Runner } from '../routine-scheduler.js';
 
 const API_URL = 'https://api.test';
@@ -307,6 +308,10 @@ describe('sealkeeper agent delete', () => {
     });
     await writeNudge(true);
     await appendRoutine({ kind: 'resume' });
+    // The last run's transcript goes with the copy (RS-10).
+    const transcript = copyPaths(p).transcript;
+    await mkdir(dirname(transcript), { recursive: true });
+    await writeFile(transcript, '{"type":"result"}\n');
 
     input.answers = ['nope'];
     const refused = await run('agent', 'delete');
@@ -320,7 +325,12 @@ describe('sealkeeper agent delete', () => {
     expect(code).toBe(0);
     expect(out).toContain('removed the daily routine job');
     expect(crontab).toBe('0 1 * * * /usr/bin/backup\n');
-    for (const f of [p.routine, p.nudge, join(home, 'routine.jsonl')]) {
+    for (const f of [
+      p.routine,
+      p.nudge,
+      join(home, 'routine.jsonl'),
+      transcript,
+    ]) {
       expect(await exists(f)).toBe(false);
     }
   });

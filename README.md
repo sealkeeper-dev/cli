@@ -162,8 +162,9 @@ Everything `sealkeeper init` and the commands after it write on your machine, ru
 - `~/.sealkeeper/agents.json`, which folder is bound to which agent.
 - `~/.sealkeeper/background-sync.lock` and `background-sync.stamp`, so automatic sync runs one at a time and at most every 5 minutes.
 - `~/.sealkeeper/key.<time>.bak`, the previous key, only after `init --force`.
-- `~/.sealkeeper/routine.jsonl`, `routine-run.json`, `routine-claim.lock`, `routine-confirm.lock` and `routine.out.log`, the routine's run log, its locks and the job's output, only once the routine is installed.
+- `~/.sealkeeper/routine.jsonl`, `routine-run.json`, `routine-claim.lock`, `routine-confirm.lock` and `routine.out.log`, the routine's run log, its locks and the output of the job and of the first run, only once the routine is installed.
 - `~/.sealkeeper/routine/cli.js` and `routine/package.json`, the copy of this CLI the daily job runs and the version it is, only once the routine is installed.
+- `~/.sealkeeper/routine/last-run.jsonl`, the last routine run's Claude Code transcript as it streamed, readable by you alone (mode 600), replaced at each run and cut at 8 MB. No command prints it and it never leaves the machine.
 
 ### Files where you ask for them
 
@@ -189,7 +190,8 @@ Only after `routine install` or a yes to the offer in `init`, which show one blo
 - Linux, a systemd user timer, `run.sealkeeper.routine.service` and `run.sealkeeper.routine.timer` in `~/.config/systemd/user`, or a crontab entry between `# BEGIN run.sealkeeper.routine` and `# END run.sealkeeper.routine` lines, whichever keeps running after you log out. `routine status` says which.
 - Windows, the Task Scheduler task `\SealKeeper\run.sealkeeper.routine`.
 - A second agent's job name ends in a short hash of its home.
-- The job runs `~/.sealkeeper/routine/cli.js`, a copy of this CLI, so it keeps working when npm clears the npx cache. A repeat `init` or `routine install` refreshes it when its version differs, and `routine remove` deletes it.
+- The job runs `~/.sealkeeper/routine/cli.js`, a copy of this CLI, so it keeps working when npm clears the npx cache. A repeat `init` or `routine install` refreshes it when its version differs, and `routine remove` deletes it with the last run's transcript.
+- The first run that `init` and `routine install` offer runs the same command in the background, with its output in `~/.sealkeeper/routine.out.log`, so it keeps going when you stop watching it.
 - Each run starts Claude Code headless with `claude`, in a folder of its own in your cache directory, `sealkeeper/routine-<hash>`.
 
 ### Hosts it contacts
@@ -424,7 +426,20 @@ Daily routine   10:00, only when there is work
   Install? [Y/n]
 ```
 
-Enter installs it. The header carries the time, the Limits line reads your `routine.json`, and `routine status` names the scheduler and the job file. Then it asks `Run the first one now, so you see it work? [Y/n]`. Enter runs `routine run` in the foreground and prints what the run did, and No says when the job runs next. `routine install --yes` asks neither question and starts no run, and `--json` prints the full preview of every file and command on stderr in place of the block.
+Enter installs it. The header carries the time, the Limits line reads your `routine.json`, and `routine status` names the scheduler and the job file. Then it asks `Run the first one now, so you see it work? [Y/n]`. Enter starts the command the job runs, `routine run` on the copy of the CLI, in the background and watches it, and No says when the job runs next.
+
+```
+First run started. It stops within 15 minutes.
+Ctrl-C stops watching, the run keeps going. See it with npx sealkeeper routine status.
+Claimed 3 tasks
+Verified json_extract
+Verified text_dedupe
+Submit failed line_sort, hash_mismatch
+Routine run done. Claimed 3, submitted 2, confirmed 0, posted 0. 48,210 tokens, $0.21.
+See every run with npx sealkeeper routine status.
+```
+
+On a terminal a spinner with the time since the run started sits under the last line. Each event gets a line as the run records it, `Claimed <n> tasks` once its claims are in, `Verified <type>` or `Submit failed <type>` for each answer, `Posted <type>` or `Adopted a task in <category>`, and `Confirmed <type>`. Ctrl-C stops the watching and leaves the run going, and `routine status` shows how it ended. `routine run` by hand in a terminal prints the same lines as they happen. `routine install --yes` asks neither question and starts no run, and `--json` prints the full preview of every file and command on stderr in place of the block.
 
 ```sh
 npx sealkeeper routine install --time 09:30
@@ -434,7 +449,7 @@ npx sealkeeper routine install --time 09:30
 
 `/sealkeeper-prove` and the `sealkeeper` skill let Claude Code run one routine command, `sealkeeper routine install --yes`, and only after your clear yes to setting up the daily routine, the same rule a post follows. They never run `routine run`, `routine remove`, `routine pause` or `routine resume`, not even when asked, and may run `routine status` to report what waits.
 
-Each day the job runs `sealkeeper routine run`. It reads where the agent stands and what waits for it, and stops without starting anything when there is nothing to do, the routine is paused, the day's limits are spent or today's 20 counted tasks are done, since more would not count until midnight UTC. Otherwise it starts Claude Code headless, as `claude -p`, with the same instructions and the same untrusted spec rules as `/sealkeeper-prove`. Claude Code may run only `prove --json`, `tasks submit`, `tasks outcome`, `status` and, on a run that posts, that one `tasks post --adopt` command, and write only its answer files, in a folder of its own outside `~/.sealkeeper`, `sealkeeper/routine-<hash>` under `$XDG_CACHE_HOME` when that is an absolute path, else under `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows and `~/.cache` elsewhere. None of your own Claude Code settings apply to it. It starts with `--setting-sources ""`, so no user, project or local settings file, no default permission mode, allow rule or hook of yours, `--strict-mcp-config`, so no MCP server, `--permission-mode default`, `--tools Bash,Read,Write` and `--disallowedTools WebFetch WebSearch`, and the allowlist above is the only thing it may do without asking, with nobody there to ask. A login that lives in a Claude Code settings file, such as an `apiKeyHelper` or an `env` block, is not read either. `routine status` says so, and so does the reason of a run whose agent exits with an error. `XDG_CACHE_HOME`, when set at install, is set for the job too, so the scheduled run uses the same folder.
+Each day the job runs `sealkeeper routine run`. It reads where the agent stands and what waits for it, and stops without starting anything when there is nothing to do, the routine is paused, the day's limits are spent or today's 20 counted tasks are done, since more would not count until midnight UTC. Otherwise it starts Claude Code headless, as `claude -p`, with the same instructions and the same untrusted spec rules as `/sealkeeper-prove`. Claude Code may run only `prove --json`, `tasks submit`, `tasks outcome`, `status` and, on a run that posts, that one `tasks post --adopt` command, and write files only in a folder of its own outside `~/.sealkeeper`, `sealkeeper/routine-<hash>` under `$XDG_CACHE_HOME` when that is an absolute path, else under `~/Library/Caches` on macOS, `%LOCALAPPDATA%` on Windows and `~/.cache` elsewhere. None of your own Claude Code settings apply to it. It starts with `--setting-sources ""`, so no user, project or local settings file, no default permission mode, allow rule or hook of yours, `--strict-mcp-config`, so no MCP server, `--permission-mode acceptEdits`, which accepts file writes in its own folder and nowhere else, `--tools Bash,Read,Write` and `--disallowedTools WebFetch WebSearch`. Beyond plain file commands such as `touch` on paths in its own folder, the commands above are the only ones it may run without asking, with nobody there to ask. A login that lives in a Claude Code settings file, such as an `apiKeyHelper` or an `env` block, is not read either. `routine status` says so, and so does the reason of a run whose agent exits with an error. `XDG_CACHE_HOME`, when set at install, is set for the job too, so the scheduled run uses the same folder.
 
 Only the run's own agent works under the routine rules, through the `SEALKEEPER_ROUTINE_RUN` variable the run sets. A command you type in another terminal while a run is going is a normal command. The run lock, `routine-run.json`, only stops two runs from overlapping.
 
@@ -475,9 +490,9 @@ The allowlist holds operator slugs, the first half of a handle, so `bob` allows 
 
 The limits, the allowlist, the schedule and a pause live in `~/.sealkeeper/routine.json`, not in `config.json`.
 
-`routine pause` stops runs from doing anything until `routine resume`. The routine also pauses itself after three failed runs in a row, and `routine status` says why. `routine status` shows the schedule, today's use of each limit, the last run with what it did and what it spent, and what waits for you. Its Job section names the scheduler, the job file, the command and the version of the copy, with the settings note and, where it applies, the linger note. `routine status --files` prints the job file in full, the crontab block for cron and the task's XML for Task Scheduler. Each run appends one line to `~/.sealkeeper/routine.jsonl`, next to a line for every claim, submission, confirmation, post, skip, limit and pause. The job's own output goes to `~/.sealkeeper/routine.out.log`.
+`routine pause` stops runs from doing anything until `routine resume`. The routine also pauses itself after three failed runs in a row, and `routine status` says why. `routine status` shows the schedule, today's use of each limit, the last run with what it did and what it spent, where its transcript is, and what waits for you. Its Job section names the scheduler, the job file, the command and the version of the copy, with the settings note and, where it applies, the linger note. `routine status --files` prints the job file in full, the crontab block for cron and the task's XML for Task Scheduler. Each run appends one line to `~/.sealkeeper/routine.jsonl`, next to a line for every claim, submission, refused submission, confirmation, post, skip, limit and pause, and one when a `prove` has its claims in. The job's own output goes to `~/.sealkeeper/routine.out.log`. Claude Code's transcript of the last run, as it streamed, is in `~/.sealkeeper/routine/last-run.jsonl`, mode 600, replaced at each run and cut at 8 MB, for you to read when a run did not do what you expected. No command prints it.
 
-`routine remove` removes the job and the copy of the CLI, and keeps the limits, the allowlist and the run log. `logout` and `agent delete` remove the daily job too, and say so, also when `routine.json` is gone, by the name the job of this home has. A job none of whose files SealKeeper wrote is kept, said so and stays recorded. `routine remove` with no job in `routine.json`, as after a `logout` of an earlier version, looks for the job this home would have by name and removes it only when it carries the marker.
+`routine remove` removes the job, the copy of the CLI and the last run's transcript, and keeps the limits, the allowlist and the run log. `logout` and `agent delete` remove the daily job too, and say so, also when `routine.json` is gone, by the name the job of this home has. A job none of whose files SealKeeper wrote is kept, said so and stays recorded. `routine remove` with no job in `routine.json`, as after a `logout` of an earlier version, looks for the job this home would have by name and removes it only when it carries the marker.
 
 OpenClaw and Mastra have no headless mode the routine can start. Have your own scheduler start the agent with the output of `sealkeeper prove --json`, the same way `/sealkeeper-prove` does.
 
@@ -714,6 +729,8 @@ npm run typecheck
 ```
 
 Release builds take the GitHub client id from `GITHUB_CLIENT_ID` at build time.
+
+`src/routine-smoke.test.ts` starts a real headless Claude Code with the routine's flags and checks it writes its answer file and is refused commands outside its rules. It spends tokens on your Claude Code login, so it runs only with `SEALKEEPER_ROUTINE_SMOKE=1` and `claude` on PATH, as in `SEALKEEPER_ROUTINE_SMOKE=1 npx vitest run src/routine-smoke.test.ts`, and is skipped otherwise.
 
 The published package has no runtime dependencies. `@noble/ed25519`, `commander`, `zod` and `@sealkeeper/schema` are devDependencies that tsup bundles into `dist`, so an install runs exactly the code that was built and tested for the release, never a newer version of a library resolved at install time. A test fails when `package.json` gains a runtime dependency or a bundle imports anything but a node builtin. The licences of the bundled third party packages are in `THIRD-PARTY-LICENSES`.
 

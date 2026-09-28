@@ -78,6 +78,8 @@ describe('the What init does inventory', () => {
       `- \`${tilde(copy.script)}\` and \`${copy.meta.slice(ROOT.length + 1)}\`, `,
     );
     expect(text).toContain(`\`${tilde(copy.script)}\`, a copy of this CLI`);
+    // The last run's transcript beside it (RS-10).
+    expect(text).toContain(`- \`${tilde(copy.transcript)}\`, `);
   });
 
   it('lists the files written into Claude Code and every hook event', () => {

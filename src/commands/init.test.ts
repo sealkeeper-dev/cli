@@ -104,7 +104,11 @@ import {
   TAGLINE,
   versionQuestion,
 } from './init.js';
-import { FIRST_RUN_QUESTION, INSTALL_QUESTION } from './routine.js';
+import {
+  FIRST_RUN_QUESTION,
+  INSTALL_QUESTION,
+  startInProcess,
+} from './routine.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const HOOK_COMMAND = hookCommand(
@@ -388,6 +392,12 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       spawner: () => {
         throw new Error('init tests start no agent');
       },
+      // The first run in this process, never a real one (RS-9).
+      startRun: startInProcess,
+      pollMs: 5,
+      // Plain output whatever runs the tests, and never the real SIGINT.
+      stdoutTTY: () => false,
+      interrupt: () => () => undefined,
     },
   });
   throwOnExit(program);

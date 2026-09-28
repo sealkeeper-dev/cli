@@ -1128,6 +1128,18 @@ describe('tasks pull, submit and post', () => {
       expect(
         (await readRoutine()).filter((e) => e.kind === 'barred'),
       ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
+      // Each refused submit is noted with why, for the watcher (RS-9), and
+      // never counts as a submit.
+      const entries = await readRoutine();
+      expect(entries.filter((e) => e.kind === 'submit_failed')).toMatchObject(
+        [task, seed].map((t) => ({
+          runId: 'run-1',
+          taskId: t.id,
+          taskType: t.taskType,
+          reason: 'hash_mismatch',
+        })),
+      );
+      expect(entries.filter((e) => e.kind === 'submit')).toEqual([]);
     });
 
     it('outside a routine run notes nothing on a failure that leaves the claim', async () => {

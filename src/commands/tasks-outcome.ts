@@ -203,7 +203,13 @@ export function register(
           payload: { task_id: id, outcome, evidence_hash: evidenceHash },
         });
         if (runId !== null) {
-          await appendRoutine({ kind: 'confirm', runId, taskId: id });
+          await appendRoutine({
+            kind: 'confirm',
+            runId,
+            taskId: id,
+            taskType: read.task.taskType,
+            outcome,
+          });
         }
         return sent;
       };

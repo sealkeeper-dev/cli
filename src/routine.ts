@@ -49,9 +49,11 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 // (RT-12).
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
-// a line. One run line per run, and a line for every claim, submit,
-// confirmation, post, skip, limit, pause and resume. The daily caps are counted
-// from it, per UTC day.
+// a line. One run line per run, and a line for every claim, submit, failed
+// submit, confirmation, post, skip, limit, pause and resume, and one for
+// each prove once its claims are in. The daily caps are counted from it,
+// per UTC day. A first run's watcher reads the lines of its run as they
+// come, see routine-watch.ts (RS-9).
 
 export const ROUTINE_RUN_ENV = 'SEALKEEPER_ROUTINE_RUN';
 
@@ -203,6 +205,33 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     adopted: z.boolean().optional(),
     category: z.string().optional(),
     fallback: z.enum(['candidate_none', 'api_too_old']).optional(),
+    // On a submit, the task's state after it, verified for a task
+    // SealKeeper checked and submitted for one that waits for its poster,
+    // and on a confirmation the outcome reported (RS-9). Absent on lines
+    // written before it.
+    state: z.string().optional(),
+    outcome: z.enum(['success', 'failure']).optional(),
+  }),
+  // A submit in a routine run that SealKeeper refused, with why, the
+  // verification failure or the API's error code (RS-9). Its own kind, so
+  // the submit count of a run and of an older CLI never includes it.
+  z.object({
+    kind: z.literal('submit_failed'),
+    at: At,
+    runId: z.string(),
+    taskId: z.string(),
+    taskType: z.string().optional(),
+    reason: z.string(),
+  }),
+  // A prove in a routine run once its claims are in (RS-9). claimed is the
+  // tasks it claimed now, tasks all it handed the agent, the tasks the
+  // agent held already included.
+  z.object({
+    kind: z.literal('prove'),
+    at: At,
+    runId: z.string(),
+    claimed: z.number().int(),
+    tasks: z.number().int(),
   }),
   // An operator whose task this agent failed, so the routine takes no
   // template task of that operator again (RT-8). tasks submit writes it on

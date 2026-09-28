@@ -119,7 +119,13 @@ import {
 } from '../output.js';
 import { refusal } from '../refusal.js';
 import { SchedulerError } from '../routine-scheduler.js';
-import { createStyle, indent, type Style, type Styled } from '../style.js';
+import {
+  createStyle,
+  INDENT,
+  indent,
+  type Style,
+  type Styled,
+} from '../style.js';
 import { describeTaxonomy } from '../taxonomy.js';
 import { VERSION } from '../version.js';
 import {
@@ -144,7 +150,7 @@ import {
   defaultRoutineDeps,
   FIRST_RUN_QUESTION,
   finishInstall,
-  firstRunLine,
+  firstRun,
   INSTALL_QUESTION,
   installedLine,
   laterLine,
@@ -152,10 +158,7 @@ import {
   prepareInstall,
   type RoutineDeps,
   refreshCopy,
-  reportLines,
   routineRows,
-  routineRun,
-  seeRunsLine,
 } from './routine.js';
 import { identityOf, printIdentity } from './whoami.js';
 
@@ -1145,13 +1148,12 @@ async function offerRoutine(
     say(o.line`${laterLine(DEFAULT_TIME)}`);
     return;
   }
-  const config = await readConfig(p);
-  const routine = await readRoutineConfig(p);
-  if (config === null) return;
-  say(o.line`${o.dim(firstRunLine(routine.limits.minutesPerRun))}`);
-  const report = await routineRun(routineDeps, config, routine, p);
-  for (const line of reportLines(report)) say(o.line`${line}`);
-  say(o.line`${o.dim(seeRunsLine())}`);
+  if ((await readConfig(p)) === null) return;
+  await firstRun(routineDeps, await readRoutineConfig(p), p, {
+    line: (text) => say(o.line`${text}`),
+    dim: (text) => say(o.line`${o.dim(text)}`),
+    indent: INDENT,
+  });
 }
 
 // A yes by default question as init asks it, indented, with the default

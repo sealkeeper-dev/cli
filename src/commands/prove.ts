@@ -225,8 +225,20 @@ export function register(
         limited,
         ceiling,
         tooNew,
+        claimed,
       } = await claim(this, deps, options, json);
       const now = Date.now();
+      // Inside a routine run, one line once the claims are in, for the first
+      // run's watcher (RS-9).
+      const runId = await activeRoutineRun();
+      if (runId !== null) {
+        await appendRoutine({
+          kind: 'prove',
+          runId,
+          claimed,
+          tasks: tasks.length,
+        });
+      }
 
       if (json) {
         // stdout is the array and nothing else. What an agent may want to
@@ -580,6 +592,8 @@ async function claim(
   limited?: string;
   ceiling: { counted: number; ceiling: number } | null;
   tooNew: TooNew[];
+  // The tasks claimed now, the held ones left out.
+  claimed: number;
 }> {
   const { config, signer, api } = await openTaskSession(cmd, deps);
   // Recomputed at every prove, once the config is known to exist, see
@@ -674,6 +688,7 @@ async function claim(
       ...(limited === undefined ? {} : { limited }),
       ceiling,
       tooNew,
+      claimed: claimedHere,
     };
   };
   // Claims one task. False when the claim cap stopped it, and then the

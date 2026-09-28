@@ -168,10 +168,22 @@ export function register(
             api.submitTask(id, envelope),
           );
         } catch (error) {
-          if (
-            error instanceof ApiError &&
-            error.code === 'verification_failed'
-          ) {
+          const failed =
+            error instanceof ApiError && error.code === 'verification_failed';
+          // Inside a routine run a refused submit is noted with why, so the
+          // first run's watcher can say so (RS-9).
+          if (runId !== null && error instanceof ApiError) {
+            await appendRoutine({
+              kind: 'submit_failed',
+              runId,
+              taskId: id,
+              taskType: task.taskType,
+              reason: failed
+                ? (error.issues[0]?.code ?? 'verification_failed')
+                : error.code,
+            });
+          }
+          if (failed) {
             const reason = error.issues[0]?.code ?? 'unknown';
             await noteBarred(api, id, signer.agentId, runId);
             this.error(`verification failed: ${reason}. ${error.message}`);
@@ -183,7 +195,13 @@ export function register(
           payload: { task_id: result.id, task_type: result.taskType },
         });
         if (runId !== null) {
-          await appendRoutine({ kind: 'submit', runId, taskId: result.id });
+          await appendRoutine({
+            kind: 'submit',
+            runId,
+            taskId: result.id,
+            taskType: result.taskType,
+            state: result.state,
+          });
         }
       }
 

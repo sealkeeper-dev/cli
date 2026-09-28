@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -37,6 +38,7 @@ import {
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
+import { tildePath } from '../files.js';
 import { postingBehind } from '../goal.js';
 import { createKey, loadSigner } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
@@ -70,8 +72,11 @@ import {
   claudeArgs,
   escapeCmdArgument,
   routinePrompt,
+  runAgent,
   type Spawner,
   spawnCall,
+  TRANSCRIPT_CAP_BYTES,
+  TRANSCRIPT_CUT_LINE,
 } from '../routine-agent.js';
 import { copyPaths, copyVersion } from '../routine-copy.js';
 import {
@@ -94,6 +99,7 @@ import {
   routineCandidates,
   routineHeld,
   seedTypesDone,
+  submitCommand,
 } from './prove.js';
 import {
   BLOCK_TITLE,
@@ -102,6 +108,7 @@ import {
   INSTALL_QUESTION,
   NO_SETTINGS_NOTE,
   preview,
+  startInProcess,
   waitingForPerson,
 } from './routine.js';
 
@@ -559,6 +566,10 @@ describe('routine', () => {
   // The copy the job runs.
   const copy = () => copyPaths(paths()).script;
   let tty: boolean;
+  // Whether stdout is a terminal, for the watcher's spinner and lines.
+  let stdoutTTY: boolean;
+  // Ctrl-C while a first run is watched, never the real SIGINT here.
+  let interrupt: (stop: () => void) => () => void;
   // The wall clock of a run, 20 ms a minute unless a test needs real time.
   let msPerMinute: number;
   let answer: string | null;
@@ -642,6 +653,11 @@ describe('routine', () => {
         findAgent: async () => CLAUDE,
         cli: () => ({ program: jobProgram, invocation: INVOCATION }),
         msPerMinute,
+        // The first run in this process, never a real one (RS-9).
+        startRun: startInProcess,
+        stdoutTTY: () => stdoutTTY,
+        interrupt,
+        pollMs: 5,
       },
     });
     throwOnExit(program);
@@ -756,6 +772,8 @@ describe('routine', () => {
     // A node that exists, so status never finds the job's node gone.
     jobProgram = [process.execPath, source];
     tty = false;
+    stdoutTTY = false;
+    interrupt = () => () => undefined;
     msPerMinute = 20;
     answer = null;
     answers = [];
@@ -902,6 +920,117 @@ describe('routine', () => {
       expect((await runs())[0]?.outcome).toBe('done');
     });
 
+    // An agent that runs prove --json and submits every task it got, in
+    // this process under the run's id, from the working folder.
+    function solvingAgent() {
+      nextAgent = () =>
+        new ScriptedAgent(async () => {
+          const runId = spawned.at(-1)?.env.SEALKEEPER_ROUTINE_RUN ?? '';
+          vi.stubEnv('SEALKEEPER_ROUTINE_RUN', runId);
+          const work = routinePaths().work;
+          vi.spyOn(process, 'cwd').mockReturnValue(work);
+          try {
+            await runInside(['prove', '--json']);
+            await mkdir(join(work, '.sealkeeper-answers'), {
+              recursive: true,
+            });
+            for (const id of api.claimed) {
+              const file = join(work, '.sealkeeper-answers', `${id}.txt`);
+              await writeFile(file, 'the answer');
+              await runInside(['tasks', 'submit', id, '--file', file]);
+            }
+          } finally {
+            vi.stubEnv('SEALKEEPER_ROUTINE_RUN', '');
+          }
+        }) as unknown as FakeAgent;
+    }
+
+    it('the first run prints a line per event as the run logs it, then the run line (RS-9)', async () => {
+      tty = true;
+      stdoutTTY = true;
+      answers = ['', ''];
+      msPerMinute = 60_000;
+      api.add();
+      api.add({ taskType: 'text_dedupe' });
+      solvingAgent();
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(0);
+      const text = result.out;
+      const started = text.indexOf(
+        'First run started. It stops within 15 minutes.\n',
+      );
+      const hint = text.indexOf(
+        'Ctrl-C stops watching, the run keeps going. See it with sealkeeper routine status.\n',
+      );
+      const claimed = text.indexOf('Claimed 2 tasks\n');
+      const first = text.indexOf('Verified json_extract\n');
+      const second = text.indexOf('Verified text_dedupe\n');
+      const done = text.indexOf('Routine run done.');
+      const see = text.indexOf('See every run with sealkeeper routine status.');
+      expect(started).toBeGreaterThan(-1);
+      expect([hint, claimed, first, second, done, see]).toEqual(
+        [hint, claimed, first, second, done, see].sort((a, b) => a - b),
+      );
+      expect(hint).toBeGreaterThan(started);
+      expect(first).toBeGreaterThan(claimed);
+      expect(text).toContain('Claimed 2, submitted 2, confirmed 0, posted 0.');
+      // The claims and the submits are logged with what the watcher says.
+      const entries = await readRoutine();
+      expect(entries).toContainEqual(
+        expect.objectContaining({ kind: 'prove', claimed: 2, tasks: 2 }),
+      );
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          kind: 'submit',
+          taskType: 'text_dedupe',
+          state: 'verified',
+        }),
+      );
+    });
+
+    it('draws no spinner and no Ctrl-C line when stdout is not a terminal (RS-9)', async () => {
+      tty = true;
+      answers = ['', ''];
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(0);
+      expect(result.out).not.toContain('Ctrl-C');
+      expect(result.out).not.toContain('Running');
+      expect(result.out).not.toContain('\r');
+    });
+
+    it('Ctrl-C ends the watching, the run keeps going and install exits 0 (RS-9)', async () => {
+      tty = true;
+      stdoutTTY = true;
+      answers = ['', ''];
+      msPerMinute = 60_000;
+      api.add();
+      // The agent waits until the watching has ended.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      nextAgent = () =>
+        new ScriptedAgent(async () => {
+          await released;
+        }) as unknown as FakeAgent;
+      interrupt = (stop) => {
+        const timer = setTimeout(stop, 20);
+        return () => clearTimeout(timer);
+      };
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('Stopped watching. The run keeps going.\n');
+      expect(result.out).toContain(
+        'See every run with sealkeeper routine status.',
+      );
+      expect(result.out).not.toContain('Routine run done.');
+      expect(await runs()).toEqual([]);
+      release();
+      await vi.waitFor(async () => {
+        expect((await runs())[0]?.outcome).toBe('done');
+      });
+    });
+
     it('a no to the first run starts nothing and says when the job runs', async () => {
       tty = true;
       answers = ['y', 'n'];
@@ -1026,6 +1155,8 @@ describe('routine', () => {
       });
 
       calls = [];
+      // A transcript from the last run (RS-10).
+      await writeFile(copyPaths(paths()).transcript, '{"type":"result"}\n');
       const removed = await run('routine', 'remove');
       expect(removed.code).toBe(0);
       expect(calls.map((c) => c.line)).toEqual([
@@ -1033,8 +1164,10 @@ describe('routine', () => {
       ]);
       await expect(readFile(file, 'utf8')).rejects.toThrow();
       expect((await readRoutineConfig())?.schedule).toBeUndefined();
-      // The copy goes with the job, and so does its folder.
+      // The copy goes with the job, the transcript with it, and so does
+      // their folder.
       expect(removed.out).toContain(`removed ${copy()}`);
+      expect(removed.out).toContain(`removed ${copyPaths(paths()).transcript}`);
       await expect(stat(copyPaths(paths()).dir)).rejects.toThrow('ENOENT');
     });
 
@@ -1554,6 +1687,160 @@ describe('routine', () => {
   });
 
   describe('run', () => {
+    // An agent that runs prove --json in this process under the run's id.
+    // prove's JSON goes to stdout, so it prints to stderr here instead.
+    function provingAgent() {
+      nextAgent = () =>
+        new ScriptedAgent(async () => {
+          const runId = spawned.at(-1)?.env.SEALKEEPER_ROUTINE_RUN ?? '';
+          vi.stubEnv('SEALKEEPER_ROUTINE_RUN', runId);
+          try {
+            await runInside(['prove', '--json']);
+          } finally {
+            vi.stubEnv('SEALKEEPER_ROUTINE_RUN', '');
+          }
+        }) as unknown as FakeAgent;
+    }
+
+    it('by hand in a terminal prints each event as it happens, then the run line (RS-9)', async () => {
+      await installed();
+      stdoutTTY = true;
+      msPerMinute = 60_000;
+      api.add();
+      provingAgent();
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      const claimed = result.out.indexOf('Claimed 1 task\n');
+      expect(claimed).toBeGreaterThan(-1);
+      expect(result.out.indexOf('Routine run done.')).toBeGreaterThan(claimed);
+      // Not a first run, so no Ctrl-C line.
+      expect(result.out).not.toContain('Ctrl-C');
+    });
+
+    it('prints no event lines with --json or without a terminal', async () => {
+      await installed();
+      msPerMinute = 60_000;
+      provingAgent();
+      api.add();
+      stdoutTTY = false;
+      const plain = await run('routine', 'run');
+      expect(plain.out).not.toContain('Claimed 1 task\n');
+      expect(plain.out).toContain('Routine run done. Claimed 1,');
+      stdoutTTY = true;
+      api.add();
+      const json = await run('routine', 'run', '--json');
+      expect(json.out).not.toContain('Claimed 1 task\n');
+      expect(
+        JSON.parse(json.out.trim().split('\n').at(-1) ?? ''),
+      ).toMatchObject({ kind: 'run', claimed: 1 });
+    });
+
+    it('logs under the run id a first run chose, and keeps it from the agent (RS-9)', async () => {
+      await installed();
+      api.add();
+      const id = randomUUID();
+      vi.stubEnv('SEALKEEPER_ROUTINE_RUN_ID', id);
+      await run('routine', 'run');
+      expect((await runs())[0]?.runId).toBe(id);
+      expect(spawned[0]?.env.SEALKEEPER_ROUTINE_RUN).toBe(id);
+      expect(spawned[0]?.env).not.toHaveProperty('SEALKEEPER_ROUTINE_RUN_ID');
+      // Anything but a UUID is not taken.
+      vi.stubEnv('SEALKEEPER_ROUTINE_RUN_ID', '../x');
+      api.add();
+      await run('routine', 'run');
+      expect((await runs())[1]?.runId).not.toBe('../x');
+    });
+
+    it('gives the agent the invocation its rules spell, so every submit line prove prints matches (RS-11)', async () => {
+      await installed();
+      api.add();
+      await run('routine', 'run');
+      const env = spawned[0]?.env ?? {};
+      expect(env.SEALKEEPER_INVOCATION).toBe(INVOCATION);
+      const args = spawned[0]?.args ?? [];
+      // prove --json in the agent's process prints this submit line.
+      vi.stubEnv('SEALKEEPER_INVOCATION', env.SEALKEEPER_INVOCATION ?? '');
+      resetInvocation();
+      const line = submitCommand(randomUUID());
+      const rule = args.find((a) => a.includes(' tasks submit:*)')) ?? '';
+      const prefix = rule.slice('Bash('.length, -':*)'.length);
+      expect(prefix).toBe(`${INVOCATION} tasks submit`);
+      expect(line.startsWith(`${prefix} `)).toBe(true);
+    });
+
+    it('keeps the agent transcript as received, mode 600, replaced at each run and named in status (RS-10)', async () => {
+      await installed();
+      api.add();
+      nextAgent = () =>
+        new FakeAgent(
+          [assistant('m1', 50), { type: 'result', total_cost_usd: 0.01 }],
+          0,
+        );
+      await run('routine', 'run');
+      const file = copyPaths(paths()).transcript;
+      expect(file).toBe(join(home, 'sk', 'routine', 'last-run.jsonl'));
+      const first = await readFile(file, 'utf8');
+      expect(first).toBe(
+        `${JSON.stringify(assistant('m1', 50))}\n${JSON.stringify({ type: 'result', total_cost_usd: 0.01 })}\n`,
+      );
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+      await chmod(file, 0o644);
+      api.add();
+      nextAgent = () => new FakeAgent([assistant('m2', 70)], 0);
+      await run('routine', 'run');
+      expect(await readFile(file, 'utf8')).toBe(
+        `${JSON.stringify(assistant('m2', 70))}\n`,
+      );
+      expect((await stat(file)).mode & 0o777).toBe(0o600);
+
+      const status = await run('routine', 'status');
+      const lines = status.out.split('\n');
+      const last = lines.findIndex((l) => l.startsWith('Last run  '));
+      expect(lines[last + 1]).toBe(`Transcript  ${tildePath(file)}`);
+      // Where it is, never what it says.
+      expect(status.out).not.toContain('"assistant"');
+      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      expect(json.transcript).toBe(file);
+    });
+
+    it('cuts a transcript at the cap on a whole line, with a last line saying so (RS-10)', async () => {
+      const path = join(home, 'cut', 'last-run.jsonl');
+      const line = `${JSON.stringify(assistant('m1', 50))}\n`;
+      const cap = line.length * 3 + TRANSCRIPT_CUT_LINE.length + 2;
+      const agent = new FakeAgent(
+        Array.from({ length: 10 }, () => assistant('m1', 50)),
+        0,
+      );
+      const result = await runAgent(
+        {
+          command: CLAUDE,
+          args: [],
+          input: '',
+          cwd: home,
+          env: {},
+          timeoutMs: 60_000,
+          tokenCap: 1_000_000,
+          transcript: { path, capBytes: cap },
+        },
+        () => agent,
+      );
+      // The usage is still read in full.
+      expect(result.tokens).toBe(150);
+      const text = await readFile(path, 'utf8');
+      expect(text).toBe(`${line.repeat(3)}${TRANSCRIPT_CUT_LINE}\n`);
+      expect(Buffer.byteLength(text)).toBeLessThanOrEqual(cap);
+      expect(TRANSCRIPT_CAP_BYTES).toBe(8 * 1024 * 1024);
+      expect(JSON.parse(TRANSCRIPT_CUT_LINE).note).toContain('cut at 8 MB');
+    });
+
+    it('names no transcript before a run started an agent', async () => {
+      await installed();
+      const status = await run('routine', 'status');
+      expect(status.out).not.toContain('Transcript');
+      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      expect(json.transcript).toBeNull();
+    });
+
     it('starts no agent and spends nothing when there is nothing to do', async () => {
       await installed();
       const result = await run('routine', 'run');
@@ -2115,7 +2402,9 @@ describe('routine', () => {
       await run('routine', 'run');
       const args = spawned[0]?.args ?? [];
       const flagValue = (flag: string) => args[args.indexOf(flag) + 1];
-      expect(flagValue('--permission-mode')).toBe('default');
+      // Writes are accepted in the working folder, the only grant a
+      // headless session honours for them (RS-11).
+      expect(flagValue('--permission-mode')).toBe('acceptEdits');
       expect(flagValue('--setting-sources')).toBe('');
       expect(args).toContain('--strict-mcp-config');
       expect(flagValue('--tools')).toBe('Bash,Read,Write');
@@ -2131,8 +2420,6 @@ describe('routine', () => {
         `Bash(${INVOCATION} tasks outcome:*)`,
         // No post rule on a run that chose no post (POST-7).
         `Bash(${INVOCATION} status:*)`,
-        'Write(./.sealkeeper-answers/**)',
-        'Read(./.sealkeeper-answers/**)',
       ]);
       expect(args.slice(args.indexOf('--disallowedTools') + 1)).toEqual([
         'WebFetch',

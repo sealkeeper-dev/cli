@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Command } from 'commander';
@@ -19,6 +20,7 @@ import {
   type RoutineConfig,
   type RoutineLimits,
   type RoutineSchedule,
+  readConfig,
   readRoutineConfig,
   sealkeeperRoot,
   writeRoutineConfig,
@@ -32,7 +34,7 @@ import {
   shownLevel,
 } from '../goal.js';
 import { KeyError, loadSigner, type Signer } from '../identity.js';
-import { cli } from '../invocation.js';
+import { cli, printedInvocation } from '../invocation.js';
 import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
 import {
   type AgentResponse,
@@ -51,6 +53,7 @@ import {
   networkBudgetOf,
   networkOperatorsToday,
   nextRoutinePost,
+  ROUTINE_RUN_ENV,
   type RoutineEntry,
   type RunEntry,
   type RunOutcome,
@@ -99,6 +102,14 @@ import {
   SchedulerError,
   schtasksName,
 } from '../routine-scheduler.js';
+import {
+  onSigint,
+  type SpinnerStream,
+  type StartedRun,
+  type StartSpec,
+  startDetached,
+  watchRun,
+} from '../routine-watch.js';
 import { createStyle } from '../style.js';
 import { dailyCeilingReached, todayOf } from '../today.js';
 import { VERSION } from '../version.js';
@@ -137,7 +148,37 @@ export type RoutineDeps = {
   cli?: () => { program: string[]; invocation: string };
   // Tests shorten the wall clock with this.
   msPerMinute?: number;
+  // How the first run starts, detached by default (RS-9). Tests run it in
+  // this process with startInProcess.
+  startRun?: RunStarter;
+  // Ctrl-C while a first run is watched, SIGINT by default.
+  interrupt?: (stop: () => void) => () => void;
+  // Whether stdout is a terminal, for the spinner and the event lines.
+  stdoutTTY?: () => boolean;
+  // How often a watcher reads routine.jsonl.
+  pollMs?: number;
 };
+
+// Starts one routine run to watch, as the first run after an install.
+export type RunStarter = (spec: StartSpec, deps: RoutineDeps) => StartedRun;
+
+// A routine run in this process, for tests, which start no real process.
+export const startInProcess: RunStarter = (spec, deps) => {
+  const p = paths(readEnv('SEALKEEPER_HOME', spec.env) ?? sealkeeperRoot());
+  return {
+    ended: (async () => {
+      const config = await readConfig(p);
+      if (config === null) return 'no agent is set up';
+      await routineRun(deps, config, await readRoutineConfig(p), p, spec.runId);
+      return null;
+    })().catch((error: Error) => error.message),
+  };
+};
+
+// Set by init and routine install on the first run they start, so the run
+// logs under the id they watch (RS-9). Read by routine run only.
+export const RUN_ID_ENV = 'SEALKEEPER_ROUTINE_RUN_ID';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const defaultRoutineDeps: RoutineDeps = {
   fetch: (...args) => fetch(...args),
@@ -386,7 +427,7 @@ async function install(
         : `--agent must be one of ${AGENTS.join(', ')}, got ${options.agent}`,
     );
   }
-  const config = await requireConfig(cmd);
+  await requireConfig(cmd);
   const current = await loadRoutineConfig(cmd);
   let prepared: PreparedInstall | string;
   try {
@@ -446,10 +487,11 @@ async function install(
     return;
   }
   const routine = await loadRoutineConfig(cmd);
-  stdout(firstRunLine(routine.limits.minutesPerRun));
-  const report = await routineRun(deps, config, routine, prepared.p);
-  for (const line of reportLines(report)) stdout(line);
-  stdout(seeRunsLine());
+  await firstRun(deps, routine, prepared.p, {
+    line: stdout,
+    dim: stdout,
+    indent: '',
+  });
 }
 
 // The two questions of install, yes by default (D-RS-1, D-RS-2).
@@ -486,9 +528,93 @@ export function laterLine(time: string, now: Date = new Date()): string {
 export const seeRunsLine = (): string =>
   `See every run with ${cli('routine status')}.`;
 
-// Said before the first run starts, since the agent may take minutes.
+// Said as the first run starts, since the agent may take minutes.
 export const firstRunLine = (minutes: number): string =>
   `First run started. It stops within ${minutes} minutes.`;
+
+// Said once under the started line, on a terminal (RS-9).
+export const watchHintLine = (): string =>
+  `Ctrl-C stops watching, the run keeps going. See it with ${cli('routine status')}.`;
+
+// Said after a Ctrl-C.
+export const STOPPED_WATCHING = 'Stopped watching. The run keeps going.';
+
+const stdoutIsTTY = (deps: RoutineDeps): boolean =>
+  (deps.stdoutTTY ?? (() => process.stdout.isTTY === true))();
+
+// How the first run's lines are printed. init indents and dims them,
+// routine install prints them as they are.
+export type FirstRunPrint = {
+  line: (text: string) => void;
+  dim: (text: string) => void;
+  indent: string;
+};
+
+// The first run after an install, as init and routine install start it
+// (RS-3, RS-9). It runs detached, the command the scheduler runs, so it
+// keeps going when the watching ends. The watcher prints a line per event
+// as the run logs it, a spinner with the elapsed time on a terminal, then
+// the run line and where to see every run. Ctrl-C ends the watching only.
+export async function firstRun(
+  deps: RoutineDeps,
+  routine: RoutineConfig,
+  p: Paths,
+  print: FirstRunPrint,
+): Promise<void> {
+  const runId = randomUUID();
+  const program = routine.schedule?.program ?? [
+    ...cliOf(deps).program,
+    'routine',
+    'run',
+  ];
+  const { [ROUTINE_RUN_ENV]: _, ...env } = process.env;
+  const started = (deps.startRun ?? startDetached)(
+    {
+      runId,
+      program,
+      env: {
+        ...env,
+        [RUN_ID_ENV]: runId,
+        // What it prints, such as a pause's reason, names the CLI as this
+        // one does.
+        SEALKEEPER_INVOCATION: printedInvocation(),
+        ...(homeEnv(p) === undefined ? {} : { SEALKEEPER_HOME: p.home }),
+      },
+      cwd: p.home,
+      outFile: routinePaths(p).out,
+    },
+    deps,
+  );
+  const tty = stdoutIsTTY(deps);
+  print.dim(firstRunLine(routine.limits.minutesPerRun));
+  if (tty) print.dim(watchHintLine());
+  const watched = await watchRun({
+    runId,
+    p,
+    ended: started.ended,
+    line: print.line,
+    spinner: tty ? (process.stdout as SpinnerStream) : null,
+    indent: print.indent,
+    interrupt: deps.interrupt ?? onSigint,
+    pollMs: deps.pollMs,
+  });
+  switch (watched.kind) {
+    case 'done':
+      for (const line of reportLines(watched)) print.line(line);
+      break;
+    case 'detached':
+      print.line(STOPPED_WATCHING);
+      break;
+    case 'lost':
+      print.line(
+        watched.error === null
+          ? `The first run ended without its run line. Its output is in ${tildePath(routinePaths(p).out)}.`
+          : `The first run did not start, ${watched.error}.`,
+      );
+      break;
+  }
+  print.dim(seeRunsLine());
+}
 
 // The job name install gives this CLI home.
 const defaultJob = (p: Paths, env: SchedulerEnv): string =>
@@ -651,7 +777,28 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (!routine.schedule) {
     cmd.error(`no routine is installed, run ${cli('routine install')} first`);
   }
-  const report = await routineRun(deps, config, routine);
+  // The id a first run's watcher chose, else a new one.
+  const given = readEnv(RUN_ID_ENV);
+  const runId = given !== undefined && UUID.test(given) ? given : randomUUID();
+  const p = paths();
+  // By hand in a terminal, the run's events as they happen (RS-9). Ctrl-C
+  // stops the run itself here, as it always has.
+  const running = routineRun(deps, config, routine, p, runId);
+  if (!json && stdoutIsTTY(deps)) {
+    await watchRun({
+      runId,
+      p,
+      ended: running.then(
+        () => null,
+        () => null,
+      ),
+      line: stdout,
+      spinner: process.stdout,
+      interrupt: null,
+      pollMs: deps.pollMs,
+    });
+  }
+  const report = await running;
   if (json) {
     stdout(JSON.stringify({ ...report.entry, paused: report.paused }));
   } else {
@@ -672,17 +819,17 @@ export function reportLines(report: RunReport): string[] {
   ];
 }
 
-// One routine run for the installed schedule, as the job runs it and as
-// init and routine install run the first one (RS-3). Logs the run line and
-// returns it. Prints nothing.
+// One routine run for the installed schedule, as the job runs it. Logs the
+// run line and returns it. Prints nothing. runId is the id its lines carry,
+// a new one unless a watcher chose it (RS-9).
 export async function routineRun(
   deps: RoutineDeps,
   config: Config,
   routine: RoutineConfig,
   p: Paths = paths(),
+  runId: string = randomUUID(),
 ): Promise<RunReport> {
   const schedule = routine.schedule;
-  const runId = randomUUID();
   const startedAt = new Date();
   let report: RunReport | null = null;
 
@@ -956,16 +1103,11 @@ export async function routineRun(
         args: claudeArgs(invocation, post),
         input: routinePrompt(invocation, confirm, { post, prove: !ceiling }),
         cwd: work,
-        env: {
-          ...process.env,
-          SEALKEEPER_ROUTINE_RUN: runId,
-          SEALKEEPER_INVOCATION: invocation,
-          // The home of this run, so a first run started from init in a
-          // bound folder works for that agent, as the job does.
-          ...(homeEnv(p) === undefined ? {} : { SEALKEEPER_HOME: p.home }),
-        },
+        env: agentEnv(runId, invocation, p),
         timeoutMs,
         tokenCap: routine.limits.tokensPerRun,
+        // Kept for the operator, never printed (RS-10).
+        transcript: { path: copyPaths(p).transcript },
       },
       deps.spawner ?? spawnAgent,
     );
@@ -1002,6 +1144,28 @@ export async function routineRun(
       await finish('done', undefined, agent);
     }
   }
+}
+
+// The agent's environment. SEALKEEPER_ROUTINE_RUN puts its commands under
+// the routine rules. SEALKEEPER_INVOCATION is the invocation its Bash rules
+// and prompt spell, so every command the CLI prints for it, such as each
+// task's submit line from prove --json, matches its rule exactly, whatever
+// started the run (RS-11). SEALKEEPER_HOME names the home of this run, so a
+// first run started from init in a bound folder works for that agent, as
+// the job does. A watcher's run id stays with the run.
+export function agentEnv(
+  runId: string,
+  invocation: string,
+  p: Paths,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const { [RUN_ID_ENV]: _, ...rest } = env;
+  return {
+    ...rest,
+    SEALKEEPER_ROUTINE_RUN: runId,
+    SEALKEEPER_INVOCATION: invocation,
+    ...(homeEnv(p) === undefined ? {} : { SEALKEEPER_HOME: p.home }),
+  };
 }
 
 // How long past the wall clock limit the run lock lasts, for the reads
@@ -1161,6 +1325,9 @@ async function status(
   const waiting = waitingForPerson(entries, now);
   const active = await readLiveLock();
   const warnings = await routineJobWarnings(p);
+  const transcript = existsSync(copyPaths(p).transcript)
+    ? copyPaths(p).transcript
+    : null;
 
   if (wantsJson(cmd)) {
     const copied = await copyVersion(p);
@@ -1179,6 +1346,7 @@ async function status(
         allow: routine.allow,
         allowSlugs: routine.allowSlugs,
         lastRun,
+        transcript,
         waiting,
         copy: {
           path: copyPaths(p).script,
@@ -1213,6 +1381,8 @@ async function status(
       ? `Last run  ${lastRun.at}. ${runLine(lastRun)}`
       : 'Last run  none yet',
   );
+  // Where the last run's transcript is, never what it says (RS-10).
+  if (transcript !== null) stdout(`Transcript  ${tildePath(transcript)}`);
   if (s !== undefined) {
     stdout('');
     for (const line of await jobSection(s, deps, p)) stdout(line);

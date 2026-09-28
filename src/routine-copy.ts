@@ -21,12 +21,18 @@ import { VERSION } from './version.js';
 // so status can compare without running it. A repeat init or routine
 // install refreshes the copy when that version differs from the running
 // CLI, and routine remove deletes it.
+//
+// The same folder keeps last-run.jsonl, the last run's Claude Code
+// transcript, which goes with the copy (RS-10).
 
 export type CopyPaths = {
   dir: string;
   script: string;
   // The package.json beside the script, with type module and the version.
   meta: string;
+  // The last routine run's stream-json as Claude Code wrote it, mode 600,
+  // replaced at each run and never printed (RS-10).
+  transcript: string;
 };
 
 export function copyPaths(p: Paths = paths()): CopyPaths {
@@ -35,6 +41,7 @@ export function copyPaths(p: Paths = paths()): CopyPaths {
     dir,
     script: join(dir, 'cli.js'),
     meta: join(dir, 'package.json'),
+    transcript: join(dir, 'last-run.jsonl'),
   };
 }
 
@@ -87,12 +94,12 @@ export async function writeCopy(
   return 'copied';
 }
 
-// Deletes the copy and its folder when that is left empty. Returns the
-// paths it removed.
+// Deletes the copy, the last run's transcript and their folder when that is
+// left empty. Returns the paths it removed.
 export async function removeCopy(p: Paths = paths()): Promise<string[]> {
   const c = copyPaths(p);
   const removed: string[] = [];
-  for (const path of [c.script, c.meta]) {
+  for (const path of [c.script, c.meta, c.transcript]) {
     if (!(await exists(path))) continue;
     await rm(path, { force: true });
     removed.push(path);
