@@ -30,6 +30,7 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api.js';
 import type { Input } from '../ask.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
@@ -62,8 +63,11 @@ import {
   WRONG_STATE,
 } from './tasks-outcome.js';
 import {
+  API_TOO_OLD_FOR_FIELDS,
   assigneeCap,
   assigneeOperatorCap,
+  badCategory,
+  badSize,
   KEY_IN_TASK,
   MAX_INPUT_FILE_BYTES,
   NO_OPTIONS_JSON,
@@ -71,7 +75,9 @@ import {
   NOT_POSTED,
   NOTHING_POSTED,
   noAssignee,
+  postRefusal,
   sameOperator,
+  TEMPLATE_SETS_FIELDS,
   templateNeedsYes,
 } from './tasks-post.js';
 import {
@@ -1463,6 +1469,124 @@ describe('tasks pull, submit and post', () => {
       expect(out).toContain('state    open');
     });
 
+    it('posts the --category and --size it is given (RT-2)', async () => {
+      const { code } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+        '--category',
+        'research',
+        '--size',
+        'm',
+      );
+      expect(code).toBe(0);
+      expect(PostTaskRequest.parse(api.posts()[0]?.payload)).toMatchObject({
+        category: 'research',
+        size: 'm',
+      });
+    });
+
+    it('leaves category and size out when not given, for the API to derive', async () => {
+      const { code } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+      );
+      expect(code).toBe(0);
+      const payload = api.posts()[0]?.payload;
+      expect(payload).not.toHaveProperty('category');
+      expect(payload).not.toHaveProperty('size');
+    });
+
+    it.each([
+      [['--category', 'cooking'], badCategory('cooking')],
+      [['--category', 'Data'], badCategory('Data')],
+      [['--size', 'l'], badSize('l')],
+    ])('refuses %j before anything is read or sent', async (flags, message) => {
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '@/no/such/file',
+        '--verify',
+        'counterparty',
+        ...flags,
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${message}\n`);
+      expect(api.requests).toEqual([]);
+    });
+
+    it('says an API from before the fields does not take category or size', async () => {
+      // What an API before RT-2 answers, its strict payload refusing both.
+      api.postReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid payload',
+              issues: [
+                {
+                  path: [],
+                  code: 'unrecognized_keys',
+                  message: 'Unrecognized keys: "category", "size"',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'text_dedupe',
+        '--yes',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${API_TOO_OLD_FOR_FIELDS}\n`);
+    });
+
+    it('names the fields by path too, and leaves other validation refusals alone', () => {
+      const failed = (path: string[]) =>
+        new ApiError(400, 'validation_failed', 'Invalid payload', [
+          { path, code: 'invalid_value', message: 'Invalid option' },
+        ]);
+      expect(postRefusal(failed(['size']), undefined)).toBe(
+        API_TOO_OLD_FOR_FIELDS,
+      );
+      expect(postRefusal(failed(['spec']), undefined)).not.toBe(
+        API_TOO_OLD_FOR_FIELDS,
+      );
+    });
+
+    it('refuses --category and --size beside --template', async () => {
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--template',
+        'text_dedupe',
+        '--yes',
+        '--category',
+        'code',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain(TEMPLATE_SETS_FIELDS);
+      expect(api.requests).toEqual([]);
+    });
+
     it.each([
       ['hash:abc', 'sha256 as 64 hex'],
       ['nonsense', '--verify must be'],
@@ -1890,6 +2014,8 @@ describe('tasks pull, submit and post', () => {
       expect(payload.taskType).toBe('text_dedupe');
       // A template post says so, for the gold rule (VOU-134).
       expect(payload.origin).toBe('template');
+      // And carries the template's category and size (RT-2).
+      expect(payload).toMatchObject({ category: 'data', size: 's' });
       const input = String(payload.spec.input);
       const answer = `${[...new Set(input.split('\n'))].join('\n')}\n`;
       expect(payload.verification).toEqual({
@@ -1995,6 +2121,8 @@ describe('tasks pull, submit and post', () => {
       const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
       expect(payload.spec.input).toBe('What is the capital of Norway?');
       expect(payload.origin).toBe('template');
+      // The guided walk sends the template's category and size (RT-2).
+      expect(payload).toMatchObject({ category: 'conversation', size: 's' });
       expect(payload).not.toHaveProperty('assignee');
     });
 
@@ -2593,6 +2721,37 @@ describe('tasks pull, submit and post', () => {
       const task = api.add({});
       const json = await run('tasks', 'show', task.id, '--json');
       expect(JSON.parse(json.out).submit).toContain(`tasks submit ${task.id}`);
+    });
+
+    it('tasks show prints category, check method, size and disclosure (RT-2)', async () => {
+      const task = api.add({
+        category: 'data',
+        checkMethod: 'hash',
+        size: 's',
+        disclosure: 'public',
+      });
+      const { code, out } = await run('tasks', 'show', task.id);
+      expect(code).toBe(0);
+      const lines = out.split('\n');
+      expect(lines[0]).toContain(`Task ${task.id}.`);
+      expect(lines[1]).toBe(
+        'Category data. check hash. size s. disclosure public.',
+      );
+      const json = await run('tasks', 'show', task.id, '--json');
+      expect(JSON.parse(json.out)).toMatchObject({
+        category: 'data',
+        check_method: 'hash',
+        size: 's',
+        disclosure: 'public',
+      });
+    });
+
+    it('tasks show leaves the fields line out for an API that sends none', async () => {
+      const task = api.add({});
+      const { out } = await run('tasks', 'show', task.id);
+      expect(out).not.toContain('Category');
+      const json = await run('tasks', 'show', task.id, '--json');
+      expect(JSON.parse(json.out)).not.toHaveProperty('category');
     });
   });
 });

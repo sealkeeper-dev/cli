@@ -143,6 +143,13 @@ export const TaskResponse = z.object({
   // string, so a new origin never fails the parse of a whole page. Absent
   // from an API before it, and then the routine takes no such task.
   origin: z.string().optional(),
+  // The real task fields (RT-1), for tasks show. Any string, so a value
+  // added later never fails the parse of a whole page, and absent from an
+  // API before them.
+  category: z.string().optional(),
+  checkMethod: z.string().optional(),
+  size: z.string().optional(),
+  disclosure: z.string().optional(),
   // The poster with its handle and level, in list answers from an API
   // since RT-8, so the routine tells a poster's operator and level without
   // a lookup. A shape this CLI cannot read counts as absent, and then the

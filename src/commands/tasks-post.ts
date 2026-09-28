@@ -4,9 +4,13 @@ import {
   AgentRef,
   MAX_TASK_SPEC_BYTES,
   PostTaskRequest,
+  TASK_CATEGORIES,
   TASK_DEFAULT_TTL_HOURS,
   TASK_MAX_TTL_DAYS,
+  TASK_SIZES,
+  TaskCategory,
   type TaskOrigin,
+  TaskSize,
   type VerificationSpec,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
@@ -85,6 +89,8 @@ type PostOptions = {
   yes?: boolean;
   expiresHours?: string;
   for?: string;
+  category?: string;
+  size?: string;
 };
 
 export const NOTHING_POSTED = 'Nothing posted.';
@@ -109,6 +115,16 @@ export const assigneeCap = (ref: string): string =>
   `${ref} already has the most open tasks addressed to it, try again once it claims some`;
 export const assigneeOperatorCap = (ref: string): string =>
   `${ref} already has the most open tasks from your agents, try again once it claims some`;
+
+// The refusals of --category and --size, one line each.
+export const badCategory = (value: string): string =>
+  `--category must be one of ${TASK_CATEGORIES.join(', ')}, got ${value}`;
+export const badSize = (value: string): string =>
+  `--size must be one of ${TASK_SIZES.join(', ')}, got ${value}`;
+export const API_TOO_OLD_FOR_FIELDS =
+  'nothing posted. This API is older than this CLI and does not take category or size yet';
+export const TEMPLATE_SETS_FIELDS =
+  '--template sets its own category and size, leave out --category and --size';
 
 // The options of a post as scripts give it, each with its flag as commander
 // names a missing one.
@@ -151,6 +167,14 @@ export function register(
       '--expires-hours <n>',
       `hours until the task expires, at most ${MAX_EXPIRES_HOURS} (default: ${TASK_DEFAULT_TTL_HOURS})`,
     )
+    .option(
+      '--category <category>',
+      `what the task is about, one of ${TASK_CATEGORIES.join(', ')} (default: from the task type, else other)`,
+    )
+    .option(
+      '--size <size>',
+      `how big the task is, ${TASK_SIZES.join(' or ')} (default: s)`,
+    )
     .action(async function (
       this: Command,
       options: PostOptions,
@@ -170,14 +194,35 @@ export function register(
             '--template replaces --type, --spec and --verify, give one or the other',
           );
         }
+        if (options.category !== undefined || options.size !== undefined) {
+          this.error(TEMPLATE_SETS_FIELDS);
+        }
         await templatePost(this, deps, options.template, options);
         return;
+      }
+      // Checked before anything is read, so a typo costs nothing.
+      if (
+        options.category !== undefined &&
+        !TaskCategory.safeParse(options.category).success
+      ) {
+        this.error(badCategory(options.category));
+      }
+      if (
+        options.size !== undefined &&
+        !TaskSize.safeParse(options.size).success
+      ) {
+        this.error(badSize(options.size));
       }
       if (options.input !== undefined) {
         this.error('--input goes with --template');
       }
       if (options.yes === true) this.error('--yes goes with --template');
       if (given.length === 0) {
+        if (options.category !== undefined || options.size !== undefined) {
+          this.error(
+            '--category and --size go with --type, --spec and --verify',
+          );
+        }
         if (wantsJson(this)) this.error(NO_OPTIONS_JSON);
         const input = (deps.stdin ?? noInput)();
         const tty = (deps.isTTY ?? stdoutIsTTY)();
@@ -233,6 +278,10 @@ async function explicitPost(
     verification,
     expiresHours: options.expiresHours,
     assignee: options.for,
+    ...(options.category === undefined
+      ? {}
+      : { category: options.category as TaskCategory }),
+    ...(options.size === undefined ? {} : { size: options.size as TaskSize }),
   };
   await postAndPrint(cmd, deps, requestOf(cmd, draft));
 }
@@ -247,6 +296,10 @@ type Draft = {
   // routine run posts (POST-7). Left out for a plain post, which the API
   // reads as manual.
   origin?: TaskOrigin;
+  // Left out when not given, and the API derives the category from the
+  // task type and takes size s.
+  category?: TaskCategory;
+  size?: TaskSize;
 };
 
 // The request for a draft, validated as the API will validate it. Ends the
@@ -271,6 +324,8 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
     ...(expiresAt === undefined ? {} : { expiresAt }),
     ...(assignee === undefined ? {} : { assignee }),
     ...(draft.origin === undefined ? {} : { origin: draft.origin }),
+    ...(draft.category === undefined ? {} : { category: draft.category }),
+    ...(draft.size === undefined ? {} : { size: draft.size }),
   });
   if (!request.success) cmd.error(z.prettifyError(request.error));
   return request.data;
@@ -481,6 +536,8 @@ const draftOf = (task: TemplateTask): Draft => ({
   taskType: task.taskType,
   spec: { ...task.spec },
   verification: task.verification,
+  category: task.category,
+  size: task.size,
 });
 
 // A JSON argument given inline or as @path to a file, for --spec and
@@ -723,6 +780,8 @@ export function previewLines(
   const lines = [
     '',
     `type     ${task.taskType}`,
+    `category ${task.category}`,
+    `size     ${task.size}`,
     `check    ${CHECKS[template.kind]}`,
     `for      ${request.assignee ?? 'any agent of another operator'}`,
     `expires  in ${hours} hour${hours === 1 ? '' : 's'}`,
@@ -798,12 +857,28 @@ function ownAgent(ref: string, slug: string, agentId: string): boolean {
   );
 }
 
+// True when a validation_failed names category or size, which an API from
+// before RT-2 refuses as unrecognized keys of the payload, path [] and the
+// keys in the message, and a newer one would name by path.
+function namesNewFields(error: ApiError): boolean {
+  if (error.code !== 'validation_failed') return false;
+  const field = /^(category|size)$/;
+  return error.issues.some(
+    (issue) =>
+      issue.path.some((p) => typeof p === 'string' && field.test(p)) ||
+      (issue.code === 'unrecognized_keys' &&
+        /"(category|size)"/.test(issue.message)),
+  );
+}
+
 // One line per refusal of the post route. The assignee codes name what
-// --for gave. Everything else is the shared refusal.
+// --for gave. An API that does not take category or size says so.
+// Everything else is the shared refusal.
 export function postRefusal(
   error: ApiError,
   assignee: string | undefined,
 ): string {
+  if (namesNewFields(error)) return API_TOO_OLD_FOR_FIELDS;
   if (assignee !== undefined) {
     switch (error.code) {
       case 'not_found':

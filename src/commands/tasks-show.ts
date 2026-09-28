@@ -86,7 +86,11 @@ export function register(
       // A task this agent posted gets poster lines instead of the submit
       // lines, and says when a submission waits for its verdict.
       const tail = posterLines(task, config.agentId);
-      for (const line of taskDetail(task, Date.now(), tail)) stdout(line);
+      const [head, ...rest] = taskDetail(task, Date.now(), tail);
+      if (head !== undefined) stdout(head);
+      const fields = fieldsLine(task);
+      if (fields !== null) stdout(fields);
+      for (const line of rest) stdout(line);
     });
 }
 
@@ -108,10 +112,36 @@ async function heldIds(
   return [...ids];
 }
 
+// The real task fields on one line under the first, such as "Category
+// data. check hash. size s. disclosure public.", each one the API sent.
+// Null from an API before them, which sends none.
+export function fieldsLine(task: TaskResponse): string | null {
+  const parts = [
+    ['category', task.category],
+    ['check', task.checkMethod],
+    ['size', task.size],
+    ['disclosure', task.disclosure],
+  ].flatMap(([label, value]) =>
+    value === undefined ? [] : [`${label} ${value}`],
+  );
+  if (parts.length === 0) return null;
+  const line = `${parts.join('. ')}.`;
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+// The real task fields in the JSON of tasks show, each one the API sent.
+const fieldsEntry = (task: TaskResponse) => ({
+  ...(task.category === undefined ? {} : { category: task.category }),
+  ...(task.checkMethod === undefined ? {} : { check_method: task.checkMethod }),
+  ...(task.size === undefined ? {} : { size: task.size }),
+  ...(task.disclosure === undefined ? {} : { disclosure: task.disclosure }),
+});
+
 // The JSON of tasks show. The poster gets no submit command, since only the
 // claimant submits, and gets the verdict command while a submission waits.
 function showEntry(task: TaskResponse, agentId: string) {
-  const { submit, ...entry } = proveEntry(task);
+  const { submit, ...base } = proveEntry(task);
+  const entry = { ...base, ...fieldsEntry(task) };
   if (task.posterAgentId !== agentId) return { ...entry, submit };
   return awaitingVerdict(task, agentId)
     ? { ...entry, awaiting_verdict: true, verdict: verdictCommand(task.id) }

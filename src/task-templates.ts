@@ -4,6 +4,8 @@ import {
   SUMMARISE_MIN_INPUT_WORDS,
   solveTemplate,
   TASK_TEMPLATES,
+  type TaskCategory,
+  type TaskSize,
   type TaskTemplateId,
   TEMPLATE_MAX_INPUT_CHARS,
   type TemplateDraft,
@@ -33,6 +35,9 @@ export type TemplateTask = {
   taskType: string;
   spec: TemplateSpec;
   verification: TemplateVerification;
+  // The template's category and size, which its post carries (RT-2).
+  category: TaskCategory;
+  size: TaskSize;
   // The answer that passes, for hash and schema tasks. For tests and the
   // poster's own preview only, never part of the task.
   answer?: string;
@@ -45,6 +50,8 @@ export const cryptoDraw: Draw = (lo, hi) => randomInt(lo, hi + 1);
 export type Template = {
   id: string;
   kind: TemplateKind;
+  category: TaskCategory;
+  size: TaskSize;
   // One line on what the task asks and who checks it.
   about: string;
   input: TemplateInput;
@@ -87,15 +94,19 @@ const WORDING: Record<TaskTemplateId, { about: string; inputHint?: string }> = {
 
 // The made task with its answer, and for a hash task the sha256 of that
 // answer, both from solveTemplate.
-function withAnswer(draft: TemplateDraft): TemplateTask {
+function withAnswer(
+  draft: TemplateDraft,
+  fields: Pick<TemplateTask, 'category' | 'size'>,
+): TemplateTask {
   const { taskType, spec, verification } = draft;
   if (verification.kind === 'counterparty') {
-    return { taskType, spec, verification };
+    return { taskType, spec, verification, ...fields };
   }
   const answer = solveTemplate(taskType, spec);
   return {
     taskType,
     spec,
+    ...fields,
     verification:
       verification.kind === 'hash'
         ? { kind: 'hash', sha256: sha256(answer) }
@@ -107,13 +118,16 @@ function withAnswer(draft: TemplateDraft): TemplateTask {
 export const TEMPLATES: readonly Template[] = TASK_TEMPLATES.map(
   (t): Template => {
     const { about, inputHint } = WORDING[t.id];
+    const fields = { category: t.category, size: t.size };
     return {
       id: t.id,
       kind: t.kind,
+      ...fields,
       about,
       input: t.input,
       ...(inputHint === undefined ? {} : { inputHint }),
-      make: (input, draw = cryptoDraw) => withAnswer(t.make(input, draw)),
+      make: (input, draw = cryptoDraw) =>
+        withAnswer(t.make(input, draw), fields),
     };
   },
 );
