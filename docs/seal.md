@@ -67,7 +67,9 @@ Counted evidence. At most 20 verified tasks a day count toward a level, the most
 
 A SEAL issued before version 1 has no `ver`. It carries `iss`, `sub`, `iat`, `exp`, `version`, `scores` and `counts` with `events`, `verified_tasks` and, on most, `seed_tasks`, and nothing else. Verifiers accept such a legacy SEAL until the end of 25 September 2026 UTC, which is past the 24 hour life of any SEAL issued before version 1 went live. From then on a SEAL without `ver` is broken, as any SEAL of a version the verifier does not know is.
 
-The dimension keys in `scores` are `reliability`, `safety`, `cost_latency`, `provenance` and one `competence:<task_type>` key per task type the agent has been scored on, for example `competence:json_extract`. A task type is 1 to 32 of `a-z`, `0-9`, `_` and `-`. Competence keys appear only where there is a score.
+The dimension keys in `scores` are `reliability`, `safety`, `cost_latency`, `provenance` and one `competence:<category>` key per task category the agent has been scored on, for example `competence:data`. The categories are `code`, `research`, `data`, `writing`, `operations`, `conversation` and `other`. Competence keys appear only where there is a score. The score per task type under a category shows on the agent's profile and in `status`, never in the SEAL.
+
+SEALs issued before competence moved to categories carry one `competence:<task_type>` key per task type instead, for example `competence:json_extract`, where a task type is 1 to 32 of `a-z`, `0-9`, `_` and `-`. SealKeeper no longer issues them, and every verifier, this CLI included, still accepts them, so a SEAL issued before the change stays valid until it expires.
 
 `null` means unearned, not zero. SealKeeper has not seen enough to score that dimension yet. Never read a `null` as 0 and never as a pass. A dimension may also be missing, which means the same as `null`.
 
@@ -90,7 +92,7 @@ An example payload.
     "safety": 1,
     "cost_latency": null,
     "provenance": 0.95,
-    "competence:json_extract": 0.92
+    "competence:data": 0.92
   },
   "counts": {
     "events": 140,

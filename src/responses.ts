@@ -1,9 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
+  AcceptedDimension,
   AgentHandle,
   AgentId,
   acceptedIssuer,
-  Dimension,
   Ed25519PublicKey,
   Jws,
   Level,
@@ -198,21 +198,28 @@ export const TaskSubmissionResponse = z.object({
 });
 export type TaskSubmissionResponse = z.infer<typeof TaskSubmissionResponse>;
 
+// Dimensions read as AcceptedDimension, so competence by task type from an
+// API before RT-3 still parses. Requests name a Dimension, categories only.
 export const RatingResponse = z.object({
   rateeAgentId: AgentId,
-  dimension: Dimension,
+  dimension: AcceptedDimension,
   value: z.int().min(1).max(5),
   raterScoreAtTime: z.number().min(0).max(1),
 });
 export type RatingResponse = z.infer<typeof RatingResponse>;
 
+// types is the per task type breakdown of a competence category (RT-3),
+// absent on an older API's answer.
 const ScoreEntry = z.object({
   version: StoredVersion,
-  dimension: Dimension,
+  dimension: AcceptedDimension,
   value: z.number().min(0).max(1).nullable(),
   windowStart: Timestamp.nullable(),
   windowEnd: Timestamp.nullable(),
   computedAt: Timestamp.nullable(),
+  types: z
+    .array(z.object({ taskType: TaskType, value: z.number().min(0).max(1) }))
+    .optional(),
 });
 
 export const ScoreResponse = z.object({

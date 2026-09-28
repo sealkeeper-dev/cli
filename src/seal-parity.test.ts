@@ -82,6 +82,16 @@ const FIXTURES: [string, unknown][] = [
       scores: { ...base.scores, charisma: 1 },
     },
   ],
+  // Competence rolled up to category in RT-3. A SEAL issued before carries
+  // a task type key, and both verifiers still take it.
+  [
+    'competence by category',
+    { ...base, scores: { ...base.scores, 'competence:data': 0.8 } },
+  ],
+  [
+    'competence by task type, issued before categories',
+    { ...base, scores: { ...base.scores, 'competence:csv_normalise': 0.8 } },
+  ],
   [
     'a count missing',
     {

@@ -3,13 +3,14 @@ import {
   AgentId,
   Dimension,
   RatingRequest,
-  type RatingResponse,
   RatingValue,
+  TASK_CATEGORIES,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
+import type { RatingResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   openTaskSession,
@@ -34,7 +35,7 @@ export function register(
     .description('Rate another agent on one dimension')
     .requiredOption(
       '--dimension <dimension>',
-      'reliability, safety, cost_latency, provenance or competence:<task_type>',
+      'reliability, safety, cost_latency, provenance or competence:<category>',
     )
     .requiredOption('--value <n>', 'a whole number from 1 to 5')
     .action(async function (
@@ -79,7 +80,7 @@ function validate(
   }
   if (!Dimension.safeParse(options.dimension).success) {
     cmd.error(
-      `--dimension must be reliability, safety, cost_latency, provenance or competence:<task_type>, got ${options.dimension}`,
+      `--dimension must be reliability, safety, cost_latency, provenance or competence:<category>, where category is one of ${TASK_CATEGORIES.join(', ')}, got ${options.dimension}`,
     );
   }
   const value = /^\d+$/.test(options.value) ? Number(options.value) : NaN;

@@ -138,7 +138,7 @@ describe('sealkeeper rate', () => {
       'rate',
       OTHER_AGENT,
       '--dimension',
-      'competence:summarise',
+      'competence:writing',
       '--value',
       '4',
     );
@@ -149,7 +149,7 @@ describe('sealkeeper rate', () => {
         path: '/v1/ratings',
         payload: {
           rateeAgentId: OTHER_AGENT,
-          dimension: 'competence:summarise',
+          dimension: 'competence:writing',
           value: 4,
           issuedAt: expect.any(String),
         },
@@ -161,7 +161,7 @@ describe('sealkeeper rate', () => {
     expect(out).toBe(
       [
         `agent      ${OTHER_AGENT}`,
-        'dimension  competence:summarise',
+        'dimension  competence:writing',
         'value      4',
         'weight     0.75',
         '',
@@ -193,6 +193,11 @@ describe('sealkeeper rate', () => {
       'a bad dimension',
       [OTHER_AGENT, '--dimension', 'speed', '--value', '3'],
       '--dimension must be',
+    ],
+    [
+      'competence by task type',
+      [OTHER_AGENT, '--dimension', 'competence:summarise', '--value', '3'],
+      'where category is one of code, research, data, writing, operations, conversation, other, got competence:summarise',
     ],
     [
       'a value of 6',

@@ -1,9 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
-import { ScoreResponse } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
+import { ScoreResponse } from './responses.js';
 
 // A small cache of the agent's scores from GET /v1/agents/<id>/score, kept in
 // score.json so status can show them offline. Scores change when the scoring

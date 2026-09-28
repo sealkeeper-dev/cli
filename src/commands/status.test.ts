@@ -107,7 +107,11 @@ function agentAnswer(verifiedTasks: number, live: Live = {}) {
 // The score and agent routes. verifiedTasks is the live count the agent
 // route answers with.
 function scoreFetch(
-  scores: { dimension: string; value: number | null }[],
+  scores: {
+    dimension: string;
+    value: number | null;
+    types?: { taskType: string; value: number }[];
+  }[],
   verifiedTasks = 2,
   live: Live = {},
 ) {
@@ -353,7 +357,17 @@ describe('status', () => {
     const fetchFn = scoreFetch([
       { dimension: 'reliability', value: 0.8234 },
       { dimension: 'safety', value: null },
-      { dimension: 'competence:lint', value: 0.5 },
+      {
+        dimension: 'competence:data',
+        value: 0.5,
+        types: [
+          { taskType: 'csv_normalise', value: 1 },
+          { taskType: 'json_extract', value: 0.25 },
+        ],
+      },
+      { dimension: 'competence:code', value: 0.75 },
+      // Competence by task type, from an API before RT-3, is not shown.
+      { dimension: 'competence:lint', value: 0.9 },
     ]);
     const { code, out, err } = await run(fetchFn, 'status');
     expect(code).toBe(0);
@@ -388,7 +402,15 @@ describe('status', () => {
     expect(lines).toContain('  safety          -');
     expect(lines).toContain('  cost_latency    -');
     expect(lines).toContain('  provenance      -');
-    expect(lines).toContain('  competence:lint 0.50');
+    // Categories in category order, each task type one step further in.
+    const at = lines.indexOf('  provenance      -');
+    expect(lines.slice(at + 1, at + 5)).toEqual([
+      '  competence:code 0.75',
+      '  competence:data 0.50',
+      '    csv_normalise 1',
+      '    json_extract  0.25',
+    ]);
+    expect(out).not.toContain('competence:lint');
   });
 
   it('names the new API address once when the API answers a redirect', async () => {
@@ -892,6 +914,7 @@ describe('status', () => {
         cost_latency: null,
         provenance: null,
       },
+      competenceTypes: {},
       scoresFetchedAt: expect.any(String),
     });
   });

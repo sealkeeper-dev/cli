@@ -3,6 +3,7 @@
 import { stat } from 'node:fs/promises';
 import {
   BaseDimension,
+  COMPETENCE_DIMENSIONS,
   DORMANCY,
   type Event,
   EventType,
@@ -124,6 +125,9 @@ type Status = {
   // Score per dimension for the configured version. null when there is no
   // score for that dimension or the score could not be fetched.
   scores: Record<string, number | null>;
+  // The per task type breakdown under each competence category that has
+  // one, keyed by the category's dimension (RT-3). Never a dimension.
+  competenceTypes: Record<string, { taskType: string; value: number }[]>;
   scoresFetchedAt: string | null;
   // Today's events in full, only with --show.
   events?: Event[];
@@ -248,7 +252,7 @@ async function readStatus(
     pending,
     lastSyncAt: cursor.lastSyncAt ?? null,
     autoSync: config.autoSync === true,
-    scores: scoresFor(config.version, score),
+    ...scoresFor(config.version, score),
     scoresFetchedAt: score?.fetchedAt ?? null,
     ...(show ? { events } : {}),
   };
@@ -329,20 +333,38 @@ function countEvents(
   };
 }
 
-// The base dimensions always, then any competence dimensions the API has for
-// this version, in name order. A dimension with no score is null.
+// The base dimensions always, then the competence categories the API has
+// for this version, in category order, each with its per task type
+// breakdown when the API sent one. A dimension with no score is null, and
+// a category the API has no row for is left out, never shown as null.
+// Competence by task type, from an API before RT-3, is not shown.
 function scoresFor(
   version: string,
   cache: ScoreCache | null,
-): Record<string, number | null> {
+): Pick<Status, 'scores' | 'competenceTypes'> {
   const scores: Record<string, number | null> = Object.fromEntries(
     BaseDimension.options.map((dimension) => [dimension, null]),
   );
-  const entries = (cache?.score.scores ?? [])
-    .filter((entry) => entry.version === version)
-    .sort((a, b) => a.dimension.localeCompare(b.dimension));
-  for (const entry of entries) scores[entry.dimension] = entry.value;
-  return scores;
+  const competenceTypes: Status['competenceTypes'] = {};
+  const entries = (cache?.score.scores ?? []).filter(
+    (entry) => entry.version === version,
+  );
+  const byDimension = new Map(entries.map((e) => [e.dimension as string, e]));
+  for (const d of BaseDimension.options) {
+    scores[d] = byDimension.get(d)?.value ?? null;
+  }
+  for (const d of COMPETENCE_DIMENSIONS) {
+    const entry = byDimension.get(d);
+    if (!entry) continue;
+    scores[d] = entry.value;
+    if (entry.types && entry.types.length > 0) {
+      competenceTypes[d] = entry.types.map((t) => ({
+        taskType: t.taskType,
+        value: t.value,
+      }));
+    }
+  }
+  return { scores, competenceTypes };
 }
 
 function printStatus(status: Status): void {
@@ -387,9 +409,15 @@ function printStatus(status: Status): void {
     ['scores', status.scoresFetchedAt ? `as of ${status.scoresFetchedAt}` : ''],
   ]);
   printRows(
-    Object.entries(status.scores).map(([dimension, value]) => [
-      `  ${dimension}`,
-      value === null ? '-' : formatScore(value),
+    Object.entries(status.scores).flatMap(([dimension, value]) => [
+      [`  ${dimension}`, value === null ? '-' : formatScore(value)] as [
+        string,
+        string,
+      ],
+      // The task types under a competence category, one step further in.
+      ...(status.competenceTypes[dimension] ?? []).map(
+        (t): [string, string] => [`    ${t.taskType}`, formatScore(t.value)],
+      ),
     ]),
   );
   stdout('');
