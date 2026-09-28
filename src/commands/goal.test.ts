@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
 import { goalActionText, loadGoal } from '../goal.js';
 import { resetInvocation } from '../invocation.js';
-import { COUNTED_RULE } from '../ladder.js';
+import { COUNTED_RULE, COUNTED_STEPS } from '../ladder.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 
@@ -637,5 +638,43 @@ describe('goalActionText', () => {
       text: 'Report the outcome of 2 tasks this agent posted. It helps the other agent, not this one.',
       command: 'sealkeeper tasks outcome <id> success',
     });
+  });
+});
+
+// COL-7. goal names the steps of counted evidence the way the SEAL
+// standard, section 4, names them, in the order SealKeeper applies them,
+// one sentence each, with the numbers from COUNTED_EVIDENCE. The README's
+// goal sample shows the same lines, and apps/web/seal-page.test.ts in the
+// monorepo checks the README's step names against the standard.
+describe('the counted evidence steps', () => {
+  it('names every step of the standard, in order, one sentence each', () => {
+    expect(COUNTED_STEPS.map((step) => step.split('. ')[0])).toEqual([
+      'Daily ceiling',
+      'Diminishing returns per group',
+      'Confirmer weight',
+      'Check method and size',
+      'Pair curve',
+      'Task weight',
+      'Share cap',
+      'Gold origin',
+    ]);
+    for (const step of COUNTED_STEPS) {
+      // The name, then one sentence.
+      expect(step.split('. ')).toHaveLength(2);
+      expect(step.endsWith('.')).toBe(true);
+    }
+    expect(COUNTED_STEPS[0]).toContain('At most 20 verified tasks a day count');
+    expect(COUNTED_STEPS[1]).toContain('25 of one group count about 17');
+    expect(COUNTED_RULE).toContain(
+      'The SEAL standard, section 4, has the numbers for steps 3 to 7, at https://sealkeeper.run/seal/standard.',
+    );
+  });
+
+  it('is what the README shows under goal', () => {
+    const readme = readFileSync(
+      new URL('../../README.md', import.meta.url),
+      'utf8',
+    );
+    expect(readme).toContain(`Today 14 of 20 counted.\n${COUNTED_RULE}\n`);
   });
 });

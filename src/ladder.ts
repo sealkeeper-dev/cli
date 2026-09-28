@@ -8,7 +8,7 @@ import {
   OPERATOR_SILVER_CAP,
 } from '@sealkeeper/schema';
 import { cli } from './invocation.js';
-import { ACCOUNT_URL, HIGHEST_ISSUED } from './level-text.js';
+import { ACCOUNT_URL, HIGHEST_ISSUED, STANDARD_URL } from './level-text.js';
 import type { LiveAgent } from './live-agent.js';
 import { TEMPLATES } from './task-templates.js';
 
@@ -74,8 +74,31 @@ const later =
 // (VOU-182) and gold needs an operator verified by DNS TXT (VOU-185).
 export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${bronze.historyDays} days. Silver ${silver.verifiedTasks} over ${silver.historyDays} days, seed tasks included, for at most ${OPERATOR_SILVER_CAP.agents} new agents per operator in ${OPERATOR_SILVER_CAP.days} days. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators, ${gold.cleanDays} clean days and an operator verified by a DNS TXT record on its domain.${later}`;
 
-// How tasks count, in two sentences, for prove, goal and the README.
-export const COUNTED_RULE = `At most ${COUNTED_EVIDENCE.dailyCeiling} verified tasks a day count toward a level, and more still verify and show on the profile. Repeating one seed task type, or tasks from one operator, counts less each time, so mix types and partners.`;
+// How tasks count toward a level, the steps of counted evidence in the
+// order SealKeeper applies them, one sentence each, named as the SEAL
+// standard, section 4, Counted evidence, names them (COL-7). The numbers
+// the CLI can see come from COUNTED_EVIDENCE. The weights of steps 3 to 7
+// live in the API's SCORING, which the CLI does not bundle, so the last line
+// sends the reader to the standard for them rather than copy them here.
+// goal prints these lines, and the README shows them in its goal sample.
+export const COUNTED_STEPS: readonly string[] = [
+  `Daily ceiling. At most ${COUNTED_EVIDENCE.dailyCeiling} verified tasks a day count, the heaviest first, and more still verify and show on the profile.`,
+  `Diminishing returns per group. Each task of one group, a seed task type or one poster operator's tasks, adds a little less than the one before, so ${COUNTED_EVIDENCE.diminishingK} of one group count about ${Math.round(COUNTED_EVIDENCE.diminishingK * Math.log(2))} and mixing types and partners pays.`,
+  'Confirmer weight. A confirmed task counts by the level its poster held when it reported, and a task its poster let lapse counts as from a poster with no level.',
+  'Check method and size. A task weighs by its check method and its size, and never counts for more than one task.',
+  'Pair curve. Past the first few recent tasks between the same two operators, each more counts less.',
+  'Task weight. A task addressed to one agent counts less than an open one, and addressed tasks between two operators share a budget.',
+  "Share cap. Past a small floor, one operator's tasks count no more than every other operator's tasks together.",
+  "Gold origin. Gold's confirmed tasks count only work posted by hand and reported without a routine.",
+];
+
+// The steps as goal prints them, a heading, the numbered steps and where
+// the numbers are.
+export const COUNTED_RULE = [
+  'How tasks count toward a level, in this order.',
+  ...COUNTED_STEPS.map((step, i) => `  ${i + 1}. ${step}`),
+  `The SEAL standard, section 4, has the numbers for steps 3 to 7, at ${STANDARD_URL}.`,
+].join('\n');
 
 export const POST_WHY =
   'Seed tasks count at every level, and gold also needs confirmed tasks from other operators, which only exist when operators post them.';
