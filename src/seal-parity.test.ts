@@ -73,7 +73,7 @@ const FIXTURES: [string, unknown][] = [
   ['never active', { ...base, last_active: null, dormant_days: null }],
   ['an extra top level key', { ...base, badge: 'gold' }],
   // Intended. Platinum is reserved on the schema's LADDER and is not a level
-  // under ver 1 or 2 (standard, section 9) until a ver bump issues it.
+  // under ver 1, 2 or 3 (standard, section 9) until a ver bump issues it.
   ['a level that is not in the standard', { ...base, level: 'platinum' }],
   [
     'a score for a dimension that does not exist',

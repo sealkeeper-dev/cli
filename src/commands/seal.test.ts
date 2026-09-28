@@ -391,7 +391,50 @@ describe('sealkeeper seal', () => {
       expect(v1.out).not.toContain('counted');
     });
 
-    it.each([3, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    it('a version 3 SEAL is valid and shows the posted counts, fingerprint and state', async () => {
+      const { version: _version, ...rest } = claims();
+      const seal = await sign(
+        {
+          ...rest,
+          ver: 3,
+          counts: {
+            ...rest.counts,
+            posted_tasks: 4,
+            posted_distinct_operators: 2,
+            posted_confirmed_tasks: 1,
+          },
+          counted: {
+            verified_tasks: 17,
+            seed_tasks: 17,
+            server_checked_tasks: 0,
+            confirmed_tasks: 0,
+            posted_tasks: 3,
+            posted_confirmed_tasks: 1,
+          },
+          fingerprint: {
+            hash: 'BwjgHg-Z9sC4K05UnygMCN_CD7onYm12GfK83VEIpTQ',
+            at: rest.iat,
+          },
+          state: 'matches',
+        },
+        serverKey.privateKey,
+        KID,
+      );
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(0);
+      const lines = out.trimEnd().split('\n');
+      expect(lines[0]).toBe('valid SEAL');
+      expect(lines).toContain('seed tasks 25, 17 counted');
+      expect(lines).toContain('posted tasks 4');
+      expect(lines).toContain('posted confirmed tasks 1');
+      expect(lines).toContain('posted distinct operators 2');
+      expect(lines).toContain(
+        `fingerprint BwjgHg-Z9sC4K05UnygMCN_CD7onYm12GfK83VEIpTQ since ${new Date(rest.iat * 1000).toISOString().slice(0, 10)}`,
+      );
+      expect(lines).toContain('state matches');
+    });
+
+    it.each([4, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);

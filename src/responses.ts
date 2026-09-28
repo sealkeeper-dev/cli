@@ -200,7 +200,7 @@ const IdentityClaim = z.object({
 });
 export type IdentityClaim = z.infer<typeof IdentityClaim>;
 
-// The claims inside a SEAL, version 1 or the legacy shape without ver. iss
+// The claims inside a SEAL, version 1, 2 or 3 or the legacy shape without ver. iss
 // is any text here so seal verify can name a wrong issuer instead of
 // calling the SEAL malformed. scores takes any dimension name and level any
 // text, so a dimension or level added later does not break an older CLI.
@@ -229,6 +229,10 @@ const sealClaims = {
     confirmed_tasks: Count.optional(),
     distinct_operators: Count.optional(),
     safety_incidents_90d: Count.optional(),
+    // The posted counts, version 3 on.
+    posted_tasks: Count.optional(),
+    posted_distinct_operators: Count.optional(),
+    posted_confirmed_tasks: Count.optional(),
   }),
   // The counted evidence the level read, version 2 on (VOU-139).
   counted: z
@@ -239,6 +243,14 @@ const sealClaims = {
       confirmed_tasks: Count,
     })
     .optional(),
+  // The fingerprint the level was last confirmed under and the state, version
+  // 3 on. state is any text here, so a state added later does not break an
+  // older CLI.
+  fingerprint: z
+    .object({ hash: z.string(), at: Seconds })
+    .nullable()
+    .optional(),
+  state: z.string().optional(),
   operator: z.object({ verified: z.boolean() }).optional(),
   identity: z.array(IdentityClaim).optional(),
   last_active: Seconds.nullable().optional(),

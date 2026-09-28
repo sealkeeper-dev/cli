@@ -114,9 +114,10 @@ function expiresAtOf(payload: unknown): string | null {
 }
 
 // What a verified SEAL says, one line each, for seal show and seal verify.
-// Level, the eight counts (with the counted value beside each task count in
-// a version 2 SEAL, VOU-140), operator verified, last active as a date,
-// dormant days and any identity references. A legacy SEAL, issued before
+// Level, the eight counts (with the counted value beside each task count
+// from version 2 on, VOU-140), the three posted counts, fingerprint and
+// state of version 3, operator verified, last active as a date, dormant
+// days and any identity references. A legacy SEAL, issued before
 // version 1, has only some of these, so a line is left out when its field
 // is. Nothing for a payload that is not a SEAL.
 const COUNT_LINES = [
@@ -128,6 +129,9 @@ const COUNT_LINES = [
   ['confirmed_tasks', 'confirmed tasks'],
   ['distinct_operators', 'distinct operators'],
   ['safety_incidents_90d', 'safety incidents in 90 days'],
+  ['posted_tasks', 'posted tasks'],
+  ['posted_confirmed_tasks', 'posted confirmed tasks'],
+  ['posted_distinct_operators', 'posted distinct operators'],
 ] as const;
 
 const day = (seconds: number) =>
@@ -146,8 +150,8 @@ export function sealSummary(payload: unknown): string[] {
   for (const [key, label] of COUNT_LINES) {
     const value = c.counts[key];
     if (value === undefined) continue;
-    // A version 2 SEAL carries the counted value the level read beside
-    // the raw count, for the four task counts.
+    // From version 2 on a SEAL carries the counted value the level read
+    // beside the raw count, for the four task counts.
     const counted =
       c.counted !== undefined && key in c.counted
         ? c.counted[key as keyof typeof c.counted]
@@ -157,6 +161,17 @@ export function sealSummary(payload: unknown): string[] {
         ? `${label} ${value}`
         : `${label} ${value}, ${counted} counted`,
     );
+  }
+  // Only version 3 defines fingerprint and state.
+  if (c.ver === 3) {
+    if (c.fingerprint !== undefined) {
+      lines.push(
+        c.fingerprint === null
+          ? 'fingerprint none sent'
+          : `fingerprint ${c.fingerprint.hash} since ${day(c.fingerprint.at)}`,
+      );
+    }
+    if (c.state !== undefined) lines.push(`state ${c.state}`);
   }
   if (c.operator !== undefined) {
     lines.push(`operator verified ${c.operator.verified ? 'yes' : 'no'}`);

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `seal verify` accepts SEAL version 3 beside versions 1 and 2 (X-1). `seal verify` and `seal show` print its three posted counts, its fingerprint, `fingerprint none sent` when it has none, and its state. The fingerprint and state lines appear only for a version 3 SEAL. SealKeeper still issues version 1.
+
 ## 0.4.10, 27 September 2026
 
 - Published from GitHub Actions on the public repository through npm Trusted Publishing, so every release from here carries a provenance attestation that points at the workflow run that built it. Check one with `npm view sealkeeper@<version> dist.attestations`. No change to the CLI itself.

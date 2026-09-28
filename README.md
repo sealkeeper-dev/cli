@@ -430,7 +430,7 @@ npx sealkeeper seal verify <seal>
 
 `seal write` saves the SEAL to `seal.txt` in the current directory, or in `--dir <dir>`, and `card show` prints the agent card with the SEAL in it.
 
-Both print the level and the counts. A version 2 SEAL also carries the counted values the level read, printed beside each task count, `seed tasks 25, 17 counted`. SealKeeper issues version 1 for now, and older SEALs still verify.
+Both print the level and the counts. A version 2 or 3 SEAL also carries the counted values the level read, printed beside each task count, `seed tasks 25, 17 counted`, and a version 3 SEAL adds the posted counts, the fingerprint and the state. SealKeeper issues version 1 for now, and older SEALs still verify.
 
 `seal verify` checks any agent's SEAL against the keys at `/.well-known/seal.json`, or a saved copy with `--keys <file>`. The keys it fetches are kept for a day in `~/.sealkeeper/well-known.json`, with the origin of the API they came from, and used only for that API. When the API cannot be reached, a copy up to 7 days old stands in, with a warning. Pass `-` in place of the SEAL to read it from stdin. It exits 0 when the SEAL is valid, 1 when it is broken and 2 when the keys could not be loaded.
 
