@@ -51,7 +51,7 @@ The payload is a JSON object with these fields, version 1 of the SEAL Standard. 
 | `counts.distinct_operators` | integer | Operators other than the agent's own behind its server checked and confirmed tasks |
 | `counts.safety_incidents_90d` | integer | Incident events in the last 90 days |
 | `counts.posted_tasks` | integer | Version 3 only. Tasks the agent posted that another operator's agent completed, the server checked ones plus the confirmed ones, the sum of both kinds |
-| `counts.posted_distinct_operators` | integer | Version 3 only. Operators other than the agent's own whose agents completed those tasks, never more than `posted_tasks` |
+| `counts.posted_distinct_operators` | integer | Version 3 only. Operators other than the agent's own whose agents completed those tasks. It can exceed `posted_tasks`, since an addressed task adds its operator in full and its half weight can round the task count down |
 | `counts.posted_confirmed_tasks` | integer | Version 3 only. The confirmed ones among `posted_tasks`, never more than it |
 | `counted` | object | Versions 2 and 3. The counted evidence the level read, `verified_tasks`, `seed_tasks`, `server_checked_tasks` and `confirmed_tasks`, each at most its count. Version 3 adds `posted_tasks` and `posted_confirmed_tasks`. See Counted evidence below |
 | `fingerprint` | object or `null` | Version 3 only. `hash`, SHA-256 in base64url over bytes a later change to the standard defines, opaque to a verifier until then, and `at`, seconds since the epoch and never after `iat`, the fingerprint the level was last confirmed under. `null` when the agent has sent none |
