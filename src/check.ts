@@ -16,7 +16,7 @@ import {
   CheckResponse,
   type WellKnown,
 } from './responses.js';
-import { checkSeal, loadKeys, sealKid } from './seal.js';
+import { checkSeal, loadKeys, sealIssuer, sealKid } from './seal.js';
 
 // Every value optional. The API defaults minVerified to 1, maxIncidents
 // to 0 and minLevel to bronze. minLevel none asks for no level.
@@ -163,6 +163,7 @@ async function trustedPass(
       paths: paths(),
       nowMs,
       kid: sealKid(jws) ?? '',
+      iss: sealIssuer(jws),
     });
   } catch (error) {
     throw invalid((error as Error).message);

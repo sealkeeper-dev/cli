@@ -3,6 +3,8 @@
 ## Unreleased
 
 - `seal verify` accepts SEAL version 3 beside versions 1 and 2 (X-1). `seal verify` and `seal show` print its three posted counts, its fingerprint, `fingerprint none sent` when it has none, and its state. The fingerprint and state lines appear only for a version 3 SEAL. SealKeeper still issues version 1.
+- `seal verify` fetches the keys for a SealKeeper SEAL from `https://sealkeeper.run/.well-known/seal.json`, the URL the SEAL Standard documents, when it points at the production API. A local or staging API signs with its own key under the same issuer, so its keys still come from that API. The cache is kept per origin, so the first run after this fetches once (TRUST-2).
+- `seal verify --offline` uses the cached keys only and never touches the network. It exits 2 with one line when there is no cached copy for the SEAL's key or the copy is more than 7 days old. `--keys <file>` still checks against a saved copy and wins when both are given (TRUST-2).
 
 ## 0.4.10, 27 September 2026
 

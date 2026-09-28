@@ -2,15 +2,23 @@
 import { readFile } from 'node:fs/promises';
 import {
   base64urlDecode,
+  CREDENTIAL_ISSUER,
   decodeHeader,
+  LEGACY_ISSUERS,
   type SealBrokenReason,
   utf8Decode,
   verifySeal,
   WELL_KNOWN_PATH,
+  WELL_KNOWN_URL,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
-import { ensureHome, type Paths, writeFileAtomic } from './config.js';
+import {
+  DEFAULT_API_URL,
+  ensureHome,
+  type Paths,
+  writeFileAtomic,
+} from './config.js';
 import { stderr } from './output.js';
 import { SealClaims, WellKnown } from './responses.js';
 
@@ -23,9 +31,9 @@ import { SealClaims, WellKnown } from './responses.js';
 // Cached keys are fetched again once they are older than this, or sooner
 // when a SEAL names a kid they do not have.
 export const KEYS_MAX_AGE_MS = 24 * 3600 * 1000;
-// When the API cannot be reached, cached keys stand in until they are this
-// old. A key SealKeeper has since withdrawn is trusted at most this long
-// offline.
+// When the keys cannot be fetched, or seal verify runs with --offline,
+// cached keys stand in until they are this old. A key SealKeeper has since
+// withdrawn is trusted at most this long offline.
 export const KEYS_OFFLINE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const KEYS_TIMEOUT_MS = 10_000;
 
@@ -40,6 +48,18 @@ export type SealCheck = {
   payload: unknown;
   expiresAt: string | null;
 };
+
+// The iss a SEAL's payload names, read before any check and used only to
+// pick where its keys come from. Nothing else trusts it, and verifySeal
+// checks iss again after the signature. null when there is none.
+export function sealIssuer(jws: string): string | null {
+  try {
+    const payload = decodeSealPayload(jws) as { iss?: unknown } | null;
+    return typeof payload?.iss === 'string' ? payload.iss : null;
+  } catch {
+    return null;
+  }
+}
 
 // The kid a SEAL names, or null when it is not a JWS with an EdDSA header.
 export function sealKid(jws: string): string | null {
@@ -245,9 +265,10 @@ function parseWellKnown(raw: string): WellKnown | null {
   }
 }
 
-// origin is the origin of the API URL the keys came from, so keys fetched
-// from one API are never used to check a SEAL for another. A cache written
-// before it existed does not parse and is fetched again.
+// origin is the origin the keys came from, the issuer's own domain or an
+// API, so keys fetched from one place are never used to check a SEAL meant
+// for another. A cache written before it existed does not parse and is
+// fetched again.
 const CachedKeys = z.object({
   v: z.literal(1),
   origin: z.string().min(1),
@@ -262,22 +283,52 @@ type LoadKeysOptions = {
   nowMs: number;
   // The kid of the SEAL being checked. Keys that lack it are fetched again.
   kid: string;
+  // The iss of the SEAL being checked, from sealIssuer. It picks where the
+  // keys come from, see keysBaseUrl.
+  iss: string | null;
+  // Cached keys only, never the network. Throws KeysError when the cache
+  // has no usable copy.
+  offline?: boolean;
 };
 
-// The cached keys while they came from the same API origin, are under a
-// day old and know the kid. Otherwise fetches them from the API and caches
-// them with that origin. When the fetch fails it falls back to cached keys
-// from the same origin that know the kid and are under
-// KEYS_OFFLINE_MAX_AGE_MS old, with one line on stderr. A copy dated later
-// than now is never used. Throws KeysError
-// when there are no usable keys at all.
+// The origin of the issuer's documented keys URL, WELL_KNOWN_URL without its
+// path.
+export const ISSUER_ORIGIN = new URL(WELL_KNOWN_URL).origin;
+
+// The base URL the keys for a SEAL are fetched from, WELL_KNOWN_PATH
+// appended. A SEAL from the production issuer,
+// checked by a CLI that points at the production API, gets its keys from
+// WELL_KNOWN_URL on the issuer's own domain, the URL the standard
+// documents. Any other API, a local or staging one, signs its SEALs with
+// its own key under the same iss, so its keys come from that API. So do the
+// keys for a SEAL of any other issuer, which verifySeal then names a wrong
+// issuer.
+export function keysBaseUrl(apiUrl: string, iss: string | null): string {
+  const production =
+    iss === CREDENTIAL_ISSUER ||
+    (LEGACY_ISSUERS as readonly (string | null)[]).includes(iss);
+  return production && originOf(apiUrl) === originOf(DEFAULT_API_URL)
+    ? ISSUER_ORIGIN
+    : apiUrl;
+}
+
+// The origin keysBaseUrl picks, the one the keys are cached under.
+export function keysOrigin(apiUrl: string, iss: string | null): string {
+  return originOf(keysBaseUrl(apiUrl, iss));
+}
+
+const DAYS = (ms: number) => ms / (24 * 3600 * 1000);
+
+// The cached keys while they came from the same origin, are under a day old
+// and know the kid. Otherwise fetches them from keysBaseUrl and caches them
+// with its origin. When the fetch fails it falls back to cached keys from
+// the same origin that know the kid and are under KEYS_OFFLINE_MAX_AGE_MS
+// old, with one line on stderr. With offline it never fetches and uses that
+// same fallback, silently. A copy dated later than now is never used.
+// Throws KeysError when there are no usable keys at all.
 export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
-  const api = createApiClient({
-    apiUrl: options.apiUrl,
-    fetch: options.fetch,
-    timeoutMs: KEYS_TIMEOUT_MS,
-  });
-  const origin = originOf(api.apiUrl);
+  const base = keysBaseUrl(options.apiUrl, options.iss);
+  const origin = keysOrigin(options.apiUrl, options.iss);
   const read = await readCachedKeys(options.paths);
   const cached =
     read !== null &&
@@ -295,8 +346,27 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
     : cached
       ? options.nowMs - fetchedMs
       : 0;
+  const staleText = !cached
+    ? ''
+    : future
+      ? `the copy fetched at ${cached.fetchedAt} is dated in the future`
+      : `the copy fetched at ${cached.fetchedAt} is more than ${DAYS(KEYS_OFFLINE_MAX_AGE_MS)} days old`;
+
+  if (options.offline) {
+    if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) return cached.wellKnown;
+    throw new KeysError(
+      cached
+        ? `no usable cached SealKeeper keys for --offline, ${staleText}`
+        : `the cached keys from ${origin} do not include kid ${options.kid}, run sealkeeper seal verify once without --offline, or pass --keys`,
+    );
+  }
   if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;
 
+  const api = createApiClient({
+    apiUrl: base,
+    fetch: options.fetch,
+    timeoutMs: KEYS_TIMEOUT_MS,
+  });
   let fresh: WellKnown;
   try {
     fresh = await api.getWellKnown();
@@ -307,13 +377,8 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
       );
       return cached.wellKnown;
     }
-    const stale = !cached
-      ? ''
-      : future
-        ? `, and the copy fetched at ${cached.fetchedAt} is dated in the future`
-        : `, and the copy fetched at ${cached.fetchedAt} is more than ${KEYS_OFFLINE_MAX_AGE_MS / (24 * 3600 * 1000)} days old`;
     throw new KeysError(
-      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}${stale}`,
+      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}${staleText ? `, and ${staleText}` : ''}`,
     );
   }
 

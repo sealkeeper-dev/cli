@@ -16,13 +16,19 @@ import {
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
   sign,
+  WELL_KNOWN_URL,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { paths, writeConfig } from '../config.js';
+import { DEFAULT_API_URL, paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
-import { KEYS_MAX_AGE_MS, KEYS_OFFLINE_MAX_AGE_MS } from '../seal.js';
+import {
+  ISSUER_ORIGIN,
+  KEYS_MAX_AGE_MS,
+  KEYS_OFFLINE_MAX_AGE_MS,
+  keysBaseUrl,
+} from '../seal.js';
 import type { SealDeps } from './seal.js';
 import { NO_SEAL } from './seal-show.js';
 
@@ -505,10 +511,14 @@ describe('sealkeeper seal', () => {
       const seal = await sign(claims(), serverKey.privateKey, 'retired');
       await run(fetchFn, 'seal', 'verify', await currentSeal());
       requests = [];
-      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      const { code, out, err } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
       expect(out).toBe('broken SEAL: unknown kid\n');
       expect(requests).toEqual([WELL_KNOWN]);
+      // The keys came from the API this CLI points at, so it says so.
+      expect(err).toBe(
+        `the keys came from ${API_URL}, the API this CLI points at, not from https://sealkeeper.run\n`,
+      );
     });
 
     it('a wrong issuer is broken, with the signed payload shown', async () => {
@@ -829,6 +839,261 @@ describe('sealkeeper seal', () => {
         await currentSeal(),
       );
       expect(code).toBe(0);
+    });
+
+    describe('where the keys come from', () => {
+      // The production API. The fetch answers the issuer's documented URL
+      // and the API's own keys path, and records which one was asked.
+      const PRODUCTION_KEYS = `${DEFAULT_API_URL}/.well-known/seal.json`;
+      const production = (async (input: string | URL | Request) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === WELL_KNOWN_URL || url === PRODUCTION_KEYS) {
+          return Response.json(published());
+        }
+        return new Response('not found', { status: 404 });
+      }) as typeof fetch;
+
+      beforeEach(() => {
+        vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+      });
+
+      it('fetches the keys of a production SEAL from the issuer URL and caches them under its origin', async () => {
+        const { code } = await run(
+          production,
+          'seal',
+          'verify',
+          await currentSeal(),
+        );
+        expect(code).toBe(0);
+        expect(WELL_KNOWN_URL).toBe(
+          'https://sealkeeper.run/.well-known/seal.json',
+        );
+        expect(requests).toEqual([WELL_KNOWN_URL]);
+        const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+        expect(cache.origin).toBe('https://sealkeeper.run');
+      });
+
+      it('fetches the keys for a SEAL of another issuer from the API', async () => {
+        const seal = await sign(
+          claims({ iss: 'evil.example' as 'sealkeeper.run' }),
+          serverKey.privateKey,
+          KID,
+        );
+        const { code, out } = await run(production, 'seal', 'verify', seal);
+        expect(code).toBe(1);
+        expect(out.split('\n')[0]).toBe('broken SEAL: wrong issuer');
+        expect(requests).toEqual([PRODUCTION_KEYS]);
+      });
+
+      it('never uses keys cached from a local API for a production SEAL', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+        const { code, err } = await run(
+          offline,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(err).toContain(
+          'the cached keys from https://sealkeeper.run do not include kid',
+        );
+      });
+    });
+
+    describe('where the keys come from, edge cases', () => {
+      const production = (async (input: string | URL | Request) => {
+        const url = String(input);
+        requests.push(url);
+        return url === WELL_KNOWN_URL
+          ? Response.json(published())
+          : new Response('not found', { status: 404 });
+      }) as typeof fetch;
+
+      it('fetches the keys of a legacy vouched.run SEAL from the issuer URL', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+        const seal = await sign(
+          claims({ iss: LEGACY_ISSUERS[0] as 'sealkeeper.run' }),
+          serverKey.privateKey,
+          KID,
+        );
+        const { code } = await run(production, 'seal', 'verify', seal);
+        expect(code).toBe(0);
+        expect(requests).toEqual([WELL_KNOWN_URL]);
+      });
+
+      it('refuses keys cached from sealkeeper.run when the CLI points at a local API', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+        await run(production, 'seal', 'verify', await currentSeal());
+        const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+        expect(cache.origin).toBe(ISSUER_ORIGIN);
+        vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+        requests = [];
+        const { code, err } = await run(
+          offline,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(err).toContain(
+          `the cached keys from ${API_URL} do not include kid ${KID}`,
+        );
+        expect(requests).toEqual([]);
+      });
+
+      it('keysBaseUrl reads the API origin through a trailing slash or a path', () => {
+        for (const api of [
+          `${DEFAULT_API_URL}/`,
+          `${DEFAULT_API_URL}/v1`,
+          `${DEFAULT_API_URL}/v1/`,
+        ]) {
+          expect(keysBaseUrl(api, 'sealkeeper.run'), api).toBe(ISSUER_ORIGIN);
+        }
+        expect(keysBaseUrl(`${API_URL}/`, 'sealkeeper.run')).toBe(
+          `${API_URL}/`,
+        );
+        expect(keysBaseUrl(`${API_URL}/base`, 'sealkeeper.run')).toBe(
+          `${API_URL}/base`,
+        );
+        expect(keysBaseUrl(`${DEFAULT_API_URL}/`, 'other.test')).toBe(
+          `${DEFAULT_API_URL}/`,
+        );
+      });
+
+      it('fetches from the issuer URL when the production API URL has a trailing slash', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', `${DEFAULT_API_URL}/`);
+        const { code } = await run(
+          production,
+          'seal',
+          'verify',
+          await currentSeal(),
+        );
+        expect(code).toBe(0);
+        expect(requests).toEqual([WELL_KNOWN_URL]);
+      });
+
+      it('fetches once, with no double slash, from a local API URL with a trailing slash', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', `${API_URL}/`);
+        const { code } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+        );
+        expect(code).toBe(0);
+        expect(requests).toEqual([WELL_KNOWN]);
+        const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+        expect(cache.origin).toBe(API_URL);
+      });
+    });
+
+    describe('--offline', () => {
+      it('verifies with a fresh cache and never fetches', async () => {
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        requests = [];
+        const { code, out, err } = await run(
+          offline,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(0);
+        expect(out.split('\n')[0]).toBe('valid SEAL');
+        expect(err).toBe('');
+        expect(requests).toEqual([]);
+      });
+
+      it('uses a cache past a day and under the offline limit without fetching', async () => {
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        requests = [];
+        now = NOW + KEYS_OFFLINE_MAX_AGE_MS - 60_000;
+        const { code, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSealAt(now),
+          '--offline',
+        );
+        expect(code).toBe(0);
+        expect(err).toBe('');
+        expect(requests).toEqual([]);
+      });
+
+      it('exits 2 with one line when there is no cache', async () => {
+        const { code, out, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(out).toBe('');
+        expect(err.trimEnd().split('\n')).toHaveLength(1);
+        expect(err).toContain(
+          `the cached keys from ${API_URL} do not include kid ${KID}, run sealkeeper seal verify once without --offline, or pass --keys`,
+        );
+        expect(requests).toEqual([]);
+      });
+
+      it('exits 2 when the cache is older than the offline limit', async () => {
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        requests = [];
+        now = NOW + KEYS_OFFLINE_MAX_AGE_MS + 60_000;
+        const { code, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSealAt(now),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(err).toContain('is more than 7 days old');
+        expect(requests).toEqual([]);
+      });
+
+      it('exits 2 when the cache is dated in the future', async () => {
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+        await writeFile(
+          paths().wellKnown,
+          JSON.stringify({
+            ...cache,
+            fetchedAt: new Date(NOW + 3600_000).toISOString(),
+          }),
+        );
+        const { code, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(err).toContain('is dated in the future');
+      });
+
+      it('--keys wins and reads the file', async () => {
+        const file = join(home, 'sealkeeper.json');
+        await writeFile(file, JSON.stringify(published()));
+        const { code } = await run(
+          offline,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+          '--keys',
+          file,
+        );
+        expect(code).toBe(0);
+        expect(requests).toEqual([]);
+      });
     });
 
     async function currentSealAt(atMs: number): Promise<string> {
