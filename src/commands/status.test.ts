@@ -45,6 +45,9 @@ type Live = {
   addressed?: number;
   // The goal answer, 404 when left out.
   goal?: Record<string, unknown>;
+  // standing.held on the agent answer, and the SEAL route's answer.
+  held?: boolean;
+  seal?: () => Response;
 };
 
 // An open task addressed to the agent, as GET /v1/tasks answers it.
@@ -69,15 +72,16 @@ function addressedTask() {
 function agentAnswer(verifiedTasks: number, live: Live = {}) {
   return {
     ...(live.level === undefined ? {} : { level: live.level }),
-    ...(live.dormantDays === undefined
+    ...(live.dormantDays === undefined && live.held === undefined
       ? {}
       : {
           standing: {
             counts: {},
             history_days: 3,
             last_active: null,
-            dormant_days: live.dormantDays,
+            dormant_days: live.dormantDays ?? 0,
             quiet: (live.dormantDays ?? 0) >= 14,
+            ...(live.held === undefined ? {} : { held: live.held }),
           },
         }),
     id: AGENT_ID,
@@ -119,6 +123,10 @@ function scoreFetch(
       return Response.json({
         tasks: Array.from({ length: live.addressed ?? 0 }, addressedTask),
       });
+    }
+    if (url === `${API_URL}/v1/agents/${AGENT_ID}/seal`) {
+      if (!live.seal) throw new Error('no SEAL route answer in this test');
+      return live.seal();
     }
     if (url === `${API_URL}/v1/agents/${AGENT_ID}/goal`) {
       return live.goal
@@ -632,16 +640,39 @@ describe('status', () => {
       );
     });
 
+    const noSeal = (days: number | null) => () =>
+      Response.json(
+        {
+          error: { code: 'no_seal', message: 'dormant' },
+          id: AGENT_ID,
+          dormant_days: days,
+        },
+        { status: 404 },
+      );
+    const heldSeal = (reason: unknown) => () =>
+      Response.json(
+        {
+          error: { code: 'withheld', message: 'withheld for cause' },
+          id: AGENT_ID,
+          reason,
+        },
+        { status: 404 },
+      );
+
     it('says no SEAL at 90 dormant days, when the API withholds it', async () => {
       const { code, out } = await run(
-        scoreFetch([], 30, { level: 'none', dormantDays: 95 }),
+        scoreFetch([], 30, {
+          level: 'none',
+          dormantDays: 95,
+          seal: noSeal(95),
+        }),
         'status',
       );
       expect(code).toBe(0);
       const lines = out.split('\n');
       expect(lines).toContain('dormant           95 days');
       expect(lines).toContain(
-        'SEAL              no SEAL, withheld while dormant',
+        'SEAL              no SEAL, withheld while the agent is dormant, 95 days',
       );
       expect(lines).toContain(
         'Quiet for 95 days. No SEAL is issued and the level is none until the next scoring run after a new event.',
@@ -649,6 +680,79 @@ describe('status', () => {
       expect(sealWithheld(89)).toBe(false);
       expect(sealWithheld(90)).toBe(true);
       expect(sealWithheld(null)).toBe(false);
+    });
+
+    it('names the hold reason class when the SEAL is withheld for cause', async () => {
+      for (const reason of ['fraud', 'spam_ring']) {
+        const { code, out } = await run(
+          scoreFetch([], 30, {
+            level: 'bronze',
+            dormantDays: 0,
+            held: true,
+            seal: heldSeal(reason),
+          }),
+          'status',
+        );
+        expect(code).toBe(0);
+        expect(out.split('\n')).toContain(
+          `SEAL              no SEAL, withheld for cause, reason ${reason}`,
+        );
+      }
+      const json = JSON.parse(
+        (
+          await run(
+            scoreFetch([], 30, {
+              held: true,
+              seal: heldSeal('safety'),
+            }),
+            'status',
+            '--json',
+          )
+        ).out,
+      );
+      expect(json).toMatchObject({
+        sealWithheld: true,
+        withheld: { kind: 'held', reason: 'safety' },
+      });
+    });
+
+    it('says withheld alone when the SEAL route does not say why', async () => {
+      for (const seal of [
+        heldSeal('Not A Class'),
+        () =>
+          Response.json(
+            { error: { code: 'x', message: 'x' } },
+            { status: 500 },
+          ),
+        () => {
+          throw new TypeError('fetch failed');
+        },
+      ]) {
+        const { out } = await run(
+          scoreFetch([], 30, { held: true, seal }),
+          'status',
+        );
+        expect(out.split('\n')).toContainEqual(
+          expect.stringMatching(/^SEAL {14}no SEAL, withheld( for cause)?$/),
+        );
+      }
+    });
+
+    it('asks the SEAL route only when the SEAL is withheld', async () => {
+      const json = JSON.parse(
+        (
+          await run(
+            scoreFetch([], 30, {
+              level: 'bronze',
+              dormantDays: 3,
+              held: false,
+            }),
+            'status',
+            '--json',
+          )
+        ).out,
+      );
+      expect(json).toMatchObject({ sealWithheld: false, withheld: null });
     });
   });
 
@@ -773,6 +877,8 @@ describe('status', () => {
       verifiedTasks: 2,
       level: null,
       dormantDays: null,
+      sealWithheld: false,
+      withheld: null,
       goal: null,
       unsubmittedClaims: 0,
       addressedTasks: 0,

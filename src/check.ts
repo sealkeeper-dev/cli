@@ -14,7 +14,10 @@ import {
   AgentRenamedResponse,
   type Check,
   CheckResponse,
+  type SealWithheld,
+  sealWithheldOf,
   type WellKnown,
+  withheldText,
 } from './responses.js';
 import { checkSeal, loadKeys, sealIssuer, sealKid } from './seal.js';
 
@@ -136,6 +139,37 @@ export async function fetchCheck(
   throw error;
 }
 
+// Why the SEAL is withheld, for a check answer with a failing seal check.
+// The check answer says withheld and not why, and the SEAL route by handle
+// carries the reason class or the dormant days (VOU-85). null when that
+// route answers anything else or cannot be reached, so the check still
+// prints, only without the reason.
+export async function fetchWithheld(
+  handle: string,
+  options: CheckOptions = {},
+): Promise<SealWithheld | null> {
+  try {
+    const { slug, name } = parseHandle(handle);
+    const api = createApiClient({
+      apiUrl: options.apiUrl?.trim() || resolveApiUrl({}),
+      fetch: options.fetch ?? fetch,
+      ...(options.timeoutMs === undefined
+        ? {}
+        : { timeoutMs: options.timeoutMs }),
+    });
+    const { status, json } = await api.request(
+      `/v1/agents/${encodeURIComponent(slug)}/${encodeURIComponent(name)}/seal`,
+    );
+    return status === 404 ? sealWithheldOf(json) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether an answer carries the failing seal check of a withheld SEAL.
+export const sealIsWithheld = (result: CheckResponse): boolean =>
+  result.checks.some((c) => c.name === 'seal' && c.actual === 'withheld');
+
 // A pass that callers act on, as assertTrusted does, needs more than the
 // API's ok. The answer must be about the handle asked for, and its SEAL
 // must verify against the SealKeeper keys, be current and name that agent.
@@ -176,8 +210,13 @@ async function trustedPass(
 }
 
 // One line per check, in plain words. "ok" or "FAIL" first. A check this
-// version does not know is named as the API sent it.
-export function describeCheck(check: Check): string {
+// version does not know is named as the API sent it. withheld says why a
+// withheld SEAL is withheld, from fetchWithheld. Without it the seal line
+// says withheld and no more.
+export function describeCheck(
+  check: Check,
+  withheld: SealWithheld | null = null,
+): string {
   const status = check.ok ? 'ok  ' : 'FAIL';
   const actual = check.actual === null ? 'none yet' : String(check.actual);
   switch (check.name) {
@@ -193,7 +232,7 @@ export function describeCheck(check: Check): string {
       return `${status} level ${actual}, need at least ${check.required}`;
     case 'seal':
       return check.actual === 'withheld'
-        ? `${status} no SEAL, withheld while the agent is dormant, need a current SEAL`
+        ? `${status} no SEAL, ${withheld === null ? 'withheld' : withheldText(withheld)}, need a current SEAL`
         : `${status} SEAL ${actual}, need ${check.required}`;
     default:
       // A check added to the API after this version.

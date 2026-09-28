@@ -2,7 +2,12 @@
 import { Level } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, resolveApiUrl } from '../api.js';
-import { describeCheck, fetchCheck } from '../check.js';
+import {
+  describeCheck,
+  fetchCheck,
+  fetchWithheld,
+  sealIsWithheld,
+} from '../check.js';
 import { readConfig } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 import type { CheckResponse } from '../responses.js';
@@ -55,6 +60,7 @@ export function register(
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();
       let result: CheckResponse;
+      const apiUrl = resolveApiUrl({ config: await configApiUrl() });
       try {
         result = await fetchCheck(
           handle,
@@ -65,10 +71,7 @@ export function register(
             minSafety: flags.minSafety,
             minLevel: flags.minLevel,
           },
-          {
-            apiUrl: resolveApiUrl({ config: await configApiUrl() }),
-            fetch: deps.fetch,
-          },
+          { apiUrl, fetch: deps.fetch },
         );
       } catch (error) {
         if (error instanceof ApiError) {
@@ -80,7 +83,14 @@ export function register(
       if (wantsJson(this)) {
         stdout(JSON.stringify(result));
       } else {
-        for (const check of result.checks) stdout(describeCheck(check));
+        // The check says withheld and not why. The SEAL route by handle
+        // says why, with the reason class or the dormant days.
+        const withheld = sealIsWithheld(result)
+          ? await fetchWithheld(result.handle, { apiUrl, fetch: deps.fetch })
+          : null;
+        for (const check of result.checks) {
+          stdout(describeCheck(check, withheld));
+        }
         stdout(`${result.ok ? 'PASS' : 'FAIL'} ${result.handle}`);
       }
       if (!result.ok) process.exitCode = EXIT_FAIL;

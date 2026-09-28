@@ -382,21 +382,7 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
     );
   }
 
-  try {
-    await ensureHome(options.paths);
-    await writeFileAtomic(
-      options.paths.wellKnown,
-      `${JSON.stringify({
-        v: 1,
-        origin,
-        fetchedAt: new Date(options.nowMs).toISOString(),
-        wellKnown: fresh,
-      })}\n`,
-      0o644,
-    );
-  } catch {
-    // A home that cannot be written only costs a fetch next time.
-  }
+  await cacheKeys(options.paths, origin, fresh, options.nowMs);
   return fresh;
 }
 
@@ -407,6 +393,31 @@ function originOf(apiUrl: string): string {
     return new URL(apiUrl).origin;
   } catch {
     return apiUrl;
+  }
+}
+
+// Writes keys fetched from origin to the cache loadKeys reads. Never
+// throws. A home that cannot be written only costs a fetch next time.
+export async function cacheKeys(
+  p: Paths,
+  origin: string,
+  wellKnown: WellKnown,
+  nowMs: number,
+): Promise<void> {
+  try {
+    await ensureHome(p);
+    await writeFileAtomic(
+      p.wellKnown,
+      `${JSON.stringify({
+        v: 1,
+        origin,
+        fetchedAt: new Date(nowMs).toISOString(),
+        wellKnown,
+      })}\n`,
+      0o644,
+    );
+  } catch {
+    // As above.
   }
 }
 

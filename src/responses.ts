@@ -422,6 +422,50 @@ export const ErrorResponse = z.object({
   }),
 });
 
+// Why a SEAL route answered 404 with no SEAL (VOU-85). withheld carries the
+// reason class of a hold in force on the agent or its operator, no_seal the
+// dormant days. Read loosely, so a class this version does not know still
+// prints as the API sent it. A reason that is not a plain class word, or
+// days that are not a whole number, read as unknown rather than failing.
+export type SealWithheld =
+  | { kind: 'held'; reason: string | null }
+  | { kind: 'dormant'; dormantDays: number | null };
+
+const WithheldAnswer = z.object({
+  error: z.object({ code: z.enum(['withheld', 'no_seal']) }),
+  reason: z.unknown().optional(),
+  dormant_days: z.unknown().optional(),
+});
+const HoldClass = z.string().regex(/^[a-z0-9_]{1,64}$/);
+const DormantDays = z.int().min(0);
+
+// The SealWithheld in a 404 body, or null when the body is anything else,
+// such as not_found for an unknown agent.
+export function sealWithheldOf(json: unknown): SealWithheld | null {
+  const parsed = WithheldAnswer.safeParse(json);
+  if (!parsed.success) return null;
+  const { error, reason, dormant_days } = parsed.data;
+  if (error.code === 'withheld') {
+    const r = HoldClass.safeParse(reason);
+    return { kind: 'held', reason: r.success ? r.data : null };
+  }
+  const d = DormantDays.safeParse(dormant_days);
+  return { kind: 'dormant', dormantDays: d.success ? d.data : null };
+}
+
+// withheld and why, in plain words, as in "withheld for cause, reason
+// fraud" or "withheld while the agent is dormant, 95 days".
+export function withheldText(withheld: SealWithheld): string {
+  if (withheld.kind === 'held') {
+    return withheld.reason === null
+      ? 'withheld for cause'
+      : `withheld for cause, reason ${withheld.reason}`;
+  }
+  const days = withheld.dormantDays;
+  if (days === null) return 'withheld while the agent is dormant';
+  return `withheld while the agent is dormant, ${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
 // GET /v1/agents/<id>/goal, loose all the way down. Unknown keys are kept
 // rather than dropped, so goal --json prints the API answer as it came.
 // A threshold name or an action code this CLI does not know still parses,

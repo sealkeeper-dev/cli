@@ -55,7 +55,7 @@ function throwOnExit(cmd: Command): void {
 describe('sealkeeper check', () => {
   let home: string;
   let urls: string[];
-  let reply: () => Response | Promise<Response>;
+  let reply: (url: string) => Response | Promise<Response>;
   let fixture: SealFixture;
 
   // A passing answer must carry a SEAL that verifies, so it is signed with
@@ -107,7 +107,7 @@ describe('sealkeeper check', () => {
         urls.push(String(input));
         expect(init?.method ?? 'GET').toBe('GET');
         expect(init?.body).toBeUndefined();
-        return reply();
+        return reply(String(input));
       }),
     );
   });
@@ -161,34 +161,115 @@ describe('sealkeeper check', () => {
     ]);
   });
 
-  it('prints the no SEAL line and exits 1 when the API withholds the SEAL', async () => {
-    const withheld: SealCheckResponse = {
-      ok: false,
-      id: ID,
-      handle: 'alice/claude-code',
-      checks: [
-        { name: 'seal', required: 'present', actual: 'withheld', ok: false },
-        { name: 'minVerified', required: 1, actual: 30, ok: true },
-        { name: 'maxIncidents', required: 0, actual: 0, ok: true },
-        { name: 'minLevel', required: 'bronze', actual: 'none', ok: false },
-      ],
-      credential: null,
-      seal: null,
-    };
-    reply = () => Response.json(withheld);
+  const withheld: SealCheckResponse = {
+    ok: false,
+    id: ID,
+    handle: 'alice/claude-code',
+    checks: [
+      { name: 'seal', required: 'present', actual: 'withheld', ok: false },
+      { name: 'minVerified', required: 1, actual: 30, ok: true },
+      { name: 'maxIncidents', required: 0, actual: 0, ok: true },
+      { name: 'minLevel', required: 'bronze', actual: 'none', ok: false },
+    ],
+    credential: null,
+    seal: null,
+  };
+  const SEAL_URL = 'https://api.test/v1/agents/alice/claude-code/seal';
+  // The check answer, and the SEAL route by handle answering sealAnswer.
+  const withheldReply =
+    (sealAnswer: () => Response) =>
+    (url: string): Response =>
+      url === SEAL_URL ? sealAnswer() : Response.json(withheld);
+  const noSeal = (dormantDays: number | null) =>
+    Response.json(
+      {
+        error: { code: 'no_seal', message: 'This agent has been dormant.' },
+        id: ID,
+        dormant_days: dormantDays,
+      },
+      { status: 404 },
+    );
+  const held = (reason: unknown) =>
+    Response.json(
+      {
+        error: { code: 'withheld', message: 'withheld for cause' },
+        id: ID,
+        reason,
+      },
+      { status: 404 },
+    );
+  const withheldLines = (sealLine: string) =>
+    [
+      sealLine,
+      'ok   verified tasks 30, need at least 1',
+      'ok   incidents 0, allow at most 0',
+      'FAIL level none, need at least bronze',
+      'FAIL alice/claude-code',
+      '',
+    ].join('\n');
+
+  it('prints the dormant days and exits 1 when the SEAL is withheld while dormant', async () => {
+    reply = withheldReply(() => noSeal(95));
     const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(1);
     expect(r.err).toBe('');
     expect(r.out).toBe(
-      [
-        'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
-        'ok   verified tasks 30, need at least 1',
-        'ok   incidents 0, allow at most 0',
-        'FAIL level none, need at least bronze',
-        'FAIL alice/claude-code',
-        '',
-      ].join('\n'),
+      withheldLines(
+        'FAIL no SEAL, withheld while the agent is dormant, 95 days, need a current SEAL',
+      ),
     );
+    expect(urls).toEqual([
+      'https://api.test/v1/check/alice/claude-code',
+      SEAL_URL,
+    ]);
+  });
+
+  it('prints the hold reason class when the SEAL is withheld for cause', async () => {
+    reply = withheldReply(() => held('fraud'));
+    const r = await run('check', 'alice/claude-code');
+    expect(r.code).toBe(1);
+    expect(r.out).toBe(
+      withheldLines(
+        'FAIL no SEAL, withheld for cause, reason fraud, need a current SEAL',
+      ),
+    );
+  });
+
+  it('prints a reason class this version does not know as it is', async () => {
+    reply = withheldReply(() => held('spam_ring'));
+    const r = await run('check', 'alice/claude-code');
+    expect(r.out.split('\n')[0]).toBe(
+      'FAIL no SEAL, withheld for cause, reason spam_ring, need a current SEAL',
+    );
+  });
+
+  it('says withheld alone when the reason cannot be read', async () => {
+    for (const answer of [
+      () => held('not a class\u001b[31m'),
+      () => noSeal(null),
+      () =>
+        Response.json({ error: { code: 'x', message: 'x' } }, { status: 500 }),
+      () => Response.json(withheld),
+    ]) {
+      reply = withheldReply(answer);
+      const r = await run('check', 'alice/claude-code');
+      expect(r.code).toBe(1);
+      expect(r.out.split('\n')[0]).toMatch(
+        /^FAIL no SEAL, withheld( for cause| while the agent is dormant)?, need a current SEAL$/,
+      );
+    }
+    reply = withheldReply(() => {
+      throw new TypeError('fetch failed');
+    });
+    const r = await run('check', 'alice/claude-code');
+    expect(r.code).toBe(1);
+    expect(r.out.split('\n')[0]).toBe(
+      'FAIL no SEAL, withheld, need a current SEAL',
+    );
+  });
+
+  it('prints the answer as it came with --json, with no SEAL request', async () => {
+    reply = withheldReply(() => held('fraud'));
     const json = await run('check', 'alice/claude-code', '--json');
     expect(json.code).toBe(1);
     expect(JSON.parse(json.out)).toMatchObject({
@@ -196,6 +277,7 @@ describe('sealkeeper check', () => {
       seal: null,
       credential: null,
     });
+    expect(urls).toEqual(['https://api.test/v1/check/alice/claude-code']);
   });
 
   it('refuses an answer with no SEAL and no withheld check', async () => {

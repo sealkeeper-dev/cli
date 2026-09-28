@@ -61,21 +61,25 @@ export async function loadCard(
   cmd: Command,
   deps: CardDeps,
   url: string | undefined,
+  fresh = false,
 ): Promise<AgentCard> {
   if (url !== undefined && !CardUrl.safeParse(url).success) {
     cmd.error(`--url must be an https URL, got ${url}`);
   }
-  const { config, credential } = await loadSeal(cmd, deps);
+  const { config, credential } = await loadSeal(cmd, deps, fresh);
   if (credential === null) stderr(NO_CREDENTIAL);
   return buildCard(config, credential, url);
 }
 
 // The agent's config and current SEAL, from the cache or the API, the same
 // for the card and the seal commands. credential is null when the API cannot
-// be reached and nothing usable is cached.
+// be reached and nothing usable is cached. fresh asks the API even when the
+// cached SEAL is fresh, for the show commands, so a withheld SEAL ends the
+// command with the hold or the dormant days. The writes reuse the cache.
 export async function loadSeal(
   cmd: Command,
   deps: CardDeps,
+  fresh = false,
 ): Promise<{ config: Config; credential: Credential | null }> {
   const config = await requireConfig(cmd);
 
@@ -86,7 +90,12 @@ export async function loadSeal(
   });
   let credential: Credential | null;
   try {
-    credential = await getCredential({ api, agentId: config.agentId });
+    credential = await getCredential({
+      api,
+      agentId: config.agentId,
+      fetch: deps.fetch,
+      force: fresh,
+    });
   } catch (error) {
     if (error instanceof CredentialError || error instanceof ApiError) {
       cmd.error(error.message);

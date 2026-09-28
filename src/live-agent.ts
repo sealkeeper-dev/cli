@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import type { Config } from './config.js';
 import { stderr } from './output.js';
+import { type SealWithheld, sealWithheldOf } from './responses.js';
 import { SCORE_TIMEOUT_MS } from './score.js';
 
 // Where the agent stands on SealKeeper, as status, prove and init read it.
@@ -29,6 +30,9 @@ export const LiveAgent = z.object({
   standing: z
     .object({
       dormant_days: z.int().min(0).nullable(),
+      // A hold is in force on the agent or its operator, so its SEAL is
+      // withheld for cause (VOU-85). Absent from an API before it.
+      held: z.boolean().optional().catch(undefined),
       // The scoring window's evidence counts, as of the last run. prove
       // --json carries them in progress.
       counts: z
@@ -95,6 +99,24 @@ export async function readLiveAgent(
     if (error instanceof ApiError && error.code === 'redirect') {
       stderr(error.message);
     }
+    return null;
+  }
+}
+
+// Why the agent's SEAL is withheld, from its SEAL route, the hold's reason
+// class or the dormant days (VOU-85). null when the route answers anything
+// else or cannot be reached. Never throws. status asks only once the agent
+// answer says the SEAL is withheld.
+export async function readSealWithheld(
+  config: Pick<Config, 'agentId' | 'apiUrl'>,
+  fetchFn: typeof fetch,
+): Promise<SealWithheld | null> {
+  try {
+    const { status, json } = await shortClient(config, fetchFn).request(
+      `/v1/agents/${encodeURIComponent(config.agentId)}/seal`,
+    );
+    return status === 404 ? sealWithheldOf(json) : null;
+  } catch {
     return null;
   }
 }

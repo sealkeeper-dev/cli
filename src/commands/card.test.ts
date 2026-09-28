@@ -13,6 +13,7 @@ import {
   AgentCard,
   base64urlEncode,
   type VerifiedCredentialPayload as CredentialPayload,
+  decodeHeader,
   generateKeypair,
   SEAL_EXTENSION_URIS,
   sign,
@@ -76,6 +77,8 @@ describe('card show and card write', () => {
   let serverKey: Awaited<ReturnType<typeof generateKeypair>>;
   let server: Server;
   let fetchFn: typeof fetch;
+  // The kid the fake API signs with and publishes. A rotation test moves it.
+  let kid: string;
 
   async function credentialFor(expSec: number): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
@@ -104,7 +107,7 @@ describe('card show and card write', () => {
       last_active: now - HOUR,
       dormant_days: 0,
     };
-    return sign(payload, serverKey.privateKey, KID);
+    return sign(payload, serverKey.privateKey, kid);
   }
 
   async function run(
@@ -155,13 +158,14 @@ describe('card show and card write', () => {
       registeredAt: new Date().toISOString(),
     });
     serverKey = await generateKeypair();
+    kid = KID;
     server = { requests: [], credential: () => credentialFor(24 * HOUR) };
     fetchFn = fakeFetch(
       server,
       () => ({
         keys: [
           {
-            kid: KID,
+            kid,
             kty: 'OKP',
             crv: 'Ed25519',
             alg: 'EdDSA',
@@ -229,29 +233,117 @@ describe('card show and card write', () => {
     expect(err).toContain('--url must be an https URL');
   });
 
+  // card write reuses the cache, so a scheduled write makes no request.
+  const writeCard = async () => {
+    const out = join(home, 'agent-card.json');
+    const result = await run(fetchFn, 'card', 'write', '--out', out);
+    return { ...result, card: await readFile(out, 'utf8') };
+  };
+
   it('reuses a fresh cached credential without a fetch', async () => {
-    const first = await run(fetchFn, 'card', 'show');
+    const first = await writeCard();
     expect(server.requests).toHaveLength(2);
     server.requests = [];
 
-    const second = await run(fetchFn, 'card', 'show');
+    const second = await writeCard();
     expect(second.code).toBe(0);
     expect(server.requests).toEqual([]);
-    expect(second.out).toBe(first.out);
+    expect(second.card).toBe(first.card);
   });
 
   it('reads a cache that has only seal, or only credential as older versions wrote', async () => {
-    const first = await run(fetchFn, 'card', 'show');
+    const first = await writeCard();
     const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
     for (const drop of ['seal', 'credential']) {
       const { [drop]: _gone, ...rest } = cache;
       await writeFile(paths().credential, JSON.stringify(rest));
       server.requests = [];
-      const again = await run(fetchFn, 'card', 'show');
+      const again = await writeCard();
       expect(again.code).toBe(0);
       expect(server.requests).toEqual([]);
-      expect(again.out).toBe(first.out);
+      expect(again.card).toBe(first.card);
     }
+  });
+
+  it('skips a cached SEAL whose key the keys no longer list', async () => {
+    const first = await writeCard();
+    const firstSeal = extensionCredential(
+      AgentCard.parse(JSON.parse(first.card)),
+    );
+    expect(decodeHeader(firstSeal ?? '').kid).toBe(KID);
+
+    // The issuer drops the key and signs with a new one. Once the cached
+    // keys are a day old they are fetched again and no longer list it.
+    serverKey = await generateKeypair();
+    kid = 'sealkeeper-test-2';
+    const keys = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+    keys.fetchedAt = new Date(Date.now() - 25 * HOUR * 1000).toISOString();
+    await writeFile(paths().wellKnown, JSON.stringify(keys));
+    server.requests = [];
+
+    const second = await writeCard();
+    expect(second.code).toBe(0);
+    const secondSeal = extensionCredential(
+      AgentCard.parse(JSON.parse(second.card)),
+    );
+    expect(decodeHeader(secondSeal ?? '').kid).toBe('sealkeeper-test-2');
+    expect(server.requests).toContain(`${API_URL}/v1/agents/${agentId}/seal`);
+    const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
+    expect(cache.seal).toBe(secondSeal);
+  });
+
+  it('keeps a cached SEAL whose key is still listed once the keys are fetched again', async () => {
+    const first = await writeCard();
+    const keys = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+    keys.fetchedAt = new Date(Date.now() - 25 * HOUR * 1000).toISOString();
+    await writeFile(paths().wellKnown, JSON.stringify(keys));
+    server.requests = [];
+
+    const second = await writeCard();
+    expect(server.requests).toEqual([`${API_URL}/.well-known/seal.json`]);
+    expect(second.card).toBe(first.card);
+  });
+
+  it('card show asks the API even with a fresh cached SEAL, and uses the cache when it cannot', async () => {
+    const first = await writeCard();
+    server.requests = [];
+    const shown = await run(fetchFn, 'card', 'show');
+    expect(shown.code).toBe(0);
+    expect(server.requests).toContain(`${API_URL}/v1/agents/${agentId}/seal`);
+
+    // The last fetch was cached, so offline show prints that SEAL.
+    const cached = JSON.parse(await readFile(paths().credential, 'utf8'));
+    const offline = await run(unreachable, 'card', 'show');
+    expect(offline.code).toBe(0);
+    expect(offline.err).toContain('using the cached SEAL');
+    expect(extensionCredential(AgentCard.parse(JSON.parse(offline.out)))).toBe(
+      cached.seal,
+    );
+    expect(first.code).toBe(0);
+  });
+
+  it('card show prints the hold rather than a cached SEAL of a held agent', async () => {
+    await writeCard();
+    const held = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === `${API_URL}/v1/agents/${agentId}/seal`) {
+        return Response.json(
+          {
+            error: { code: 'withheld', message: 'withheld for cause' },
+            id: agentId,
+            reason: 'fraud',
+          },
+          { status: 404 },
+        );
+      }
+      return fetchFn(input);
+    }) as typeof fetch;
+    const { code, out, err } = await run(held, 'card', 'show');
+    expect(code).toBe(1);
+    expect(out).toBe('');
+    expect(err).toBe(
+      'no SEAL, withheld for cause, reason fraud, none is issued while the hold is in force\n',
+    );
   });
 
   it('refetches a credential within two hours of expiry', async () => {
@@ -349,9 +441,6 @@ describe('card show and card write', () => {
     const second = await run(fetchFn, 'card', 'write', '--out', out);
     expect(second.code).toBe(0);
     expect(await readFile(out, 'utf8')).toBe(written);
-
-    const show = await run(fetchFn, 'card', 'show');
-    expect(show.out).toBe(written);
   });
 
   it('card write into a missing directory fails with the path', async () => {

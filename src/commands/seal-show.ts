@@ -16,7 +16,7 @@ export function register(parent: Command, deps: SealDeps): Command {
     .command('show')
     .description("Print the agent's current SEAL and what it says")
     .action(async function (this: Command): Promise<void> {
-      const { credential } = await loadSeal(this, deps);
+      const { credential } = await loadSeal(this, deps, true);
       if (credential === null) this.error(NO_SEAL);
       const seal = credential.credential;
       const payload = decodeSealPayload(seal);

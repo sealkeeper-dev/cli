@@ -16,7 +16,7 @@ export function register(
       this: Command,
       options: { url?: string },
     ): Promise<void> {
-      const card = await loadCard(this, deps, options.url);
+      const card = await loadCard(this, deps, options.url, true);
       stdout(JSON.stringify(card, null, 2));
     });
 }

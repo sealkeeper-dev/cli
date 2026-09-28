@@ -267,12 +267,32 @@ describe('sealkeeper seal', () => {
       );
     });
 
-    it('seal show reuses the cached SEAL card show uses', async () => {
+    it('seal show asks the API even with a cached SEAL, and falls back to it offline', async () => {
       await run(fetchFn, 'card', 'show');
       requests = [];
       const { code } = await run(fetchFn, 'seal', 'show');
       expect(code).toBe(0);
-      expect(requests).toEqual([]);
+      expect(requests).toContain(`${API_URL}/v1/agents/${agentId}/seal`);
+      const offlineShow = await run(offline, 'seal', 'show');
+      expect(offlineShow.code).toBe(0);
+      expect(offlineShow.err).toContain('using the cached SEAL');
+    });
+
+    it('seal show prints the hold rather than a cached SEAL of a held agent', async () => {
+      await run(fetchFn, 'seal', 'write', '--dir', home);
+      const { code, out, err } = await run(
+        withheldFetch({
+          error: { code: 'withheld', message: 'withheld for cause' },
+          reason: 'safety',
+        }),
+        'seal',
+        'show',
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        'no SEAL, withheld for cause, reason safety, none is issued while the hold is in force\n',
+      );
     });
 
     it('seal show with no API and no cache exits 1', async () => {
@@ -280,6 +300,49 @@ describe('sealkeeper seal', () => {
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${NO_SEAL}\n`);
+    });
+
+    // The SEAL route's 404 when no SEAL is issued, with the agent's id.
+    const withheldFetch = (body: object) =>
+      (async (input: string | URL | Request) => {
+        const url = String(input);
+        requests.push(url);
+        if (url === WELL_KNOWN) return Response.json(published());
+        return Response.json({ id: agentId, ...body }, { status: 404 });
+      }) as typeof fetch;
+
+    it('seal show names the hold reason class when the SEAL is withheld for cause', async () => {
+      for (const reason of ['fraud', 'spam_ring']) {
+        const { code, out, err } = await run(
+          withheldFetch({
+            error: { code: 'withheld', message: 'withheld for cause' },
+            reason,
+          }),
+          'seal',
+          'show',
+        );
+        expect(code).toBe(1);
+        expect(out).toBe('');
+        expect(err).toBe(
+          `no SEAL, withheld for cause, reason ${reason}, none is issued while the hold is in force\n`,
+        );
+      }
+    });
+
+    it('seal show gives the dormant days when the SEAL is withheld while dormant', async () => {
+      const { code, out, err } = await run(
+        withheldFetch({
+          error: { code: 'no_seal', message: 'dormant' },
+          dormant_days: 95,
+        }),
+        'seal',
+        'show',
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        'no SEAL, withheld while the agent is dormant, 95 days, one returns on the next scoring run after activity\n',
+      );
     });
 
     it('seal show without config prints the init hint', async () => {

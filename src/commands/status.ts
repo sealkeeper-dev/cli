@@ -37,7 +37,11 @@ import {
 } from '../goal.js';
 import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
-import { type LiveAgent, readLiveAgent } from '../live-agent.js';
+import {
+  type LiveAgent,
+  readLiveAgent,
+  readSealWithheld,
+} from '../live-agent.js';
 import {
   CursorError,
   countPending,
@@ -47,6 +51,7 @@ import {
 } from '../log.js';
 import { refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
+import { type SealWithheld, withheldText } from '../responses.js';
 import { getScore, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
@@ -96,6 +101,12 @@ type Status = {
   // Whole days since the API last accepted an event from this agent. null
   // when unknown or when it has accepted none.
   dormantDays: number | null;
+  // Whether the SEAL is withheld, for cause while a hold is in force or at
+  // 90 dormant days, from the agent answer.
+  sealWithheld: boolean;
+  // Why, from the SEAL route, the hold's reason class or the dormant days.
+  // null when it is not withheld or the route did not say.
+  withheld: SealWithheld | null;
   // What the next level needs, from the goal cache, fifteen minutes like
   // the score. null when the API did not answer and there is no cache.
   goal: GoalResponse | null;
@@ -211,6 +222,13 @@ async function readStatus(
     ]);
   seen(live);
   const slug = await refreshOperatorSlug(config.agentId, live, p);
+  const dormantDays = live?.standing?.dormant_days ?? null;
+  const withheldNow =
+    live?.standing?.held === true || sealWithheld(dormantDays);
+  // The agent answer says withheld and not why. The SEAL route says why.
+  const withheld = withheldNow
+    ? await readSealWithheld(config, deps.fetch)
+    : null;
 
   return {
     agentId: config.agentId,
@@ -220,7 +238,9 @@ async function readStatus(
     ...countEvents(events),
     verifiedTasks: live?.counts?.verifiedTasks ?? null,
     level: live?.level ?? null,
-    dormantDays: live?.standing?.dormant_days ?? null,
+    dormantDays,
+    sealWithheld: withheldNow,
+    withheld,
     goal,
     unsubmittedClaims: unsubmitted.length,
     addressedTasks: inbox?.count ?? null,
@@ -355,8 +375,8 @@ function printStatus(status: Status): void {
     ...(status.dormantDays !== null && status.dormantDays > 0
       ? ([['dormant', days(status.dormantDays)]] as [string, string][])
       : []),
-    ...(sealWithheld(status.dormantDays)
-      ? ([['SEAL', 'no SEAL, withheld while dormant']] as [string, string][])
+    ...(status.sealWithheld
+      ? ([['SEAL', sealRow(status.withheld)]] as [string, string][])
       : []),
     ['pending', String(status.pending)],
     ['last sync', status.lastSyncAt ?? 'never'],
@@ -402,6 +422,12 @@ export function nextScoringLine(minutes: number): string {
 }
 
 const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
+
+// The SEAL row of a withheld SEAL, with the reason class or the dormant
+// days as check prints them, or withheld alone when the SEAL route did not
+// say why.
+export const sealRow = (withheld: SealWithheld | null): string =>
+  `no SEAL, ${withheld === null ? 'withheld' : withheldText(withheld)}`;
 
 // At the 90 day rung the API withholds the SEAL until the next scoring run
 // after a new event.

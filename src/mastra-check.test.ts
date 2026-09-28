@@ -138,7 +138,7 @@ describe('mastra check', () => {
     expect(e.message).toBe(
       [
         'alice/claude-code did not pass the SealKeeper check',
-        'FAIL no SEAL, withheld while the agent is dormant, need a current SEAL',
+        'FAIL no SEAL, withheld, need a current SEAL',
       ].join('\n'),
     );
     expect(e.result.seal).toBeNull();

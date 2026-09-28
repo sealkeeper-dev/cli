@@ -22,8 +22,10 @@ import {
   runBySealKeeper,
   ScoreResponse,
   SealClaims,
+  sealWithheldOf,
   TaskResponse,
   WellKnown,
+  withheldText,
 } from './responses.js';
 
 const ID = 'A'.repeat(43);
@@ -569,5 +571,69 @@ describe('agentHandle and operatorSlugOf (VOU-196)', () => {
     });
     expect(parsed.operator.slug).toBeUndefined();
     expect(operatorSlugOf({ operator: parsed.operator })).toBe('alice');
+  });
+});
+
+describe('sealWithheldOf', () => {
+  it('reads the hold class and the dormant days loosely', () => {
+    const held = (reason: unknown) => ({
+      error: { code: 'withheld', message: 'm' },
+      id: 'x',
+      reason,
+      extra: true,
+    });
+    expect(sealWithheldOf(held('safety'))).toEqual({
+      kind: 'held',
+      reason: 'safety',
+    });
+    expect(sealWithheldOf(held('new_class'))).toEqual({
+      kind: 'held',
+      reason: 'new_class',
+    });
+    for (const reason of [undefined, 3, 'Fraud', 'a b', 'x'.repeat(65)]) {
+      expect(sealWithheldOf(held(reason))).toEqual({
+        kind: 'held',
+        reason: null,
+      });
+    }
+    const noSeal = (dormant_days: unknown) => ({
+      error: { code: 'no_seal', message: 'm' },
+      dormant_days,
+    });
+    expect(sealWithheldOf(noSeal(1))).toEqual({
+      kind: 'dormant',
+      dormantDays: 1,
+    });
+    for (const days of [null, -1, 1.5, '9']) {
+      expect(sealWithheldOf(noSeal(days))).toEqual({
+        kind: 'dormant',
+        dormantDays: null,
+      });
+    }
+    for (const body of [
+      { error: { code: 'not_found', message: 'm' } },
+      undefined,
+      'withheld',
+    ]) {
+      expect(sealWithheldOf(body)).toBeNull();
+    }
+  });
+
+  it('says withheld and why in plain words', () => {
+    expect(withheldText({ kind: 'held', reason: 'fraud' })).toBe(
+      'withheld for cause, reason fraud',
+    );
+    expect(withheldText({ kind: 'held', reason: null })).toBe(
+      'withheld for cause',
+    );
+    expect(withheldText({ kind: 'dormant', dormantDays: 1 })).toBe(
+      'withheld while the agent is dormant, 1 day',
+    );
+    expect(withheldText({ kind: 'dormant', dormantDays: 120 })).toBe(
+      'withheld while the agent is dormant, 120 days',
+    );
+    expect(withheldText({ kind: 'dormant', dormantDays: null })).toBe(
+      'withheld while the agent is dormant',
+    );
   });
 });

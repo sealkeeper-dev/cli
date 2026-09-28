@@ -12,6 +12,7 @@ import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 import { readIfExists } from './files.js';
 import { stderr } from './output.js';
 import { CredentialPayload } from './responses.js';
+import { cacheKeys, keysOrigin, loadKeys } from './seal.js';
 
 // The agent's current SEAL, Signed Evidence of Agent Legitimacy. In code it
 // keeps its first name, the credential. It is cached in
@@ -44,10 +45,49 @@ export class CredentialError extends Error {
 type GetCredentialOptions = {
   api: ApiClient;
   agentId: string;
+  // Fetch even when the cached SEAL is fresh, falling back to it only when
+  // the API cannot be reached. seal show and card show pass it, so a
+  // withheld SEAL prints the hold rather than the cached SEAL.
   force?: boolean;
+  // For the keys a cached SEAL is checked against, the same fetch as api.
+  // Without it a cached SEAL is reused unchecked.
+  fetch?: typeof fetch;
   now?: () => number;
   paths?: Paths;
 };
+
+// False when the SealKeeper keys, cached for a day as seal verify keeps
+// them and fetched again once older, no longer list the kid the cached SEAL
+// was signed with, as after a key is dropped at the end of a rotation or at
+// once after a compromise. True when they list it or cannot be loaded, since
+// then nothing says the key is gone.
+async function keyStillListed(
+  options: GetCredentialOptions,
+  cached: Credential,
+  p: Paths,
+  nowMs: number,
+): Promise<boolean> {
+  if (options.fetch === undefined) return true;
+  let kid: string;
+  try {
+    kid = decodeHeader(cached.credential).kid;
+  } catch {
+    return false;
+  }
+  try {
+    const keys = await loadKeys({
+      apiUrl: options.api.apiUrl,
+      fetch: options.fetch,
+      paths: p,
+      nowMs,
+      kid,
+      iss: cached.payload.iss,
+    });
+    return keys.keys.some((k) => k.kid === kid);
+  } catch {
+    return true;
+  }
+}
 
 // Returns the cached SEAL while it is fresh. Otherwise fetches one, verifies
 // it against the API's well-known keys, caches it and returns it. When the
@@ -59,8 +99,15 @@ export async function getCredential(
   options: GetCredentialOptions,
 ): Promise<Credential | null> {
   const p = options.paths ?? paths();
-  const nowSec = Math.floor((options.now ?? Date.now)() / 1000);
-  const cached = await readCache(p, options.agentId);
+  const nowMs = (options.now ?? Date.now)();
+  const nowSec = Math.floor(nowMs / 1000);
+  const read = await readCache(p, options.agentId);
+  // A cached SEAL whose key has left the published keys is never reused,
+  // so card write, seal write and the routine stop embedding it.
+  const cached =
+    read !== null && (await keyStillListed(options, read, p, nowMs))
+      ? read
+      : null;
 
   if (
     !options.force &&
@@ -72,7 +119,7 @@ export async function getCredential(
 
   let fresh: Credential;
   try {
-    fresh = await fetchVerified(options.api, options.agentId, nowSec);
+    fresh = await fetchVerified(options.api, options.agentId, nowSec, p);
   } catch (error) {
     if (!unreachable(error)) throw error;
     if (cached !== null && cached.payload.exp > nowSec) {
@@ -99,6 +146,7 @@ async function fetchVerified(
   api: ApiClient,
   agentId: string,
   nowSec: number,
+  p: Paths,
 ): Promise<Credential> {
   const [response, wellKnown] = await Promise.all([
     api.getCredential(agentId),
@@ -150,6 +198,15 @@ async function fetchVerified(
       'the SEAL from the API has expired, not using it',
     );
   }
+  // The keys it verified against go to the cache keyStillListed and seal
+  // verify read, under the origin loadKeys would fetch them from. The API
+  // serves the same document the issuer's domain does.
+  await cacheKeys(
+    p,
+    keysOrigin(api.apiUrl, payload.data.iss),
+    wellKnown,
+    nowSec * 1000,
+  );
   return { credential: jws, payload: payload.data };
 }
 

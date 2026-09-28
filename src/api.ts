@@ -20,9 +20,12 @@ import {
   ListTasksResponse,
   RatingResponse,
   ScoreResponse,
+  type SealWithheld,
+  sealWithheldOf,
   TaskResponse,
   TaskSubmissionResponse,
   WellKnown,
+  withheldText,
 } from './responses.js';
 
 // A small client for the SealKeeper API. Every response is parsed before
@@ -48,6 +51,22 @@ export class ApiError extends Error {
     readonly retryAfterSec: number | null = null,
   ) {
     super(message);
+  }
+}
+
+// The SEAL routes answered 404 with no SEAL, withheld for cause or while
+// dormant (VOU-85). withheld says which and why. The message is one plain
+// line with the reason class or the dormant days.
+export class SealWithheldError extends ApiError {
+  override name = 'SealWithheldError';
+  constructor(readonly withheld: SealWithheld) {
+    super(
+      404,
+      withheld.kind === 'held' ? 'withheld' : 'no_seal',
+      withheld.kind === 'held'
+        ? `no SEAL, ${withheldText(withheld)}, none is issued while the hold is in force`
+        : `no SEAL, ${withheldText(withheld)}, one returns on the next scoring run after activity`,
+    );
   }
 }
 
@@ -271,8 +290,18 @@ export function createApiClient(options: {
       call('/v1/events', EventsBatchResponse, { body: { envelopes } }),
     // GET /v1/agents/:id/seal. /credential is the old path of the same
     // answer, kept by the API for one release.
-    getCredential: (agentId) =>
-      call(agentPath(agentId, '/seal'), CredentialResponse),
+    // A 404 that says the SEAL is withheld is a SealWithheldError.
+    async getCredential(agentId) {
+      const { status, json, headers } = await request(
+        agentPath(agentId, '/seal'),
+      );
+      const withheld = status === 404 ? sealWithheldOf(json) : null;
+      if (withheld) throw new SealWithheldError(withheld);
+      if (status !== 200) throw apiErrorOf(status, json, headers);
+      const result = CredentialResponse.safeParse(json);
+      if (!result.success) throw apiErrorOf(status, undefined, headers);
+      return result.data;
+    },
     getWellKnown: () => call(WELL_KNOWN_PATH, WellKnown),
     getScore: (agentId) => call(agentPath(agentId, '/score'), ScoreResponse),
     getGoal: (agentId) => call(agentPath(agentId, '/goal'), GoalResponse),

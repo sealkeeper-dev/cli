@@ -288,7 +288,7 @@ export class SealKeeperCheckError extends Error {
     super(
       [
         `${result.handle} did not pass the SealKeeper check`,
-        ...failed.map(describeCheck),
+        ...failed.map((check) => describeCheck(check)),
       ].join('\n'),
     );
     this.failed = failed;
