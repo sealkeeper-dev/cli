@@ -22,7 +22,7 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApiClient } from '../api.js';
+import { ApiError, createApiClient } from '../api.js';
 import type { Input } from '../ask.js';
 import { ANSWER_RULES } from '../claude-code-command.js';
 import {
@@ -85,8 +85,14 @@ import {
   withoutBlock,
 } from '../routine-scheduler.js';
 import type { TasksDeps } from '../tasks.js';
-import { PosterLookup, routineCandidates, seedTypesDone } from './prove.js';
-import { NPX_NOTE } from './routine.js';
+import {
+  PosterLookup,
+  refusesOrigin,
+  routineCandidates,
+  routineHeld,
+  seedTypesDone,
+} from './prove.js';
+import { NPX_NOTE, waitingForPerson } from './routine.js';
 
 const API_URL = 'https://api.test';
 
@@ -111,9 +117,14 @@ const CAROL_AGENT = `${'K'.repeat(42)}A`;
 // An agent of another operator, whose login is dan and whose slug is carol,
 // Carol's login, which Carol gave up as a slug and dan took.
 const DAN_AGENT = `${'D'.repeat(42)}A`;
+// Another agent of this agent's own operator, alice.
+const SIBLING_AGENT = `${'O'.repeat(42)}A`;
+// A second agent of bob (RT-8).
+const BOB_SECOND_AGENT = `${'Q'.repeat(42)}A`;
 const LOGINS: Record<string, string> = {
   [SEED_AGENT]: 'sealkeeper-dev',
   [BOB_AGENT]: 'bob',
+  [BOB_SECOND_AGENT]: 'bob',
   [MALLORY_AGENT]: 'mallory',
   [CAROL_AGENT]: 'Carol',
   [DAN_AGENT]: 'dan',
@@ -153,6 +164,16 @@ class FakeApi {
   goal: Record<string, unknown> | null = null;
   // Claims of these task ids fail with a 500.
   failClaim = new Set<string>();
+  // Claims of these task ids answer 409 with the code given, or 400 about
+  // origin as an API from before the claim's origin (RT-8).
+  claimReply = new Map<string, 'already_claimed' | 'too_new' | 'origin'>();
+  // Every claim asked for, by task id, and the origin each one signed.
+  claimAsked: { taskId: string; origin: unknown }[] = [];
+  // The level each agent answer carries, bronze unless set. null leaves it
+  // out, as for an agent not yet scored (RT-8).
+  levels = new Map<string, string | null>();
+  // True for an API from before the origin filter, which refuses it.
+  refuseOrigin = false;
   // Runs as an outcome report arrives, before it is stored.
   beforeOutcome: (() => Promise<void>) | null = null;
 
@@ -198,6 +219,24 @@ class FakeApi {
     const method = init?.method ?? 'GET';
     if (method === 'GET' && url.pathname === '/v1/tasks') {
       const q = url.searchParams;
+      if (this.refuseOrigin && q.has('origin')) {
+        return Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid query',
+              issues: [
+                {
+                  path: [],
+                  code: 'unrecognized_keys',
+                  message: 'Unrecognized key: "origin"',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      }
       const state = q.get('state');
       const assignee = q.get('assignee');
       const seed = q.get('seed');
@@ -210,6 +249,8 @@ class FakeApi {
         if (q.has('claimant') && t.claimantAgentId !== q.get('claimant')) {
           return false;
         }
+        // origin as the API filters it (RT-8).
+        if (q.has('origin') && t.origin !== q.get('origin')) return false;
         if (
           seed !== null &&
           (t.posterAgentId === SEED_AGENT) !== (seed === 'true')
@@ -257,6 +298,9 @@ class FakeApi {
         },
         createdAt: '2026-09-22T00:00:00.000Z',
         operatedBySealKeeper: id === SEED_AGENT,
+        ...(this.levels.get(id) === null
+          ? {}
+          : { level: this.levels.get(id) ?? 'bronze' }),
       });
     }
     if (method === 'POST' && url.pathname === '/v1/tasks') {
@@ -276,7 +320,34 @@ class FakeApi {
     if (method === 'GET' && !match[2]) return Response.json(task);
     const payload = await this.payload(init);
     if (match[2] === '/claim') {
+      this.claimAsked.push({ taskId: task.id, origin: payload.origin });
       if (this.failClaim.has(task.id)) return error(500, 'internal');
+      const reply = this.claimReply.get(task.id);
+      if (reply === 'origin') {
+        return Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid payload',
+              issues: [
+                {
+                  path: [],
+                  code: 'unrecognized_keys',
+                  message: 'Unrecognized key: "origin"',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      }
+      if (reply === 'too_new') {
+        return Response.json(
+          { error: { code: 'too_new', message: 'too new' } },
+          { status: 409, headers: { 'Retry-After': '90' } },
+        );
+      }
+      if (reply) return error(409, reply);
       Object.assign(task, {
         state: 'claimed',
         claimantAgentId: this.agentId,
@@ -676,6 +747,7 @@ describe('routine', () => {
       ]);
       expect((await readRoutineConfig())?.limits).toEqual({
         claimsPerDay: 10,
+        networkClaimsPerDay: 2,
         confirmsPerDay: 10,
         postsPerDay: 3,
         minutesPerRun: 15,
@@ -1226,6 +1298,203 @@ describe('routine', () => {
       expect(prompt).toContain('A claim allows 3 failed submits.');
     });
 
+    it("takes other operators' template tasks 30 minutes after they are posted, before seed tasks (RT-8)", async () => {
+      await installed({ allow: ['bob'] });
+      const ago = (minutes: number) =>
+        new Date(Date.now() - minutes * 60_000).toISOString();
+      // A seed task posted a minute ago, which has no claim age wait.
+      const seed = api.add({ postedAt: ago(1) });
+      const addressed = api.add({
+        posterAgentId: BOB_AGENT,
+        assignee: { id: api.agentId, handle: 'alice/agent' },
+        postedAt: ago(5),
+      });
+      // Older manual posts, which the origin filter reads past.
+      const manual = api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'manual',
+        postedAt: ago(90),
+      });
+      const ownOperator = api.add({
+        posterAgentId: SIBLING_AGENT,
+        origin: 'template',
+        postedAt: ago(60),
+      });
+      const counterparty = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        taskType: 'summarise',
+        verification: { kind: 'counterparty' },
+        postedAt: ago(45),
+      });
+      const fromRoutine = api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'routine',
+        taskType: 'json_shape',
+        verification: { kind: 'schema', jsonSchema: { type: 'object' } },
+        postedAt: ago(40),
+      });
+      const ready = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: ago(31),
+      });
+      const young = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: ago(10),
+      });
+      const client = createApiClient({ apiUrl: API_URL, fetch: api.fetch });
+      const posters = new PosterLookup(client);
+      const config = (await readConfig()) as Config;
+      const found = await routineCandidates(
+        client,
+        posters,
+        await loadSigner(API_URL),
+        config,
+        { ...defaultRoutineConfig(), allow: ['bob'] },
+      );
+      // Allowed addressed tasks first, then the network tasks oldest
+      // first, then seed tasks at any age. The young one, the counterparty
+      // one and the own operator's are not taken.
+      expect(found.tasks.map((t) => t.id)).toEqual([
+        addressed.id,
+        fromRoutine.id,
+        ready.id,
+        seed.id,
+      ]);
+      expect(found.tasks.map((t) => t.id)).not.toContain(young.id);
+      expect(found.tasks.map((t) => t.id)).not.toContain(ownOperator.id);
+      // The manual and the counterparty task wait for a person as before.
+      // The young one waits for a later run and the own operator's never
+      // counts, so neither is noted.
+      expect(found.skipped.map((s) => s.taskId).sort()).toEqual(
+        [manual.id, counterparty.id].sort(),
+      );
+      expect(found.skipped.every((s) => s.reason === 'open_task')).toBe(true);
+
+      // A network task claimed in an earlier run is worked on the next.
+      const held = await routineHeld(
+        posters,
+        [{ ...ready, state: 'claimed', claimantAgentId: api.agentId }],
+        config,
+        defaultRoutineConfig(),
+      );
+      expect(held.tasks.map((t) => t.id)).toEqual([ready.id]);
+      expect(held.skipped).toEqual([]);
+    });
+
+    const candidatesOf = async (
+      routine: RoutineConfig = defaultRoutineConfig(),
+      options: Parameters<typeof routineCandidates>[6] = {},
+    ) => {
+      const client = createApiClient({ apiUrl: API_URL, fetch: api.fetch });
+      return routineCandidates(
+        client,
+        new PosterLookup(client),
+        await loadSigner(API_URL),
+        (await readConfig()) as Config,
+        routine,
+        undefined,
+        options,
+      );
+    };
+    const minutesAgo = (minutes: number) =>
+      new Date(Date.now() - minutes * 60_000).toISOString();
+
+    it('takes seed tasks only when an older API refuses the origin filter (RT-8)', async () => {
+      await installed();
+      api.refuseOrigin = true;
+      const seed = api.add();
+      api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        postedAt: minutesAgo(60),
+      });
+      const found = await candidatesOf();
+      expect(found.tasks.map((t) => t.id)).toEqual([seed.id]);
+      expect(found.network).toEqual([]);
+    });
+
+    it('surfaces a 400 that is not about origin (RT-8)', () => {
+      const origin = new ApiError(400, 'validation_failed', 'Invalid', [
+        { path: ['origin'], code: 'invalid_value', message: 'bad' },
+      ]);
+      const other = new ApiError(400, 'validation_failed', 'Invalid', [
+        { path: ['limit'], code: 'too_big', message: 'bad' },
+      ]);
+      expect(refusesOrigin(origin)).toBe(true);
+      expect(refusesOrigin(other)).toBe(false);
+      expect(refusesOrigin(new ApiError(400, 'bad_request', 'x'))).toBe(false);
+    });
+
+    it('finds a claimable hash template behind a page of 100 counterparty templates (RT-8)', async () => {
+      await installed();
+      for (let i = 0; i < 100; i++) {
+        api.add({
+          posterAgentId: BOB_AGENT,
+          origin: 'template',
+          taskType: 'summarise',
+          verification: { kind: 'counterparty' },
+          postedAt: minutesAgo(300 - i),
+        });
+      }
+      const hash = api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: minutesAgo(60),
+      });
+      const found = await candidatesOf();
+      expect(found.network).toEqual([{ id: hash.id, operator: 'mallory' }]);
+      expect(found.tasks.map((t) => t.id)).toContain(hash.id);
+    });
+
+    it('takes no template task from an unscored poster, one barred before, or past the daily network cap (RT-8)', async () => {
+      await installed();
+      const fromBob = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        postedAt: minutesAgo(60),
+      });
+      api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'template',
+        postedAt: minutesAgo(50),
+      });
+      api.levels.set(MALLORY_AGENT, null);
+      expect((await candidatesOf()).network).toEqual([
+        { id: fromBob.id, operator: 'bob' },
+      ]);
+      expect(
+        (await candidatesOf(undefined, { barredOperators: new Set(['bob']) }))
+          .network,
+      ).toEqual([]);
+      expect(
+        (await candidatesOf(undefined, { operatorsToday: new Set(['bob']) }))
+          .network,
+      ).toEqual([]);
+      expect(
+        (await candidatesOf(undefined, { networkRemaining: 0 })).network,
+      ).toEqual([]);
+    });
+
+    it('never lists a too_new skip as waiting for a person (RT-8)', async () => {
+      await appendRoutine({
+        kind: 'skip',
+        runId: 'earlier',
+        action: 'claim',
+        taskId: 'fresh',
+        reason: 'too_new',
+        taskType: 'line_sort',
+      });
+      const entries = await readRoutine();
+      expect(entries.at(-1)).toMatchObject({ reason: 'too_new' });
+      expect(waitingForPerson(entries, new Date())).toEqual([]);
+    });
+
     it('finds seed tasks behind 150 older open tasks from another poster', async () => {
       // VOU-208. The routine read one global page of the 100 oldest, so a
       // flood of older tasks hid every seed task and runs logged nothing.
@@ -1760,6 +2029,144 @@ describe('routine', () => {
         ).toBe(0);
         expect(api.outcomes).toHaveLength(1);
       });
+    });
+
+    it('prove signs origin routine, skips a too_new claim with a skip line and still claims seed tasks (RT-8)', async () => {
+      const network = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: new Date(Date.now() - 45 * 60_000).toISOString(),
+      });
+      api.claimReply.set(network.id, 'too_new');
+      const seed = api.add();
+      const result = await run('prove', '--json', '--count', '2');
+      expect(result.code).toBe(0);
+      expect(api.claimed).toEqual([seed.id]);
+      // Only the network claim says origin routine.
+      expect(api.claimAsked.map((c) => c.origin)).toEqual([
+        'routine',
+        undefined,
+      ]);
+      const last = result.err.trim().split('\n').at(-1) ?? '{}';
+      expect(JSON.parse(last).skipped).toEqual([
+        {
+          id: network.id,
+          taskType: 'line_sort',
+          reason: 'too_new',
+          retryAfterSec: 90,
+        },
+      ]);
+      expect(await readRoutine()).toContainEqual(
+        expect.objectContaining({
+          kind: 'skip',
+          runId: RUN,
+          taskId: network.id,
+          reason: 'too_new',
+        }),
+      );
+    });
+
+    it('prove takes at most one of 20 unsolvable template tasks from one operator and still claims seed tasks (RT-8)', async () => {
+      const flood = Array.from({ length: 20 }, (_, i) =>
+        api.add({
+          posterAgentId: MALLORY_AGENT,
+          origin: 'template',
+          taskType: 'line_sort',
+          postedAt: new Date(Date.now() - (120 - i) * 60_000).toISOString(),
+        }),
+      );
+      for (const task of flood) api.claimReply.set(task.id, 'already_claimed');
+      const seeds = [api.add(), api.add(), api.add()];
+      const result = await run('prove', '--json', '--count', '3');
+      expect(result.code).toBe(0);
+      const floodIds = new Set(flood.map((t) => t.id));
+      expect(
+        api.claimAsked.filter((c) => floodIds.has(c.taskId)).length,
+      ).toBeLessThanOrEqual(1);
+      expect(api.claimed).toEqual(seeds.map((t) => t.id));
+    });
+
+    it('prove claims a template task first and marks its claim line network, within networkClaimsPerDay (RT-8)', async () => {
+      await setRoutine({
+        limits: { ...defaultRoutineConfig().limits, networkClaimsPerDay: 1 },
+      });
+      const fromBob = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      });
+      const fromMallory = api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 50 * 60_000).toISOString(),
+      });
+      const seed = api.add();
+      const result = await run('prove', '--json', '--count', '3');
+      expect(result.code).toBe(0);
+      expect(api.claimed).toEqual([fromBob.id, seed.id]);
+      expect(api.claimed).not.toContain(fromMallory.id);
+      const claims = (await readRoutine()).filter((e) => e.kind === 'claim');
+      expect(claims).toMatchObject([
+        { taskId: fromBob.id, network: true },
+        { taskId: seed.id },
+      ]);
+      expect(claims[1]).not.toHaveProperty('network');
+    });
+
+    it('prove gives two agents of one operator one network claim between them in a run (RT-8)', async () => {
+      await setRoutine({
+        limits: { ...defaultRoutineConfig().limits, networkClaimsPerDay: 5 },
+      });
+      const first = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      });
+      const second = api.add({
+        posterAgentId: BOB_SECOND_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 50 * 60_000).toISOString(),
+      });
+      const seed = api.add();
+      expect((await run('prove', '--json', '--count', '3')).code).toBe(0);
+      expect(api.claimed).toEqual([first.id, seed.id]);
+      // A later prove of the same day reads the claim line and takes none.
+      const task = api.tasks.get(first.id);
+      if (task) Object.assign(task, { state: 'verified' });
+      const seedTask = api.tasks.get(seed.id);
+      if (seedTask) Object.assign(seedTask, { state: 'verified' });
+      api.add();
+      expect((await run('prove', '--json', '--count', '1')).code).toBe(0);
+      expect(api.claimed).not.toContain(second.id);
+      expect(
+        (await readRoutine()).filter((e) => e.kind === 'claim' && e.network),
+      ).toMatchObject([{ taskId: first.id, operator: 'bob' }]);
+    });
+
+    it('prove goes on to seed tasks when the claim answers 400 about origin (RT-8)', async () => {
+      const network = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      });
+      const other = api.add({
+        posterAgentId: MALLORY_AGENT,
+        origin: 'template',
+        postedAt: new Date(Date.now() - 50 * 60_000).toISOString(),
+      });
+      api.claimReply.set(network.id, 'origin');
+      const seed = api.add();
+      const result = await run('prove', '--json', '--count', '2');
+      expect(result.code).toBe(0);
+      // The network source is off after the first refusal, so the second
+      // network task is never asked for.
+      expect(api.claimAsked.map((c) => c.taskId)).toEqual([
+        network.id,
+        seed.id,
+      ]);
+      expect(api.claimed).toEqual([seed.id]);
+      expect(api.claimed).not.toContain(other.id);
     });
 
     it('prove stops at the daily claim limit', async () => {

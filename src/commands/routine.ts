@@ -46,10 +46,13 @@ import {
   acquireLock,
   allowedNames,
   appendRoutine,
+  barredOperators,
   budgetOf,
   ensureWorkDir,
   failureStreak,
   isAllowed,
+  networkBudgetOf,
+  networkOperatorsToday,
   nextRoutineTemplate,
   type RoutineEntry,
   type RunEntry,
@@ -454,6 +457,10 @@ const indentAll = (text: string) =>
 
 const LIMIT_TEXT: Record<keyof RoutineLimits, [string, string]> = {
   claimsPerDay: ['claims-per-day', 'tasks claimed per day'],
+  networkClaimsPerDay: [
+    'network-claims-per-day',
+    "of those, other operators' template tasks",
+  ],
   confirmsPerDay: ['confirms-per-day', 'outcomes confirmed per day'],
   postsPerDay: ['posts-per-day', 'template tasks posted per day'],
   minutesPerRun: [
@@ -682,7 +689,19 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
         held = kept.tasks;
         found =
           claims.remaining > 0
-            ? await routineCandidates(api, posters, signer, config, routine)
+            ? await routineCandidates(
+                api,
+                posters,
+                signer,
+                config,
+                routine,
+                undefined,
+                {
+                  networkRemaining: networkBudgetOf(entries, routine).remaining,
+                  barredOperators: barredOperators(entries),
+                  operatorsToday: networkOperatorsToday(entries),
+                },
+              )
             : { tasks: [], skipped: [] };
         const pending = await pendingConfirmations(
           api,
@@ -719,7 +738,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       const why =
         claims.remaining === 0
           ? 'the daily claim limit is spent and nothing waits for a confirmation'
-          : 'no seed tasks, allowed addressed tasks or confirmations to do';
+          : "no seed tasks, allowed addressed tasks, other operators' template tasks or confirmations to do";
       await finish('nothing', why, null);
       return;
     }
@@ -988,27 +1007,33 @@ async function status(cmd: Command): Promise<void> {
   for (const item of waiting) stdout(`  ${waitingLine(item)}`);
 }
 
+// A skip that waits for a person, every reason but too_new.
+type PersonSkip = SkipEntry & {
+  reason: Exclude<SkipEntry['reason'], 'too_new'>;
+};
+
 // Skipped work from the last week, newest first, one line per task and
-// action.
+// action. A too_new skip is left out, since a later run takes the task.
 export function waitingForPerson(
   entries: RoutineEntry[],
   now: Date,
-): SkipEntry[] {
+): PersonSkip[] {
   const since = now.getTime() - SKIP_LIST_DAYS * 24 * 60 * 60 * 1000;
   const seen = new Set<string>();
-  const out: SkipEntry[] = [];
+  const out: PersonSkip[] = [];
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i] as RoutineEntry;
     if (e.kind !== 'skip' || Date.parse(e.at) < since) continue;
+    if (e.reason === 'too_new') continue;
     const key = `${e.action}:${e.taskId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(e);
+    out.push({ ...e, reason: e.reason });
   }
   return out;
 }
 
-function waitingLine(skip: SkipEntry): string {
+function waitingLine(skip: PersonSkip): string {
   const by = skip.operator ? ` from ${skip.operator}` : '';
   const type = skip.taskType ? ` ${skip.taskType}` : '';
   switch (skip.reason) {

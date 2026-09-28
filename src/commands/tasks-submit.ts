@@ -6,7 +6,7 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
-import { ApiError } from '../api.js';
+import { type ApiClient, ApiError } from '../api.js';
 import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey } from '../key-guard.js';
@@ -16,8 +16,8 @@ import {
   specAsksFinalLineFeed,
 } from '../line-break.js';
 import { stdout, wantsJson } from '../output.js';
-import type { TaskResponse } from '../responses.js';
-import { activeRoutineRun, appendRoutine } from '../routine.js';
+import { operatorSlugOf, type TaskResponse } from '../responses.js';
+import { activeRoutineRun, appendRoutine, readRoutine } from '../routine.js';
 import {
   defaultTasksDeps,
   failOnApiError,
@@ -35,6 +35,47 @@ type SubmitOptions = {
   keepNewline?: boolean;
   allowOutsideCwd?: boolean;
 };
+
+// After a failed submit, notes the poster's operator in routine.jsonl, so
+// a routine takes no template task of that operator again (RT-8). Inside a
+// routine run it is the first failure of a network claim, the claim line
+// that names the operator, since the routine gives up on a task after a
+// second failure and a later bar would never come. Outside a run it is the
+// failure that ends the claim, when the task no longer names this agent as
+// claimant, or it expired when it was addressed. A read that fails notes
+// nothing.
+async function noteBarred(
+  api: ApiClient,
+  taskId: string,
+  agentId: string,
+  runId: string | null,
+): Promise<void> {
+  try {
+    if (runId !== null) {
+      const claim = (await readRoutine()).find(
+        (e) => e.kind === 'claim' && e.taskId === taskId && e.network === true,
+      );
+      if (claim?.kind === 'claim' && claim.operator !== undefined) {
+        await appendRoutine({
+          kind: 'barred',
+          taskId,
+          operator: claim.operator,
+        });
+      }
+      return;
+    }
+    const after = await api.getTask(taskId);
+    if (after.claimantAgentId === agentId && after.state !== 'expired') return;
+    const poster = await api.getAgent(after.posterAgentId);
+    await appendRoutine({
+      kind: 'barred',
+      taskId,
+      operator: operatorSlugOf(poster),
+    });
+  } catch {
+    // Nothing noted.
+  }
+}
 
 export function register(
   parent: Command,
@@ -129,6 +170,7 @@ export function register(
             error.code === 'verification_failed'
           ) {
             const reason = error.issues[0]?.code ?? 'unknown';
+            await noteBarred(api, id, signer.agentId, runId);
             this.error(`verification failed: ${reason}. ${error.message}`);
           }
           failOnApiError(this, error);

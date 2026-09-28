@@ -135,6 +135,25 @@ export async function handleOrId(
   }
 }
 
+// How long after its post another operator's open task is left for a
+// person, the API's TASKS_MIN_AGE_MINUTES (RT-8). The API holds the real
+// number and answers a routine claim that comes too early with 409 too_new
+// and the seconds left, which wins. This is only a pre filter, so the
+// routine's network source never asks for a young task. A claim without
+// origin, a person's, never waits.
+export const CLAIM_MIN_AGE_MS = 30 * 60_000;
+
+// True when the task is old enough to claim by this machine's clock. An
+// addressed task is, since its assignee claims at once, and so is a seed
+// task, since no person waits to look at it.
+export const claimableByAge = (
+  task: TaskResponse,
+  now: number = Date.now(),
+): boolean =>
+  Boolean(task.assignee) ||
+  task.seed === true ||
+  now - Date.parse(task.postedAt) >= CLAIM_MIN_AGE_MS;
+
 // One page of the open pool as this agent sees it (VOU-200). The signed
 // POST /v1/tasks/open leaves out the tasks it is barred from, which a claim
 // would only get 409 claim_barred for. An API from before that route

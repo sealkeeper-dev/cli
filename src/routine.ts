@@ -156,6 +156,9 @@ export const SkipReason = z.enum([
   'poster_not_allowed',
   // A counterparty submission from an operator not on the allowlist.
   'claimant_not_allowed',
+  // A claim the API refused because the task was posted too recently
+  // (RT-8). Nothing waits for a person, a later run takes it.
+  'too_new',
 ]);
 export type SkipReason = z.infer<typeof SkipReason>;
 
@@ -185,6 +188,21 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     // done least (VOU-140), and of a post, the template's id, so a run can
     // post the template it posted least. Absent on lines written before it.
     taskType: z.string().optional(),
+    // True on a claim of another operator's template task, which
+    // networkClaimsPerDay counts, with the poster's operator slug, so one
+    // operator gets at most one such claim a day (RT-8).
+    network: z.boolean().optional(),
+    operator: z.string().optional(),
+  }),
+  // An operator whose task this agent failed, so the routine takes no
+  // template task of that operator again (RT-8). tasks submit writes it on
+  // the first failed submit of a network claim in a routine run, and
+  // outside a run on the failed submit that ends a claim.
+  z.object({
+    kind: z.literal('barred'),
+    at: At,
+    taskId: z.string(),
+    operator: z.string(),
   }),
   z.object({
     kind: z.literal('skip'),
@@ -289,6 +307,50 @@ export function budgetOf(
   ).length;
   const cap = routine.limits[LIMIT_OF[kind]];
   return { used, cap, remaining: Math.max(0, cap - used) };
+}
+
+// How much of networkClaimsPerDay is used on the UTC day of now, from the
+// claim lines marked network (RT-8).
+export function networkBudgetOf(
+  entries: RoutineEntry[],
+  routine: RoutineConfig,
+  now: Date = new Date(),
+): Budget {
+  const day = dayOf(now);
+  const used = entries.filter(
+    (e) =>
+      e.kind === 'claim' && e.network === true && dayOf(new Date(e.at)) === day,
+  ).length;
+  const cap = routine.limits.networkClaimsPerDay;
+  return { used, cap, remaining: Math.max(0, cap - used) };
+}
+
+// Every operator slug on a barred line, lowercased (RT-8).
+export function barredOperators(entries: RoutineEntry[]): Set<string> {
+  return new Set(
+    entries.flatMap((e) =>
+      e.kind === 'barred' ? [e.operator.toLowerCase()] : [],
+    ),
+  );
+}
+
+// The operators of today's network claims, lowercased, so each operator
+// gets at most one a day across every prove of every run (RT-8).
+export function networkOperatorsToday(
+  entries: RoutineEntry[],
+  now: Date = new Date(),
+): Set<string> {
+  const day = dayOf(now);
+  return new Set(
+    entries.flatMap((e) =>
+      e.kind === 'claim' &&
+      e.network === true &&
+      e.operator !== undefined &&
+      dayOf(new Date(e.at)) === day
+        ? [e.operator.toLowerCase()]
+        : [],
+    ),
+  );
 }
 
 export function limitName(kind: keyof typeof LIMIT_OF): RoutineLimitName {
@@ -684,7 +746,7 @@ export async function refuseInRoutine(
   if ((await activeRoutineRun()) === null) return;
   const why =
     post === undefined
-      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes seed tasks and tasks addressed to this agent by allowed operators, and posts only from a template`
+      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, and posts only from a template`
       : routinePostRefusal(post);
   if (why !== null) cmd.error(why);
 }

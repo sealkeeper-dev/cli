@@ -75,8 +75,11 @@ export function idProfileUrl(agentId: string): string {
 // UTC day from routine.jsonl. tokensPerRun counts what the headless agent
 // reports, see routine-agent.ts. postsPerDay counts the template tasks a
 // run posts when the goal says posting is behind (POST-7).
+// networkClaimsPerDay is the part of claimsPerDay other operators'
+// template tasks may take (RT-8).
 export const ROUTINE_LIMIT_DEFAULTS = {
   claimsPerDay: 10,
+  networkClaimsPerDay: 2,
   confirmsPerDay: 10,
   postsPerDay: 3,
   minutesPerRun: 15,
@@ -87,6 +90,7 @@ export const ROUTINE_LIMIT_DEFAULTS = {
 // off for routine runs.
 export const ROUTINE_LIMIT_MAX = {
   claimsPerDay: 100,
+  networkClaimsPerDay: 5,
   confirmsPerDay: 100,
   postsPerDay: 10,
   minutesPerRun: 120,
@@ -108,6 +112,7 @@ const limit = (name: RoutineLimitName, min = 0) =>
 // back since POST-7, so a routine.json written in between reads it as 3.
 export const RoutineLimits = z.object({
   claimsPerDay: limit('claimsPerDay'),
+  networkClaimsPerDay: limit('networkClaimsPerDay'),
   confirmsPerDay: limit('confirmsPerDay'),
   postsPerDay: limit('postsPerDay'),
   minutesPerRun: limit('minutesPerRun', 1),

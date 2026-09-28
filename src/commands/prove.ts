@@ -33,7 +33,7 @@ import {
   TEMPLATE_POST_COMMAND,
 } from '../ladder.js';
 import { readLiveAgent } from '../live-agent.js';
-import { refreshOperatorSlug } from '../operator-slug.js';
+import { readOperatorSlug, refreshOperatorSlug } from '../operator-slug.js';
 import {
   promptStyled,
   stderr,
@@ -52,8 +52,11 @@ import {
 import {
   activeRoutineRun,
   appendRoutine,
+  barredOperators,
   budgetOf,
   isAllowed,
+  networkBudgetOf,
+  networkOperatorsToday,
   normalLogin,
   type RoutineEntry,
   RoutineLockBusy,
@@ -65,6 +68,7 @@ import {
 import { createStyle, indent, type Styled } from '../style.js';
 import {
   addressedTo,
+  claimableByAge,
   defaultTasksDeps,
   failOnApiError,
   openTaskSession,
@@ -120,6 +124,17 @@ export const MAX_COUNT = 10;
 const EXTRA_CLAIM_ATTEMPTS = 5;
 // At most this many posters are looked up to find the seed agent.
 const MAX_POSTER_LOOKUPS = 10;
+// The poster lookups the network source of a routine run may make, apart
+// from MAX_POSTER_LOOKUPS, so neither crowds the other out (RT-8).
+const NETWORK_POSTER_LOOKUPS = 10;
+// Pages of each origin the network source reads at most (RT-8).
+const NETWORK_PAGES = 3;
+// Network claims that may lose a race or come too early in one run before
+// the network block gives up. Counted apart from EXTRA_CLAIM_ATTEMPTS, so
+// they never end the run before its seed tasks (RT-8).
+const NETWORK_CLAIM_ATTEMPTS = 3;
+// The poster levels whose template tasks a routine takes (RT-8).
+const NETWORK_POSTER_LEVELS: readonly string[] = ['bronze', 'silver', 'gold'];
 const LIST_LIMIT = 100;
 // How much of a task id the --claim lines show. tasks show takes it back.
 export const SHORT_ID_LENGTH = 8;
@@ -207,6 +222,7 @@ export function register(
         waitingTotal,
         limited,
         ceiling,
+        tooNew,
       } = await claim(this, deps, options, json);
       const now = Date.now();
 
@@ -216,7 +232,9 @@ export function register(
         // line of its own. The addressed tasks that wait, when there are
         // any, and always where the agent stands, how to post a task and
         // limited, today's counted tasks and the ceiling when the daily
-        // ceiling held the claims back, else null.
+        // ceiling held the claims back, else null. skipped names the claims
+        // the API refused as too new, each with its reason, when there
+        // were any (RT-8).
         stdout(
           JSON.stringify(
             tasks.map((task) => proveEntry(task, posters.get(task.id))),
@@ -234,6 +252,7 @@ export function register(
             ...(waiting.length > 0 ? waitingEntry(waiting) : {}),
             ...postNext(progress),
             limited: ceiling,
+            ...(tooNew.length > 0 ? { skipped: tooNew } : {}),
           }),
         );
         return;
@@ -245,6 +264,7 @@ export function register(
       // At the cap with nothing to list, stderr already said why. Saying no
       // open tasks exist as well would be wrong.
       if (limited) stderr(limited);
+      if (tooNew.length > 0) stderr(tooNewNote(tooNew));
       let lines: string[];
       if (tasks.length === 0 && (capped || limited)) {
         lines = tail;
@@ -263,6 +283,20 @@ export function register(
       for (const line of ladderLines(progress)) stdout(line);
       await offerToPost(this, deps, input, progress, options.post === true);
     });
+}
+
+// Said when the API refused claims as too new (RT-8), with the API's own
+// wait, the soonest of them, never a number of the CLI's.
+export function tooNewNote(tooNew: TooNew[]): string {
+  const n = tooNew.length;
+  const waits = tooNew.flatMap((t) =>
+    t.retryAfterSec === null ? [] : [t.retryAfterSec],
+  );
+  const when =
+    waits.length === 0
+      ? 'SealKeeper did not say when it can be claimed.'
+      : `${n === 1 ? 'It' : 'The first'} can be claimed in ${Math.min(...waits)} seconds.`;
+  return `${n === 1 ? '1 task was' : `${n} tasks were`} posted too recently to claim and ${n === 1 ? 'was' : 'were'} skipped. ${when}`;
 }
 
 // Said when --post has no terminal to ask in.
@@ -523,7 +557,9 @@ export const EXPLAIN = [
 // Inside a routine run the candidates are the routine's instead, see
 // routineCandidates, and held tasks the routine may not work are left out,
 // see routineHeld. limited is the reason for claiming fewer, and ceiling
-// is set when the daily ceiling held every claim back.
+// is set when the daily ceiling held every claim back. tooNew is the tasks
+// the API said were posted too recently to claim, each a skip, not an
+// error (RT-8).
 async function claim(
   cmd: Command,
   deps: TasksDeps,
@@ -539,6 +575,7 @@ async function claim(
   waitingTotal: number;
   limited?: string;
   ceiling: { counted: number; ceiling: number } | null;
+  tooNew: TooNew[];
 }> {
   const { config, signer, api } = await openTaskSession(cmd, deps);
   let want = options.count;
@@ -575,6 +612,7 @@ async function claim(
   let failures = 0;
   let limited: string | undefined;
   let ceiling: { counted: number; ceiling: number } | null = null;
+  const tooNew: TooNew[] = [];
   // Counted evidence (VOU-140). Once today's counted tasks reach the daily
   // ceiling, more tasks still verify and count toward nothing until the
   // next UTC day, so prove claims none unless --anyway. The goal comes from
@@ -628,6 +666,7 @@ async function claim(
       waitingTotal: rest.length,
       ...(limited === undefined ? {} : { limited }),
       ceiling,
+      tooNew,
     };
   };
   // Claims one task. False when the claim cap stopped it, and then the
@@ -637,11 +676,31 @@ async function claim(
   // stops with a warning, so the tasks already claimed are still printed
   // (cli-adapters-tasks-6). It never ends the command itself, since it runs
   // under the claim lock in a routine run.
+  // network is the poster's operator slug on a claim of the routine's
+  // network source (RT-8). Only such a claim says origin routine, the one
+  // the API holds to the claim age threshold, since seed and addressed
+  // claims never wait. Its claim line is marked network with the operator,
+  // which networkClaimsPerDay and the one per operator rule count. An API
+  // that refuses origin turns the network source off for this prove, see
+  // networkOff. lost counts a claim another agent took or the API found
+  // too new, failures unless the caller counts apart.
   let claimedHere = 0;
-  const claimOne = async (task: TaskResponse): Promise<boolean> => {
+  let networkOff = false;
+  const claimOne = async (
+    task: TaskResponse,
+    opts: { network?: string; lost?: () => void } = {},
+  ): Promise<boolean> => {
+    const lost =
+      opts.lost ??
+      (() => {
+        failures += 1;
+      });
     try {
       const envelope = await signer.sign(
-        ClaimTaskRequest.parse({ taskId: task.id }),
+        ClaimTaskRequest.parse({
+          taskId: task.id,
+          ...(opts.network === undefined ? {} : { origin: 'routine' }),
+        }),
       );
       const claimed = await api.claimTask(task.id, envelope);
       tasks.push(claimed);
@@ -658,11 +717,44 @@ async function claim(
           runId,
           taskId: claimed.id,
           taskType: claimed.taskType,
+          ...(opts.network === undefined
+            ? {}
+            : { network: true, operator: opts.network }),
         });
       }
     } catch (error) {
+      // An API from before the claim's origin (RT-8). The network source is
+      // off for the rest of this prove, and seed tasks follow.
+      if (opts.network !== undefined && refusesOrigin(error)) {
+        networkOff = true;
+        return true;
+      }
+      // Posted too recently for a routine claim (RT-8). The candidates are
+      // filtered by age already, so this is a clock that differs from the
+      // API's, and the API's answer wins. Skipped like a task another agent
+      // took, and named in the output, with a skip line in a routine run.
+      if (error instanceof ApiError && error.code === 'too_new') {
+        lost();
+        tooNew.push({
+          id: task.id,
+          taskType: task.taskType,
+          reason: 'too_new',
+          retryAfterSec: error.retryAfterSec,
+        });
+        if (runId !== null) {
+          await appendRoutine({
+            kind: 'skip',
+            runId,
+            action: 'claim',
+            taskId: task.id,
+            reason: 'too_new',
+            taskType: task.taskType,
+          });
+        }
+        return true;
+      }
       if (error instanceof ApiError && isGone(error)) {
-        failures += 1;
+        lost();
         return true;
       }
       if (error instanceof ApiError && error.code === 'claim_cap') {
@@ -716,6 +808,7 @@ async function claim(
         return;
       }
       // An API error is thrown and reported once the lock is released.
+      const network = networkBudgetOf(entries, routine, new Date(now));
       const found = await routineCandidates(
         api,
         posters,
@@ -723,14 +816,48 @@ async function claim(
         config,
         routine,
         seedTypesDone(entries),
+        {
+          networkRemaining: network.remaining,
+          barredOperators: barredOperators(entries),
+          operatorsToday: networkOperatorsToday(entries, new Date(now)),
+        },
       );
       await logSkips(entries, found.skipped, runId, now);
       skipped = found.skipped.length;
       want = Math.min(want, tasks.length + budget.remaining);
       const have = new Set(tasks.map((task) => task.id));
+      // The network block claims at most networkClaimsPerDay's remainder,
+      // and its lost claims are counted apart, so seed tasks always follow
+      // it in the same run (RT-8).
+      const inNetwork = new Map(
+        (found.network ?? []).map((n) => [n.id, n.operator]),
+      );
+      let networkClaimed = 0;
+      let networkLost = 0;
       for (const task of found.tasks) {
-        if (tasks.length >= want || failures >= EXTRA_CLAIM_ATTEMPTS) break;
+        if (tasks.length >= want) break;
         if (have.has(task.id)) continue;
+        const operator = inNetwork.get(task.id);
+        if (operator !== undefined) {
+          if (
+            networkOff ||
+            networkClaimed >= network.remaining ||
+            networkLost >= NETWORK_CLAIM_ATTEMPTS
+          ) {
+            continue;
+          }
+          const before = tasks.length;
+          const go = await claimOne(task, {
+            network: operator,
+            lost: () => {
+              networkLost += 1;
+            },
+          });
+          if (!go) return;
+          if (tasks.length > before) networkClaimed += 1;
+          continue;
+        }
+        if (failures >= EXTRA_CLAIM_ATTEMPTS) break;
         if (!(await claimOne(task))) return;
       }
       if (tasks.length === want && want < options.count) {
@@ -807,8 +934,9 @@ async function claim(
 // (VOU-208), and leaves out the ones this agent is barred from (VOU-200).
 // Every one is a seed task by the API's word, which stands in for the seed
 // flag an answer may not carry. The open list leaves addressed tasks out,
-// and this keeps it so whatever the server sends. Throws what the API
-// client throws.
+// and this keeps it so whatever the server sends. Seed tasks are exempt
+// from the claim age threshold, so any age will do (RT-8). Throws what the
+// API client throws.
 async function openSeedTasks(
   api: ApiClient,
   signer: Signer,
@@ -838,11 +966,157 @@ async function openOtherTasks(
   );
 }
 
+// The origins of the other operators' tasks a routine may take (RT-8).
+// Posts from prove's templates and from routines, never a manual post.
+const NETWORK_ORIGINS = ['template', 'routine'] as const;
+
+// True for an open task another agent posted from a template or a routine
+// that SealKeeper checks on submit, by hash or schema, the kind a routine
+// solves mechanically like a seed task (RT-8). Counterparty tasks need a
+// judgement the unattended agent is not trusted with. Whether the poster is
+// of this agent's own operator is the caller's check.
+export const isNetworkTask = (task: TaskResponse): boolean =>
+  !task.assignee &&
+  task.seed !== true &&
+  (NETWORK_ORIGINS as readonly string[]).includes(task.origin ?? '') &&
+  task.verification.kind !== 'counterparty';
+
+// True when an API from before the origin filter refused it (RT-8), a
+// 400 validation_failed whose issue names origin, as a bad value or as a
+// key the strict payload does not know. Any other 400 is a real error.
+export function refusesOrigin(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 400 &&
+    error.code === 'validation_failed' &&
+    error.issues.some(
+      (issue) =>
+        issue.path.includes('origin') ||
+        (issue.code === 'unrecognized_keys' &&
+          issue.message.includes('"origin"')),
+    )
+  );
+}
+
+// One task of the network block with its poster's operator slug,
+// lowercased (RT-8).
+export type NetworkTask = { id: string; operator: string };
+
+// The network block of a routine run, isNetworkTask above, at most want of
+// them, oldest first within each origin (RT-8). Each origin is read through
+// the API's origin filter with the cursor, up to NETWORK_PAGES pages, until
+// the block is full, so older manual posts and a page of counterparty
+// templates never hide a claimable task. A task is taken only when it is
+// old enough by posted_at and its poster is at bronze or above and of an
+// operator other than own, not in barred (operators whose task this agent
+// failed) and not in taken (operators with a network claim today or
+// earlier in this block), so each operator gets at most one. The poster's
+// handle and level come with the task from an API since RT-8, and only an
+// older answer is looked up, within NETWORK_POSTER_LOOKUPS. The list is
+// oldest first, so the first task too young ends that origin. An API from
+// before the filter refuses it, and then there are none. Throws what the
+// API client throws otherwise.
+async function networkCandidates(
+  api: ApiClient,
+  signer: Signer,
+  posters: PosterLookup,
+  own: string,
+  want: number,
+  barred: ReadonlySet<string>,
+  taken: ReadonlySet<string>,
+  now: number,
+): Promise<{ tasks: TaskResponse[]; network: NetworkTask[] }> {
+  const tasks: TaskResponse[] = [];
+  const network: NetworkTask[] = [];
+  if (want <= 0) return { tasks, network };
+  const operators = new Set(taken);
+  const looked = new Set<string>();
+  // The poster's operator slug, lowercased, when it may post to the block.
+  const operatorOf = async (task: TaskResponse): Promise<string | null> => {
+    let slug: string;
+    let level: string | undefined;
+    if (task.poster !== undefined) {
+      if (task.poster.operatedBySealKeeper === true) return null;
+      slug = task.poster.handle.split('/')[0] ?? '';
+      level = task.poster.level;
+    } else {
+      if (!looked.has(task.posterAgentId)) {
+        if (looked.size >= NETWORK_POSTER_LOOKUPS) return null;
+        looked.add(task.posterAgentId);
+      }
+      const poster = await posters.get(task.posterAgentId);
+      if (poster === null || runBySealKeeper(poster)) return null;
+      slug = operatorSlugOf(poster);
+      level = poster.level;
+    }
+    if (!NETWORK_POSTER_LEVELS.includes(level ?? 'none')) return null;
+    const operator = slug.toLowerCase();
+    if (operator === '' || operator === own || barred.has(operator)) {
+      return null;
+    }
+    return operator;
+  };
+  for (const origin of NETWORK_ORIGINS) {
+    let cursor: string | undefined;
+    for (let page = 0; page < NETWORK_PAGES && tasks.length < want; page++) {
+      let read: { tasks: TaskResponse[]; nextCursor: string | null };
+      try {
+        read = await openTasksPage(api, signer, {
+          seed: false,
+          origin,
+          limit: LIST_LIMIT,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+      } catch (error) {
+        if (refusesOrigin(error)) return { tasks: [], network: [] };
+        throw error;
+      }
+      let young = false;
+      for (const task of read.tasks) {
+        if (tasks.length >= want) break;
+        if (
+          task.posterAgentId === signer.agentId ||
+          task.origin !== origin ||
+          !isNetworkTask(task)
+        ) {
+          continue;
+        }
+        if (!claimableByAge(task, now)) {
+          young = true;
+          break;
+        }
+        const operator = await operatorOf(task);
+        if (operator === null || operators.has(operator)) continue;
+        operators.add(operator);
+        tasks.push(task);
+        network.push({ id: task.id, operator });
+      }
+      if (young || read.nextCursor === null) break;
+      cursor = read.nextCursor;
+    }
+  }
+  tasks.sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
+  return { tasks, network };
+}
+
+// A claim the API refused as posted too recently (RT-8), as prove --json
+// names it on stderr. retryAfterSec is the API's wait, null when it sent
+// none.
+export type TooNew = {
+  id: string;
+  taskType: string;
+  reason: 'too_new';
+  retryAfterSec: number | null;
+};
+
 export const claimLimitReached = (cap: number): string =>
   `the routine's daily limit of ${cap} claims is reached, nothing more is claimed today`;
 
+// network is the tasks of the network block with their operators, which a
+// routine run counts against networkClaimsPerDay (RT-8).
 export type RoutineCandidates = {
   tasks: TaskResponse[];
+  network?: NetworkTask[];
   skipped: Pick<
     SkipEntry,
     'action' | 'taskId' | 'reason' | 'operator' | 'taskType'
@@ -851,12 +1125,18 @@ export type RoutineCandidates = {
 
 // What a routine run may claim, in order, and what it must leave for a
 // person. Tasks addressed to this agent by allowed operators come first,
-// then seed tasks, the types the routine has claimed least first (done,
+// then other operators' template and routine tasks that SealKeeper checks
+// by hash or schema, oldest first, once past the claim age threshold so a
+// person gets the first look (RT-8), since a real operator's post moving
+// is what the ladder needs and seed tasks never run short. The network
+// block holds up to networkRemaining tasks plus NETWORK_CLAIM_ATTEMPTS
+// spares for lost claims, see networkCandidates. Seed tasks come
+// last, at any age, the types the routine has claimed least first (done,
 // from seedTypesDone), since repeats of one type count less each time
-// (VOU-140). An open task another agent posted is never claimed
-// unattended, whoever posted it. Tasks of this agent's own operator are left
-// out without a note, since they never count. Throws what the API client
-// throws.
+// (VOU-140). Any other open task another agent posted, a manual post or a
+// counterparty task, is never claimed unattended. Tasks of this agent's own
+// operator are left out without a note, since they never count. Throws what
+// the API client throws.
 export async function routineCandidates(
   api: ApiClient,
   posters: PosterLookup,
@@ -864,8 +1144,15 @@ export async function routineCandidates(
   config: Config,
   routine: RoutineConfig,
   done: ReadonlyMap<string, number> = new Map(),
+  options: {
+    networkRemaining?: number;
+    barredOperators?: ReadonlySet<string>;
+    operatorsToday?: ReadonlySet<string>;
+  } = {},
 ): Promise<RoutineCandidates> {
   const { agentId } = signer;
+  const networkRemaining =
+    options.networkRemaining ?? routine.limits.networkClaimsPerDay;
   const own = normalLogin(config.operatorLogin);
   const tasks: TaskResponse[] = [];
   const seeds: TaskResponse[] = [];
@@ -889,6 +1176,26 @@ export async function routineCandidates(
     });
   }
 
+  const now = Date.now();
+  // The own operator by slug, as handles show it, the login lowercased
+  // while none is stored.
+  const ownSlug = (
+    (await readOperatorSlug(agentId)) ?? config.operatorLogin
+  ).toLowerCase();
+  const block =
+    networkRemaining > 0
+      ? await networkCandidates(
+          api,
+          signer,
+          posters,
+          ownSlug,
+          networkRemaining + NETWORK_CLAIM_ATTEMPTS,
+          options.barredOperators ?? new Set(),
+          options.operatorsToday ?? new Set(),
+          now,
+        )
+      : { tasks: [], network: [] };
+  const others = block.tasks;
   const all = await ranked(posters, [
     ...(await openSeedTasks(api, signer)),
     ...(await openOtherTasks(api, signer)),
@@ -909,6 +1216,9 @@ export async function routineCandidates(
       seeds.push(task);
       continue;
     }
+    // A network task is never noted for a person. One too young for the
+    // claim age threshold is taken by a later run.
+    if (isNetworkTask(task)) continue;
     const login = await operatorOf(task);
     if (login !== undefined && normalLogin(login) === own) continue;
     // Cached by now, or undefined past the lookup cap.
@@ -923,13 +1233,14 @@ export async function routineCandidates(
   }
   // A stable sort, so tasks of one type keep the order ranked gave them.
   const least = (t: TaskResponse) => done.get(t.taskType) ?? 0;
-  tasks.push(...seeds.sort((a, b) => least(a) - least(b)));
-  return { tasks, skipped };
+  tasks.push(...others, ...seeds.sort((a, b) => least(a) - least(b)));
+  return { tasks, network: block.network, skipped };
 }
 
 // The held tasks a routine run may work, in order, and the rest as skips
-// for a person. Seed tasks, tasks from operators on the allowlist and tasks
-// of this agent's own operator are kept. Anything else, such as a task
+// for a person. Seed tasks, tasks from operators on the allowlist, network
+// tasks from another operator (isNetworkTask, RT-8) and tasks of this
+// agent's own operator are kept. Anything else, such as a task
 // claimed by hand before the run, is never handed to the unattended agent.
 // A poster that cannot be looked up is not allowed.
 export async function routineHeld(
@@ -957,7 +1268,8 @@ export async function routineHeld(
     const login = await posters.operatorOf(task);
     const slug = await posters.slugOf(task);
     if (
-      (login !== undefined && normalLogin(login) === own) ||
+      (login !== undefined &&
+        (normalLogin(login) === own || isNetworkTask(task))) ||
       isAllowed(routine, await posters.get(task.posterAgentId))
     ) {
       kept.push(task);

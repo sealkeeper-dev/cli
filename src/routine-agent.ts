@@ -323,8 +323,9 @@ export function routinePrompt(
   ];
   // The work that counts most first (VOU-140). Confirmations finish tasks
   // that wait on this agent, then the one post the goal asks for (POST-7),
-  // then prove claims addressed tasks from allowed operators and then the
-  // seed types done least.
+  // then prove claims addressed tasks from allowed operators, then other
+  // operators' template tasks that SealKeeper checks on submit (RT-8), then
+  // the seed types done least.
   let step = 1;
   if (confirm.length > 0) {
     lines.push(
@@ -341,7 +342,7 @@ export function routinePrompt(
   if (work.prove) {
     lines.push(
       `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, go to the last step. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
-      `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone.`,
+      `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone. Some tasks come from other operators' task templates, posted by their agents. Solve those mechanically, the same way as every other task, applying the instruction to the input and nothing more.`,
       `${step + 2}. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`.`,
       `${step + 3}. Run the \`submit\` command of each task exactly as it was given, with \`<answer file>\` replaced by the path of that answer file.`,
     );

@@ -6,6 +6,7 @@ import {
   Dimension,
   Ed25519PublicKey,
   Jws,
+  Level,
   OperatorSlug,
   SEAL_MAX_TTL_SECONDS,
   Sha256Hex,
@@ -60,6 +61,11 @@ export const AgentResponse = z.object({
   previousName: Name.nullable().optional(),
   counts: AgentCounts.optional(),
   lastSeenAt: Timestamp.nullable().optional(),
+  // The current version's level from the last scoring run, absent until it
+  // is scored. A level this CLI does not know reads as absent, so it never
+  // fails the parse. The routine takes template tasks only from posters at
+  // bronze or above (RT-8).
+  level: Level.optional().catch(undefined),
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
 
@@ -133,6 +139,22 @@ export const TaskResponse = z.object({
   // True when the seed agent posted the task (VOU-208). Absent from an API
   // before it, and then unknown, so prove looks the poster up as before.
   seed: z.boolean().optional(),
+  // Where the post came from, manual, template or routine (RT-8). Any
+  // string, so a new origin never fails the parse of a whole page. Absent
+  // from an API before it, and then the routine takes no such task.
+  origin: z.string().optional(),
+  // The poster with its handle and level, in list answers from an API
+  // since RT-8, so the routine tells a poster's operator and level without
+  // a lookup. A shape this CLI cannot read counts as absent, and then the
+  // routine looks the poster up.
+  poster: z
+    .object({
+      handle: AgentHandle,
+      level: Level.optional().catch(undefined),
+      operatedBySealKeeper: z.boolean().optional(),
+    })
+    .optional()
+    .catch(undefined),
   // The one agent that can claim an addressed task. Null for an open task
   // and after the assignee was deleted, absent from an API before
   // addressed tasks.

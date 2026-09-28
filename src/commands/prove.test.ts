@@ -94,7 +94,7 @@ const loginOf = (id: string) =>
 const HOUR = 3_600_000;
 
 type RunResult = { code: number; out: string; err: string };
-type ClaimReply = 'ok' | 409 | 'claim_cap' | 'unknown_agent';
+type ClaimReply = 'ok' | 409 | 'claim_cap' | 'unknown_agent' | 'too_new';
 
 // The task and agent routes prove uses. Claims are verified against the
 // local agent's key and must name the task in the path.
@@ -288,6 +288,13 @@ class FakeApi {
     }
     const reply = this.claims.get(task.id) ?? 'ok';
     if (reply === 409) return error(409, 'already_claimed');
+    // Posted too recently (RT-8), with the seconds left in Retry-After.
+    if (reply === 'too_new') {
+      return Response.json(
+        { error: { code: 'too_new', message: 'too new' } },
+        { status: 409, headers: { 'Retry-After': '120' } },
+      );
+    }
     if (reply === 'claim_cap') return error(403, 'claim_cap');
     if (reply === 'unknown_agent') return error(401, 'unknown_agent');
     Object.assign(task, {
@@ -1207,6 +1214,35 @@ describe('prove', () => {
     for (const task of tasks.slice(0, 6)) {
       expect(api.requests).not.toContain(`POST /v1/tasks/${task.id}/claim`);
     }
+  });
+
+  it('skips a claim the API refuses as too new and names it on stderr (RT-8)', async () => {
+    const tasks = seedTasks(2);
+    api.claims.set(tasks[0]?.id ?? '', 'too_new');
+    const { code, out, err } = await run('prove', '--count', '1');
+    expect(code).toBe(0);
+    expect(api.claimed).toEqual([tasks[1]?.id]);
+    expect(jsonIds(out)).toEqual([tasks[1]?.id]);
+    expect(splitErr(err).json?.skipped).toEqual([
+      {
+        id: tasks[0]?.id,
+        taskType: 'json_extract',
+        reason: 'too_new',
+        retryAfterSec: 120,
+      },
+    ]);
+  });
+
+  it('claims a seed task at any age, since seed tasks have no claim age wait (RT-8)', async () => {
+    const older = api.add({
+      postedAt: new Date(Date.now() - 31 * 60_000).toISOString(),
+    });
+    const fresh = api.add({
+      postedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const { code, out } = await run('prove', '--count', '2');
+    expect(code).toBe(0);
+    expect(jsonIds(out)).toEqual([older.id, fresh.id]);
   });
 
   it('reads the public list on an older API and moves past a barred task', async () => {

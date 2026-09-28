@@ -239,7 +239,7 @@ export function createApiClient(options: {
       cursor?: string;
     } = {},
   ): Promise<ListTasksPage> {
-    const { state, taskType, assignee, poster, claimant, seed, limit } =
+    const { state, taskType, assignee, poster, claimant, seed, origin, limit } =
       ListTasksQuery.parse(query);
     const search = new URLSearchParams({ state, limit: String(limit) });
     if (taskType !== undefined) search.set('taskType', taskType);
@@ -249,6 +249,7 @@ export function createApiClient(options: {
     if (poster !== undefined) search.set('poster', poster);
     if (claimant !== undefined) search.set('claimant', claimant);
     if (seed !== undefined) search.set('seed', String(seed));
+    if (origin !== undefined) search.set('origin', origin);
     // The cursor goes back as the API sent it. The parse above checked it.
     if (query.cursor !== undefined) search.set('cursor', query.cursor);
     return taskPage(`/v1/tasks?${search.toString()}`);

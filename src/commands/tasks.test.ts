@@ -36,6 +36,7 @@ import { createKey } from '../identity.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
+import { appendRoutine, readRoutine } from '../routine.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -168,7 +169,9 @@ class FakeApi {
       spec: { words: 100 },
       verification: { kind: 'counterparty' },
       state: 'open',
-      postedAt: new Date(Date.now() - 60_000).toISOString(),
+      // Past the claim age threshold, which pull leaves to a person first
+      // (RT-8).
+      postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       claimedAt: null,
       submittedAt: null,
       verifiedAt: null,
@@ -508,7 +511,9 @@ describe('tasks pull, submit and post', () => {
 
   afterEach(async () => {
     vi.mocked(process.cwd).mockRestore();
-    for (const file of onCleanup) await rm(file, { force: true });
+    for (const file of onCleanup) {
+      await rm(file, { force: true, recursive: true });
+    }
     expect(api.errors).toEqual([]);
     vi.unstubAllEnvs();
     await rm(home, { recursive: true, force: true });
@@ -596,7 +601,7 @@ describe('tasks pull, submit and post', () => {
       for (let i = 0; i < 150; i++) {
         api.add({ postedAt: at(9e6 - i), posterAgentId: agentId });
       }
-      const other = api.add({ postedAt: at(1e6) });
+      const other = api.add({ postedAt: at(2e6) });
       const { code, out } = await run('tasks', 'pull', '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out).task.id).toBe(other.id);
@@ -626,6 +631,16 @@ describe('tasks pull, submit and post', () => {
       expect(out).toContain('spec          {"words":100}');
     });
 
+    it('takes a task posted 5 minutes ago, since a person never waits (RT-8)', async () => {
+      const young = api.add({
+        postedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+      });
+      const { code, out } = await run('tasks', 'pull', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).task.id).toBe(young.id);
+      expect(api.posts()[0]?.payload).toEqual({ taskId: young.id });
+    });
+
     it('moves on after a 409 or 410', async () => {
       const first = api.add({
         postedAt: new Date(Date.now() - 9e6).toISOString(),
@@ -645,7 +660,7 @@ describe('tasks pull, submit and post', () => {
     it(`gives up after ${MAX_CLAIM_ATTEMPTS} lost claims`, async () => {
       for (let i = 0; i < 7; i++) {
         const task = api.add({
-          postedAt: new Date(Date.now() - (10 - i) * 60_000).toISOString(),
+          postedAt: new Date(Date.now() - (60 - i) * 60_000).toISOString(),
         });
         api.claims.set(task.id, 409);
       }
@@ -1041,6 +1056,59 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(err).toContain('not valid JSON');
       expect(api.posts()).toEqual([]);
+    });
+
+    it('in a routine run notes the operator as barred on the first failure of a network claim (RT-8)', async () => {
+      vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
+      const task = claimed({ kind: 'hash', sha256: sha256('right') });
+      const seed = claimed({ kind: 'hash', sha256: sha256('right') });
+      await appendRoutine({
+        kind: 'claim',
+        runId: 'run-1',
+        taskId: task.id,
+        network: true,
+        operator: 'bob',
+      });
+      await appendRoutine({ kind: 'claim', runId: 'run-1', taskId: seed.id });
+      const dir = await realpath(
+        await mkdtemp(join(tmpdir(), 'sealkeeper-rt8-')),
+      );
+      onCleanup.push(dir);
+      await mkdir(join(dir, '.sealkeeper-answers'), { recursive: true });
+      await writeFile(join(dir, '.sealkeeper-answers', 'a.txt'), 'wrong');
+      cwd = dir;
+      for (const id of [task.id, seed.id]) {
+        const { code } = await run(
+          'tasks',
+          'submit',
+          id,
+          '--file',
+          '.sealkeeper-answers/a.txt',
+        );
+        expect(code).toBe(1);
+      }
+      expect(
+        (await readRoutine()).filter((e) => e.kind === 'barred'),
+      ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
+    });
+
+    it('outside a routine run notes nothing on a failure that leaves the claim', async () => {
+      const task = claimed({ kind: 'hash', sha256: sha256('right') });
+      const { code } = await run('tasks', 'submit', task.id, '--text', 'wrong');
+      expect(code).toBe(1);
+      expect((await readRoutine()).filter((e) => e.kind === 'barred')).toEqual(
+        [],
+      );
+      // The failure that ends the claim is noted with the poster's operator.
+      Object.assign(task, { state: 'open', claimantAgentId: null });
+      api.submitReply = () =>
+        error(422, 'verification_failed', 'hash_mismatch');
+      expect((await run('tasks', 'submit', task.id, '--text', 'x')).code).toBe(
+        1,
+      );
+      expect(
+        (await readRoutine()).filter((e) => e.kind === 'barred'),
+      ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
     });
 
     it('prints the reason code of a 422', async () => {

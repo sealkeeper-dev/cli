@@ -164,6 +164,7 @@ describe('config', () => {
     expect(await readRoutineConfig(p)).toEqual({
       limits: {
         claimsPerDay: 10,
+        networkClaimsPerDay: 2,
         confirmsPerDay: 10,
         postsPerDay: 3,
         minutesPerRun: 15,
