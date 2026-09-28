@@ -21,10 +21,12 @@ import {
   paths,
   type RoutineConfig,
   type RoutineLimitName,
+  writeFileAtomic,
 } from './config.js';
 import { readEnv } from './env.js';
 import { dayOf } from './log.js';
 import { slugOfAnswer } from './operator-slug.js';
+import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 
 // The guardrails of sealkeeper routine (VOU-138), shared by the routine
 // command and by the task commands a routine run's agent calls.
@@ -32,18 +34,20 @@ import { slugOfAnswer } from './operator-slug.js';
 // A routine run starts a headless agent with SEALKEEPER_ROUTINE_RUN set to
 // the run id. Only that variable puts a command in routine mode, where
 // prove, tasks outcome and tasks submit apply the routine rules whatever
-// their options, and tasks post, tasks claim and tasks pull are refused. A
-// command the operator runs in another terminal while a run is going is a
-// normal command. The Bash rules the agent gets allow only commands that
+// their options, tasks post takes only a template that makes its own input,
+// and tasks claim and tasks pull are refused. A command the operator runs in
+// another terminal while a run is going is a normal command. The Bash rules the agent gets allow only commands that
 // keep the variable, see routine-agent.ts.
 //
 // routine-run.json holds the run id, its pid and a deadline. It is created
 // exclusively at the start of a run, so two runs never overlap, and says
-// nothing about which commands are in routine mode.
+// nothing about which commands are in routine mode. Once the run has chosen
+// a template to post, it holds that too, and tasks post in the run posts
+// only that one, once (POST-7).
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
 // a line. One run line per run, and a line for every claim, submit,
-// confirmation, skip, limit, pause and resume. The daily caps are counted
+// confirmation, post, skip, limit, pause and resume. The daily caps are counted
 // from it, per UTC day.
 
 export const ROUTINE_RUN_ENV = 'SEALKEEPER_ROUTINE_RUN';
@@ -57,6 +61,9 @@ export type RoutinePaths = {
   // Held while tasks outcome reports inside a run, so two reports at once
   // cannot pass the daily confirmation limit.
   confirmLock: string;
+  // Held while tasks post posts inside a run, so two posts at once cannot
+  // pass the daily post limit.
+  postLock: string;
   // Where the headless agent runs and writes its answer files. Outside the
   // CLI home, since tasks submit refuses any file inside it, see
   // key-guard.ts.
@@ -71,6 +78,7 @@ export function routinePaths(p: Paths = paths()): RoutinePaths {
     lock: join(p.home, 'routine-run.json'),
     claimLock: join(p.home, 'routine-claim.lock'),
     confirmLock: join(p.home, 'routine-confirm.lock'),
+    postLock: join(p.home, 'routine-post.lock'),
     work: routineWorkDir(p.home),
     out: join(p.home, 'routine.out.log'),
   };
@@ -163,16 +171,19 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     claimed: z.number().int(),
     submitted: z.number().int(),
     confirmed: z.number().int(),
+    // Template tasks posted (POST-7). Absent on lines written before it.
+    posted: z.number().int().optional(),
     tokens: z.number().int().nullable(),
     costUsd: z.number().nullable(),
   }),
   z.object({
-    kind: z.enum(['claim', 'submit', 'confirm']),
+    kind: z.enum(['claim', 'submit', 'confirm', 'post']),
     at: At,
     runId: z.string(),
     taskId: z.string(),
     // The task type of a claim, so a run can prefer the seed types it has
-    // done least (VOU-140). Absent on lines written before it.
+    // done least (VOU-140), and of a post, the template's id, so a run can
+    // post the template it posted least. Absent on lines written before it.
     taskType: z.string().optional(),
   }),
   z.object({
@@ -194,6 +205,7 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     limit: z.enum([
       'claimsPerDay',
       'confirmsPerDay',
+      'postsPerDay',
       'minutesPerRun',
       'tokensPerRun',
       // Today's counted tasks reached the daily ceiling (VOU-140). used and
@@ -259,6 +271,7 @@ export async function readRoutine(p: Paths = paths()): Promise<RoutineEntry[]> {
 const LIMIT_OF = {
   claim: 'claimsPerDay',
   confirm: 'confirmsPerDay',
+  post: 'postsPerDay',
 } as const satisfies Record<string, RoutineLimitName>;
 
 export type Budget = { used: number; cap: number; remaining: number };
@@ -362,6 +375,8 @@ const Lock = z.object({
   runId: z.string().min(1),
   pid: z.number().int(),
   deadline: At,
+  // The template this run posts, when it chose one.
+  post: z.string().min(1).optional(),
 });
 export type Lock = z.infer<typeof Lock>;
 
@@ -498,6 +513,31 @@ function processAlive(pid: number): boolean {
   }
 }
 
+// Records in the run lock the template runId chose to post. Nothing when
+// the lock is another run's or gone.
+export async function setRunPost(
+  runId: string,
+  post: string,
+  p: Paths = paths(),
+): Promise<void> {
+  const lock = await readLock(p);
+  if (lock === null || lock.runId !== runId) return;
+  await writeFileAtomic(
+    routinePaths(p).lock,
+    `${JSON.stringify({ ...lock, post })}\n`,
+  );
+}
+
+// The template runId chose to post, from its live run lock, or null when it
+// chose none or its lock is not live.
+export async function runPost(
+  runId: string,
+  p: Paths = paths(),
+): Promise<string | null> {
+  const lock = await readLiveLock(p);
+  return lock !== null && lock.runId === runId ? (lock.post ?? null) : null;
+}
+
 // How long a command waits for another of the same run to let go of a
 // routine lock, and when a lock counts as left behind.
 const ROUTINE_LOCK_WAIT_MS = 60_000;
@@ -541,6 +581,23 @@ export function withConfirmLock<T>(
   return withRoutineLock(
     routinePaths(p).confirmLock,
     'another tasks outcome of this routine run is still reporting, nothing was reported',
+    fn,
+    p,
+    sleep,
+  );
+}
+
+// Runs fn while holding the post lock, so the daily post budget is read,
+// spent and logged by one tasks post at a time. Throws RoutineLockBusy when
+// another one holds it for more than a minute.
+export function withPostLock<T>(
+  fn: () => Promise<T>,
+  p: Paths = paths(),
+  sleep: Sleep = realSleep,
+): Promise<T> {
+  return withRoutineLock(
+    routinePaths(p).postLock,
+    'another tasks post of this routine run is still posting, nothing was posted',
     fn,
     p,
     sleep,
@@ -606,13 +663,71 @@ export async function activeRoutineRun(
   return readEnv(ROUTINE_RUN_ENV, env) ?? null;
 }
 
+// What a tasks post asks for, as refuseInRoutine reads it. template is the
+// --template id, null for --type, --spec and --verify or the guided walk.
+export type PostAsk = {
+  template: string | null;
+  input: boolean;
+  assignee: boolean;
+  outsideCwd: boolean;
+};
+
 // A command a routine run's agent may not use ends here, with the reason.
+// With post, tasks post passes when it asks for a template that makes its
+// own input and nothing else (POST-7). The daily post limit is checked as
+// it posts, see tasks-post.ts.
 export async function refuseInRoutine(
   cmd: Command,
   command: string,
+  post?: PostAsk,
 ): Promise<void> {
   if ((await activeRoutineRun()) === null) return;
-  cmd.error(
-    `${command} is not available during a routine run. A routine run claims through prove only, which takes seed tasks and tasks addressed to this agent by allowed operators, and never posts`,
-  );
+  const why =
+    post === undefined
+      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes seed tasks and tasks addressed to this agent by allowed operators, and posts only from a template`
+      : routinePostRefusal(post);
+  if (why !== null) cmd.error(why);
+}
+
+const ROUTINE_TEMPLATE_IDS = ROUTINE_TEMPLATES.map((t) => t.id).join(', ');
+
+// Why a routine run may not make this post, or null when it may.
+export function routinePostRefusal(post: PostAsk): string | null {
+  if (post.template === null) {
+    return `nothing posted. During a routine run tasks post takes only --template with one of ${ROUTINE_TEMPLATE_IDS}`;
+  }
+  const template = templateById(post.template);
+  if (
+    template !== undefined &&
+    !ROUTINE_TEMPLATES.some((t) => t.id === template.id)
+  ) {
+    return `nothing posted. ${template.id} needs input a person writes, so during a routine run only ${ROUTINE_TEMPLATE_IDS} post`;
+  }
+  if (post.input) {
+    return 'nothing posted. During a routine run a template makes its own input, so --input is refused';
+  }
+  if (post.assignee) {
+    return 'nothing posted. During a routine run a post goes to every agent, so --for is refused';
+  }
+  if (post.outsideCwd) {
+    return 'nothing posted. --allow-outside-cwd is refused during a routine run';
+  }
+  return null;
+}
+
+// The template a routine run posts next. The one of ROUTINE_TEMPLATES it
+// has posted least, from the post lines of routine.jsonl, the first in
+// order on a tie.
+export function nextRoutineTemplate(entries: RoutineEntry[]): string {
+  const posted = new Map<string, number>();
+  for (const e of entries) {
+    if (e.kind === 'post' && e.taskType !== undefined) {
+      posted.set(e.taskType, (posted.get(e.taskType) ?? 0) + 1);
+    }
+  }
+  let best = ROUTINE_TEMPLATES[0] as (typeof ROUTINE_TEMPLATES)[number];
+  for (const t of ROUTINE_TEMPLATES) {
+    if ((posted.get(t.id) ?? 0) < (posted.get(best.id) ?? 0)) best = t;
+  }
+  return best.id;
 }

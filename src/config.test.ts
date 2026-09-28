@@ -165,6 +165,7 @@ describe('config', () => {
       limits: {
         claimsPerDay: 10,
         confirmsPerDay: 10,
+        postsPerDay: 3,
         minutesPerRun: 15,
         tokensPerRun: 300_000,
       },
@@ -175,6 +176,11 @@ describe('config', () => {
       p.routine,
       JSON.stringify({ limits: { claimsPerDay: -1 } }),
     );
+    await expect(readRoutineConfig(p)).rejects.toThrow(ConfigError);
+    // postsPerDay reads from routine.json within 0 to 10 (POST-7).
+    await writeFile(p.routine, JSON.stringify({ limits: { postsPerDay: 0 } }));
+    expect((await readRoutineConfig(p)).limits.postsPerDay).toBe(0);
+    await writeFile(p.routine, JSON.stringify({ limits: { postsPerDay: 11 } }));
     await expect(readRoutineConfig(p)).rejects.toThrow(ConfigError);
     await writeFile(p.routine, '{ nope');
     await expect(readRoutineConfig(p)).rejects.toThrow(/not valid JSON/);

@@ -13,7 +13,8 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { type Input, readYesNo } from '../ask.js';
-import { requireConfig } from '../cli-config.js';
+import { loadRoutineConfig, requireConfig } from '../cli-config.js';
+import type { RoutineConfig } from '../config.js';
 import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
 import {
@@ -26,7 +27,16 @@ import { readOperatorSlug } from '../operator-slug.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
-import { refuseInRoutine } from '../routine.js';
+import {
+  activeRoutineRun,
+  appendRoutine,
+  budgetOf,
+  RoutineLockBusy,
+  readRoutine,
+  refuseInRoutine,
+  runPost,
+  withPostLock,
+} from '../routine.js';
 import { createStyle } from '../style.js';
 import {
   TEMPLATES,
@@ -52,6 +62,9 @@ import {
 // when the template takes one, and posts it only with --yes or after a yes
 // in a terminal. Without a terminal and without --yes it refuses before
 // anything is read or sent.
+//
+// Inside a routine run only a template that makes its own input posts, with
+// origin routine, within the routine's daily post limit (POST-7).
 //
 // No options at all in a terminal walks the operator through it. Pick a
 // template, give its input, optionally name one agent, read the task, then
@@ -142,6 +155,14 @@ export function register(
       this: Command,
       options: PostOptions,
     ): Promise<void> {
+      // Before anything is read, so a routine run never reads a file for a
+      // post it may not make.
+      await refuseInRoutine(this, 'tasks post', {
+        template: options.template ?? null,
+        input: options.input !== undefined,
+        assignee: options.for !== undefined,
+        outsideCwd: options.allowOutsideCwd === true,
+      });
       const given = EXPLICIT.filter(([key]) => options[key] !== undefined);
       if (options.template !== undefined) {
         if (given.length > 0) {
@@ -222,8 +243,9 @@ type Draft = {
   verification: VerificationSpec;
   expiresHours?: string;
   assignee?: string;
-  // template for a task built from a template (VOU-134). Left out for a
-  // plain post, which the API reads as manual.
+  // template for a task built from a template (VOU-134), routine for one a
+  // routine run posts (POST-7). Left out for a plain post, which the API
+  // reads as manual.
   origin?: TaskOrigin;
 };
 
@@ -261,9 +283,17 @@ async function postAndPrint(
   deps: TasksDeps,
   request: PostTaskRequest,
 ): Promise<void> {
-  // A routine run never posts (VOU-138). Posting asks for another
-  // operator's time, which needs the operator's own yes.
-  await refuseInRoutine(cmd, 'tasks post');
+  // Inside a routine run only templatePost builds a routine post, so any
+  // other way in, such as the guided walk of prove --post, ends here.
+  const runId = await activeRoutineRun();
+  if (runId !== null && request.origin !== 'routine') {
+    await refuseInRoutine(cmd, 'tasks post', {
+      template: null,
+      input: false,
+      assignee: false,
+      outsideCwd: false,
+    });
+  }
   const assignee = request.assignee;
   // Every way in ends here, so no spec, schema or input carries the key.
   await refuseKeyInTask(cmd, request);
@@ -275,10 +305,21 @@ async function postAndPrint(
   ) {
     cmd.error(sameOperator(assignee));
   }
+  const send = async () => api.postTask(await signer.sign(request));
+  const run =
+    runId === null ? null : { runId, routine: await loadRoutineConfig(cmd) };
   let task: TaskResponse;
   try {
-    task = await api.postTask(await signer.sign(request));
+    task =
+      run === null
+        ? await send()
+        : await withPostLock(() =>
+            routinePost(send, run.routine, run.runId, request.taskType),
+          );
   } catch (error) {
+    if (error instanceof PostRefused || error instanceof RoutineLockBusy) {
+      cmd.error(error.message);
+    }
     if (error instanceof ApiError) cmd.error(postRefusal(error, assignee));
     throw error;
   }
@@ -306,6 +347,58 @@ async function postAndPrint(
     ['expires', task.expiresAt],
   ]);
   for (const line of postLines(task, handle)) stdout(line);
+}
+
+// A routine post refused before it is sent. Thrown inside the post lock,
+// so the lock is released before the command ends with the message.
+class PostRefused extends Error {
+  override name = 'PostRefused';
+}
+
+// A post inside a routine run, under the post lock. Sent only when the run
+// chose this template, has not posted yet and the day's post limit has
+// room, and logged with the template's id as its task type. Throws
+// PostRefused otherwise. A post the API took whose answer was lost is not
+// logged, which the daily limit bounds.
+async function routinePost(
+  send: () => Promise<TaskResponse>,
+  routine: RoutineConfig,
+  runId: string,
+  taskType: string,
+): Promise<TaskResponse> {
+  const chosen = await runPost(runId);
+  if (chosen === null) {
+    throw new PostRefused(
+      'nothing posted. This routine run was not asked to post, the goal did not say posting is behind',
+    );
+  }
+  if (chosen !== taskType) {
+    throw new PostRefused(
+      `nothing posted. This routine run posts only ${chosen}`,
+    );
+  }
+  const entries = await readRoutine();
+  if (entries.some((e) => e.kind === 'post' && e.runId === runId)) {
+    throw new PostRefused(
+      'nothing posted. This routine run already posted its one task',
+    );
+  }
+  const budget = budgetOf(entries, 'post', routine);
+  if (budget.remaining === 0) {
+    await appendRoutine({
+      kind: 'limit',
+      runId,
+      limit: 'postsPerDay',
+      used: budget.used,
+      cap: budget.cap,
+    });
+    throw new PostRefused(
+      `nothing posted. The routine's daily limit of ${budget.cap} posts is reached`,
+    );
+  }
+  const task = await send();
+  await appendRoutine({ kind: 'post', runId, taskId: task.id, taskType });
+  return task;
 }
 
 // --template. The template's task with --input, posted on --yes or on a yes
@@ -354,7 +447,7 @@ async function templatePost(
     ...draftOf(task),
     expiresHours: options.expiresHours,
     assignee: options.for,
-    origin: 'template',
+    origin: (await activeRoutineRun()) === null ? 'template' : 'routine',
   });
   if (input !== null) {
     // The input was checked for the key as it was read, and postAndPrint

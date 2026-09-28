@@ -250,7 +250,10 @@ const num = (value: unknown) =>
 // server. --permission-mode default asks before any tool not allowed
 // below, and with nobody to ask, the tool is refused. --tools leaves only
 // Bash, Read and Write in the session, and allowedTools is the only grant.
-export function claudeArgs(invocation: string): string[] {
+export function claudeArgs(
+  invocation: string,
+  post: string | null = null,
+): string[] {
   return [
     '-p',
     '--output-format',
@@ -264,7 +267,7 @@ export function claudeArgs(invocation: string): string[] {
     '--tools',
     'Bash,Read,Write',
     '--allowedTools',
-    ...allowedTools(invocation),
+    ...allowedTools(invocation, post),
     '--disallowedTools',
     'WebFetch',
     'WebSearch',
@@ -272,12 +275,20 @@ export function claudeArgs(invocation: string): string[] {
 }
 
 // The only tools the headless agent may use without a person. The Bash
-// rules match the commands the prompt gives, spelled with invocation.
-export function allowedTools(invocation: string): string[] {
+// rules match the commands the prompt gives, spelled with invocation. post
+// is the template the run chose to post, and only then is its exact post
+// command allowed (POST-7).
+export function allowedTools(
+  invocation: string,
+  post: string | null = null,
+): string[] {
   return [
     `Bash(${invocation} prove --json)`,
     `Bash(${invocation} tasks submit:*)`,
     `Bash(${invocation} tasks outcome:*)`,
+    ...(post === null
+      ? []
+      : [`Bash(${invocation} tasks post --template ${post} --yes --json)`]),
     `Bash(${invocation} status:*)`,
     'Write(./.sealkeeper-answers/**)',
     'Read(./.sealkeeper-answers/**)',
@@ -288,6 +299,12 @@ export function allowedTools(invocation: string): string[] {
 // confirm, see pendingConfirmations in commands/routine.ts.
 export type Confirmable = { task: TaskResponse; submission: string };
 
+// What a routine run's prompt asks beyond confirmations. post is the
+// template to post once, when the goal says posting is behind and the day's
+// post limit has room, else null. prove is false when today's counted tasks
+// reached the daily ceiling and only the post is left to do.
+export type PromptWork = { post: string | null; prove: boolean };
+
 // The prove instructions for a routine run. The same steps and the same
 // untrusted spec rules as the /sealkeeper-prove command, with every command
 // spelled out in full, since the agent may run nothing else. Submissions to
@@ -295,6 +312,7 @@ export type Confirmable = { task: TaskResponse; submission: string };
 export function routinePrompt(
   invocation: string,
   confirm: Confirmable[],
+  work: PromptWork = { post: null, prove: true },
 ): string {
   const sk = (args: string) => `${invocation} ${args}`;
   const lines = [
@@ -304,8 +322,9 @@ export function routinePrompt(
     '',
   ];
   // The work that counts most first (VOU-140). Confirmations finish tasks
-  // that wait on this agent, then prove claims addressed tasks from allowed
-  // operators and then the seed types done least.
+  // that wait on this agent, then the one post the goal asks for (POST-7),
+  // then prove claims addressed tasks from allowed operators and then the
+  // seed types done least.
   let step = 1;
   if (confirm.length > 0) {
     lines.push(
@@ -313,13 +332,21 @@ export function routinePrompt(
     );
     step += 1;
   }
-  lines.push(
-    `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, go to the last step. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
-    `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone.`,
-    `${step + 2}. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`.`,
-    `${step + 3}. Run the \`submit\` command of each task exactly as it was given, with \`<answer file>\` replaced by the path of that answer file.`,
-  );
-  step += 4;
+  if (work.post !== null) {
+    lines.push(
+      `${step}. This agent's goal says to post a task for other agents. Run \`${sk(`tasks post --template ${work.post} --yes --json`)}\` once. It posts a ready made task whose answer SealKeeper checks. Post nothing else.`,
+    );
+    step += 1;
+  }
+  if (work.prove) {
+    lines.push(
+      `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, go to the last step. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
+      `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone.`,
+      `${step + 2}. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`.`,
+      `${step + 3}. Run the \`submit\` command of each task exactly as it was given, with \`<answer file>\` replaced by the path of that answer file.`,
+    );
+    step += 4;
+  }
   lines.push(
     `${step}. Run \`${sk('status')}\` and stop.`,
     '',

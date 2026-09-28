@@ -28,7 +28,12 @@ import {
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
-import { HIGHEST_ISSUED, loadGoal, shownLevel } from '../goal.js';
+import {
+  HIGHEST_ISSUED,
+  loadGoal,
+  postingBehind,
+  shownLevel,
+} from '../goal.js';
 import { KeyError, loadSigner, type Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
@@ -45,6 +50,7 @@ import {
   ensureWorkDir,
   failureStreak,
   isAllowed,
+  nextRoutineTemplate,
   type RoutineEntry,
   type RunEntry,
   type RunOutcome,
@@ -54,6 +60,7 @@ import {
   routinePaths,
   SKIP_LIST_DAYS,
   type SkipEntry,
+  setRunPost,
 } from '../routine.js';
 import {
   type AgentResult,
@@ -415,7 +422,7 @@ export function preview(
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
     `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper prove instructions. Otherwise it starts nothing.`,
     '',
-    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They never post tasks. Everything else waits for you in routine status.',
+    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only ready made template tasks that SealKeeper checks, and only when the goal says posting is behind. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
     ...(npx ? [NPX_NOTE] : []),
     ...(plan.note === undefined ? [] : [plan.note]),
@@ -448,6 +455,7 @@ const indentAll = (text: string) =>
 const LIMIT_TEXT: Record<keyof RoutineLimits, [string, string]> = {
   claimsPerDay: ['claims-per-day', 'tasks claimed per day'],
   confirmsPerDay: ['confirms-per-day', 'outcomes confirmed per day'],
+  postsPerDay: ['posts-per-day', 'template tasks posted per day'],
   minutesPerRun: [
     'minutes-per-run',
     'minutes per run, then the agent is stopped',
@@ -471,7 +479,9 @@ export const LIMIT_OPTIONS = Object.fromEntries(
 
 // run
 
-type RunTally = Pick<RunEntry, 'claimed' | 'submitted' | 'confirmed'>;
+type RunTally = Pick<RunEntry, 'claimed' | 'submitted' | 'confirmed'> & {
+  posted: number;
+};
 
 async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   const json = wantsJson(cmd);
@@ -547,21 +557,43 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     const entries = await readRoutine(p);
     const claims = budgetOf(entries, 'claim', routine);
     const confirms = budgetOf(entries, 'confirm', routine);
-    if (claims.remaining === 0 && confirms.remaining === 0) {
+    const posts = budgetOf(entries, 'post', routine);
+    // Stops with a limit line for each spent limit. The post limit is
+    // named only when it is spent too.
+    const spent = async (): Promise<void> => {
       for (const [limit, budget] of [
         ['claimsPerDay', claims],
         ['confirmsPerDay', confirms],
+        ['postsPerDay', posts],
       ] as const) {
+        if (limit === 'postsPerDay' && budget.remaining > 0) continue;
         await appendRoutine(
           { kind: 'limit', runId, limit, used: budget.used, cap: budget.cap },
           p,
         );
       }
       await finish('stopped', 'the daily limits are spent', null);
+    };
+    if (
+      claims.remaining === 0 &&
+      confirms.remaining === 0 &&
+      posts.remaining === 0
+    ) {
+      await spent();
       return;
     }
 
     const goal = await loadGoal({ fetch: deps.fetch }).catch(() => null);
+    // The template to post once this run, when the goal says posting is
+    // behind and the day's post limit has room (POST-7).
+    const post =
+      posts.remaining > 0 && goal !== null && postingBehind(goal)
+        ? nextRoutineTemplate(entries)
+        : null;
+    if (claims.remaining === 0 && confirms.remaining === 0 && post === null) {
+      await spent();
+      return;
+    }
     if (
       goal !== null &&
       goal.nextLevel === null &&
@@ -578,9 +610,11 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     }
     // Counted evidence (VOU-140). Once today's counted tasks reach the daily
     // ceiling, more work today would verify and count toward nothing, so the
-    // run starts no agent and waits for the next UTC day.
+    // run claims and confirms nothing and waits for the next UTC day. A post
+    // counts for the poster apart from that ceiling, so it still goes.
     const today = todayOf(goal);
-    if (today !== null && dailyCeilingReached(today)) {
+    const ceiling = today !== null && dailyCeilingReached(today);
+    if (today !== null && ceiling) {
       await appendRoutine(
         {
           kind: 'limit',
@@ -591,12 +625,14 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
         },
         p,
       );
-      await finish(
-        'stopped',
-        `today's ${today.ceiling} counted tasks are done, more would not count until midnight UTC`,
-        null,
-      );
-      return;
+      if (post === null) {
+        await finish(
+          'stopped',
+          `today's ${today.ceiling} counted tasks are done, more would not count until midnight UTC`,
+          null,
+        );
+        return;
+      }
     }
 
     // What there is to do, read before any agent starts. The key is loaded
@@ -624,40 +660,44 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       }
       throw error;
     }
-    let held: TaskResponse[];
-    let found: RoutineCandidates;
-    let confirm: Confirmable[];
+    let held: TaskResponse[] = [];
+    let found: RoutineCandidates = { tasks: [], skipped: [] };
+    let confirm: Confirmable[] = [];
     try {
-      const now = Date.now();
-      const posters = new PosterLookup(api);
-      // Held tasks the routine may not work wait for a person, like open
-      // tasks from others, and start no agent.
-      const kept = await routineHeld(
-        posters,
-        (await serverHeld(api, signer.agentId)).filter(
-          (task) => Date.parse(task.expiresAt) > now,
-        ),
-        config,
-        routine,
-      );
-      held = kept.tasks;
-      found =
-        claims.remaining > 0
-          ? await routineCandidates(api, posters, signer, config, routine)
-          : { tasks: [], skipped: [] };
-      const pending = await pendingConfirmations(
-        api,
-        signer,
-        routine,
-        confirms.remaining,
-      );
-      confirm = pending.confirm;
-      await logSkips(
-        entries,
-        [...kept.skipped, ...found.skipped, ...pending.skipped],
-        runId,
-        now,
-      );
+      // Only the post is left once the ceiling is reached, so nothing is
+      // read for claims or confirmations.
+      if (!ceiling) {
+        const now = Date.now();
+        const posters = new PosterLookup(api);
+        // Held tasks the routine may not work wait for a person, like open
+        // tasks from others, and start no agent.
+        const kept = await routineHeld(
+          posters,
+          (await serverHeld(api, signer.agentId)).filter(
+            (task) => Date.parse(task.expiresAt) > now,
+          ),
+          config,
+          routine,
+        );
+        held = kept.tasks;
+        found =
+          claims.remaining > 0
+            ? await routineCandidates(api, posters, signer, config, routine)
+            : { tasks: [], skipped: [] };
+        const pending = await pendingConfirmations(
+          api,
+          signer,
+          routine,
+          confirms.remaining,
+        );
+        confirm = pending.confirm;
+        await logSkips(
+          entries,
+          [...kept.skipped, ...found.skipped, ...pending.skipped],
+          runId,
+          now,
+        );
+      }
     } catch (error) {
       if (error instanceof ApiError) {
         await finish(
@@ -670,7 +710,12 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       throw error;
     }
 
-    if (held.length === 0 && found.tasks.length === 0 && confirm.length === 0) {
+    if (
+      held.length === 0 &&
+      found.tasks.length === 0 &&
+      confirm.length === 0 &&
+      post === null
+    ) {
       const why =
         claims.remaining === 0
           ? 'the daily claim limit is spent and nothing waits for a confirmation'
@@ -691,11 +736,14 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       );
       return;
     }
+    // tasks post in this run reads the choice from the run lock and posts
+    // nothing else.
+    if (post !== null) await setRunPost(runId, post, p);
     const agent = await runAgent(
       {
         command: schedule.agentCommand,
-        args: claudeArgs(invocation),
-        input: routinePrompt(invocation, confirm),
+        args: claudeArgs(invocation, post),
+        input: routinePrompt(invocation, confirm, { post, prove: !ceiling }),
         cwd: work,
         env: {
           ...process.env,
@@ -754,6 +802,7 @@ function tally(entries: RoutineEntry[], runId: string): RunTally {
     claimed: count('claim'),
     submitted: count('submit'),
     confirmed: count('confirm'),
+    posted: count('post'),
   };
 }
 
@@ -852,7 +901,7 @@ export function runLine(entry: Omit<RunEntry, 'at'>): string {
   if (entry.reason) parts.push(`${capital(entry.reason)}.`);
   if (entry.agentStarted) {
     parts.push(
-      `Claimed ${entry.claimed}, submitted ${entry.submitted}, confirmed ${entry.confirmed}.`,
+      `Claimed ${entry.claimed}, submitted ${entry.submitted}, confirmed ${entry.confirmed}, posted ${entry.posted ?? 0}.`,
     );
     parts.push(`${spent(entry)}.`);
   }
@@ -882,6 +931,7 @@ async function status(cmd: Command): Promise<void> {
   const today = {
     claims: budgetOf(entries, 'claim', routine, now),
     confirms: budgetOf(entries, 'confirm', routine, now),
+    posts: budgetOf(entries, 'post', routine, now),
   };
   const runs = entries.filter((e): e is RunEntry => e.kind === 'run');
   const lastRun = runs.at(-1) ?? null;
@@ -899,6 +949,7 @@ async function status(cmd: Command): Promise<void> {
         today: {
           claimed: today.claims.used,
           confirmed: today.confirms.used,
+          posted: today.posts.used,
         },
         allow: routine.allow,
         allowSlugs: routine.allowSlugs,
@@ -920,7 +971,7 @@ async function status(cmd: Command): Promise<void> {
   }
   if (active !== null) stdout('Running   a run is going now');
   stdout(
-    `Today     claimed ${today.claims.used} of ${today.claims.cap}, confirmed ${today.confirms.used} of ${today.confirms.cap}`,
+    `Today     claimed ${today.claims.used} of ${today.claims.cap}, confirmed ${today.confirms.used} of ${today.confirms.cap}, posted ${today.posts.used} of ${today.posts.cap}`,
   );
   stdout(
     `Per run   ${routine.limits.minutesPerRun} minutes, ${routine.limits.tokensPerRun.toLocaleString('en-US')} tokens`,

@@ -121,3 +121,11 @@ export const TEMPLATES: readonly Template[] = TASK_TEMPLATES.map(
 export function templateById(id: string): Template | undefined {
   return TEMPLATES.find((t) => t.id === id);
 }
+
+// The templates a routine run may post (POST-7). Only those that make their
+// own input, so nothing an unattended agent wrote goes to other agents, and
+// whose answers SealKeeper checks by hash or schema, so no post waits on a
+// confirmation.
+export const ROUTINE_TEMPLATES: readonly Template[] = TEMPLATES.filter(
+  (t) => t.input !== 'required' && t.kind !== 'counterparty',
+);

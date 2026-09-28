@@ -73,11 +73,12 @@ export function idProfileUrl(agentId: string): string {
 // The guardrails of sealkeeper routine (VOU-138). Set at routine install
 // with these defaults and changed with config routine set. Caps count per
 // UTC day from routine.jsonl. tokensPerRun counts what the headless agent
-// reports, see routine-agent.ts. A routine run never posts tasks, so there
-// is no post limit.
+// reports, see routine-agent.ts. postsPerDay counts the template tasks a
+// run posts when the goal says posting is behind (POST-7).
 export const ROUTINE_LIMIT_DEFAULTS = {
   claimsPerDay: 10,
   confirmsPerDay: 10,
+  postsPerDay: 3,
   minutesPerRun: 15,
   tokensPerRun: 300_000,
 } as const;
@@ -87,6 +88,7 @@ export const ROUTINE_LIMIT_DEFAULTS = {
 export const ROUTINE_LIMIT_MAX = {
   claimsPerDay: 100,
   confirmsPerDay: 100,
+  postsPerDay: 10,
   minutesPerRun: 120,
   tokensPerRun: 10_000_000,
 } as const;
@@ -101,11 +103,13 @@ const limit = (name: RoutineLimitName, min = 0) =>
     .max(ROUTINE_LIMIT_MAX[name])
     .default(ROUTINE_LIMIT_DEFAULTS[name]);
 
-// z.object drops keys it does not know, such as postsPerDay from the first
-// routine release, and a missing limit reads as its default.
+// z.object drops keys it does not know, and a missing limit reads as its
+// default. postsPerDay was dropped after an unreleased first build and is
+// back since POST-7, so a routine.json written in between reads it as 3.
 export const RoutineLimits = z.object({
   claimsPerDay: limit('claimsPerDay'),
   confirmsPerDay: limit('confirmsPerDay'),
+  postsPerDay: limit('postsPerDay'),
   minutesPerRun: limit('minutesPerRun', 1),
   tokensPerRun: limit('tokensPerRun', 1_000),
 });

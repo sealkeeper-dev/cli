@@ -337,6 +337,22 @@ export function goalSummary(goal: GoalResponse): string {
   return `${shownLevel(goal.nextLevel)} next, ${met} of ${goal.thresholds.length} thresholds met`;
 }
 
+// The posted thresholds a routine template post can close. Never the
+// posted confirmed ones, since a routine posts no counterparty task and
+// gold counts no routine post.
+const ROUTINE_POSTED = new Set(['posted_tasks', 'posted_distinct_operators']);
+
+// True when the goal says this agent's posting is behind, so a routine run
+// posts a template task (POST-7). Either the first action is post_task or
+// one of ROUTINE_POSTED is not met. Both are read by name, since an API
+// newer than this CLI sends them.
+export function postingBehind(goal: GoalResponse): boolean {
+  return (
+    goal.actions[0]?.code === 'post_task' ||
+    goal.thresholds.some((t) => ROUTINE_POSTED.has(t.name) && !t.met)
+  );
+}
+
 // The ladder states this CLI shows. reached, next and locked are issued
 // levels, reserved a level the standard names and does not issue yet.
 export type LadderRow = {
