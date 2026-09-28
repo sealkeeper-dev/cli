@@ -474,6 +474,8 @@ async function removeLocal(p: Paths): Promise<string[]> {
     p.routine,
     p.runtimeQuestion,
     p.operatorSlug,
+    p.fingerprint,
+    p.fingerprintSources,
     routinePaths(p).log,
     routinePaths(p).lock,
     routinePaths(p).claimLock,

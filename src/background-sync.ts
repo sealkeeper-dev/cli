@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ensureHome, type Paths, paths, readConfig } from './config.js';
+import { refreshFingerprintQuietly } from './fingerprint.js';
 import { syncEvents } from './sync.js';
 
 export const BACKGROUND_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -115,6 +116,9 @@ export async function gatedSync(
     // finished a sync between the first look and taking the lock.
     if (await recentlyStarted(p, start)) return 'throttled';
     await touch(join(p.home, STAMP_FILE), start);
+    // A sync is one of the two moments the fingerprint is recomputed, see
+    // fingerprint.ts. It never holds up or fails the sync.
+    await refreshFingerprintQuietly({ paths: p, now });
     await syncEvents({
       api: createApiClient({
         apiUrl: resolveApiUrl({ config: config.apiUrl }),

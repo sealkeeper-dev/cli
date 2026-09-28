@@ -14,12 +14,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { EventPayload } from '@sealkeeper/schema';
 import { adapterNudge, clampMs, emitQueue, safeEmit } from './adapter-core.js';
+import { mastraVersion, toolLine } from './adapter-fingerprint.js';
 import {
   type CheckOptions,
   type CheckThresholds,
   describeCheck,
   fetchCheck,
 } from './check.js';
+import { createObserver } from './fingerprint-observer.js';
 import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
 import { quietly } from './output.js';
@@ -91,14 +93,52 @@ function wrapTool<T extends MastraToolLike>(tool: T): T {
   return Object.assign(copy, tool, { execute: wrapped });
 }
 
+// The fingerprint parts this process sees (VB-2). Model ids from steps,
+// the names and schemas of every tool wrapped here and the @mastra/core
+// version. Only their hashes are written, see fingerprint-observer.ts.
+const observer = createObserver('mastra');
+let frameworkLooked = false;
+
+// Once per process, in the background.
+function observeFramework(): void {
+  if (frameworkLooked) return;
+  frameworkLooked = true;
+  void quietly(async () => {
+    try {
+      const version = await mastraVersion();
+      if (version !== null) await observer.framework('@mastra/core', version);
+    } catch {
+      // Left not declared.
+    }
+  });
+}
+
+// Never throws into the agent, a tool that cannot be read is left out.
+function observeTools(tools: readonly MastraToolLike[]): void {
+  try {
+    const lines = new Map<string, string>();
+    for (const tool of tools) {
+      const name = toolNameOf(tool?.id);
+      if (name !== null) lines.set(name, toolLine(name, tool));
+    }
+    if (lines.size > 0) void observer.tools(lines);
+    observeFramework();
+  } catch {
+    // Left as the last observation.
+  }
+}
+
 // Wraps the execute of every tool in a record or an array and returns the
-// same shape. Tools without an execute are returned as they are.
+// same shape. Tools without an execute are returned as they are. The names
+// and schemas of the tools are hashed for the fingerprint.
 export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
 >(tools: T): T {
   if (Array.isArray(tools)) {
+    observeTools(tools);
     return tools.map((tool: MastraToolLike) => wrapTool(tool)) as never;
   }
+  observeTools(Object.values(tools));
   const out: Record<string, MastraToolLike> = {};
   for (const [key, tool] of Object.entries(tools)) out[key] = wrapTool(tool);
   return out as T;
@@ -122,10 +162,7 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
   const u = usage as Record<string, unknown>;
   const tokensIn = u.promptTokens ?? u.inputTokens;
   const tokensOut = u.completionTokens ?? u.outputTokens;
-  const modelId =
-    toolNameOf(response?.modelId) ??
-    toolNameOf((model as { modelId?: unknown } | null | undefined)?.modelId) ??
-    toolNameOf(model);
+  const modelId = modelIdOf(response, model);
   if (
     typeof tokensIn !== 'number' ||
     typeof tokensOut !== 'number' ||
@@ -142,6 +179,24 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
       model: modelId,
     },
   };
+}
+
+// response.modelId, else step.model.modelId, else step.model as a name.
+function modelIdOf(response: unknown, model: unknown): string | null {
+  return (
+    toolNameOf(
+      (response as { modelId?: unknown } | null | undefined)?.modelId,
+    ) ??
+    toolNameOf((model as { modelId?: unknown } | null | undefined)?.modelId) ??
+    toolNameOf(model)
+  );
+}
+
+// The model id of a step for the fingerprint, with or without usage.
+function stepModelId(step: unknown): string | null {
+  if (typeof step !== 'object' || step === null) return null;
+  const { response, model } = step as { response?: unknown; model?: unknown };
+  return modelIdOf(response, model);
 }
 
 // A session id is kept only when it is a plain id, letters, digits, _ and
@@ -163,6 +218,7 @@ export function sealKeeperSession(
 ): SealKeeperSession {
   const sessionId = sessionIdOf(String(given));
   const start = performance.now();
+  observeFramework();
   // A step's latency runs from the end of the previous step, or from session
   // creation for the first one.
   let last = start;
@@ -181,6 +237,9 @@ export function sealKeeperSession(
       let input: EmitInput | null = null;
       try {
         input = usageOf(step, latencyMs);
+        const id = stepModelId(step);
+        // Written only the first time this process sees the id.
+        if (id !== null) void observer.model(id);
       } catch {
         // A step that throws when read is skipped.
       }

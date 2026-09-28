@@ -230,6 +230,12 @@ export type Paths = {
   // The operator slug the API last sent, for the handle offline, see
   // operator-slug.ts.
   operatorSlug: string;
+  // The last captures of the agent's fingerprint and the fingerprint they
+  // make, see fingerprint.ts.
+  fingerprint: string;
+  // The part hashes the Mastra and OpenClaw adapters observed in the
+  // agent's process, for the next capture, see fingerprint.ts.
+  fingerprintSources: string;
   logFile(day: string): string;
 };
 
@@ -549,6 +555,8 @@ export function paths(home: string = sealkeeperHome()): Paths {
     routine: join(home, 'routine.json'),
     runtimeQuestion: join(home, 'runtime-question.json'),
     operatorSlug: join(home, 'operator-slug.json'),
+    fingerprint: join(home, 'fingerprint.json'),
+    fingerprintSources: join(home, 'fingerprint-sources.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

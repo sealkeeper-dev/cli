@@ -11,6 +11,7 @@ import { type Input, readYesNo } from '../ask.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import { type Config, handleOf, type RoutineConfig } from '../config.js';
+import { refreshFingerprintQuietly } from '../fingerprint.js';
 import {
   dailyCeilingReached,
   type GoalResponse,
@@ -354,6 +355,8 @@ async function explain(
   deps: TasksDeps,
 ): Promise<Progress | null> {
   const config = await requireConfig(cmd);
+  // Recomputed at every prove, see fingerprint.ts. Never fails prove.
+  await refreshFingerprintQuietly();
   const [live, hooks, addressed, goal] = await Promise.all([
     readLiveAgent(config, deps.fetch),
     claudeCodeHooksIn(deps),
@@ -578,6 +581,9 @@ async function claim(
   tooNew: TooNew[];
 }> {
   const { config, signer, api } = await openTaskSession(cmd, deps);
+  // Recomputed at every prove, once the config is known to exist, see
+  // fingerprint.ts. Never fails prove.
+  await refreshFingerprintQuietly();
   let want = options.count;
   const now = Date.now();
   const posters = new PosterLookup(api);

@@ -5,6 +5,7 @@ import { type Input, isYes, streamInput } from '../ask.js';
 import { SyncBusyError, withSyncLock } from '../background-sync.js';
 import { requireConfig } from '../cli-config.js';
 import { writeConfig } from '../config.js';
+import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { type Sleep, sleep } from '../github-device.js';
 import { KeyError } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -107,9 +108,16 @@ export function register(
       // to one of them and moves the cursor back. It skips their throttle,
       // so a person can always send now.
       try {
-        result = await withSyncLock((keepLock) =>
-          syncEvents({ api, sleep: deps.sleep, until, onRound: keepLock }),
-        );
+        result = await withSyncLock(async (keepLock) => {
+          // Recomputed at every sync, see fingerprint.ts. Never fails it.
+          await refreshFingerprintQuietly();
+          return syncEvents({
+            api,
+            sleep: deps.sleep,
+            until,
+            onRound: keepLock,
+          });
+        });
       } catch (error) {
         if (
           error instanceof SyncBusyError ||

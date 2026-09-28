@@ -76,7 +76,8 @@ describe('openclaw adapter', () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     await chmod(home, 0o700).catch(() => {});
-    await rm(home, { recursive: true, force: true });
+    // The fingerprint observer may still be writing, so rm retries.
+    await rm(home, { recursive: true, force: true, maxRetries: 5 });
   });
 
   async function logged(): Promise<Event[]> {

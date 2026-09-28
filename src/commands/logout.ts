@@ -17,18 +17,20 @@ import {
 } from './routine.js';
 
 // Removes the local session. config.json, credential.json, score.json,
-// inbox.json, post-prompt.json, goal.json and operator-slug.json go, and
-// the daily routine job when one is installed, since it would run for
-// nobody. nudge.json and the routine's limits and allowlist stay. The key,
-// the log and the cursor stay too, so a later init brings the same
-// identity back and sync goes on where it was. --delete-key with --yes
-// also deletes the key, every copy of it (key.<time>.bak and key.<id>.tmp),
-// the log and the cursor, as agent delete does, so a new key never signs
-// the events the old one logged. There is no prompt, the --yes flag is the
-// confirmation, and everything removed is printed. With the key
-// gone the folders init bound to this agent are unbound too, and a named
-// home left empty is removed. A plain logout keeps them, since the key
-// stays.
+// inbox.json, post-prompt.json, goal.json and operator-slug.json go, and the
+// daily routine job when one is installed, since it would run for nobody.
+// nudge.json and the routine's limits and allowlist stay. The key, the log,
+// the cursor and the fingerprint files stay too, so a later init brings the
+// same identity back and sync goes on where it was.
+//
+// --delete-key with --yes also deletes the key, every copy of it
+// (key.<time>.bak and key.<id>.tmp), the log, the cursor and the
+// fingerprint files, which go with the key, as agent delete does, so a new
+// key never signs the events the old one logged. There is no prompt, the
+// --yes flag is the confirmation, and everything removed is printed. With
+// the key gone the folders init bound to this agent are unbound too, and a
+// named home left empty is removed. A plain logout keeps them, since the
+// key stays.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -178,7 +180,9 @@ async function removeSession(
     p.postPrompt,
     p.goal,
     p.operatorSlug,
-    ...(deleteKey ? [p.cursor, p.cursorOffset, p.log] : []),
+    ...(deleteKey
+      ? [p.cursor, p.cursorOffset, p.log, p.fingerprint, p.fingerprintSources]
+      : []),
   ];
   const removed: string[] = [];
   const remove = async (target: string) => {

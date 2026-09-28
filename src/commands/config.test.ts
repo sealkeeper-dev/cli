@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readConfig, readNudge, writeConfig } from '../config.js';
+import { describeFingerprint } from '../fingerprint.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
@@ -149,10 +150,16 @@ describe('config', () => {
 });
 
 describe('what-is-shared', () => {
-  it('prints the same block as init and is listed in help', async () => {
+  it('prints the same block as init, then the fingerprint, and is listed in help', async () => {
     const { code, out } = await run('what-is-shared');
     expect(code).toBe(0);
-    expect(out).toBe(`${describeTaxonomy()}\n`);
+    expect(out).toBe(`${describeTaxonomy()}\n\n${describeFingerprint()}\n`);
+    for (const part of ['model_set', 'prompt', 'tools', 'framework']) {
+      expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
+    }
+    expect(out).toContain(
+      'Only a SHA-256 hash of each part is stored, never what it is hashed from, and nothing is sent until a later release.',
+    );
     expect(createProgram().helpInformation()).toMatch(/^ {2}what-is-shared\b/m);
   });
 });

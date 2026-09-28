@@ -16,8 +16,14 @@
 // step.
 import { EventPayload } from '@sealkeeper/schema';
 import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
+import { openClawVersion } from './adapter-fingerprint.js';
+import {
+  createObserver,
+  type FingerprintObserver,
+} from './fingerprint-observer.js';
 import type { EmitInput } from './lib.js';
 import { toolNameOf } from './names.js';
+import { quietly } from './output.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
 const NAME = EventPayload['session.start'].shape.session_id;
@@ -91,6 +97,21 @@ function bounded<V>(): Map<string, V> & { put: (k: string, v: V) => void } {
   return map;
 }
 
+// The fingerprint parts OpenClaw shows (VB-2). The framework version once,
+// at register, and each model id llm_output reports. The tool set is not
+// declared, since OpenClaw shows tools one call at a time. Only hashes are
+// written, see fingerprint-observer.ts.
+function observeFramework(observer: FingerprintObserver): void {
+  void quietly(async () => {
+    try {
+      const version = await openClawVersion();
+      if (version !== null) await observer.framework('openclaw', version);
+    } catch {
+      // Left not declared.
+    }
+  });
+}
+
 // Wires the hooks. Every handler reads only names, ids, durations and
 // counts. Tool params and results, prompts, messages and model output are
 // never read, logged or emitted.
@@ -102,6 +123,8 @@ function register(api: OpenClawPluginApiLike): void {
 
   // Events are written in order, one after another.
   const enqueue = emitQueue();
+  const observer = createObserver('openclaw');
+  observeFramework(observer);
 
   registerNudge(api);
 
@@ -198,6 +221,9 @@ function register(api: OpenClawPluginApiLike): void {
   // stay null. From the event only usage, model and runId are read. Without
   // a model time for the run nothing is recorded, rather than a latency of 0.
   on('llm_output', (event, ctx) => {
+    const model = toolNameOf(field(event, 'model'));
+    // Written only the first time this process sees the id.
+    if (model !== null) void observer.model(model);
     const run = idOf(field(event, 'runId') ?? field(ctx, 'runId'));
     if (run === null) return null;
     const latency = runs.get(run);
@@ -205,7 +231,6 @@ function register(api: OpenClawPluginApiLike): void {
     const usage = field(event, 'usage');
     const tokensIn = countOf(field(usage, 'input'));
     const tokensOut = countOf(field(usage, 'output'));
-    const model = toolNameOf(field(event, 'model'));
     if (
       latency === undefined ||
       tokensIn === null ||

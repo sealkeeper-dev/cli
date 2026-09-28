@@ -13,6 +13,7 @@ import {
 } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { readIfExists } from './files.js';
+import { observeClaudeCode } from './fingerprint-claude-code.js';
 import { fetchGoal } from './goal.js';
 import { cli } from './invocation.js';
 import { toolNameOf } from './names.js';
@@ -153,10 +154,20 @@ async function logHook(
     if (config === null) return;
     const append = (event: EmitInput) =>
       emit({ ...event, version: config.version }, p);
+    // The fingerprint parts, read from the folder Claude Code runs in and
+    // kept for the next sync or prove, see fingerprint-claude-code.ts. Only
+    // at session start and end, never per tool call. Never throws.
+    const observe = () =>
+      observeClaudeCode(
+        config.agentId,
+        { cwd: input.cwd ?? process.cwd(), env: process.env },
+        p,
+      );
 
     switch (input.event) {
       case 'SessionStart': {
         if (input.sessionId === null) return;
+        await observe();
         await removeStaleMarkers(p, now, append);
         // A resume or compact fires SessionStart again for the same session.
         // The marker, open or ended, keeps it to one session.start.
@@ -179,6 +190,8 @@ async function logHook(
       }
       case 'SessionEnd': {
         if (input.sessionId === null) return;
+        // Before the sync below, which recomputes the fingerprint.
+        await observe();
         // No open marker means the session already ended, or began before
         // the hooks were installed. Either way there is nothing to close.
         const session = await readSession(p, input.sessionId);

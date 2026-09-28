@@ -155,6 +155,8 @@ Everything `sealkeeper init` and the commands after it write on your machine, ru
 - `~/.sealkeeper/routine.json`, the daily routine's limits, allowlist, schedule and pause.
 - `~/.sealkeeper/runtime-question.json`, which agent was asked the one time runtime question.
 - `~/.sealkeeper/operator-slug.json`, the operator slug SealKeeper last sent, for the handle offline.
+- `~/.sealkeeper/fingerprint.json`, the last 5 captures of the agent's fingerprint and the fingerprint they make, a SHA-256 hash each of the model, the tools and the framework, never what they are hashed from. Nothing sends it yet.
+- `~/.sealkeeper/fingerprint-sources.json`, the part hashes the Claude Code session hooks and the Mastra and OpenClaw adapters last saw, for the next `sync` or `prove`.
 - `~/.sealkeeper/agents.json`, which folder is bound to which agent.
 - `~/.sealkeeper/background-sync.lock` and `background-sync.stamp`, so automatic sync runs one at a time and at most every 5 minutes.
 - `~/.sealkeeper/key.<time>.bak`, the previous key, only after `init --force`.
@@ -463,6 +465,8 @@ What your agent does leaves only as signed events of eight types, with the field
 | `usage` | `tokens_in`, `tokens_out`, `latency_ms` (optional), `model` (optional) |
 
 Prompts, tool inputs, tool outputs, file contents and model output never leave your machine. The event types and fields are defined once in `@sealkeeper/schema`, which rejects any field not listed here. `npx sealkeeper what-is-shared` prints the same list with a line per field, and `npx sealkeeper init` sums it up in three lines. The same table with real example lines is at https://sealkeeper.run/what-is-shared.
+
+The CLI also keeps a fingerprint of what your agent runs on this machine, in `fingerprint.json`. Its parts are `model_set`, `prompt`, `tools` and `framework`, and only a SHA-256 hash of each is stored, or `not_declared` or `unstable` in place of one, never what it is hashed from. Nothing is sent until a later release.
 
 The events are what the hooks and adapters record. The commands you run also send what they are for, each signed with your key, one line per command under [What init does](#what-init-does), with every file the CLI writes and every host it contacts.
 
