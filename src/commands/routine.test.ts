@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import {
   base64urlDecode,
@@ -73,6 +73,7 @@ import {
   type Spawner,
   spawnCall,
 } from '../routine-agent.js';
+import { copyPaths, copyVersion } from '../routine-copy.js';
 import {
   applyPlan,
   cronBlock,
@@ -86,6 +87,7 @@ import {
   withoutBlock,
 } from '../routine-scheduler.js';
 import type { TasksDeps } from '../tasks.js';
+import { VERSION } from '../version.js';
 import {
   PosterLookup,
   refusesOrigin,
@@ -93,7 +95,15 @@ import {
   routineHeld,
   seedTypesDone,
 } from './prove.js';
-import { NPX_NOTE, waitingForPerson } from './routine.js';
+import {
+  BLOCK_TITLE,
+  blockLines,
+  FIRST_RUN_QUESTION,
+  INSTALL_QUESTION,
+  NO_SETTINGS_NOTE,
+  preview,
+  waitingForPerson,
+} from './routine.js';
 
 const API_URL = 'https://api.test';
 
@@ -137,6 +147,8 @@ const SLUGS: Record<string, string> = {
   [DAN_AGENT]: 'carol',
 };
 const PROGRAM = ['/usr/bin/node', '/opt/sealkeeper/dist/index.js'];
+// The bundle the fake CLI runs from, which install copies (RS-2).
+const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 const INVOCATION = '"/usr/bin/node" "/opt/sealkeeper/dist/index.js"';
 const CLAUDE = '/usr/local/bin/claude';
 
@@ -540,12 +552,18 @@ describe('routine', () => {
   let agentId: string;
   let api: FakeApi;
   let platform: NodeJS.Platform;
-  // The CLI's node and script paths the job points at.
+  // The CLI's node and script paths, which install copies from.
   let jobProgram: string[];
+  // The script of jobProgram, a real file in the temp home.
+  let source: string;
+  // The copy the job runs.
+  const copy = () => copyPaths(paths()).script;
   let tty: boolean;
   // The wall clock of a run, 20 ms a minute unless a test needs real time.
   let msPerMinute: number;
   let answer: string | null;
+  // Answers given one after another, before answer takes over.
+  let answers: (string | null)[];
   // The scheduler calls, as file and args joined.
   let calls: { line: string; input?: string }[];
   let crontab: string | null;
@@ -588,6 +606,9 @@ describe('routine', () => {
         : { code: 0, stdout: crontab, stderr: '' };
     }
     if (file === 'crontab' && args[0] === '-') crontab = options?.input ?? '';
+    if (file === 'schtasks' && args.includes('/XML')) {
+      return { code: 0, stdout: '<Task>ours</Task>\n', stderr: '' };
+    }
     return { code: 0, stdout: '', stderr: '' };
   };
 
@@ -599,7 +620,11 @@ describe('routine', () => {
   };
 
   async function run(...args: string[]): Promise<RunResult> {
-    const input: Input = { isTTY: tty, readLine: async () => answer };
+    const input: Input = {
+      isTTY: tty,
+      readLine: async () =>
+        (answers.length > 0 ? answers.shift() : answer) ?? null,
+    };
     const tasks: TasksDeps = {
       fetch: api.fetch,
       stdin: () => input,
@@ -725,10 +750,15 @@ describe('routine', () => {
     vi.stubEnv('XDG_CACHE_HOME', join(home, 'cache'));
     resetInvocation();
     platform = 'linux';
-    jobProgram = PROGRAM;
+    source = join(home, 'dist', 'index.js');
+    await mkdir(dirname(source), { recursive: true });
+    await writeFile(source, BUNDLE);
+    // A node that exists, so status never finds the job's node gone.
+    jobProgram = [process.execPath, source];
     tty = false;
     msPerMinute = 20;
     answer = null;
+    answers = [];
     calls = [];
     crontab = null;
     systemdUp = false;
@@ -759,27 +789,61 @@ describe('routine', () => {
   });
 
   describe('install and remove', () => {
-    it('previews and installs nothing without a terminal or --yes', async () => {
+    it('shows the block and installs nothing without a terminal or --yes', async () => {
       const result = await run('routine', 'install');
       expect(result.code).toBe(1);
-      expect(result.out).toContain('Every day at 10:00, cron runs');
-      expect(result.out).toContain('Adds these lines to your crontab:');
+      expect(result.out).toBe(
+        [
+          'Daily routine   10:00, only when there is work',
+          '',
+          '  Claims   Seed tasks and tasks from operators you allow',
+          '  Posts    1 task a day when posting is behind',
+          '  Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
+          '  Why      Verified tasks get your agent to bronze',
+          '',
+          'Check it later with sealkeeper routine status',
+          '',
+        ].join('\n'),
+      );
+      // The header carries the time.
+      const later = await run('routine', 'install', '--time', '09:30');
+      expect(later.out.split('\n')[0]).toBe(
+        'Daily routine   09:30, only when there is work',
+      );
+      // The full preview is for --json only.
+      expect(result.out).not.toContain('Adds these lines to your crontab:');
       expect(result.err).toContain('nothing installed');
+      expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(calls.map((c) => c.line)).not.toContain('crontab -');
       expect((await readRoutineConfig()).schedule).toBeUndefined();
+      expect(await copyVersion()).toBeNull();
     });
 
-    it('says in the preview when the CLI runs from the npx cache', async () => {
-      const script =
-        '/home/alice/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
-      jobProgram = [PROGRAM[0] as string, script];
-      const result = await run('routine', 'install');
+    it('keeps the full preview for --json, on stderr, with the copy it makes', async () => {
+      const result = await run('routine', 'install', '--json');
       expect(result.code).toBe(1);
-      expect(result.out).toContain(NPX_NOTE);
-      expect(result.out).toContain(script);
-      jobProgram = PROGRAM;
-      const stable = await run('routine', 'install');
-      expect(stable.out).not.toContain(NPX_NOTE);
+      expect(result.out).toBe('');
+      expect(result.err).toContain('Every day at 10:00, cron runs');
+      expect(result.err).toContain('Adds these lines to your crontab:');
+      expect(result.err).toContain(`Copies ${source} to ${copy()}`);
+      expect(result.err).toContain(NO_SETTINGS_NOTE);
+      expect(result.err).not.toContain(BLOCK_TITLE);
+    });
+
+    it('reads the limits line from routine.json', async () => {
+      await setRoutine({
+        limits: {
+          ...defaultRoutineConfig().limits,
+          claimsPerDay: 1,
+          postsPerDay: 0,
+          minutesPerRun: 1,
+          tokensPerRun: 1500,
+        },
+      });
+      const result = await run('routine', 'install');
+      expect(result.out).toContain(
+        '  Limits   1 claim, 0 posts, 1 min, 1,500 tokens a day\n',
+      );
     });
 
     it('installs nothing when the answer is no', async () => {
@@ -787,13 +851,144 @@ describe('routine', () => {
       answer = 'n';
       const result = await run('routine', 'install');
       expect(result.code).toBe(1);
+      expect(result.err).toContain(INSTALL_QUESTION);
+      expect(result.err).not.toContain(FIRST_RUN_QUESTION);
+      expect(crontab).toBeNull();
+      expect(await copyVersion()).toBeNull();
+    });
+
+    it('asks again on an unclear answer, then counts it as no', async () => {
+      tty = true;
+      answers = ['maybe', 'what', 'hm'];
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`Please answer y or n. ${INSTALL_QUESTION}`);
       expect(crontab).toBeNull();
     });
 
-    it('writes a launchd job on macOS and removes only it', async () => {
-      platform = 'darwin';
+    it('installs on Enter, then runs the first one on Enter (D-RS-1, D-RS-2)', async () => {
+      tty = true;
+      answers = ['', ''];
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(INSTALL_QUESTION);
+      expect(result.err).toContain(FIRST_RUN_QUESTION);
+      expect(result.err.indexOf(INSTALL_QUESTION)).toBeLessThan(
+        result.err.indexOf(FIRST_RUN_QUESTION),
+      );
+      expect(crontab).toContain(`'${copy()}' 'routine' 'run'`);
+      const lines = result.out.trimEnd().split('\n');
+      expect(lines.slice(-4)).toEqual([
+        'Routine installed. It runs every day at 10:00. See it with sealkeeper routine status, stop it with sealkeeper routine pause or sealkeeper routine remove.',
+        'First run started. It stops within 15 minutes.',
+        "Routine run found nothing to do, no agent started. No seed tasks, allowed addressed tasks, other operators' template tasks or confirmations to do.",
+        'See every run with sealkeeper routine status.',
+      ]);
+      expect(await runs()).toHaveLength(1);
+      expect(spawned).toEqual([]);
+    });
+
+    it('the first run starts the agent when there is work', async () => {
+      tty = true;
+      answers = ['y', 'y'];
+      api.add();
+      const result = await run('routine', 'install');
+      expect(result.code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(result.out).toContain('Routine run done.');
+      expect(result.out).toContain(
+        'See every run with sealkeeper routine status.',
+      );
+      expect((await runs())[0]?.outcome).toBe('done');
+    });
+
+    it('a no to the first run starts nothing and says when the job runs', async () => {
+      tty = true;
+      answers = ['y', 'n'];
+      const result = await run('routine', 'install', '--time', '07:30');
+      expect(result.code).toBe(0);
+      expect(result.out).toMatch(
+        /\nIt runs (today|tomorrow) at 07:30\. Run one any time with sealkeeper routine run\.\n$/,
+      );
+      expect(await runs()).toEqual([]);
+      expect((await readRoutineConfig()).schedule?.time).toBe('07:30');
+    });
+
+    it('--yes asks nothing and starts no run', async () => {
       tty = true;
       answer = 'y';
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      expect(result.err).not.toContain(INSTALL_QUESTION);
+      expect(result.err).not.toContain(FIRST_RUN_QUESTION);
+      expect(result.out).toContain(BLOCK_TITLE);
+      expect(result.out).toContain('Routine installed.');
+      expect(await runs()).toEqual([]);
+    });
+
+    it('copies the running CLI for the job, with its version beside it (RS-2)', async () => {
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(0);
+      const c = copyPaths(paths());
+      expect(c.script).toBe(join(home, 'sk', 'routine', 'cli.js'));
+      expect(await readFile(c.script, 'utf8')).toBe(BUNDLE);
+      expect(JSON.parse(await readFile(c.meta, 'utf8'))).toEqual({
+        type: 'module',
+        version: VERSION,
+      });
+      expect(await copyVersion()).toBe(VERSION);
+      expect((await stat(c.dir)).mode & 0o777).toBe(0o700);
+      expect((await stat(c.script)).mode & 0o777).toBe(0o600);
+      expect((await stat(c.meta)).mode & 0o777).toBe(0o600);
+      const schedule = (await readRoutineConfig()).schedule;
+      expect(schedule?.program).toEqual([
+        jobProgram[0],
+        c.script,
+        'routine',
+        'run',
+      ]);
+      // The job runs the copy, never the script that ran install.
+      expect(crontab).toContain(`'${c.script}' 'routine' 'run'`);
+      expect(crontab).not.toContain(source);
+    });
+
+    it('refreshes the copy when its version differs, and never copies over itself', async () => {
+      await run('routine', 'install', '--yes');
+      const c = copyPaths(paths());
+      await writeFile(c.script, 'old bundle\n');
+      await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
+      expect((await run('routine', 'install', '--yes')).code).toBe(0);
+      expect(await readFile(c.script, 'utf8')).toBe(BUNDLE);
+      expect(await copyVersion()).toBe(VERSION);
+
+      // The same version is left as it is.
+      await writeFile(c.script, 'same version\n');
+      expect((await run('routine', 'install', '--yes')).code).toBe(0);
+      expect(await readFile(c.script, 'utf8')).toBe('same version\n');
+
+      // Run from the copy, install never writes over the file it runs.
+      await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
+      jobProgram = [jobProgram[0] as string, c.script];
+      expect((await run('routine', 'install', '--yes')).code).toBe(0);
+      expect(await readFile(c.script, 'utf8')).toBe('same version\n');
+      expect(await copyVersion()).toBe('0.0.1');
+    });
+
+    it('says so and installs nothing when the CLI cannot be copied', async () => {
+      await rm(source);
+      const result = await run('routine', 'install', '--yes');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        `nothing installed. This CLI could not be copied to ${copy()}`,
+      );
+      expect(crontab).toBeNull();
+      expect((await readRoutineConfig()).schedule).toBeUndefined();
+    });
+
+    it('writes a launchd job on macOS and removes only it, and the copy', async () => {
+      platform = 'darwin';
+      tty = true;
+      answers = ['y', 'n'];
       const result = await run('routine', 'install', '--time', '07:30');
       expect(result.code).toBe(0);
       const plist = join(
@@ -808,9 +1003,14 @@ describe('routine', () => {
       expect(text).toContain(MANAGED_MARKER);
       expect(text).toContain('<integer>7</integer>');
       expect(text).toContain('<integer>30</integer>');
-      expect(text).toContain(`<string>${PROGRAM[1]}</string>`);
+      expect(text).toContain(`<string>${jobProgram[0]}</string>`);
+      expect(text).toContain(`<string>${copy()}</string>`);
       expect(text).toContain('<string>routine</string>');
-      expect(result.out).toContain(`Writes ${file}`);
+      // The block names no file, routine status does.
+      expect(result.out).not.toContain(basename(file));
+      expect((await run('routine', 'status')).out).toContain(
+        `  File       ~/Library/LaunchAgents/${basename(file)}\n`,
+      );
       const job = (await readRoutineConfig())?.schedule?.job;
       expect(calls.map((c) => c.line)).toEqual([
         `launchctl bootout gui/501/${job}`,
@@ -833,6 +1033,9 @@ describe('routine', () => {
       ]);
       await expect(readFile(file, 'utf8')).rejects.toThrow();
       expect((await readRoutineConfig())?.schedule).toBeUndefined();
+      // The copy goes with the job, and so does its folder.
+      expect(removed.out).toContain(`removed ${copy()}`);
+      await expect(stat(copyPaths(paths()).dir)).rejects.toThrow('ENOENT');
     });
 
     it('writes a systemd user timer on Linux when systemd answers', async () => {
@@ -854,7 +1057,7 @@ describe('routine', () => {
       const serviceText = await readFile(service ?? '', 'utf8');
       expect(serviceText.split('\n')[0]).toContain(MANAGED_MARKER);
       expect(serviceText).toContain(
-        `ExecStart="${PROGRAM[0]}" "${PROGRAM[1]}" "routine" "run"`,
+        `ExecStart="${jobProgram[0]}" "${copy()}" "routine" "run"`,
       );
       expect(await readFile(timer ?? '', 'utf8')).toContain(
         'OnCalendar=*-*-* 10:00:00',
@@ -882,17 +1085,21 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('cron');
       expect(crontab).toContain(MANAGED_MARKER);
-      expect(result.out).not.toContain(LINGER_NOTE);
+      expect((await run('routine', 'status')).out).not.toContain(LINGER_NOTE);
     });
 
-    it('says linger is needed when there is no cron to fall back on', async () => {
+    it('says in routine status that linger is needed when there is no cron to fall back on', async () => {
       systemdUp = true;
       linger = false;
       cronInstalled = false;
       const result = await run('routine', 'install', '--yes');
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
-      expect(result.out).toContain(LINGER_NOTE);
+      // Not in the block, in the Job section of routine status (RS-4).
+      expect(result.out).not.toContain(LINGER_NOTE);
+      expect((await run('routine', 'status')).out).toContain(
+        `  ${LINGER_NOTE}\n`,
+      );
       expect(LINGER_NOTE).toContain('loginctl enable-linger');
     });
 
@@ -903,7 +1110,7 @@ describe('routine', () => {
       const result = await run('routine', 'install', '--yes');
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
-      expect(result.out).toContain(LINGER_NOTE);
+      expect((await run('routine', 'status')).out).toContain(LINGER_NOTE);
       expect(crontab).toBeNull();
       // Both daemon names were looked for, by process and by unit.
       expect(calls.map((c) => c.line)).toEqual(
@@ -915,7 +1122,6 @@ describe('routine', () => {
         ]),
       );
     });
-
     it('never overwrites or removes a unit file the operator wrote', async () => {
       systemdUp = true;
       await run('routine', 'install', '--yes');
@@ -947,10 +1153,11 @@ describe('routine', () => {
       expect(crontab).toContain(`5 6 * * * PATH=`);
       // The scheduled run finds the same working directory.
       expect(crontab).toContain(`XDG_CACHE_HOME='${join(home, 'cache')}'`);
-      expect(result.out).toContain(
+      // The settings note is in the Job section of routine status.
+      expect((await run('routine', 'status')).out).toContain(
         'runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it',
       );
-      expect(crontab).toContain(`'${PROGRAM[1]}' 'routine' 'run'`);
+      expect(crontab).toContain(`'${copy()}' 'routine' 'run'`);
 
       // A second install replaces the block rather than adding another.
       await run('routine', 'install', '--yes', '--time', '06:05');
@@ -1158,6 +1365,179 @@ describe('routine', () => {
       await expect(applyPlan(plan, other, async () => {})).rejects.toThrow(
         /Bootstrap failed: 119/,
       );
+    });
+
+    it('names the job, its command and the copy in routine status (RS-4)', async () => {
+      await run('routine', 'install', '--yes');
+      const job = (await readRoutineConfig()).schedule?.job ?? '';
+      const result = await run('routine', 'status');
+      expect(result.code).toBe(0);
+      const section = result.out.slice(result.out.indexOf('\nJob\n') + 1);
+      expect(section.split('\n').slice(0, 7)).toEqual([
+        'Job',
+        '  Scheduler  cron',
+        `  Entry      crontab, marked ${job}`,
+        `  Command    ${jobProgram[0]} ${copy()} routine run`,
+        `  Copy       ${VERSION}`,
+        `  ${NO_SETTINGS_NOTE}`,
+        '  See the job file in full with sealkeeper routine status --files.',
+      ]);
+      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      expect(json.copy).toEqual({
+        path: copy(),
+        version: VERSION,
+        cliVersion: VERSION,
+      });
+      expect(json.warnings).toEqual([]);
+    });
+
+    it('says in routine status when the copy is another version or gone', async () => {
+      await run('routine', 'install', '--yes');
+      const c = copyPaths(paths());
+      await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
+      const outdated = await run('routine', 'status');
+      expect(outdated.out).toContain(
+        `Routine runs 0.0.1, this CLI is ${VERSION}, run sealkeeper routine install to update it.\n`,
+      );
+      await rm(c.script);
+      const gone = await run('routine', 'status');
+      expect(gone.out).toContain(
+        'The daily routine job points at a sealkeeper that is no longer there. Run sealkeeper routine install again.\n',
+      );
+      expect(gone.out).toContain('  Copy       missing\n');
+    });
+
+    it('routine status --files prints the job file in full for each scheduler', async () => {
+      // launchd, the plist.
+      platform = 'darwin';
+      await run('routine', 'install', '--yes');
+      const plist = (await readRoutineConfig()).schedule?.files[0] ?? '';
+      const launchd = await run('routine', 'status', '--files');
+      expect(launchd.code).toBe(0);
+      expect(launchd.out).toBe(`${plist}\n${await readFile(plist, 'utf8')}`);
+      await run('routine', 'remove');
+
+      // systemd, both units.
+      platform = 'linux';
+      systemdUp = true;
+      await run('routine', 'install', '--yes');
+      const [service = '', timer = ''] =
+        (await readRoutineConfig()).schedule?.files ?? [];
+      const systemd = await run('routine', 'status', '--files');
+      expect(systemd.out).toBe(
+        `${service}\n${await readFile(service, 'utf8')}\n${timer}\n${await readFile(timer, 'utf8')}`,
+      );
+      await run('routine', 'remove');
+
+      // cron, our block of the crontab and nothing else of it.
+      systemdUp = false;
+      crontab = '0 1 * * * /usr/bin/backup\n';
+      await run('routine', 'install', '--yes');
+      const cron = await run('routine', 'status', '--files');
+      expect(cron.out.startsWith('crontab\n# BEGIN ')).toBe(true);
+      expect(cron.out).toContain(`'${copy()}' 'routine' 'run'`);
+      expect(cron.out).not.toContain('/usr/bin/backup');
+      await run('routine', 'remove');
+
+      // Task Scheduler, the task's XML as schtasks prints it. Written as
+      // install would, since the temp paths here are longer than a Task
+      // Scheduler command may be.
+      platform = 'win32';
+      await installed({
+        schedule: {
+          time: '10:00',
+          scheduler: 'schtasks',
+          agent: 'claude-code',
+          agentCommand: CLAUDE,
+          job: 'run.sealkeeper.routine',
+          files: [],
+          installedAt: new Date().toISOString(),
+        },
+      });
+      calls = [];
+      const schtasks = await run('routine', 'status', '--files');
+      expect(schtasks.out).toContain('<Task>ours</Task>');
+      expect(calls.map((c) => c.line)).toEqual([
+        expect.stringMatching(/^schtasks \/Query \/TN .* \/XML$/),
+      ]);
+
+      // Nothing installed.
+      await run('routine', 'remove');
+      const none = await run('routine', 'status', '--files');
+      expect(none.code).toBe(1);
+      expect(none.err).toContain('no routine is installed');
+    });
+
+    it('shows the same block for every scheduler kind, naming no scheduler or file', async () => {
+      const lines = blockLines('10:00', defaultRoutineConfig().limits);
+      expect(lines).toEqual([
+        'Daily routine   10:00, only when there is work',
+        '',
+        '  Claims   Seed tasks and tasks from operators you allow',
+        '  Posts    1 task a day when posting is behind',
+        '  Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
+        '  Why      Verified tasks get your agent to bronze',
+        '',
+        'Check it later with sealkeeper routine status',
+      ]);
+      for (const kind of ['launchd', 'systemd', 'cron', 'schtasks']) {
+        expect(lines.join('\n')).not.toContain(kind);
+      }
+      expect(lines.join('\n')).not.toMatch(/LaunchAgents|crontab|\\SealKeeper/);
+      // The temp paths here are too long for a Task Scheduler command, so
+      // Windows is left to the lines above.
+      for (const [p, kind] of [
+        ['darwin', 'launchd'],
+        ['linux', 'cron'],
+      ] as const) {
+        platform = p;
+        const result = await run('routine', 'install');
+        expect(result.out.split('\n').slice(0, 8), kind).toEqual(lines);
+      }
+    });
+
+    it('the full preview names the copy', async () => {
+      const env = { platform: 'darwin' as const, homedir: userHome, uid: 501 };
+      const plan = await planInstall(
+        'launchd',
+        'run.sealkeeper.routine',
+        {
+          time: '10:00',
+          program: [
+            PROGRAM[0] as string,
+            '/h/routine/cli.js',
+            'routine',
+            'run',
+          ],
+          env: {},
+          home: '/h',
+          outFile: '/h/out',
+        },
+        env,
+        runner,
+      );
+      const lines = preview(
+        {
+          plan,
+          agentCommand: CLAUDE,
+          current: defaultRoutineConfig(),
+          env,
+          run: runner,
+          p: paths('/h'),
+          source: '/opt/sealkeeper/dist/index.js',
+          program: [
+            PROGRAM[0] as string,
+            '/h/routine/cli.js',
+            'routine',
+            'run',
+          ],
+        },
+        '10:00',
+      );
+      expect(lines).toContain(
+        'Copies /opt/sealkeeper/dist/index.js to /h/routine/cli.js',
+      );
+      expect(lines.join('\n')).toContain('<string>/h/routine/cli.js</string>');
     });
 
     it('refuses an agent with no headless mode', async () => {

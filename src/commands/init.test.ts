@@ -12,6 +12,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import {
   base64urlDecode,
   decodeHeader,
@@ -22,8 +23,17 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wasAskedRuntime } from '../agent-runtime.js';
-import { cleanAnswer, type Input, isYes, readYesNo } from '../ask.js';
-import { proveCommandText } from '../claude-code-command.js';
+import {
+  cleanAnswer,
+  type Input,
+  isYes,
+  readYesNo,
+  streamInput,
+} from '../ask.js';
+import {
+  proveCommandText,
+  ROUTINE_INSTALL_COMMAND,
+} from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
   DEFAULT_API_URL,
@@ -47,6 +57,8 @@ import { appendEvent, countPending } from '../log.js';
 import { isManaged } from '../managed.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
+import { readRoutine } from '../routine.js';
+import { copyPaths, copyVersion } from '../routine-copy.js';
 import type { Runner } from '../routine-scheduler.js';
 import { stripStyle } from '../style.js';
 import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
@@ -59,11 +71,13 @@ import {
   bronzeLine,
   CONSENT,
   folderLine,
+  HOOKS_BY_CLAUDE,
   HOOKS_INTRO,
   HOOKS_MAX_ASKS,
   HOOKS_NOT_INSTALLED,
   HOOKS_QUESTION,
   homeTaken,
+  INPUT_CLOSED,
   isYesByDefault,
   leftBehindLine,
   MACHINE_AGENTS_SHOWN,
@@ -72,6 +86,7 @@ import {
   NEXT_NPX,
   NEXT_POST,
   NEXT_PROVE,
+  NEXT_ROUTINE,
   NEXT_WHAT_IS_SHARED,
   NO_NAME,
   NOTHING_SENT,
@@ -79,9 +94,8 @@ import {
   NUDGE_NOT_ON,
   nameQuestion,
   otherApiLine,
-  ROUTINE_INTRO,
+  ROUTINE_EARLIER_LINE,
   ROUTINE_NOT_INSTALLED,
-  ROUTINE_QUESTION,
   ROUTINE_TIME_LINE,
   routinePresentLine,
   runtimeNameLine,
@@ -90,7 +104,7 @@ import {
   TAGLINE,
   versionQuestion,
 } from './init.js';
-import { INSTALL_QUESTION, NPX_NOTE } from './routine.js';
+import { FIRST_RUN_QUESTION, INSTALL_QUESTION } from './routine.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const HOOK_COMMAND = hookCommand(
@@ -106,6 +120,8 @@ const API_URL = 'https://api.test';
 const CLAUDE = '/usr/local/bin/claude';
 const PROGRAM = ['/usr/local/bin/node', '/opt/sealkeeper/dist/index.js'];
 const NPX_PROGRAM = ['/usr/local/bin/node', STALE_SCRIPT];
+// What a bundle the routine tests copy holds (RS-2).
+const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 
 // Every signed payload names the API it is for (VOU-111). The fake takes
 // aud off before it parses, and a payload without the right aud fails the
@@ -176,6 +192,9 @@ type World = {
   // Every scheduler command the routine offer ran, as file and args
   // joined. The fake scheduler is launchd and answers every call with 0.
   scheduler: string[];
+  // A real script the CLI runs from, which routine install copies. Unset
+  // means PROGRAM or NPX_PROGRAM, whose scripts do not exist.
+  bundle?: string;
 };
 
 // A terminal that answers with each line in turn, then closes.
@@ -357,8 +376,17 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       stdin: world.stdin ? () => world.stdin as Input : undefined,
       findAgent: async () => (world.claude ? CLAUDE : null),
       cli: () => {
-        const program = world.npx ? NPX_PROGRAM : PROGRAM;
+        const program =
+          world.bundle === undefined
+            ? world.npx
+              ? NPX_PROGRAM
+              : PROGRAM
+            : [process.execPath, world.bundle];
         return { program, invocation: program.join(' ') };
+      },
+      // No test ever starts a real agent.
+      spawner: () => {
+        throw new Error('init tests start no agent');
       },
     },
   });
@@ -1538,7 +1566,8 @@ describe('sealkeeper init', () => {
 
     it('asks again on an unclear answer and installs on a later y', async () => {
       await withClaudeCode();
-      const stdin = answeringEach(['maybe', 'y']);
+      // Enter at the nudge that follows.
+      const stdin = answeringEach(['maybe', 'y', '']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -1651,6 +1680,199 @@ describe('sealkeeper init', () => {
       world.stdin = answering('');
       expect((await run(world, 'init')).code).toBe(0);
       expect(await readFile(command, 'utf8')).toBe('my own command\n');
+    });
+
+    describe('init run by Claude Code, with no terminal (RS-8)', () => {
+      it('installs the hooks without asking, leaves the nudge off and puts the routine first in Next', async () => {
+        await withClaudeCode();
+        world.env = { CLAUDECODE: '1' };
+        world.claude = true;
+        const stdin = answering('y', false);
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(stdin.reads).toBe(0);
+        expect(result.err).not.toContain(HOOKS_QUESTION);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(6);
+        expect(result.out).toContain(
+          `  ✓ Hooks in ${tildePath(settingsFile())}\n`,
+        );
+        expect(result.err).toContain(`  ${HOOKS_BY_CLAUDE}\n`);
+        // The nudge is neither asked nor stored, the routine not offered.
+        expect(result.err).not.toContain(NUDGE_INTRO);
+        expect(await readNudge(paths(home))).toBeUndefined();
+        expect(result.all).not.toContain(INSTALL_QUESTION);
+        expect(world.scheduler).toEqual([]);
+        expect((await readRoutineConfig()).schedule).toBeUndefined();
+        const next = result.out.slice(result.out.indexOf('  Next\n'));
+        expect(next.split('\n')[1]).toBe(
+          '  1  Set up the daily routine   npx sealkeeper routine install --yes',
+        );
+        expect(next).toContain('  2  In Claude Code, run /sealkeeper-prove');
+      });
+
+      it('does the same with --json, the routine first in nextSteps', async () => {
+        await withClaudeCode();
+        world.env = { CLAUDECODE: '1' };
+        world.stdin = answering('y', false);
+        const result = await run(world, 'init', '--name', 'scout', '--json');
+        expect(result.code).toBe(0);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(6);
+        expect(result.err).toContain(`${HOOKS_BY_CLAUDE}\n`);
+        const json = JSON.parse(result.out);
+        expect(json.nextSteps[0]).toBe(NEXT_ROUTINE);
+        expect(NEXT_ROUTINE).toBe(
+          "Set up the daily routine with npx sealkeeper routine install --yes, only after the user's clear yes",
+        );
+        // The same command the prove command and the skill allow.
+        expect(NEXT_ROUTINE).toContain(
+          ROUTINE_INSTALL_COMMAND.replace(/^sealkeeper /, ''),
+        );
+      });
+
+      it('leaves the routine out of Next once a job is installed', async () => {
+        await withClaudeCode();
+        world.env = { CLAUDECODE: '1' };
+        world.stdin = answering('y', false);
+        expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+        const routine = await readRoutineConfig();
+        await writeFile(
+          paths(home).routine,
+          `${JSON.stringify({
+            ...routine,
+            schedule: {
+              time: '10:00',
+              scheduler: 'launchd',
+              agent: 'claude-code',
+              agentCommand: CLAUDE,
+              job: 'run.sealkeeper.routine',
+              files: [],
+              installedAt: new Date().toISOString(),
+            },
+          })}\n`,
+        );
+        world = newWorld();
+        world.env = { CLAUDECODE: '1' };
+        world.stdin = answering('y', false);
+        const again = await run(world, 'init');
+        expect(again.code).toBe(0);
+        expect(again.out).not.toContain('Set up the daily routine');
+      });
+
+      it('still counts a missing terminal as no without CLAUDECODE', async () => {
+        await withClaudeCode();
+        world.claude = true;
+        const stdin = answering('y', false);
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(stdin.reads).toBe(0);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toEqual([]);
+        expect(result.all).not.toContain(HOOKS_BY_CLAUDE);
+        expect(result.out).not.toContain('Set up the daily routine');
+      });
+
+      it('registers a plain non-terminal init with the suggested name, asking nothing and never ending as D6', async () => {
+        await withClaudeCode();
+        world.repo = 'research-bot';
+        // A pipe that is already closed, as a script or an agent gives.
+        const stdin = answering(null, false);
+        world.stdin = stdin;
+        const result = await run(world, 'init');
+        expect(result.code).toBe(0);
+        expect(stdin.reads).toBe(0);
+        expect(result.all).not.toContain(INPUT_CLOSED);
+        expect((await readConfig(paths(home)))?.name).toBe('research-bot');
+        expect(world.registrations).toHaveLength(1);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toEqual([]);
+      });
+
+      it('still counts a missing terminal as no with --json and no CLAUDECODE', async () => {
+        await withClaudeCode();
+        world.stdin = answering('y', false);
+        const json = await run(world, 'init', '--name', 'scout', '--json');
+        expect(json.code).toBe(0);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toEqual([]);
+        expect(JSON.parse(json.out).nextSteps).not.toContain(NEXT_ROUTINE);
+      });
+
+      it('asks as usual in a terminal, CLAUDECODE or not', async () => {
+        await withClaudeCode();
+        world.env = { CLAUDECODE: '1' };
+        const stdin = answeringEach(['', 'n', 'n']);
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(result.err).toContain(HOOKS_QUESTION.trimEnd());
+        expect(result.all).not.toContain(HOOKS_BY_CLAUDE);
+      });
+    });
+
+    describe('a stdin that closes at a question (D6)', () => {
+      it('ends with the no terminal line and exit 1 at the hooks question', async () => {
+        await withClaudeCode();
+        const stdin = answeringEach([]);
+        world.stdin = stdin;
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(1);
+        expect(stdin.reads).toBe(1);
+        expect(result.err).toContain(INPUT_CLOSED);
+        expect(INPUT_CLOSED).toBe(
+          'init stopped, stdin closed before an answer. There is no terminal to ask, so run npx sealkeeper init again in a terminal.',
+        );
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toEqual([]);
+      });
+
+      it('ends the same way at the name question and at the nudge', async () => {
+        const name = answeringEach([]);
+        world.stdin = name;
+        const atName = await run(world, 'init');
+        expect(atName.code).toBe(1);
+        expect(atName.err).toContain(INPUT_CLOSED);
+        expect(await readConfig(paths(home))).toBeNull();
+
+        world = newWorld();
+        await withClaudeCode();
+        const nudge = answeringEach(['y']);
+        world.stdin = nudge;
+        const atNudge = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(atNudge.code).toBe(1);
+        expect(nudge.reads).toBe(2);
+        expect(atNudge.err).toContain(INPUT_CLOSED);
+      });
+
+      it('streamInput answers null at once after the stream ended, never waiting', async () => {
+        const stream = new PassThrough() as PassThrough & { isTTY?: boolean };
+        stream.isTTY = true;
+        const input = streamInput(stream);
+        stream.end('y\n');
+        expect(await input.readLine()).toBe('y');
+        // The first readline took the end with it. Each later question
+        // settles with null rather than hanging.
+        const settle = <T>(p: Promise<T>) =>
+          Promise.race([
+            p,
+            new Promise<'hung'>((r) => setTimeout(() => r('hung'), 500)),
+          ]);
+        expect(await settle(input.readLine())).toBeNull();
+        expect(await settle(input.readLine())).toBeNull();
+        // A fresh input on the ended stream settles too.
+        expect(await settle(streamInput(stream).readLine())).toBeNull();
+      });
     });
 
     describe('the session nudge', () => {
@@ -2151,42 +2373,52 @@ describe('sealkeeper init', () => {
       await writeFile(join(claudeDir(), 'settings.json'), '{}\n');
     }
 
+    // The bundle the CLI runs from, a real file install copies (RS-2).
+    async function withBundle(
+      script = join(home, 'dist', 'index.js'),
+    ): Promise<string> {
+      await mkdir(dirname(script), { recursive: true });
+      await writeFile(script, BUNDLE);
+      world.bundle = script;
+      return script;
+    }
+
     // The runtime, the hooks and the nudge, each by Enter, then the
-    // routine question and the preview question.
+    // install question and the first run question.
     const answersThen = (...routine: string[]) =>
       answeringEach(['', '', '', ...routine]);
 
-    it('offers the routine after the hooks and installs nothing by default', async () => {
+    it('offers the routine as one block after the hooks and installs on Enter (RS-1)', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
-      const stdin = answersThen('');
-      world.stdin = stdin;
-      const result = await run(world, 'init', '--name', 'scout');
-      expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(4);
-      const shown = result.err.indexOf(ROUTINE_QUESTION);
-      expect(shown).toBeGreaterThan(result.err.indexOf(NUDGE_INTRO));
-      for (const text of ROUTINE_INTRO) expect(result.err).toContain(text);
-      expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
-      expect(result.all).not.toContain(INSTALL_QUESTION);
-      expect(world.scheduler).toEqual([]);
-      expect((await readRoutineConfig()).schedule).toBeUndefined();
-    });
-
-    it('shows the preview after a yes and installs after a second yes', async () => {
-      await withClaudeCode();
-      world.claude = true;
-      const stdin = answersThen('y', 'y');
+      const stdin = answersThen('', 'n');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(5);
-      expect(result.out).toContain(
-        '  Every day at 10:00, launchd runs npx sealkeeper routine run.',
-      );
-      expect(result.out).toContain(`starts ${CLAUDE} -p`);
-      expect(result.err).toContain('Install this daily routine? [y/N] ');
       const schedule = (await readRoutineConfig()).schedule;
+      const job = schedule?.job ?? '';
+      const block = [
+        '  Daily routine   10:00, only when there is work',
+        '',
+        '    Claims   Seed tasks and tasks from operators you allow',
+        '    Posts    1 task a day when posting is behind',
+        '    Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
+        '    Why      Verified tasks get your agent to bronze',
+        '',
+        '  Check it later with npx sealkeeper routine status',
+        `  ${INSTALL_QUESTION}`,
+      ].join('\n');
+      expect(INSTALL_QUESTION).toBe('Install? [Y/n] ');
+      // The scheduler and the file are in routine status only.
+      expect(result.err).not.toContain('LaunchAgents');
+      expect(result.err).toContain(block);
+      expect(result.err.indexOf(block)).toBeGreaterThan(
+        result.err.indexOf(NUDGE_INTRO),
+      );
+      // One question before the install, never the full job file.
+      expect(result.all).not.toContain('<?xml');
       expect(schedule?.time).toBe('10:00');
       expect(schedule?.scheduler).toBe('launchd');
       expect(schedule?.agentCommand).toBe(CLAUDE);
@@ -2194,11 +2426,13 @@ describe('sealkeeper init', () => {
       expect(plist.startsWith(join(home, 'Library', 'LaunchAgents'))).toBe(
         true,
       );
+      const copy = copyPaths(paths(home)).script;
       expect(await readFile(plist, 'utf8')).toContain(
-        `<string>${PROGRAM[1]}</string>`,
+        `<string>${copy}</string>`,
       );
+      expect(await readFile(copy, 'utf8')).toBe(BUNDLE);
       expect(world.scheduler).toEqual([
-        `launchctl bootout gui/501/${schedule?.job}`,
+        `launchctl bootout gui/501/${job}`,
         `launchctl bootstrap gui/501 ${plist}`,
       ]);
       expect(result.out).toContain(
@@ -2206,24 +2440,60 @@ describe('sealkeeper init', () => {
       );
       expect(result.out).toContain(`  ${ROUTINE_TIME_LINE}\n`);
       expect(result.out).not.toContain(ROUTINE_NOT_INSTALLED);
+      // The no to the first run.
+      expect(result.err).toContain(`  ${FIRST_RUN_QUESTION}`);
+      expect(result.out).toMatch(
+        /\n {2}It runs (today|tomorrow) at 10:00\. Run one any time with npx sealkeeper routine run\.\n/,
+      );
+      expect(await readRoutine(paths(home))).toEqual([]);
     });
 
-    it('installs nothing when the preview is refused', async () => {
+    it('runs the first one on Enter and says where to look (RS-3)', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
-      const stdin = answersThen('y', 'n');
+      const stdin = answersThen('', '');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      // A first run that fails does not fail init.
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(5);
+      expect(result.out).toContain(
+        '  First run started. It stops within 15 minutes.\n',
+      );
+      expect(result.out).toMatch(/\n {2}Routine run \w+/);
+      expect(result.out).toContain(
+        '  See every run with npx sealkeeper routine status.\n',
+      );
+      const runs = (await readRoutine(paths(home))).filter(
+        (e) => e.kind === 'run',
+      );
+      expect(runs).toHaveLength(1);
+      // Next still follows.
+      expect(result.out.indexOf('See every run')).toBeLessThan(
+        result.out.indexOf('Next'),
+      );
+    });
+
+    it('installs nothing on a no, and asks no more', async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.claude = true;
+      const stdin = answersThen('n');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(5);
-      expect(result.out).toContain('Every day at 10:00, launchd runs');
+      expect(stdin.reads).toBe(4);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
+      expect(result.err).not.toContain(FIRST_RUN_QUESTION);
       expect(world.scheduler).toEqual([]);
       expect((await readRoutineConfig()).schedule).toBeUndefined();
+      expect(await copyVersion(paths(home))).toBeNull();
     });
 
     it('asks again on an unclear answer, then counts it as no', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
       const stdin = answersThen('maybe', 'what', 'hm');
       world.stdin = stdin;
@@ -2231,18 +2501,23 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(6);
       expect(result.err).toContain(
-        '  Please answer y or n. Set up the daily routine now? [y/N] ',
+        `  Please answer y or n. ${INSTALL_QUESTION}`,
       );
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(world.scheduler).toEqual([]);
     });
 
-    it('names the installed routine on a repeat init and asks nothing', async () => {
+    it('names the installed routine on a repeat init, asks nothing and refreshes the copy', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
-      world.stdin = answersThen('y', 'y');
+      world.stdin = answersThen('y', 'n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const c = copyPaths(paths(home));
+      await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
+      await writeFile(c.script, 'old bundle\n');
       world = newWorld();
+      await withBundle();
       world.claude = true;
       const stdin = answering('');
       world.stdin = stdin;
@@ -2250,53 +2525,92 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
       expect(result.out).toContain(`  ✓ ${routinePresentLine('10:00')}\n`);
-      expect(result.err).not.toContain(ROUTINE_QUESTION);
+      expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
+      expect(await copyVersion(paths(home))).toBe(VERSION);
+      expect(await readFile(c.script, 'utf8')).toBe(BUNDLE);
+    });
+
+    it('says how to move a job an earlier CLI installed onto a copy', async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.claude = true;
+      world.stdin = answersThen('y', 'n');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const routine = await readRoutineConfig();
+      const { program: _, ...earlier } = routine.schedule ?? {};
+      await writeFile(
+        paths(home).routine,
+        `${JSON.stringify({ ...routine, schedule: earlier })}\n`,
+      );
+      world = newWorld();
+      world.claude = true;
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`  ${ROUTINE_EARLIER_LINE}\n`);
     });
 
     it('offers the routine on a repeat init when it is not installed', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
-      world.stdin = answersThen('');
+      world.stdin = answersThen('n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       world = newWorld();
+      await withBundle();
       world.claude = true;
-      const stdin = answering('');
+      const stdin = answering('n');
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(1);
-      expect(result.err).toContain(ROUTINE_QUESTION);
+      expect(result.err).toContain(INSTALL_QUESTION);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
     });
 
-    it('warns before the question and in the preview when the CLI runs from npx', async () => {
+    it('points the job at the copy when the CLI runs from npx, with no npx note', async () => {
       await withClaudeCode();
+      const npx = await withBundle(
+        join(
+          home,
+          '.npm',
+          '_npx',
+          'abc',
+          'node_modules',
+          'sealkeeper',
+          'dist',
+          'index.js',
+        ),
+      );
       world.claude = true;
-      world.npx = true;
       world.stdin = answersThen('y', 'n');
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      const warned = result.err.indexOf(NPX_NOTE);
-      expect(warned).toBeGreaterThan(-1);
-      expect(warned).toBeLessThan(result.err.indexOf(ROUTINE_QUESTION));
-      expect(result.out).toContain(`  ${NPX_NOTE}\n`);
-      expect(result.out).toContain(`<string>${STALE_SCRIPT}</string>`);
+      const [plist = ''] = (await readRoutineConfig()).schedule?.files ?? [];
+      const text = await readFile(plist, 'utf8');
+      expect(text).toContain(
+        `<string>${copyPaths(paths(home)).script}</string>`,
+      );
+      expect(text).not.toContain(npx);
+      expect(result.all).not.toContain('npx cache');
     });
 
     it('says nothing about the routine when claude is not on PATH', async () => {
       await withClaudeCode();
+      await withBundle();
       const stdin = answersThen('y', 'y');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(3);
       expect(result.all).not.toContain('Daily routine');
-      expect(result.err).not.toContain(ROUTINE_QUESTION);
+      expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
     });
 
     it('says nothing about the routine without a Claude Code dir', async () => {
+      await withBundle();
       world.claude = true;
       const stdin = answering('y');
       world.stdin = stdin;
@@ -2306,20 +2620,24 @@ describe('sealkeeper init', () => {
       expect(world.scheduler).toEqual([]);
     });
 
-    it('asks nothing with --json or without a terminal', async () => {
+    it('asks nothing and installs nothing with --json or without a terminal', async () => {
       await withClaudeCode();
+      await withBundle();
       world.claude = true;
       world.stdin = answering('y');
       const json = await run(world, 'init', '--name', 'scout', '--json');
       expect(json.code).toBe(0);
-      expect(json.all).not.toContain(ROUTINE_QUESTION);
+      expect(json.all).not.toContain(INSTALL_QUESTION);
       world = newWorld();
+      await withBundle();
       world.claude = true;
       world.stdin = answering('y', false);
       const piped = await run(world, 'init');
       expect(piped.code).toBe(0);
-      expect(piped.all).not.toContain(ROUTINE_QUESTION);
+      expect(piped.all).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
+      expect((await readRoutineConfig()).schedule).toBeUndefined();
+      expect(await copyVersion(paths(home))).toBeNull();
     });
   });
 

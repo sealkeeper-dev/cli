@@ -134,6 +134,10 @@ export const RoutineSchedule = z.object({
   job: z.string().min(1),
   files: z.array(z.string()),
   installedAt: z.iso.datetime({ offset: true }),
+  // What the job runs, node, the script and routine run. Since RS-2 the
+  // script is the copy under <home>/routine. Absent for a job an earlier
+  // CLI installed.
+  program: z.array(z.string()).optional(),
 });
 export type RoutineSchedule = z.infer<typeof RoutineSchedule>;
 

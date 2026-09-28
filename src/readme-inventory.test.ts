@@ -13,6 +13,7 @@ import { skillPath } from './claude-code-skill.js';
 import { agentsMapPath, DEFAULT_API_URL, type Paths, paths } from './config.js';
 import { ACCESS_TOKEN_URL, DEVICE_CODE_URL } from './github-device.js';
 import { routinePaths } from './routine.js';
+import { copyPaths } from './routine-copy.js';
 import {
   jobName,
   launchdPath,
@@ -71,6 +72,12 @@ describe('the What init does inventory', () => {
     for (const file of rest) {
       expect(text, file).toContain(`\`${file.slice(ROOT.length + 1)}\``);
     }
+    // The copy of the CLI the daily job runs, and its version (RS-2).
+    const copy = copyPaths(paths(ROOT));
+    expect(text).toContain(
+      `- \`${tilde(copy.script)}\` and \`${copy.meta.slice(ROOT.length + 1)}\`, `,
+    );
+    expect(text).toContain(`\`${tilde(copy.script)}\`, a copy of this CLI`);
   });
 
   it('lists the files written into Claude Code and every hook event', () => {

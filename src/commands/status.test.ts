@@ -9,11 +9,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RUNTIME_UNKNOWN_INTRO, wasAskedRuntime } from '../agent-runtime.js';
 import type { Input } from '../ask.js';
 import { hookCommand } from '../claude-code-settings.js';
-import { paths, writeConfig } from '../config.js';
+import {
+  defaultRoutineConfig,
+  paths,
+  readRoutineConfig,
+  writeConfig,
+  writeRoutineConfig,
+} from '../config.js';
 import { createKey } from '../identity.js';
 import { appendEvent, dayOf, writeCursor } from '../log.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
+import { copyPaths, writeCopy } from '../routine-copy.js';
+import { VERSION } from '../version.js';
 import {
   dormancyLine,
   HOOKS_MISSING,
@@ -1166,6 +1174,80 @@ describe('status', () => {
       const { out, err } = await run(offline, 'status', '--json');
       expect(JSON.parse(out)).toMatchObject({ pending: 0 });
       expect(err).toBe(`${HOOKS_MISSING}\n`);
+    });
+  });
+
+  describe("the daily job's copy of the CLI (RS-2)", () => {
+    // A job as routine install records it, running the copy in the home.
+    async function installed(version: string): Promise<void> {
+      const c = copyPaths(paths());
+      await writeFile(join(home, 'bundle.js'), '// bundle\n');
+      await writeCopy(join(home, 'bundle.js'), paths(), version);
+      await writeRoutineConfig({
+        ...defaultRoutineConfig(),
+        schedule: {
+          time: '10:00',
+          scheduler: 'cron',
+          agent: 'claude-code',
+          agentCommand: '/usr/local/bin/claude',
+          job: 'run.sealkeeper.routine',
+          files: [],
+          installedAt: new Date().toISOString(),
+          program: [process.execPath, c.script, 'routine', 'run'],
+        },
+      });
+    }
+
+    it('says nothing when the copy is this version', async () => {
+      await installed(VERSION);
+      expect((await run(offline, 'status')).err).not.toContain('Routine');
+    });
+
+    it('says on stderr when the copy is another version', async () => {
+      await installed('0.0.1');
+      const { code, out, err } = await run(offline, 'status');
+      expect(code).toBe(0);
+      const line = `Routine runs 0.0.1, this CLI is ${VERSION}, run npx sealkeeper routine install to update it.`;
+      expect(err).toContain(`${line}\n`);
+      expect(out).not.toContain(line);
+    });
+
+    it('warns when the copy or the node the job runs is gone', async () => {
+      await installed(VERSION);
+      await rm(copyPaths(paths()).script);
+      const gone = await run(offline, 'status', '--json');
+      expect(gone.err).toContain(
+        'The daily routine job points at a sealkeeper that is no longer there. Run npx sealkeeper routine install again.\n',
+      );
+
+      await installed(VERSION);
+      const routine = await readRoutineConfig();
+      await writeRoutineConfig({
+        ...routine,
+        schedule: {
+          ...(routine.schedule as NonNullable<typeof routine.schedule>),
+          program: [
+            '/no/such/node',
+            copyPaths(paths()).script,
+            'routine',
+            'run',
+          ],
+        },
+      });
+      expect((await run(offline, 'status')).err).toContain(
+        'points at a sealkeeper that is no longer there',
+      );
+    });
+
+    it('says nothing for a job an earlier CLI installed, which recorded no command', async () => {
+      await installed('0.0.1');
+      const routine = await readRoutineConfig();
+      const { program: _, ...earlier } = routine.schedule ?? {};
+      await writeFile(
+        paths().routine,
+        `${JSON.stringify({ ...routine, schedule: earlier })}\n`,
+      );
+      expect((await run(offline, 'status')).err).not.toContain('Routine');
     });
   });
 });

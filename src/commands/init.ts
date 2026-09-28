@@ -135,16 +135,27 @@ import {
   skillLine,
 } from './adapter.js';
 import {
+  askYes,
+  BLOCK_LABEL,
+  BLOCK_TITLE,
+  blockHeadTail,
+  checkLaterLine,
   DEFAULT_TIME,
   defaultRoutineDeps,
+  FIRST_RUN_QUESTION,
   finishInstall,
+  firstRunLine,
   INSTALL_QUESTION,
   installedLine,
-  NPX_NOTE,
+  laterLine,
   type PreparedInstall,
   prepareInstall,
-  preview,
   type RoutineDeps,
+  refreshCopy,
+  reportLines,
+  routineRows,
+  routineRun,
+  seeRunsLine,
 } from './routine.js';
 import { identityOf, printIdentity } from './whoami.js';
 
@@ -191,18 +202,26 @@ export const NUDGE_INTRO =
   'The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.';
 export const NUDGE_NOT_ON = `Session nudge off. Run ${cli('config nudge on')} to turn it on later.`;
 export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
-// The daily routine, offered after the hooks when claude is on PATH. It
-// spends the operator's tokens unattended, so no is the default, and yes
-// shows what routine install would write before anything is written.
-export const ROUTINE_INTRO = [
-  `A daily job can start Claude Code headless at ${DEFAULT_TIME} to earn verified tasks on its own,`,
-  'within limits you set. It shows what it will write before it runs anything.',
-];
-export const ROUTINE_QUESTION = 'Set up the daily routine now? [y/N] ';
+// Said on stderr when the hooks went in without a question, since Claude
+// Code runs this init with no terminal (RS-8).
+export const HOOKS_BY_CLAUDE =
+  'The Claude Code hooks went in without a question, since Claude Code is running this init.';
+// The first Next step then, for Claude to run on the user's yes.
+export const ROUTINE_STEP = 'Set up the daily routine';
+export const NEXT_ROUTINE = `${ROUTINE_STEP} with ${cli('routine install --yes')}, only after the user's clear yes`;
+// Said when stdin closes at a question, so init ends rather than waits
+// (D6).
+export const INPUT_CLOSED = `init stopped, stdin closed before an answer. There is no terminal to ask, so run ${cli('init')} again in a terminal.`;
+// The daily routine, offered after the hooks when claude is on PATH, as
+// one block routine install shows too, with yes as the default (RS-1). The
+// limits are on the screen before the question.
 export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine install')} to set it up later.`;
 export const ROUTINE_TIME_LINE = `Change the time with ${cli('routine install --time HH:MM')}.`;
 export const routinePresentLine = (time: string): string =>
   `Daily routine at ${time}`;
+// Said on a repeat init when the job was installed by a CLI from before
+// RS-2, which pointed it at the script that ran install.
+export const ROUTINE_EARLIER_LINE = `An earlier CLI installed this job. Run ${cli('routine install')} to give it a copy of the CLI that npm cannot clear.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
 // What bronze asks for, from the thresholds the scoring job applies.
 export const BRONZE = LEVEL_THRESHOLDS.bronze;
@@ -367,8 +386,9 @@ export function register(
     .option('--force', 'regenerate the key and register again')
     .action(async function (this: Command, options: InitOptions) {
       try {
-        await init(this, options, deps, routineDeps);
+        await init(this, options, stopOnClose(deps), routineDeps);
       } catch (error) {
+        if (error instanceof InputClosed) this.error(INPUT_CLOSED);
         if (
           error instanceof ApiError ||
           error instanceof DeviceFlowError ||
@@ -783,7 +803,11 @@ async function init(
         apiUrl: api.apiUrl,
         profileUrl,
         ...(folder === null ? {} : { folder, home: p.home }),
-        nextSteps: nextSteps(hooks, deps),
+        nextSteps: nextSteps(
+          hooks,
+          deps,
+          await routineStepFirst(hooks, deps, p),
+        ),
       }),
     );
     // On stderr, so --json output stays one object.
@@ -811,7 +835,12 @@ async function init(
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
   await offerRoutine(hooks, deps, routineDeps, ui, p);
-  printNext(ui.out, hooks, nextStateOf(config, live));
+  printNext(
+    ui.out,
+    hooks,
+    nextStateOf(config, live),
+    await routineStepFirst(hooks, deps, p),
+  );
 }
 
 // A run for an agent registered already. When the choice picked it by
@@ -878,7 +907,64 @@ async function initRegistered(
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
   await offerRoutine(hooks, deps, routineDeps, ui, p);
-  printNext(ui.out, hooks, nextStateOf(existing, live));
+  printNext(
+    ui.out,
+    hooks,
+    nextStateOf(existing, live),
+    await routineStepFirst(hooks, deps, p),
+  );
+}
+
+// Thrown when stdin closes at a question, caught by the action (D6).
+class InputClosed extends Error {
+  override name = 'InputClosed';
+}
+
+// deps whose stdin throws InputClosed on a closed input, so every question
+// init asks, its own and the runtime and nudge questions it borrows, ends
+// init with INPUT_CLOSED instead of reading the close as an answer.
+function stopOnClose(deps: InitDeps): InitDeps {
+  const stdin = deps.stdin;
+  if (stdin === undefined) return deps;
+  return {
+    ...deps,
+    stdin: () => {
+      const input = stdin();
+      return {
+        isTTY: input.isTTY,
+        readLine: async () => {
+          const line = await input.readLine();
+          if (line === null) throw new InputClosed();
+          return line;
+        },
+      };
+    },
+  };
+}
+
+// Whether Claude Code runs this init for the user, stdin not a terminal
+// and CLAUDECODE set (RS-8).
+function claudeDriven(deps: InitDeps, input: Input | undefined): boolean {
+  if (input?.isTTY === true) return false;
+  return (
+    readEnv('CLAUDECODE', (deps.env ?? (() => process.env))()) !== undefined
+  );
+}
+
+// Whether Next starts with the routine, when Claude Code runs this init,
+// the hooks are in and no job is installed yet (RS-8).
+async function routineStepFirst(
+  hooks: HooksResult,
+  deps: InitDeps,
+  p: Paths,
+): Promise<boolean> {
+  if (hooks !== 'installed' && hooks !== 'present') return false;
+  if (!claudeDriven(deps, deps.stdin?.())) return false;
+  try {
+    return (await readRoutineConfig(p)).schedule === undefined;
+  } catch {
+    return false;
+  }
 }
 
 // The suggested name. The repository name of the origin remote, then the
@@ -988,13 +1074,13 @@ async function offerNudge(
 }
 
 // Offers the daily routine when Claude Code is set up here, claude is on
-// PATH and a person can answer. One with a job installed already is named
-// and nothing is asked. Yes prints the same preview routine install prints
-// and asks once more before the job is written, so nothing lands on the
-// scheduler unseen. No, the default, is not stored, so a repeat init asks
-// again the way it asks about the hooks. A machine where the routine
-// cannot be installed, no claude on PATH or a scheduler that cannot be
-// read, hears nothing, since init has nothing to offer it.
+// PATH and a person can answer (RS-1). One block and one question, yes by
+// default, then the first run, yes by default (RS-3). One with a job
+// installed already is named, its copy of the CLI refreshed when its
+// version is not this one (RS-2), and nothing is asked. No is not stored,
+// so a repeat init asks again the way it asks about the hooks. A machine
+// where the routine cannot be installed, no claude on PATH or a scheduler
+// that cannot be read, hears nothing, since init has nothing to offer it.
 async function offerRoutine(
   hooks: HooksResult,
   deps: InitDeps,
@@ -1017,6 +1103,11 @@ async function offerRoutine(
   }
   if (current.schedule !== undefined) {
     say(o.line`${o.tick()} ${routinePresentLine(current.schedule.time)}`);
+    if (current.schedule.program === undefined) {
+      say(o.line`${o.dim(ROUTINE_EARLIER_LINE)}`);
+    } else {
+      await refreshCopy(current.schedule, routineDeps, p);
+    }
     return;
   }
   let prepared: PreparedInstall | string;
@@ -1028,26 +1119,15 @@ async function offerRoutine(
   }
   if (typeof prepared === 'string') return;
   note();
-  note(e.bold('Daily routine'));
-  for (const text of ROUTINE_INTRO) note(e.line`${text}`);
-  if (prepared.npx) note(e.line`${NPX_NOTE}`);
-  if ((await askRoutine(input, ui)) !== 'yes') {
-    say(o.line`${ROUTINE_NOT_INSTALLED}`);
-    return;
+  note(e.line`${e.bold(BLOCK_TITLE)}   ${blockHeadTail(DEFAULT_TIME)}`);
+  note();
+  for (const [label, text] of routineRows(current.limits)) {
+    const pad = ' '.repeat(BLOCK_LABEL - label.length);
+    note(e.line`  ${e.dim(label)}${pad}${text}`);
   }
-  say();
-  for (const text of preview(
-    prepared.plan,
-    DEFAULT_TIME,
-    prepared.agentCommand,
-    current,
-    prepared.npx,
-  )) {
-    say(o.line`${text}`);
-  }
-  const [confirm = ''] = INSTALL_QUESTION.split(' [y/N]');
-  promptStyled(indent(e.line`${confirm} ${e.dim('[y/N]')} `));
-  if (!isYes(await input.readLine())) {
+  note();
+  note(e.line`${e.dim(checkLaterLine())}`);
+  if (!(await askYes(input, question(ui, INSTALL_QUESTION)))) {
     say(o.line`${ROUTINE_NOT_INSTALLED}`);
     return;
   }
@@ -1061,20 +1141,26 @@ async function offerRoutine(
   }
   say(o.line`${o.tick()} ${installedLine(DEFAULT_TIME)}`);
   say(o.line`${o.dim(ROUTINE_TIME_LINE)}`);
+  if (!(await askYes(input, question(ui, FIRST_RUN_QUESTION)))) {
+    say(o.line`${laterLine(DEFAULT_TIME)}`);
+    return;
+  }
+  const config = await readConfig(p);
+  const routine = await readRoutineConfig(p);
+  if (config === null) return;
+  say(o.line`${o.dim(firstRunLine(routine.limits.minutesPerRun))}`);
+  const report = await routineRun(routineDeps, config, routine, p);
+  for (const line of reportLines(report)) say(o.line`${line}`);
+  say(o.line`${o.dim(seeRunsLine())}`);
 }
 
-// The routine question, no by default. An answer that is not yes or no
-// asks again, up to HOOKS_MAX_ASKS questions, and then counts as no.
-async function askRoutine(input: Input, ui: Ui): Promise<'yes' | 'no'> {
+// A yes by default question as init asks it, indented, with the default
+// dimmed.
+function question(ui: Ui, text: string): (again: string) => void {
   const e = ui.err;
-  const [question = ''] = ROUTINE_QUESTION.split(' [y/N]');
-  for (let asked = 0; asked < HOOKS_MAX_ASKS; asked++) {
-    const again = asked === 0 ? '' : 'Please answer y or n. ';
-    promptStyled(indent(e.line`${again}${question} ${e.dim('[y/N]')} `));
-    const answer = readYesNo(await input.readLine(), 'no');
-    if (answer !== 'unclear') return answer;
-  }
-  return 'no';
+  const [words = ''] = text.split(' [Y/n]');
+  return (again) =>
+    promptStyled(indent(e.line`${again}${words} ${e.dim('[Y/n]')} `));
 }
 
 // A short account of what leaves this machine, on stderr where the full
@@ -1115,9 +1201,14 @@ function printNext(
   s: Style,
   hooks: HooksResult,
   state: NextState | null,
+  routineFirst = false,
 ): void {
-  const steps =
-    state === null ? genericSteps(s, hooks) : stateSteps(s, hooks, state);
+  const steps = [
+    ...(routineFirst
+      ? [s.line`${ROUTINE_STEP}   ${s.dim(cli('routine install --yes'))}`]
+      : []),
+    ...(state === null ? genericSteps(s, hooks) : stateSteps(s, hooks, state)),
+  ];
   say();
   say(s.bold('Next'));
   steps.forEach((step, i) => {
@@ -1309,13 +1400,21 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
     (await hasHooks(project)) || (await hasHooks(shared)) ? project : user;
 
   const input = deps.stdin?.();
-  if (ui === null || input === undefined || !input.isTTY) {
-    return 'not-installed';
+  // Claude Code running init for the user, the hooks are for the tool that
+  // runs it, so they go in without a question (RS-8). Anywhere else a
+  // missing terminal is a no.
+  const driven = claudeDriven(deps, input);
+  if (!driven) {
+    if (ui === null || input === undefined || !input.isTTY) {
+      return 'not-installed';
+    }
+    if ((await askHooks(input, ui)) !== 'yes') {
+      say(ui.out.line`${HOOKS_NOT_INSTALLED}`);
+      return 'not-installed';
+    }
   }
-  if ((await askHooks(input, ui)) !== 'yes') {
-    say(ui.out.line`${HOOKS_NOT_INSTALLED}`);
-    return 'not-installed';
-  }
+  const warn = (message: string) =>
+    ui === null ? stderr(message) : note(ui.err.line`${message}`);
   if (file === project) {
     try {
       await refuseOutsideProject(dirs.cwd, [
@@ -1325,7 +1424,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       ]);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
-      note(ui.err.line`${error.message}`);
+      warn(error.message);
       return 'not-installed';
     }
   }
@@ -1335,9 +1434,10 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       await uninstallHooks(shared, hook);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
-      note(ui.err.line`${error.message}`);
+      warn(error.message);
     }
   }
+  if (driven) warn(HOOKS_BY_CLAUDE);
   return 'installed';
 }
 
@@ -1515,8 +1615,17 @@ export function isYesByDefault(answer: string | null): boolean {
 // The nextSteps of a --json run. The hooks this run wrote point at the
 // running script, which under npx lives in a cache that can be cleared, so
 // that gets a line of its own.
-function nextSteps(hooks: HooksResult, deps: InitDeps): string[] {
-  const steps = [NEXT_PROVE, NEXT_WHAT_IS_SHARED, NEXT_POST];
+function nextSteps(
+  hooks: HooksResult,
+  deps: InitDeps,
+  routineFirst = false,
+): string[] {
+  const steps = [
+    ...(routineFirst ? [NEXT_ROUTINE] : []),
+    NEXT_PROVE,
+    NEXT_WHAT_IS_SHARED,
+    NEXT_POST,
+  ];
   if (hooks === 'not-installed') steps.push(NEXT_HOOKS);
   if (hooks === 'installed' && (deps.isNpx ?? isNpxCopy)()) {
     steps.push(NEXT_NPX);

@@ -162,6 +162,17 @@ describe('identity', () => {
     expect(line.split('\n')).toHaveLength(2);
   });
 
+  it('skips the mode check on Windows, where every file reads as 666 (D26)', async () => {
+    const { agentId } = await createKey();
+    await chmod(paths().key, 0o666);
+    const loaded = await loadKey(paths(), 'win32');
+    expect(loaded?.agentId).toBe(agentId);
+    expect(err).not.toHaveBeenCalled();
+    // Any other platform still warns.
+    await loadKey(paths(), 'linux');
+    expect(err).toHaveBeenCalledTimes(1);
+  });
+
   it('signs an envelope that verifies against the loaded public key', async () => {
     const { agentId } = await createKey();
     const payload = { event_id: 'x', type: 'tool.call', n: 1 };

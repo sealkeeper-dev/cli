@@ -132,13 +132,18 @@ export async function deleteKey(p: Paths = paths()): Promise<string[]> {
 
 // Returns null when there is no key file. Throws KeyError when the file is not
 // one base64url line holding a 32 byte seed. Prints one warning line on stderr
-// when group or others have any permission on the file.
-export async function loadKey(p: Paths = paths()): Promise<LoadedKey | null> {
+// when group or others have any permission on the file, except on Windows.
+export async function loadKey(
+  p: Paths = paths(),
+  platform: NodeJS.Platform = process.platform,
+): Promise<LoadedKey | null> {
   const raw = await readIfExists(p.key);
   if (raw === null) return null;
 
+  // Windows reports every file as mode 666 and chmod does nothing there,
+  // so the check would warn on every command (D26).
   const mode = (await stat(p.key)).mode & 0o777;
-  if ((mode & 0o077) !== 0) {
+  if (platform !== 'win32' && (mode & 0o077) !== 0) {
     stderr(
       `warning: key file ${p.key} has mode ${mode.toString(8)}, run chmod 600 ${p.key}`,
     );

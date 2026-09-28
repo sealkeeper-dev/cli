@@ -55,6 +55,7 @@ import {
 import { refreshOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { type SealWithheld, withheldText } from '../responses.js';
+import { routineJobWarnings } from '../routine-copy.js';
 import { getScore, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
 import { INSTALL_COMMAND } from './adapter.js';
@@ -177,6 +178,9 @@ export function register(
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
+      // The daily job's copy of the CLI, when it is out of date or gone
+      // (RS-2).
+      for (const line of await routineJobWarnings()) stderr(line);
       // An agent the API has as unknown is asked what it runs in, once,
       // and only where a person can answer.
       if (!wantsJson(this)) {

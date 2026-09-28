@@ -95,7 +95,10 @@ export async function detectScheduler(
 // Whether logind keeps this user's manager running after logout.
 // loginctl prints Linger=yes or Linger=no. Anything else, loginctl missing
 // included, counts as no.
-async function lingers(env: SchedulerEnv, run: Runner): Promise<boolean> {
+export async function lingers(
+  env: SchedulerEnv,
+  run: Runner,
+): Promise<boolean> {
   const result = await run('loginctl', [
     'show-user',
     String(env.uid),
@@ -549,7 +552,7 @@ export function cronBlock(job: string, spec: JobSpec): string[] {
 
 // The current crontab, or empty when there is none. crontab -l exits 1 for
 // a user without one.
-async function readCrontab(run: Runner): Promise<string> {
+export async function readCrontab(run: Runner): Promise<string> {
   const result = await run('crontab', ['-l']);
   if (result.code === 0) return result.stdout;
   if (/no crontab/i.test(result.stderr)) return '';
@@ -592,6 +595,16 @@ export function withoutBlock(text: string, job: string): string {
     out.push(line);
   }
   return out.join('\n');
+}
+
+// Our block for job in the crontab text, begin and end lines included, or
+// null when there is none.
+export function cronBlockIn(text: string, job: string): string[] | null {
+  const lines = text.split('\n');
+  const begin = lines.indexOf(cronBegin(job));
+  if (begin === -1) return null;
+  const end = lines.indexOf(cronEnd(job), begin + 1);
+  return end === -1 ? null : lines.slice(begin, end + 1);
 }
 
 async function cronPlan(

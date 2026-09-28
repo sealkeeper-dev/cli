@@ -19,6 +19,7 @@ import {
   type Paths,
   writeFileAtomic,
 } from './config.js';
+import { cli } from './invocation.js';
 import { stderr } from './output.js';
 import { SealClaims, WellKnown } from './responses.js';
 
@@ -372,7 +373,7 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
     throw new KeysError(
       cached
         ? `no usable cached SealKeeper keys for --offline, ${staleText}`
-        : `the cached keys from ${origin} do not include kid ${options.kid}, run sealkeeper seal verify once without --offline, or pass --keys`,
+        : `the cached keys from ${origin} do not include kid ${options.kid}, run ${cli('seal verify')} once without --offline, or pass --keys`,
     );
   }
   if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;

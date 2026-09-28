@@ -9,13 +9,23 @@ export type Input = {
   readLine(): Promise<string | null>;
 };
 
+// One readline per question, closed after its line so stdin never keeps the
+// process alive. A stream that has ended answers null at once, since a
+// readline on it would never emit close and the question would wait
+// forever (D6).
 export function streamInput(
-  stream: NodeJS.ReadableStream & { isTTY?: boolean },
+  stream: NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean },
 ): Input {
+  let closed = false;
   return {
     isTTY: stream.isTTY === true,
     readLine: () =>
       new Promise((resolve) => {
+        if (closed || stream.readableEnded === true) {
+          closed = true;
+          resolve(null);
+          return;
+        }
         const rl = createInterface({ input: stream, terminal: false });
         let done = false;
         rl.once('line', (line) => {
@@ -24,7 +34,9 @@ export function streamInput(
           resolve(line);
         });
         rl.once('close', () => {
-          if (!done) resolve(null);
+          if (done) return;
+          closed = true;
+          resolve(null);
         });
       }),
   };

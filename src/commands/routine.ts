@@ -9,14 +9,11 @@ import {
   createApiClient,
   resolveApiUrl,
 } from '../api.js';
-import { type Input, isYes, streamInput } from '../ask.js';
-import {
-  cliInvocation,
-  cliProgram,
-  isNpxCopy,
-} from '../claude-code-settings.js';
+import { type Input, readYesNo, streamInput } from '../ask.js';
+import { cliInvocation, cliProgram } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
+  type Config,
   type Paths,
   paths,
   type RoutineConfig,
@@ -27,7 +24,7 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
-import { tildePath } from '../files.js';
+import { readIfExists, tildePath } from '../files.js';
 import {
   HIGHEST_ISSUED,
   loadGoal,
@@ -36,7 +33,7 @@ import {
 } from '../goal.js';
 import { KeyError, loadSigner, type Signer } from '../identity.js';
 import { cli } from '../invocation.js';
-import { stderr, stdout, wantsJson } from '../output.js';
+import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
 import {
   type AgentResponse,
   operatorSlugOf,
@@ -76,20 +73,35 @@ import {
   spawnAgent,
 } from '../routine-agent.js';
 import {
+  copyPaths,
+  copyVersion,
+  removeCopy,
+  routineJobWarnings,
+  runsCopy,
+  writeCopy,
+} from '../routine-copy.js';
+import {
   applyPlan,
   commandLine,
+  cronBlockIn,
   detectScheduler,
   execRunner,
   jobName,
+  LINGER_NOTE,
+  lingers,
   type Plan,
   planInstall,
   type Runner,
+  readCrontab,
   removeJob,
   removeJobByName,
   type SchedulerEnv,
   SchedulerError,
+  schtasksName,
 } from '../routine-scheduler.js';
+import { createStyle } from '../style.js';
 import { dailyCeilingReached, todayOf } from '../today.js';
+import { VERSION } from '../version.js';
 import {
   logSkips,
   PosterLookup,
@@ -103,8 +115,9 @@ import { awaitingVerdict, fetchSubmission } from './tasks-outcome.js';
 // sealkeeper routine (VOU-136, VOU-138). An opt-in daily run that works
 // toward the next level unattended.
 //
-// install writes one daily job with the operator's own scheduler, after a
-// preview and a yes. The job runs routine run, which checks whether there is
+// install writes one daily job with the operator's own scheduler, after one
+// short block and a yes, and offers the first run (RS-1, RS-3). The job runs
+// a copy of this CLI under the home (RS-2) with routine run, which checks whether there is
 // anything to do within the day's limits and, only then, starts the agent
 // headless with the prove instructions. Everything a run does is held to
 // the routine rules in routine.ts and logged in routine.jsonl. status shows
@@ -156,7 +169,7 @@ export function register(
 
   routine
     .command('install')
-    .description('Write a daily job with your scheduler, after a preview')
+    .description('Write a daily job with your scheduler, after asking')
     .option('--time <HH:MM>', 'local time of day to run', DEFAULT_TIME)
     .option('--agent <agent>', 'the agent to start headless', 'claude-code')
     .option('--yes', 'install without asking, for scripts')
@@ -177,8 +190,12 @@ export function register(
   routine
     .command('status')
     .description('Schedule, limits, the last run and what waits for you')
-    .action(async function (this: Command): Promise<void> {
-      await status(this);
+    .option('--files', 'print the job files in full')
+    .action(async function (
+      this: Command,
+      options: { files?: boolean },
+    ): Promise<void> {
+      await status(this, deps, options);
     });
 
   routine
@@ -233,8 +250,11 @@ export type PreparedInstall = {
   current: RoutineConfig;
   env: SchedulerEnv;
   run: Runner;
-  // Whether this CLI runs from the npx cache, which the job would point at.
-  npx: boolean;
+  p: Paths;
+  // The running CLI's script, copied to the home for the job (RS-2).
+  source: string;
+  // What the job runs, node, the copy and routine run.
+  program: string[];
 };
 
 export const NO_CLAUDE =
@@ -251,10 +271,15 @@ export async function prepareInstall(
     'claude',
   );
   if (agentCommand === null) return NO_CLAUDE;
-  const { program } = cliOf(deps);
-  if (program.length === 0) return 'Run this from the sealkeeper CLI';
+  const [node, source] = cliOf(deps).program;
+  if (node === undefined || source === undefined) {
+    return 'Run this from the sealkeeper CLI';
+  }
   const routine = current ?? (await readRoutineConfig());
   const p = paths();
+  // The job runs the copy, never the script that runs now, which may sit
+  // in the npx cache (RS-2).
+  const program = [node, copyPaths(p).script, 'routine', 'run'];
   const job = defaultJob(p, env);
   const scheduler = await detectScheduler(env, run);
   const planned = await planInstall(
@@ -262,7 +287,7 @@ export async function prepareInstall(
     job,
     {
       time,
-      program: [...program, 'routine', 'run'],
+      program,
       env: jobEnv(p),
       home: p.home,
       outFile: routinePaths(p).out,
@@ -280,19 +305,28 @@ export async function prepareInstall(
     current: routine,
     env,
     run,
-    npx: isNpxCopy(program[1]),
+    p,
+    source,
+    program,
   };
 }
 
-// Writes the job the preview showed and records it in routine.json. A job
-// from an earlier install under another name or scheduler goes first, so
-// there is only ever one. Throws a SchedulerError when the scheduler
-// refuses.
+// Copies the CLI for the job, then writes the job and records it in
+// routine.json. A job from an earlier install under another name or
+// scheduler goes first, so there is only ever one. Throws a
+// SchedulerError when the copy cannot be written or the scheduler refuses.
 export async function finishInstall(
   prepared: PreparedInstall,
   time: string,
 ): Promise<RoutineSchedule> {
-  const { plan, current, env, run } = prepared;
+  const { plan, current, env, run, p } = prepared;
+  try {
+    await writeCopy(prepared.source, p);
+  } catch (error) {
+    throw new SchedulerError(
+      `nothing installed. This CLI could not be copied to ${copyPaths(p).script}: ${(error as Error).message}`,
+    );
+  }
   const old = current.schedule;
   if (old && (old.job !== plan.job || old.scheduler !== plan.scheduler)) {
     await removeJob(old, env, run);
@@ -306,9 +340,30 @@ export async function finishInstall(
     job: plan.job,
     files: plan.files.map((f) => f.path),
     installedAt: new Date().toISOString(),
+    program: prepared.program,
   };
-  await writeRoutineConfig({ ...current, schedule });
+  await writeRoutineConfig({ ...current, schedule }, p);
   return schedule;
+}
+
+// Refreshes the copy an installed job runs when its version is not this
+// CLI's, as a repeat init does. Never when the running CLI is the copy.
+// Returns whether it copied.
+export async function refreshCopy(
+  schedule: RoutineSchedule,
+  deps: RoutineDeps,
+  p: Paths = paths(),
+): Promise<boolean> {
+  if (schedule.program === undefined || !runsCopy(schedule.program, p)) {
+    return false;
+  }
+  const source = cliOf(deps).program[1];
+  if (source === undefined) return false;
+  try {
+    return (await writeCopy(source, p)) === 'copied';
+  } catch {
+    return false;
+  }
 }
 
 export const installedLine = (time: string): string =>
@@ -331,7 +386,7 @@ async function install(
         : `--agent must be one of ${AGENTS.join(', ')}, got ${options.agent}`,
     );
   }
-  await requireConfig(cmd);
+  const config = await requireConfig(cmd);
   const current = await loadRoutineConfig(cmd);
   let prepared: PreparedInstall | string;
   try {
@@ -342,26 +397,29 @@ async function install(
   }
   if (typeof prepared === 'string') cmd.error(`nothing installed. ${prepared}`);
 
-  const print = json ? stderr : stdout;
-  for (const line of preview(
-    prepared.plan,
-    options.time,
-    prepared.agentCommand,
-    current,
-    prepared.npx,
-  )) {
-    print(line);
+  // --json keeps the full preview, on stderr. A person reads the block.
+  if (json) {
+    for (const line of preview(prepared, options.time)) stderr(line);
+  } else {
+    const lines = blockLines(options.time, current.limits);
+    for (const line of lines.slice(0, -1)) stdout(line);
+    // The check line is dim where the terminal takes colour.
+    const s = createStyle(process.stdout);
+    stdoutStyled(s.line`${s.dim(checkLaterLine())}`);
   }
 
+  let input: Input | undefined;
   if (options.yes !== true) {
-    const input = (deps.stdin ?? (() => streamInput(process.stdin)))();
+    input = (deps.stdin ?? (() => streamInput(process.stdin)))();
     if (!input.isTTY) {
       cmd.error(
-        `nothing installed. There is no terminal to ask, so run ${cli('routine install')} --yes after reading the preview above`,
+        `nothing installed. There is no terminal to ask, so run ${cli('routine install')} --yes after reading the lines above`,
       );
     }
-    process.stderr.write(INSTALL_QUESTION);
-    if (!isYes(await input.readLine())) cmd.error('nothing installed');
+    const yes = await askYes(input, (again) =>
+      process.stderr.write(`${again}${INSTALL_QUESTION}`),
+    );
+    if (!yes) cmd.error('nothing installed');
   }
 
   let schedule: RoutineSchedule;
@@ -378,9 +436,59 @@ async function install(
     return;
   }
   stdout(installedLine(options.time));
+  // --yes is for scripts, which never start a run here.
+  if (input === undefined) return;
+  const now = await askYes(input, (again) =>
+    process.stderr.write(`${again}${FIRST_RUN_QUESTION}`),
+  );
+  if (!now) {
+    stdout(laterLine(options.time));
+    return;
+  }
+  const routine = await loadRoutineConfig(cmd);
+  stdout(firstRunLine(routine.limits.minutesPerRun));
+  const report = await routineRun(deps, config, routine, prepared.p);
+  for (const line of reportLines(report)) stdout(line);
+  stdout(seeRunsLine());
 }
 
-export const INSTALL_QUESTION = 'Install this daily routine? [y/N] ';
+// The two questions of install, yes by default (D-RS-1, D-RS-2).
+export const INSTALL_QUESTION = 'Install? [Y/n] ';
+export const FIRST_RUN_QUESTION =
+  'Run the first one now, so you see it work? [Y/n] ';
+// Asked again after an answer that is not yes or no, up to this many
+// questions in all, and then no.
+export const MAX_ASKS = 3;
+
+// Asks a question whose default is yes. prompt writes it, with again in
+// front after an unclear answer. A closed input is no.
+export async function askYes(
+  input: Input,
+  prompt: (again: string) => void,
+): Promise<boolean> {
+  for (let asked = 0; asked < MAX_ASKS; asked++) {
+    prompt(asked === 0 ? '' : 'Please answer y or n. ');
+    const answer = readYesNo(await input.readLine(), 'yes');
+    if (answer !== 'unclear') return answer === 'yes';
+  }
+  return false;
+}
+
+// Said after a no to the first run. The job runs later today when its time
+// has not come yet.
+export function laterLine(time: string, now: Date = new Date()): string {
+  const [hour = 0, minute = 0] = time.split(':').map(Number);
+  const today = now.getHours() * 60 + now.getMinutes() < hour * 60 + minute;
+  return `It runs ${today ? 'today' : 'tomorrow'} at ${time}. Run one any time with ${cli('routine run')}.`;
+}
+
+// Said after the first run's line.
+export const seeRunsLine = (): string =>
+  `See every run with ${cli('routine status')}.`;
+
+// Said before the first run starts, since the agent may take minutes.
+export const firstRunLine = (minutes: number): string =>
+  `First run started. It stops within ${minutes} minutes.`;
 
 // The job name install gives this CLI home.
 const defaultJob = (p: Paths, env: SchedulerEnv): string =>
@@ -394,9 +502,8 @@ function jobEnv(p: Paths): Record<string, string> {
   const env: Record<string, string> = {};
   const path = process.env.PATH;
   if (path) env.PATH = path;
-  if (resolve(p.home) !== resolve(sealkeeperRoot())) {
-    env.SEALKEEPER_HOME = p.home;
-  }
+  const home = homeEnv(p);
+  if (home !== undefined) env.SEALKEEPER_HOME = home;
   // The agent's working directory follows it, so the scheduled run and
   // agent delete agree on where it is.
   const cache = readEnv('XDG_CACHE_HOME');
@@ -404,36 +511,83 @@ function jobEnv(p: Paths): Record<string, string> {
   return env;
 }
 
-// Said in the preview and after a failed agent. The routine's Claude Code
-// loads none of the operator's settings files, see claudeArgs.
+// SEALKEEPER_HOME for a home that is not the root, else undefined.
+const homeEnv = (p: Paths): string | undefined =>
+  resolve(p.home) === resolve(sealkeeperRoot()) ? undefined : p.home;
+
+// Said in routine status and after a failed agent. The routine's Claude
+// Code loads none of the operator's settings files, see claudeArgs.
 export const NO_SETTINGS_NOTE =
   "The routine's Claude Code runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it.";
 
-// Said in the preview, and by init before its question, when the CLI runs
-// from the npx cache. The job points at that copy, and npm can clear it.
-export const NPX_NOTE =
-  'This CLI runs from the npx cache, which npm can clear, and the job points at this copy. For a job that keeps working, run npm i -g sealkeeper and then sealkeeper routine install.';
+// The one block init and routine install show before they ask (RS-1). A
+// header with the time, four short rows with the limits from routine.json,
+// then where to check it later. The scheduler and the job file are in
+// routine status only.
+export const BLOCK_TITLE = 'Daily routine';
 
-export function preview(
-  plan: Plan,
-  time: string,
-  agentCommand: string,
-  routine: RoutineConfig,
-  npx = false,
-): string[] {
+export const blockHeadTail = (time: string): string =>
+  `${time}, only when there is work`;
+
+export function routineRows(limits: RoutineLimits): [string, string][] {
+  return [
+    ['Claims', 'Seed tasks and tasks from operators you allow'],
+    ['Posts', '1 task a day when posting is behind'],
+    ['Limits', limitsText(limits)],
+    ['Why', 'Verified tasks get your agent to bronze'],
+  ];
+}
+
+export const checkLaterLine = (): string =>
+  `Check it later with ${cli('routine status')}`;
+
+// The width of the label column of the rows.
+export const BLOCK_LABEL = 9;
+
+// The block as routine install prints it, without style. init prints the
+// same lines with the label dim and the check line dim.
+export function blockLines(time: string, limits: RoutineLimits): string[] {
+  return [
+    `${BLOCK_TITLE}   ${blockHeadTail(time)}`,
+    '',
+    ...routineRows(limits).map(
+      ([label, text]) => `  ${label.padEnd(BLOCK_LABEL)}${text}`,
+    ),
+    '',
+    checkLaterLine(),
+  ];
+}
+
+const plural = (n: number, one: string, many: string) =>
+  `${n} ${n === 1 ? one : many}`;
+
+// 300000 as 300k, only for whole thousands, anything else as it is.
+const tokenCount = (n: number) =>
+  n >= 1000 && n % 1000 === 0 ? `${n / 1000}k` : n.toLocaleString('en-US');
+
+// The day's limits in the order claims, posts, minutes, tokens.
+export function limitsText(limits: RoutineLimits): string {
+  return `${plural(limits.claimsPerDay, 'claim', 'claims')}, ${plural(limits.postsPerDay, 'post', 'posts')}, ${limits.minutesPerRun} min, ${tokenCount(limits.tokensPerRun)} tokens a day`;
+}
+
+// Everything install writes and runs, in full, for --json on stderr and
+// for tests. A person reads the block instead.
+export function preview(prepared: PreparedInstall, time: string): string[] {
+  const { plan, agentCommand, current: routine } = prepared;
   const lines = [
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
     `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper prove instructions. Otherwise it starts nothing.`,
     '',
     'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only when the goal says posting is behind, adopting a ready made task whose answer SealKeeper knows, or a template task SealKeeper checks when none is waiting. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
-    ...(npx ? [NPX_NOTE] : []),
     ...(plan.note === undefined ? [] : [plan.note]),
     `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('config routine allow <operator>')}.`,
     '',
     'Limits',
     ...limitLines(routine.limits).map((l) => `  ${l}`),
     `Change them with ${cli('config routine set <limit> <value>')}.`,
+    '',
+    `Copies ${prepared.source} to ${prepared.program[1]}`,
   ];
   for (const file of plan.files) {
     lines.push('', `Writes ${file.path}`, ...indentAll(file.text));
@@ -497,10 +651,40 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (!routine.schedule) {
     cmd.error(`no routine is installed, run ${cli('routine install')} first`);
   }
+  const report = await routineRun(deps, config, routine);
+  if (json) {
+    stdout(JSON.stringify({ ...report.entry, paused: report.paused }));
+  } else {
+    for (const line of reportLines(report)) stdout(line);
+  }
+  if (report.entry.outcome === 'failed') process.exitCode = 1;
+}
+
+// What one run did, and the reason the routine paused itself after it,
+// null when it did not.
+export type RunReport = { entry: Omit<RunEntry, 'at'>; paused: string | null };
+
+// The run line, and the pause when the run paused the routine.
+export function reportLines(report: RunReport): string[] {
+  return [
+    runLine(report.entry),
+    ...(report.paused ? [`The routine paused itself. ${report.paused}`] : []),
+  ];
+}
+
+// One routine run for the installed schedule, as the job runs it and as
+// init and routine install run the first one (RS-3). Logs the run line and
+// returns it. Prints nothing.
+export async function routineRun(
+  deps: RoutineDeps,
+  config: Config,
+  routine: RoutineConfig,
+  p: Paths = paths(),
+): Promise<RunReport> {
   const schedule = routine.schedule;
   const runId = randomUUID();
   const startedAt = new Date();
-  const p = paths();
+  let report: RunReport | null = null;
 
   const finish = async (
     outcome: RunOutcome,
@@ -524,18 +708,20 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     if (outcome === 'failed') {
       paused = await pauseAfterFailures(p);
     }
-    if (json) {
-      stdout(JSON.stringify({ ...entry, paused }));
-    } else {
-      stdout(runLine(entry));
-      if (paused) stdout(`The routine paused itself. ${paused}`);
-    }
-    if (outcome === 'failed') process.exitCode = 1;
+    report = { entry, paused };
+  };
+  const done = (): RunReport => {
+    if (report === null) throw new Error('the routine run ended with no line');
+    return report;
   };
 
+  if (schedule === undefined) {
+    await finish('skipped', 'no routine is installed', null);
+    return done();
+  }
   if (routine.paused) {
     await finish('skipped', `paused: ${routine.paused.reason}`, null);
-    return;
+    return done();
   }
   // Taken exclusively before anything is read, so two runs started at once
   // never both go on. Released when the run ends.
@@ -551,13 +737,15 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   );
   if (!locked) {
     await finish('skipped', 'another routine run is still going', null);
-    return;
+    return done();
   }
+  const agentCommand = schedule.agentCommand;
   try {
     await lockedRun();
   } finally {
     await removeLock(runId, p);
   }
+  return done();
 
   // The rest of the run, while this run holds the lock.
   async function lockedRun(): Promise<void> {
@@ -590,7 +778,9 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       return;
     }
 
-    const goal = await loadGoal({ fetch: deps.fetch }).catch(() => null);
+    const goal = await loadGoal({ fetch: deps.fetch, paths: p }).catch(
+      () => null,
+    );
     // What to post once this run, when the goal says posting is behind and
     // the day's post limit has room (POST-7). A ready made task adopted in
     // the category of the template it would post, that template when none
@@ -655,7 +845,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
         apiUrl: resolveApiUrl({ config: config.apiUrl }),
         fetch: deps.fetch,
       });
-      signer = await loadSigner(api.apiUrl);
+      signer = await loadSigner(api.apiUrl, p);
     } catch (error) {
       if (error instanceof KeyError || error instanceof ApiError) {
         await finish(
@@ -762,7 +952,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     if (post !== null) await setRunPost(runId, post, p);
     const agent = await runAgent(
       {
-        command: schedule.agentCommand,
+        command: agentCommand,
         args: claudeArgs(invocation, post),
         input: routinePrompt(invocation, confirm, { post, prove: !ceiling }),
         cwd: work,
@@ -770,6 +960,9 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
           ...process.env,
           SEALKEEPER_ROUTINE_RUN: runId,
           SEALKEEPER_INVOCATION: invocation,
+          // The home of this run, so a first run started from init in a
+          // bound folder works for that agent, as the job does.
+          ...(homeEnv(p) === undefined ? {} : { SEALKEEPER_HOME: p.home }),
         },
         timeoutMs,
         tokenCap: routine.limits.tokensPerRun,
@@ -944,9 +1137,18 @@ function spent(entry: Pick<RunEntry, 'tokens' | 'costUsd'>): string {
 
 // status
 
-async function status(cmd: Command): Promise<void> {
+async function status(
+  cmd: Command,
+  deps: RoutineDeps,
+  options: { files?: boolean } = {},
+): Promise<void> {
   await requireConfig(cmd);
   const routine = await loadRoutineConfig(cmd);
+  const p = paths();
+  if (options.files === true) {
+    await printJobFiles(cmd, routine.schedule, deps);
+    return;
+  }
   const entries = await readRoutine();
   const now = new Date();
   const today = {
@@ -958,8 +1160,10 @@ async function status(cmd: Command): Promise<void> {
   const lastRun = runs.at(-1) ?? null;
   const waiting = waitingForPerson(entries, now);
   const active = await readLiveLock();
+  const warnings = await routineJobWarnings(p);
 
   if (wantsJson(cmd)) {
+    const copied = await copyVersion(p);
     stdout(
       JSON.stringify({
         installed: routine.schedule !== undefined,
@@ -976,6 +1180,12 @@ async function status(cmd: Command): Promise<void> {
         allowSlugs: routine.allowSlugs,
         lastRun,
         waiting,
+        copy: {
+          path: copyPaths(p).script,
+          version: copied,
+          cliVersion: VERSION,
+        },
+        warnings,
       }),
     );
     return;
@@ -1003,10 +1213,121 @@ async function status(cmd: Command): Promise<void> {
       ? `Last run  ${lastRun.at}. ${runLine(lastRun)}`
       : 'Last run  none yet',
   );
+  if (s !== undefined) {
+    stdout('');
+    for (const line of await jobSection(s, deps, p)) stdout(line);
+  }
+  for (const line of warnings) stdout(line);
   if (waiting.length === 0) return;
   stdout('');
   stdout(`Waiting for you, from the last ${SKIP_LIST_DAYS} days`);
   for (const item of waiting) stdout(`  ${waitingLine(item)}`);
+}
+
+// The Job section of routine status (RS-4). The scheduler, where the job
+// is, what it runs, the copy's version, and the notes the install used to
+// show, the settings note and the linger note when it applies.
+async function jobSection(
+  s: RoutineSchedule,
+  deps: RoutineDeps,
+  p: Paths,
+): Promise<string[]> {
+  const env = schedulerEnv(deps);
+  const row = (label: string, text: string) =>
+    `  ${label.padEnd(JOB_LABEL)}${text}`;
+  const lines = ['Job', row('Scheduler', s.scheduler)];
+  for (const where of jobWhere(s, env)) lines.push(row(where[0], where[1]));
+  if (s.program !== undefined) {
+    const [file = '', ...args] = s.program;
+    lines.push(row('Command', commandLine({ file, args })));
+    if (runsCopy(s.program, p)) {
+      const copied = await copyVersion(p);
+      lines.push(row('Copy', copied === null ? 'missing' : copied));
+    }
+  }
+  lines.push(`  ${NO_SETTINGS_NOTE}`);
+  if (
+    s.scheduler === 'systemd' &&
+    !(await lingers(env, deps.run ?? execRunner))
+  ) {
+    lines.push(`  ${LINGER_NOTE}`);
+  }
+  lines.push(
+    `  See the job ${s.files.length > 1 ? 'files' : 'file'} in full with ${cli('routine status --files')}.`,
+  );
+  return lines;
+}
+
+const JOB_LABEL = 11;
+
+// Where the job is, as label and text.
+function jobWhere(s: RoutineSchedule, env: SchedulerEnv): [string, string][] {
+  switch (s.scheduler) {
+    case 'launchd':
+    case 'systemd':
+      return s.files.map((f): [string, string] => [
+        'File',
+        tildePath(f, env.homedir),
+      ]);
+    case 'cron':
+      return [['Entry', `crontab, marked ${s.job}`]];
+    case 'schtasks':
+      return [['Task', schtasksName(s.job)]];
+  }
+}
+
+// routine status --files. Each job file in full, the crontab block for
+// cron and the task's XML for Task Scheduler, read through the scheduler.
+async function printJobFiles(
+  cmd: Command,
+  s: RoutineSchedule | undefined,
+  deps: RoutineDeps,
+): Promise<void> {
+  if (s === undefined) {
+    cmd.error(`no routine is installed, run ${cli('routine install')} first`);
+  }
+  const run = deps.run ?? execRunner;
+  const files: { path: string; text: string | null }[] = [];
+  switch (s.scheduler) {
+    case 'launchd':
+    case 'systemd':
+      for (const path of s.files) {
+        files.push({ path, text: await readIfExists(path) });
+      }
+      break;
+    case 'cron': {
+      let block: string[] | null = null;
+      try {
+        block = cronBlockIn(await readCrontab(run), s.job);
+      } catch (error) {
+        if (!(error instanceof SchedulerError)) throw error;
+        cmd.error(error.message);
+      }
+      files.push({
+        path: 'crontab',
+        text: block === null ? null : `${block.join('\n')}\n`,
+      });
+      break;
+    }
+    case 'schtasks': {
+      const name = schtasksName(s.job);
+      const result = await run('schtasks', ['/Query', '/TN', name, '/XML']);
+      files.push({
+        path: name,
+        text: result.code === 0 ? result.stdout : null,
+      });
+      break;
+    }
+  }
+  if (wantsJson(cmd)) {
+    stdout(JSON.stringify({ files }));
+    return;
+  }
+  files.forEach((file, i) => {
+    if (i > 0) stdout('');
+    stdout(file.text === null ? `${file.path}, not found` : file.path);
+    if (file.text !== null) stdout(file.text.replace(/\n$/, ''));
+  });
 }
 
 // A skip that waits for a person, every reason but too_new.
@@ -1071,6 +1392,8 @@ async function remove(cmd: Command, deps: RoutineDeps): Promise<void> {
     const { schedule: _, ...rest } = routine;
     await writeRoutineConfig(rest, p);
   }
+  // The copy of the CLI the job ran goes with it (RS-2).
+  result.removed.push(...(await removeCopy(p)));
   if (wantsJson(cmd)) {
     stdout(JSON.stringify(result));
     return;
@@ -1149,6 +1472,7 @@ export async function uninstallJob(
   if (result.removed.length > 0 || result.kept.length === 0) {
     const { schedule: _, ...rest } = await readRoutineConfig(p);
     await writeRoutineConfig(rest, p);
+    result.removed.push(...(await removeCopy(p)));
   }
   return result;
 }

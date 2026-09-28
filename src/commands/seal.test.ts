@@ -1106,7 +1106,7 @@ describe('sealkeeper seal', () => {
         expect(out).toBe('');
         expect(err.trimEnd().split('\n')).toHaveLength(1);
         expect(err).toContain(
-          `the cached keys from ${API_URL} do not include kid ${KID}, run sealkeeper seal verify once without --offline, or pass --keys`,
+          `the cached keys from ${API_URL} do not include kid ${KID}, run npx sealkeeper seal verify once without --offline, or pass --keys`,
         );
         expect(requests).toEqual([]);
       });
