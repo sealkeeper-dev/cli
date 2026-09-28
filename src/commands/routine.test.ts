@@ -3357,6 +3357,12 @@ describe('routine posts (POST-7)', () => {
     expect(
       postingBehind(goal({ thresholds: [open('posted_confirmed_tasks')] })),
     ).toBe(false);
+    // POST-6. A template post never closes the posted confirmed row.
+    expect(
+      postingBehind(
+        goal({ actions: [{ code: 'post_confirmed_task', count: 3 }] }),
+      ),
+    ).toBe(false);
     expect(
       postingBehind(
         goal({ thresholds: [{ ...open('posted_tasks'), met: true }] }),

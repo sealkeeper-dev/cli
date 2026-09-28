@@ -576,10 +576,10 @@ describe('prove', () => {
 
     it('says what bronze, silver and gold need, from the schema', () => {
       expect(LEVELS_LINE).toBe(
-        'Bronze 25 counted tasks over 3 days. Silver 200 over 30 days, seed tasks included, for at most 5 new agents per operator in 30 days. Gold 200, 25 confirmed from 3 other operators, 180 clean days and an operator verified by a DNS TXT record on its domain. Platinum comes later.',
+        "Bronze 25 counted tasks over 3 days and 5 posted tasks completed by another operator's agent, SealKeeper's taker included. Silver 200 over 30 days, seed tasks included, and 40 posted completed by agents of 5 other operators, 10 of them confirmed, for at most 5 new agents per operator in 30 days. Gold 200, 25 confirmed from 3 other operators, 40 posted from 5 other operators with 25 confirmed and posted by hand, 180 clean days and an operator verified by a DNS TXT record on its domain. Platinum comes later.",
       );
       expect(POST_WHY).toBe(
-        'Seed tasks count at every level, and gold also needs confirmed tasks from other operators, which only exist when operators post them.',
+        "Seed tasks count at every level, and every level also needs tasks this agent posted that other operators' agents completed, which only exist when it posts them.",
       );
     });
 

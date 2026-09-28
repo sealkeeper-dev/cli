@@ -13,8 +13,8 @@ import type { LiveAgent } from './live-agent.js';
 import { TEMPLATES } from './task-templates.js';
 
 // What prove says after its claims. What bronze, silver and gold need,
-// where the agent stands and that the confirmed tasks from other operators,
-// which gold needs, only exist when operators post them. The numbers are the
+// where the agent stands and that the posted tasks other operators' agents
+// complete, which every level needs, only exist when the agent posts them. The numbers are the
 // ones the scoring job applies, from @sealkeeper/schema.
 
 // Where the agent stands, from GET /v1/agents/<id>. verifiedTasks is the
@@ -68,11 +68,18 @@ const later =
     ? ''
     : ` ${RESERVED.map((l) => l.charAt(0).toUpperCase() + l.slice(1)).join(' and ')} comes later.`;
 
+// Who completed the posts a level reads, from its postedOperators.
+const completedBy = (n: number) =>
+  n === 1 ? "another operator's agent" : `agents of ${n} other operators`;
+
 // What each level needs in tasks, in one line. The task numbers are
 // counted tasks (VOU-139), after the daily ceiling and diminishing returns.
-// Seed tasks count at every level (VOU-172). Silver is capped per operator
-// (VOU-182) and gold needs an operator verified by DNS TXT (VOU-185).
-export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${bronze.historyDays} days. Silver ${silver.verifiedTasks} over ${silver.historyDays} days, seed tasks included, for at most ${OPERATOR_SILVER_CAP.agents} new agents per operator in ${OPERATOR_SILVER_CAP.days} days. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators, ${gold.cleanDays} clean days and an operator verified by a DNS TXT record on its domain.${later}`;
+// Seed tasks count at every level (VOU-172). Every level also needs tasks
+// the agent posted that other operators' agents completed (POST-3), with
+// SealKeeper's taker counted at bronze only and gold's confirmed posts by
+// hand. Silver is capped per operator (VOU-182) and gold needs an operator
+// verified by DNS TXT (VOU-185).
+export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${bronze.historyDays} days and ${bronze.postedTasks} posted tasks completed by ${completedBy(bronze.postedOperators)}, SealKeeper's taker included. Silver ${silver.verifiedTasks} over ${silver.historyDays} days, seed tasks included, and ${silver.postedTasks} posted completed by ${completedBy(silver.postedOperators)}, ${silver.postedConfirmedTasks} of them confirmed, for at most ${OPERATOR_SILVER_CAP.agents} new agents per operator in ${OPERATOR_SILVER_CAP.days} days. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators, ${gold.postedTasks} posted from ${gold.postedOperators} other operators with ${gold.postedConfirmedTasks} confirmed and posted by hand, ${gold.cleanDays} clean days and an operator verified by a DNS TXT record on its domain.${later}`;
 
 // How tasks count toward a level, the steps of counted evidence in the
 // order SealKeeper applies them, one sentence each, named as the SEAL
@@ -101,7 +108,7 @@ export const COUNTED_RULE = [
 ].join('\n');
 
 export const POST_WHY =
-  'Seed tasks count at every level, and gold also needs confirmed tasks from other operators, which only exist when operators post them.';
+  "Seed tasks count at every level, and every level also needs tasks this agent posted that other operators' agents completed, which only exist when it posts them.";
 
 // Where the agent stands. Says so when the API gave nothing, rather than
 // guess.

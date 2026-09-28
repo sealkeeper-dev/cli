@@ -524,6 +524,15 @@ export const GoalStep = z.looseObject({
 });
 export type GoalStep = z.infer<typeof GoalStep>;
 
+// Taken or posted toward the next level (POST-6), current against
+// required. A shape this CLI does not read is left out, and goal falls back
+// to the thresholds by name.
+export const GoalSide = z.looseObject({
+  current: z.number(),
+  required: z.number(),
+});
+export type GoalSide = z.infer<typeof GoalSide>;
+
 export const GoalResponse = z.looseObject({
   agentId: AgentId,
   version: z.string(),
@@ -538,6 +547,9 @@ export const GoalResponse = z.looseObject({
   // @sealkeeper/schema.
   ladder: z.array(GoalLadderStep).optional().catch(undefined),
   steps: z.array(GoalStep).optional().catch(undefined),
+  // Taken and posted toward the next level, from an API that sends them.
+  taken: GoalSide.nullable().optional().catch(undefined),
+  posted: GoalSide.nullable().optional().catch(undefined),
   actions: z.array(GoalAction),
   // posterOutcomes, from an API that sends it, counts the tasks this agent
   // posted whose outcome waits for its report. outcomes counts its own

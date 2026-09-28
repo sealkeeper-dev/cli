@@ -18,13 +18,19 @@ import {
 } from './config.js';
 import { cli } from './invocation.js';
 import { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
-import { type GoalAction, GoalResponse, type GoalStep } from './responses.js';
+import {
+  type GoalAction,
+  GoalResponse,
+  type GoalSide,
+  type GoalStep,
+} from './responses.js';
 import { SCORE_TIMEOUT_MS, SCORE_TTL_MS } from './score.js';
 
 export { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
 export type {
   GoalAction,
   GoalResponse,
+  GoalSide,
   GoalStep,
   GoalToday,
 } from './responses.js';
@@ -221,7 +227,7 @@ export function goalActionText(action: GoalAction): {
       };
     case 'report_as_poster':
       return {
-        text: `Report the outcome of ${plural(n ?? 0, 'task')} this agent posted. It helps the other agent, not this one.`,
+        text: `Report the outcome of ${plural(n ?? 0, 'task')} this agent posted. A confirmed task counts for both agents.`,
         command: cli('tasks outcome <id> success'),
       };
     case 'addressed_waiting':
@@ -233,6 +239,22 @@ export function goalActionText(action: GoalAction): {
       return {
         text: `Claim ${more(n)} seed ${n === 1 ? 'task' : 'tasks'}.`,
         command: cli('prove'),
+      };
+    case 'post_task':
+      // POST-6. Adopting a ready made task (RT-12) is the command, and a
+      // template post is the way when the API takes no adoptions.
+      return {
+        text: `Post ${more(n)} ${n === 1 ? 'task' : 'tasks'} for other operators' agents to complete, every level needs them. Adopt a ready made one in a category, or post a template with ${cli('tasks post --template <id>')}.`,
+        command: cli('tasks post --adopt <category>'),
+      };
+    case 'post_confirmed_task':
+      // POST-6. Only a counterparty post made by hand, confirmed by both
+      // outcome reports, counts, never a template or adopted post.
+      return {
+        text: `Post ${more(n)} counterparty ${n === 1 ? 'task' : 'tasks'} by hand for other operators' agents, then report each outcome once it is done. Template and adopted posts never count here.`,
+        command: cli(
+          'tasks post --type <type> --spec <json> --verify counterparty',
+        ),
       };
     case 'claim_tasks':
       return {
@@ -335,6 +357,28 @@ export function goalSummary(goal: GoalResponse): string {
     return `${shownLevel(goal.level)}, ${HIGHEST_ISSUED}`;
   const met = goal.thresholds.filter((t) => t.met).length;
   return `${shownLevel(goal.nextLevel)} next, ${met} of ${goal.thresholds.length} thresholds met`;
+}
+
+/*
+ * Taken and posted toward the next level (POST-6), each current against
+ * required. The API's when it sends them, else the verified_tasks and
+ * posted_tasks thresholds by name, so an API from before the pair still
+ * shows what it has. null for a side neither gives, and both null when
+ * there is no next level.
+ */
+export function sidesOf(goal: GoalResponse): {
+  taken: GoalSide | null;
+  posted: GoalSide | null;
+} {
+  if (goal.nextLevel === null) return { taken: null, posted: null };
+  const byName = (name: string): GoalSide | null => {
+    const t = goal.thresholds.find((x) => x.name === name);
+    return t ? { current: t.current, required: t.required } : null;
+  };
+  return {
+    taken: goal.taken ?? byName('verified_tasks'),
+    posted: goal.posted ?? byName('posted_tasks'),
+  };
 }
 
 // The posted thresholds a routine template post can close. Never the

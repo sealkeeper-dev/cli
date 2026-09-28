@@ -70,6 +70,27 @@ const AT_NONE = answer({
   today: { day: TODAY, counted: 14, ceiling: 20, remaining: 6 },
 });
 
+// POST-6. 30 taken and 2 posted toward bronze, so posting is the step.
+const POSTING_BEHIND = answer({
+  level: 'none',
+  nextLevel: 'bronze',
+  thresholds: [
+    { name: 'verified_tasks', current: 30, required: 25, met: true, raw: 34 },
+    { name: 'posted_tasks', current: 2, required: 5, met: false, raw: 2 },
+    {
+      name: 'posted_distinct_operators',
+      current: 1,
+      required: 1,
+      met: true,
+      raw: null,
+    },
+    { name: 'history_days', current: 4, required: 3, met: true, raw: null },
+  ],
+  taken: { current: 30, required: 25 },
+  posted: { current: 2, required: 5 },
+  actions: [{ code: 'post_task', count: 3 }],
+});
+
 const AT_BRONZE = answer({
   level: 'bronze',
   nextLevel: 'silver',
@@ -267,6 +288,37 @@ describe('sealkeeper goal', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  // POST-6. Taken and Posted side by side, and post a task first.
+  it('prints Taken and Posted side by side and post a task first', async () => {
+    const { code, out } = await run(serve(POSTING_BEHIND), 'goal');
+    expect(code).toBe(0);
+    expect(out).toContain(
+      [
+        'Level none. Next bronze.',
+        'Ladder  bronze next > silver > gold > platinum coming later',
+        'Taken 30 of 25   Posted 2 of 5',
+        '',
+      ].join('\n'),
+    );
+    expect(out).toContain(
+      [
+        'Next',
+        "  Post 3 more tasks for other operators' agents to complete, every level needs them. Adopt a ready made one in a category, or post a template with npx sealkeeper tasks post --template <id>. npx sealkeeper tasks post --adopt <category>",
+      ].join('\n'),
+    );
+  });
+
+  it('reads Taken and Posted from the thresholds when the API sends no pair', async () => {
+    const {
+      taken: _,
+      posted: __,
+      ...older
+    } = POSTING_BEHIND as Record<string, unknown>;
+    const { code, out } = await run(serve(older), 'goal');
+    expect(code).toBe(0);
+    expect(out).toContain('Taken 30 of 25   Posted 2 of 5\n');
   });
 
   it('names the agent by the stored operator slug', async () => {
@@ -633,9 +685,24 @@ describe('goalActionText', () => {
     ).toContain('in 3 days.');
   });
 
+  it('says post a task with the adopt command and the template post beside it', () => {
+    expect(goalActionText({ code: 'post_task', count: 1 })).toEqual({
+      text: "Post 1 more task for other operators' agents to complete, every level needs them. Adopt a ready made one in a category, or post a template with sealkeeper tasks post --template <id>.",
+      command: 'sealkeeper tasks post --adopt <category>',
+    });
+  });
+
+  it('says a posted confirmed task is a counterparty post by hand with its outcome report', () => {
+    expect(goalActionText({ code: 'post_confirmed_task', count: 2 })).toEqual({
+      text: "Post 2 more counterparty tasks by hand for other operators' agents, then report each outcome once it is done. Template and adopted posts never count here.",
+      command:
+        'sealkeeper tasks post --type <type> --spec <json> --verify counterparty',
+    });
+  });
+
   it('says what a report as poster is for', () => {
     expect(goalActionText({ code: 'report_as_poster', count: 2 })).toEqual({
-      text: 'Report the outcome of 2 tasks this agent posted. It helps the other agent, not this one.',
+      text: 'Report the outcome of 2 tasks this agent posted. A confirmed task counts for both agents.',
       command: 'sealkeeper tasks outcome <id> success',
     });
   });

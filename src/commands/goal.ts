@@ -13,6 +13,7 @@ import {
   ladderOf,
   reservedOf,
   shownLevel,
+  sidesOf,
   todayLine,
   todayOf,
 } from '../goal.js';
@@ -67,7 +68,9 @@ const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const num = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
 // The terminal view. Where the agent stands and the ladder, with platinum
-// as coming later. Below gold, a table of the next level's thresholds with
+// as coming later. Taken and posted side by side toward the next level
+// (POST-6), each current of required. Below gold, a table of the next
+// level's thresholds with
 // the raw count beside each counted one. Toward gold, gold's checklist
 // (VOU-184) and the one step left when only one is. An API from before the
 // checklist gets the table there too. Then the day's counted tasks, the
@@ -89,6 +92,13 @@ export function goalLines(
     );
   }
   if (ladder.length > 0) lines.push(ladderLine(ladder));
+  // Only as a pair, so an API from before posted evidence shows none.
+  const { taken, posted } = sidesOf(goal);
+  if (taken !== null && posted !== null) {
+    lines.push(
+      `Taken ${num(taken.current)} of ${num(taken.required)}   Posted ${num(posted.current)} of ${num(posted.required)}`,
+    );
+  }
   if (goal.nextLevel === null && reserved.length > 0) {
     lines.push(
       `${cap(reserved.join(' and '))} ${reserved.length === 1 ? 'is' : 'are'} coming later. The standard names ${reserved.length === 1 ? 'it' : 'them'} and SealKeeper does not issue ${reserved.length === 1 ? 'it' : 'them'} yet.`,
