@@ -158,7 +158,7 @@ describe('what-is-shared', () => {
       expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
     }
     expect(out).toContain(
-      'Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else.',
+      'Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits, outcome reports and each sync send those hashes and nothing else.',
     );
     expect(createProgram().helpInformation()).toMatch(/^ {2}what-is-shared\b/m);
   });

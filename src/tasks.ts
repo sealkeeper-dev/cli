@@ -1,10 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
-import {
-  type Fingerprint,
-  fingerprintProblem,
-  OpenTasksRequest,
-} from '@sealkeeper/schema';
+import { OpenTasksRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import type { z } from 'zod';
 import {
@@ -16,8 +12,11 @@ import {
 import { type Input, streamInput } from './ask.js';
 import { requireConfig } from './cli-config.js';
 import { type Config, type Paths, paths } from './config.js';
+import {
+  declaredFingerprint,
+  refusesFingerprint,
+} from './declared-fingerprint.js';
 import { type EmitInput, emit } from './emit.js';
-import { currentFingerprint } from './fingerprint.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
@@ -93,43 +92,6 @@ export async function recordEvent(input: EmitInput): Promise<void> {
       `warning: could not record ${input.type} in the local log: ${(error as Error).message}`,
     );
   }
-}
-
-// The fingerprint a claim, submit or outcome report declares (VB-3), the
-// one sync and prove last wrote to fingerprint.json. Nothing when there is
-// none, or when its hash is not the hash of its parts, which the API would
-// refuse. It never recomputes and never throws, so a task command never
-// waits on a capture or fails over one.
-export async function declaredFingerprint(
-  p?: Paths,
-): Promise<{ fingerprint?: Fingerprint }> {
-  try {
-    const fingerprint = await currentFingerprint(p);
-    if (fingerprint === null || (await fingerprintProblem(fingerprint))) {
-      return {};
-    }
-    return { fingerprint };
-  } catch {
-    return {};
-  }
-}
-
-// True when the API refused the fingerprint, a 400 whose issue names it.
-// An API from before VB-3 answers validation_failed, the key unknown to its
-// strict payload, and one that finds the hash wrong fingerprint_mismatch.
-export function refusesFingerprint(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.status === 400 &&
-    (error.code === 'fingerprint_mismatch' ||
-      (error.code === 'validation_failed' &&
-        error.issues.some(
-          (issue) =>
-            issue.path.includes('fingerprint') ||
-            (issue.code === 'unrecognized_keys' &&
-              issue.message.includes('"fingerprint"')),
-        )))
-  );
 }
 
 // Signs and sends a claim, submit or outcome request with the declared

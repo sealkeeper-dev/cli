@@ -111,7 +111,12 @@ export type ApiClient = {
   ): Promise<z.output<S>>;
   registerAgent(envelope: string): Promise<AgentResponse>;
   getAgent(agentId: string): Promise<AgentResponse>;
-  postEvents(envelopes: string[]): Promise<EventsBatchResponse>;
+  // fingerprint is the agent's fingerprint as a JWS it signed over
+  // { fingerprint }, sent beside the envelopes when given (VB-4).
+  postEvents(
+    envelopes: string[],
+    fingerprint?: string,
+  ): Promise<EventsBatchResponse>;
   // The Date header of the last response this client received, in ms since
   // the epoch. null before any response, or when the last one had no Date
   // header or one that does not parse.
@@ -286,8 +291,13 @@ export function createApiClient(options: {
       }),
     // The public agent answer, with live counts and operatedBySealKeeper.
     getAgent: (agentId) => call(agentPath(agentId), AgentResponse),
-    postEvents: (envelopes) =>
-      call('/v1/events', EventsBatchResponse, { body: { envelopes } }),
+    postEvents: (envelopes, fingerprint) =>
+      call('/v1/events', EventsBatchResponse, {
+        body:
+          fingerprint === undefined
+            ? { envelopes }
+            : { envelopes, fingerprint },
+      }),
     // GET /v1/agents/:id/seal. /credential is the old path of the same
     // answer, kept by the API for one release.
     // A 404 that says the SEAL is withheld is a SealWithheldError.

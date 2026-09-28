@@ -30,6 +30,7 @@ import {
   STAMP_FILE,
 } from '../background-sync.js';
 import { paths, readConfig, writeConfig } from '../config.js';
+import { currentFingerprint } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import {
   appendEvent,
@@ -72,7 +73,10 @@ type Server = {
   batches: Event[][];
   bodyBytes: number[];
   envelopes: string[];
-  reply: (events: Event[]) => Reply;
+  // The fingerprint JWS each request carried beside its envelopes, or
+  // undefined for a request without one (VB-4).
+  fingerprints: (string | undefined)[];
+  reply: (events: Event[], fingerprint?: string) => Reply;
 };
 
 function accept(events: Event[]): Reply {
@@ -98,9 +102,11 @@ function fakeFetch(server: Server): typeof fetch {
       throw new TypeError('fetch failed');
     }
     server.bodyBytes.push(Buffer.byteLength(String(init.body)));
-    const { envelopes } = JSON.parse(String(init.body)) as {
+    const { envelopes, fingerprint } = JSON.parse(String(init.body)) as {
       envelopes: string[];
+      fingerprint?: string;
     };
+    server.fingerprints.push(fingerprint);
     const events: Event[] = [];
     for (const envelope of envelopes) {
       const { kid } = decodeHeader(envelope);
@@ -121,7 +127,7 @@ function fakeFetch(server: Server): typeof fetch {
       }
     }
     server.batches.push(events);
-    const reply = server.reply(events);
+    const reply = server.reply(events, fingerprint);
     return Response.json(reply.body, {
       status: reply.status,
       headers: reply.headers,
@@ -262,6 +268,7 @@ describe('emit and sync', () => {
       batches: [],
       bodyBytes: [],
       envelopes: [],
+      fingerprints: [],
       reply: accept,
     };
     sleeps = [];
@@ -649,6 +656,83 @@ describe('emit and sync', () => {
         skipped: 0,
         dropped: 0,
       });
+    });
+
+    // VB-4. The fingerprint sync last wrote goes beside the envelopes as a
+    // JWS the agent signed over { fingerprint }, with the first batch only.
+    it('sends the fingerprint from fingerprint.json with the first batch, signed by the agent', async () => {
+      await initialise();
+      server.verify = false;
+      await seed(501);
+      const { code } = await api('sync');
+      expect(code).toBe(0);
+      expect(server.batches.map((b) => b.length)).toEqual([500, 1]);
+      const [first, second] = server.fingerprints;
+      expect(second).toBeUndefined();
+      if (first === undefined) throw new Error('no fingerprint sent');
+      expect(decodeHeader(first).kid).toBe(agentId);
+      const { payload } = await verify(first, publicKeyFromAgentId(agentId));
+      expect(unsigned(payload)).toEqual({
+        fingerprint: await currentFingerprint(),
+      });
+    }, 60_000);
+
+    it('sends the batch again without the fingerprint when the API refuses it', async () => {
+      await initialise();
+      await seed(2);
+      // A strict body from before the field.
+      server.reply = (events, fingerprint) =>
+        fingerprint === undefined
+          ? accept(events)
+          : apiError(400, 'validation_failed', [
+              {
+                path: [],
+                code: 'unrecognized_keys',
+                message: 'Unrecognized key: "fingerprint"',
+              },
+            ]);
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 2, duplicates 0\n');
+      expect(server.fingerprints.map((f) => f !== undefined)).toEqual([
+        true,
+        false,
+      ]);
+      expect(await countPending()).toBe(0);
+    });
+
+    // A 401 that is not about the fingerprint is not a reason to send the
+    // batch again without it.
+    it('stops on unknown_agent with the fingerprint attached and sends no second request', async () => {
+      await initialise();
+      await seed(2);
+      server.reply = () => apiError(401, 'unknown_agent');
+      const { code, err } = await api('sync');
+      expect(code).toBe(1);
+      expect(err).toContain('2 events pending');
+      expect(server.fingerprints).toHaveLength(1);
+      expect(server.fingerprints[0]).toBeDefined();
+      expect(await countPending()).toBe(2);
+    });
+
+    it('treats invalid_signature at envelopes 0 with the fingerprint attached as that event, with no second request', async () => {
+      await initialise();
+      const [only] = await seed(1);
+      server.reply = () =>
+        apiError(401, 'invalid_signature', [
+          {
+            path: ['envelopes', 0],
+            code: 'invalid_signature',
+            message: 'invalid_signature',
+          },
+        ]);
+      const { code, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(err).toContain(
+        `the API rejected event ${only?.event_id} (invalid_signature), skipped it`,
+      );
+      expect(server.fingerprints).toHaveLength(1);
+      expect(server.fingerprints[0]).toBeDefined();
     });
 
     it('with nothing pending sends nothing', async () => {

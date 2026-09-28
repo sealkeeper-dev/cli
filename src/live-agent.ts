@@ -1,10 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   AgentName,
+  FINGERPRINT_PARTS,
+  type FingerprintPartName,
+  FingerprintPartState,
   LEVEL_RANK,
   Level,
   OperatorSlug,
   Runtime,
+  Sha256Base64url,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
@@ -77,8 +81,55 @@ export const LiveAgent = z.object({
     .optional()
     .catch(undefined),
   runtime: Runtime.optional().catch(undefined),
+  // The agent's current fingerprint as the API keeps it (VB-4), its hash,
+  // when it was captured and each part's state, never a part hash. null
+  // when the agent has declared none. Absent from an API before it, and
+  // when it does not parse, a state this version does not know included.
+  // status and whoami print the states.
+  fingerprint: z
+    .object({
+      hash: Sha256Base64url,
+      at: z.iso.datetime(),
+      parts: z.object({
+        model_set: FingerprintPartState,
+        prompt: FingerprintPartState,
+        tools: FingerprintPartState,
+        framework: FingerprintPartState,
+      }),
+    })
+    .nullable()
+    .optional()
+    .catch(undefined),
 });
 export type LiveAgent = z.infer<typeof LiveAgent>;
+export type LiveFingerprint = LiveAgent['fingerprint'];
+
+// The fingerprint parts as status and whoami name them, the words the
+// profile uses.
+const PART_LABELS: Record<FingerprintPartName, string> = {
+  model_set: 'model',
+  prompt: 'prompt',
+  tools: 'tools',
+  framework: 'framework',
+};
+
+const STATE_WORDS: Record<FingerprintPartState, string> = {
+  declared: 'declared',
+  not_declared: 'not declared',
+  unstable: 'unstable',
+};
+
+// The fingerprint row of status and whoami, each part and its state, as in
+// model declared, prompt not declared, tools declared, framework unstable.
+// none declared when the agent has declared none, and - when the API did
+// not answer or sent no fingerprint.
+export function fingerprintText(fingerprint: LiveFingerprint): string {
+  if (fingerprint === undefined) return '-';
+  if (fingerprint === null) return 'none declared';
+  return FINGERPRINT_PARTS.map(
+    (name) => `${PART_LABELS[name]} ${STATE_WORDS[fingerprint.parts[name]]}`,
+  ).join(', ');
+}
 
 // The agent answer, with the same two second limit as the score. null when
 // the API does not answer or answers with something else. Never throws.

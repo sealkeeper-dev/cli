@@ -48,6 +48,8 @@ type Live = {
   // standing.held on the agent answer, and the SEAL route's answer.
   held?: boolean;
   seal?: () => Response;
+  // The agent answer's fingerprint, left out when undefined (VB-4).
+  fingerprint?: unknown;
 };
 
 // An open task addressed to the agent, as GET /v1/tasks answers it.
@@ -72,6 +74,9 @@ function addressedTask() {
 function agentAnswer(verifiedTasks: number, live: Live = {}) {
   return {
     ...(live.level === undefined ? {} : { level: live.level }),
+    ...(live.fingerprint === undefined
+      ? {}
+      : { fingerprint: live.fingerprint }),
     ...(live.dormantDays === undefined && live.held === undefined
       ? {}
       : {
@@ -618,6 +623,53 @@ describe('status', () => {
       );
       expect((await run(offline, 'status')).out).toContain(
         'level             -\n',
+      );
+    });
+
+    // VB-4. The agent's current fingerprint states, as the profile shows
+    // them, never a part hash.
+    it('prints the fingerprint states, none declared, or a dash when unknown', async () => {
+      const fingerprint = {
+        hash: `${'F'.repeat(42)}A`,
+        at: '2026-09-28T08:00:00.000Z',
+        parts: {
+          model_set: 'declared',
+          prompt: 'not_declared',
+          tools: 'declared',
+          framework: 'unstable',
+        },
+      };
+      const withOne = scoreFetch([], 2, { fingerprint });
+      expect((await run(withOne, 'status')).out).toContain(
+        'fingerprint       model declared, prompt not declared, tools declared, framework unstable\n',
+      );
+      expect(
+        JSON.parse((await run(withOne, 'status', '--json')).out),
+      ).toMatchObject({ fingerprint });
+
+      const none = scoreFetch([], 2, { fingerprint: null });
+      expect((await run(none, 'status')).out).toContain(
+        'fingerprint       none declared\n',
+      );
+      expect(
+        JSON.parse((await run(none, 'status', '--json')).out),
+      ).toMatchObject({ fingerprint: null });
+
+      expect((await run(offline, 'status')).out).toContain(
+        'fingerprint       -\n',
+      );
+      expect(
+        JSON.parse((await run(offline, 'status', '--json')).out),
+      ).not.toHaveProperty('fingerprint');
+      // A state this version does not know reads as unknown, not as a guess.
+      const unknown = scoreFetch([], 2, {
+        fingerprint: {
+          ...fingerprint,
+          parts: { ...fingerprint.parts, tools: 'drifting' },
+        },
+      });
+      expect((await run(unknown, 'status')).out).toContain(
+        'fingerprint       -\n',
       );
     });
 

@@ -208,6 +208,59 @@ describe('sealkeeper cli', () => {
     );
   });
 
+  // VB-4. whoami prints the agent's current fingerprint states from the
+  // agent answer, as status and the profile do, never a part hash.
+  it('whoami prints the fingerprint states from the agent answer', async () => {
+    await writeConfig(
+      {
+        agentId: AGENT_ID,
+        operatorLogin: 'alice',
+        name: 'scout',
+        version: '1.2.0',
+        registeredAt: '2026-09-23T10:00:00Z',
+      },
+      paths(home),
+    );
+    const fingerprint = {
+      hash: `${'F'.repeat(42)}A`,
+      at: '2026-09-28T08:00:00.000Z',
+      parts: {
+        model_set: 'declared',
+        prompt: 'not_declared',
+        tools: 'unstable',
+        framework: 'declared',
+      },
+    };
+    let answer: unknown = fingerprint;
+    whoamiFetch = (async () =>
+      Response.json({
+        operator: { login: 'alice', slug: 'alice' },
+        handle: 'alice/scout',
+        fingerprint: answer,
+      })) as typeof fetch;
+    const text = await run('whoami');
+    expect(text.out).toContain(
+      'fingerprint    model declared, prompt not declared, tools unstable, framework declared\n',
+    );
+    expect(JSON.parse((await run('--json', 'whoami')).out)).toMatchObject({
+      fingerprint,
+    });
+
+    answer = null;
+    expect((await run('whoami')).out).toContain(
+      'fingerprint    none declared\n',
+    );
+    expect(JSON.parse((await run('--json', 'whoami')).out)).toMatchObject({
+      fingerprint: null,
+    });
+
+    whoamiFetch = offline;
+    expect((await run('whoami')).out).toContain('fingerprint    -\n');
+    expect(JSON.parse((await run('--json', 'whoami')).out)).not.toHaveProperty(
+      'fingerprint',
+    );
+  });
+
   it('--json also works after the command name', async () => {
     await writeConfig(
       {

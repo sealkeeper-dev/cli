@@ -7,6 +7,10 @@ import {
 } from '@sealkeeper/schema';
 import { type ApiClient, ApiError } from './api.js';
 import { type Paths, paths } from './config.js';
+import {
+  declaredFingerprint,
+  refusesFingerprint,
+} from './declared-fingerprint.js';
 import { loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import {
@@ -209,6 +213,27 @@ async function sendRounds(
     }
   };
 
+  // The fingerprint this run declares (VB-4), fingerprint.json as sync or
+  // prove last wrote it, never computed here. Signed on its own when the
+  // first batch goes and sent beside the envelopes until a batch is
+  // accepted with it. When the API refuses it, as an API from before the
+  // field does, the batch goes again without it and the rest of the run
+  // sends none.
+  let fingerprintDue = true;
+  let fingerprintJws: string | undefined;
+  const fingerprintToSend = async (s: Signer): Promise<string | undefined> => {
+    if (!fingerprintDue) return undefined;
+    if (fingerprintJws === undefined) {
+      const { fingerprint } = await declaredFingerprint(p);
+      if (fingerprint === undefined) {
+        fingerprintDue = false;
+        return undefined;
+      }
+      fingerprintJws = await s.sign({ fingerprint });
+    }
+    return fingerprintJws;
+  };
+
   for (;;) {
     if (options.deadline !== undefined && now() >= options.deadline) {
       return result;
@@ -255,9 +280,10 @@ async function sendRounds(
     }
 
     const signed: string[] = [];
-    const { sign } = await loadOnce();
-    for (const { event } of fresh) signed.push(await sign(event));
-    let envelopes = fitBatch(signed);
+    const roundSigner = await loadOnce();
+    for (const { event } of fresh) signed.push(await roundSigner.sign(event));
+    let fingerprint = await fingerprintToSend(roundSigner);
+    let envelopes = fitBatch(signed, fingerprint);
 
     // Sends one batch. A rejection at index i > 0 sends the i events before
     // it on their own. A rejection at index 0 skips that event, or stops the
@@ -269,7 +295,8 @@ async function sendRounds(
       // times, with split retries and a rate limit wait between them.
       await options.onRound?.();
       try {
-        const sent = await options.api.postEvents(envelopes);
+        const sent = await options.api.postEvents(envelopes, fingerprint);
+        fingerprintDue = false;
         result.accepted += sent.accepted;
         result.duplicates += sent.duplicates;
         // When the whole round went, stale events after the last fresh one
@@ -284,6 +311,11 @@ async function sendRounds(
         break;
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
+        if (fingerprint !== undefined && refusesFingerprint(error)) {
+          fingerprintDue = false;
+          fingerprint = undefined;
+          continue;
+        }
         // Status 0 means no response came back, so there is no Date to read.
         if (error.status !== 0) await checkClock();
 
@@ -442,10 +474,11 @@ async function ack(
 }
 
 // The longest prefix whose request body stays within MAX_BATCH_BYTES, and at
-// least one envelope. Envelopes are base64url and dots, so JSON adds only the
-// quotes and commas.
-function fitBatch(envelopes: string[]): string[] {
-  let bytes = JSON.stringify({ envelopes: [] }).length;
+// least one envelope, with the fingerprint JWS beside them when there is
+// one. Envelopes are base64url and dots, so JSON adds only the quotes and
+// commas.
+function fitBatch(envelopes: string[], fingerprint?: string): string[] {
+  let bytes = JSON.stringify({ envelopes: [], fingerprint }).length;
   for (const [i, envelope] of envelopes.entries()) {
     bytes += envelope.length + 2 + (i > 0 ? 1 : 0);
     if (bytes > MAX_BATCH_BYTES && i > 0) return envelopes.slice(0, i);

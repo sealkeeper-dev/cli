@@ -20,6 +20,7 @@ import {
   FINGERPRINT_NOT_DECLARED,
   FINGERPRINT_PARTS,
   FINGERPRINT_UNSTABLE,
+  FINGERPRINT_UNSTABLE_CAPTURES,
   Fingerprint,
   type FingerprintPartName,
   type FingerprintParts,
@@ -33,7 +34,7 @@ import { exists, readIfExists } from './files.js';
 
 // A part whose hash differed from the capture before it on each of the last
 // this many captures reads unstable (D-VB-4). The file keeps this many.
-export const FINGERPRINT_WINDOW = 5;
+export const FINGERPRINT_WINDOW = FINGERPRINT_UNSTABLE_CAPTURES;
 
 // A part as captured, its hash or not_declared. unstable is never captured,
 // it is what the window makes of a part that keeps changing.
@@ -107,7 +108,8 @@ async function readFingerprintFile(p: Paths): Promise<FingerprintFile | null> {
 // The fingerprint as last computed, from fingerprint.json, or null when it
 // was never computed or the file does not parse. Never recomputes, never
 // throws. What a task claim, submit and outcome report send (VB-3, see
-// sendWithFingerprint in tasks.ts).
+// sendWithFingerprint in tasks.ts), and what sync sends (VB-4), both
+// through declared-fingerprint.ts.
 export async function currentFingerprint(
   p: Paths = paths(),
 ): Promise<Fingerprint | null> {
@@ -312,7 +314,7 @@ export function describeFingerprint(): string {
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else.`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits, outcome reports and each sync send those hashes and nothing else.`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),

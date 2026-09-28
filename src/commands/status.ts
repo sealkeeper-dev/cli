@@ -39,7 +39,9 @@ import {
 import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import {
+  fingerprintText,
   type LiveAgent,
+  type LiveFingerprint,
   readLiveAgent,
   readSealWithheld,
 } from '../live-agent.js';
@@ -99,6 +101,10 @@ type Status = {
   // The SEAL standard level of the current version, live from the API. null
   // when the API did not answer or has not scored this version yet.
   level: Level | null;
+  // The agent's current fingerprint from the agent answer (VB-4), its hash,
+  // when it was captured and each part's state. null when the agent has
+  // declared none, absent when the API did not answer or sent none.
+  fingerprint?: NonNullable<LiveFingerprint> | null;
   // Whole days since the API last accepted an event from this agent. null
   // when unknown or when it has accepted none.
   dormantDays: number | null;
@@ -242,6 +248,9 @@ async function readStatus(
     ...countEvents(events),
     verifiedTasks: live?.counts?.verifiedTasks ?? null,
     level: live?.level ?? null,
+    ...(live?.fingerprint === undefined
+      ? {}
+      : { fingerprint: live.fingerprint }),
     dormantDays,
     sealWithheld: withheldNow,
     withheld,
@@ -393,6 +402,7 @@ function printStatus(status: Status): void {
       status.verifiedTasks === null ? '-' : String(status.verifiedTasks),
     ],
     ['level', status.level ?? '-'],
+    ['fingerprint', fingerprintText(status.fingerprint)],
     ['goal', status.goal ? goalLine(status.goal) : '-'],
     ...(status.dormantDays !== null && status.dormantDays > 0
       ? ([['dormant', days(status.dormantDays)]] as [string, string][])
