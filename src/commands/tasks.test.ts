@@ -62,6 +62,7 @@ import {
   NOT_COUNTERPARTY,
   NOT_POSTER,
   NOT_SUBMITTED,
+  POSTER_LAPSED,
   VERIFIED,
   WAITING,
   WAITING_AFTER_FAILURE,
@@ -2630,6 +2631,18 @@ describe('tasks pull, submit and post', () => {
         ALREADY_VERIFIED,
       ],
       [
+        'verified because the poster let its response time lapse',
+        () => {
+          const at = new Date().toISOString();
+          return submitted({
+            state: 'verified',
+            verifiedAt: at,
+            posterLapsedAt: at,
+          });
+        },
+        POSTER_LAPSED,
+      ],
+      [
         'expired before a submission',
         () =>
           submitted({
@@ -2658,6 +2671,7 @@ describe('tasks pull, submit and post', () => {
 
     it.each([
       [409, 'wrong_state', WRONG_STATE],
+      [409, 'poster_lapsed', POSTER_LAPSED],
       [403, 'not_party', NOT_POSTER],
       [400, 'not_counterparty', NOT_COUNTERPARTY],
       [429, 'rate_limited', 'too many requests'],

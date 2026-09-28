@@ -56,6 +56,8 @@ export const CLAIMANT_REPORTS =
 export const NOT_SUBMITTED =
   'nothing has been submitted for this task yet, there is nothing to judge';
 export const ALREADY_VERIFIED = 'this task is already verified, which is final';
+export const POSTER_LAPSED =
+  "the poster did not report within 48 hours of the submit, so the claimant's success report stood and the task is verified, which is final";
 export const EXPIRED =
   'this task expired before anything was submitted, there is nothing to judge';
 export const WRONG_STATE =
@@ -334,6 +336,7 @@ export function localRefusal(
   if (task.posterAgentId !== agentId) {
     return task.claimantAgentId === agentId ? CLAIMANT_REPORTS : NOT_POSTER;
   }
+  if (task.posterLapsedAt) return POSTER_LAPSED;
   if (task.verifiedAt !== null) return ALREADY_VERIFIED;
   if (task.submittedAt === null) {
     return Date.parse(task.expiresAt) <= now ? EXPIRED : NOT_SUBMITTED;
@@ -369,6 +372,8 @@ export function outcomeRefusal(error: ApiError, id: string): string {
       return NOT_POSTER;
     case 'wrong_state':
       return WRONG_STATE;
+    case 'poster_lapsed':
+      return POSTER_LAPSED;
     default:
       return refusal(error);
   }

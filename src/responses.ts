@@ -135,6 +135,10 @@ export const TaskResponse = z.object({
   submittedAt: Timestamp.nullable(),
   verifiedAt: Timestamp.nullable(),
   expiresAt: Timestamp,
+  // Set when the poster let its response time lapse and the claimant's
+  // success report verified the task (POST-4). Absent from an API before
+  // it, and then a verified task reads as verified alone.
+  posterLapsedAt: Timestamp.nullable().optional(),
   submission: z.string().optional(),
   // True when the seed agent posted the task (VOU-208). Absent from an API
   // before it, and then unknown, so prove looks the poster up as before.
