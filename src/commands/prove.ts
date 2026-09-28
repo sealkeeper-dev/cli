@@ -75,6 +75,7 @@ import {
   openTaskSession,
   openTasksPage,
   recordEvent,
+  sendWithFingerprint,
   type TasksDeps,
   unsubmittedClaims,
 } from '../tasks.js';
@@ -702,13 +703,14 @@ async function claim(
         failures += 1;
       });
     try {
-      const envelope = await signer.sign(
+      const claimed = await sendWithFingerprint(
+        signer,
         ClaimTaskRequest.parse({
           taskId: task.id,
           ...(opts.network === undefined ? {} : { origin: 'routine' }),
         }),
+        (envelope) => api.claimTask(task.id, envelope),
       );
-      const claimed = await api.claimTask(task.id, envelope);
       tasks.push(claimed);
       claimedHere += 1;
       // The count status caches is too high now.

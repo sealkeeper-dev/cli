@@ -32,7 +32,12 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api.js';
 import type { Input } from '../ask.js';
-import { paths, writeConfig } from '../config.js';
+import { paths, writeConfig, writeFileAtomic } from '../config.js';
+import {
+  currentFingerprint,
+  NOTHING_DECLARED,
+  recordCapture,
+} from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
@@ -163,6 +168,9 @@ class FakeApi {
   openRoute = true;
   // Replaces the answer to the signed open list when set.
   openReply: (() => Response) | null = null;
+  // True for an API from before VB-3, whose strict payloads refuse a
+  // fingerprint.
+  refuseFingerprint = false;
 
   constructor(readonly agentId: string) {}
 
@@ -285,6 +293,29 @@ class FakeApi {
       (await verify(body.envelope, base64urlDecode(kid))).payload,
     );
     request.payload = payload as Record<string, unknown>;
+    if (
+      this.refuseFingerprint &&
+      typeof payload === 'object' &&
+      payload !== null &&
+      'fingerprint' in payload
+    ) {
+      return Response.json(
+        {
+          error: {
+            code: 'validation_failed',
+            message: 'Request validation failed',
+            issues: [
+              {
+                path: [],
+                code: 'unrecognized_keys',
+                message: 'Unrecognized key: "fingerprint"',
+              },
+            ],
+          },
+        },
+        { status: 400 },
+      );
+    }
 
     if (url.pathname === '/v1/tasks/open') {
       // An API from before the signed open list answers 404.
@@ -2752,6 +2783,140 @@ describe('tasks pull, submit and post', () => {
       expect(out).not.toContain('Category');
       const json = await run('tasks', 'show', task.id, '--json');
       expect(JSON.parse(json.out)).not.toHaveProperty('category');
+    });
+  });
+
+  // VB-3. Claim, submit and outcome carry the fingerprint sync and prove
+  // last wrote, inside and outside a routine run, and leave it out when
+  // there is none.
+  describe('fingerprint', () => {
+    const MODEL = 'A'.repeat(42).concat('E');
+
+    const written = async () => {
+      await recordCapture(
+        paths(),
+        { ...NOTHING_DECLARED, model_set: MODEL },
+        1_790_000_000,
+      );
+      const fingerprint = await currentFingerprint();
+      if (fingerprint === null) throw new Error('no fingerprint written');
+      return fingerprint;
+    };
+
+    const sent = (suffix: string) =>
+      api.posts().filter((r) => r.path.endsWith(suffix));
+
+    it('sends it on claim, submit and the claimant report when the file exists', async () => {
+      const fingerprint = await written();
+      const task = api.add({});
+      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
+      expect(
+        (await run('tasks', 'submit', task.id, '--text', 'the summary')).code,
+      ).toBe(0);
+      expect(sent('/claim')[0]?.payload).toEqual({
+        taskId: task.id,
+        fingerprint,
+      });
+      expect(sent('/submit')[0]?.payload).toMatchObject({ fingerprint });
+      expect(sent('/outcome')[0]?.payload).toEqual({
+        taskId: task.id,
+        outcome: 'success',
+        fingerprint,
+      });
+    });
+
+    it('sends it on a pull claim and on a routine run submit', async () => {
+      const fingerprint = await written();
+      const task = api.add({});
+      expect((await run('tasks', 'pull')).code).toBe(0);
+      expect(sent('/claim')[0]?.payload).toEqual({
+        taskId: task.id,
+        fingerprint,
+      });
+      vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
+      const dir = await realpath(
+        await mkdtemp(join(tmpdir(), 'sealkeeper-vb3-')),
+      );
+      onCleanup.push(dir);
+      await mkdir(join(dir, '.sealkeeper-answers'), { recursive: true });
+      await writeFile(join(dir, '.sealkeeper-answers', 'a.txt'), 'summary');
+      cwd = dir;
+      const { code } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--file',
+        '.sealkeeper-answers/a.txt',
+      );
+      expect(code).toBe(0);
+      expect(sent('/submit')[0]?.payload).toMatchObject({ fingerprint });
+      expect(sent('/outcome')[0]?.payload).toEqual({
+        taskId: task.id,
+        outcome: 'success',
+        origin: 'routine',
+        fingerprint,
+      });
+    });
+
+    it("sends it on the poster's outcome report", async () => {
+      const fingerprint = await written();
+      const now = new Date().toISOString();
+      const task = api.add({
+        posterAgentId: agentId,
+        claimantAgentId: OTHER_AGENT,
+        state: 'submitted',
+        claimedAt: now,
+        submittedAt: now,
+        submission: 'done',
+      });
+      api.reports.set(task.id, new Map([[OTHER_AGENT, 'success']]));
+      expect(
+        (await run('tasks', 'outcome', task.id, 'success', '--yes')).code,
+      ).toBe(0);
+      expect(sent('/outcome')[0]?.payload).toEqual({
+        taskId: task.id,
+        outcome: 'success',
+        evidenceHash: sha256('done'),
+        fingerprint,
+      });
+    });
+
+    it('leaves it out when there is no file, or its hash is not its parts', async () => {
+      const task = api.add({});
+      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
+      expect(sent('/claim')[0]?.payload).toEqual({ taskId: task.id });
+
+      const fingerprint = await written();
+      const file = JSON.parse(await readFile(paths().fingerprint, 'utf8'));
+      file.current = { ...fingerprint, hash: MODEL };
+      await writeFileAtomic(paths().fingerprint, JSON.stringify(file));
+      const other = api.add({});
+      expect((await run('tasks', 'claim', other.id)).code).toBe(0);
+      expect(sent('/claim')[1]?.payload).toEqual({ taskId: other.id });
+    });
+
+    it('does not retry a 400 that is not about the fingerprint', async () => {
+      const fingerprint = await written();
+      const task = api.add({});
+      api.claims.set(task.id, 'own_task');
+      const { code } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(1);
+      expect(sent('/claim').map((r) => r.payload)).toEqual([
+        { taskId: task.id, fingerprint },
+      ]);
+    });
+
+    it('claims without it from an API that refuses the field', async () => {
+      await written();
+      api.refuseFingerprint = true;
+      const task = api.add({});
+      const { code } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      expect(sent('/claim').map((r) => Object.keys(r.payload ?? {}))).toEqual([
+        ['taskId', 'fingerprint'],
+        ['taskId'],
+      ]);
+      expect(api.tasks.get(task.id)?.state).toBe('claimed');
     });
   });
 });

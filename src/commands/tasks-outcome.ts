@@ -34,6 +34,7 @@ import {
   openTaskSession,
   printFields,
   recordEvent,
+  sendWithFingerprint,
   sha256Hex,
   type TasksDeps,
 } from '../tasks.js';
@@ -192,7 +193,9 @@ export function register(
           evidenceHash,
           ...(runId === null ? {} : { origin: 'routine' }),
         });
-        const sent = await api.postOutcome(id, await signer.sign(request));
+        const sent = await sendWithFingerprint(signer, request, (envelope) =>
+          api.postOutcome(id, envelope),
+        );
         await recordEvent({
           type: 'task.outcome',
           payload: { task_id: id, outcome, evidence_hash: evidenceHash },

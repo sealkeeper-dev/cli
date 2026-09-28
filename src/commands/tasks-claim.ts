@@ -16,6 +16,7 @@ import {
   defaultTasksDeps,
   openTaskSession,
   recordEvent,
+  sendWithFingerprint,
   type TasksDeps,
   taskSummary,
 } from '../tasks.js';
@@ -64,8 +65,11 @@ export function register(
       let task: TaskResponse;
       let fresh = true;
       try {
-        const envelope = await signer.sign(ClaimTaskRequest.parse({ taskId }));
-        task = await api.claimTask(taskId, envelope);
+        task = await sendWithFingerprint(
+          signer,
+          ClaimTaskRequest.parse({ taskId }),
+          (envelope) => api.claimTask(taskId, envelope),
+        );
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         // A claim this agent already holds, say from a retry after a lost

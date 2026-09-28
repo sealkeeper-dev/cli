@@ -24,6 +24,7 @@ import {
   openTaskSession,
   printFields,
   recordEvent,
+  sendWithFingerprint,
   type TasksDeps,
 } from '../tasks.js';
 
@@ -163,7 +164,9 @@ export function register(
       let result = task;
       if (!alreadySubmitted) {
         try {
-          result = await api.submitTask(id, await signer.sign(request.data));
+          result = await sendWithFingerprint(signer, request.data, (envelope) =>
+            api.submitTask(id, envelope),
+          );
         } catch (error) {
           if (
             error instanceof ApiError &&
@@ -193,7 +196,9 @@ export function register(
           ...(runId === null ? {} : { origin: 'routine' }),
         });
         try {
-          result = await api.postOutcome(id, await signer.sign(outcome));
+          result = await sendWithFingerprint(signer, outcome, (envelope) =>
+            api.postOutcome(id, envelope),
+          );
         } catch (error) {
           if (error instanceof ApiError) {
             this.error(

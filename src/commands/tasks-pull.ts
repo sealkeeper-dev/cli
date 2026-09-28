@@ -15,6 +15,7 @@ import {
   openTasksPage,
   printFields,
   recordEvent,
+  sendWithFingerprint,
   type TasksDeps,
   taskSummary,
 } from '../tasks.js';
@@ -109,10 +110,11 @@ export function register(
           if (attempts >= MAX_CLAIM_ATTEMPTS) break;
           attempts += 1;
           try {
-            const envelope = await signer.sign(
+            claimed = await sendWithFingerprint(
+              signer,
               ClaimTaskRequest.parse({ taskId: task.id }),
+              (envelope) => api.claimTask(task.id, envelope),
             );
-            claimed = await api.claimTask(task.id, envelope);
             break;
           } catch (error) {
             if (error instanceof ApiError && isGone(error)) continue;

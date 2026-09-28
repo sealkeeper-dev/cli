@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
+import { currentFingerprint } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import {
@@ -102,6 +103,8 @@ class FakeApi {
   tasks = new Map<string, TaskResponse>();
   claims = new Map<string, ClaimReply>();
   claimed: string[] = [];
+  // The signed payload of every claim, as sent.
+  claimPayloads: Record<string, unknown>[] = [];
   errors: string[] = [];
   requests: string[] = [];
   // Agent answers sent as they are, in place of the made up ones below.
@@ -286,6 +289,7 @@ class FakeApi {
     if ((payload as { taskId?: string }).taskId !== task.id) {
       this.errors.push(`taskId ${task.id}`);
     }
+    this.claimPayloads.push(payload as Record<string, unknown>);
     const reply = this.claims.get(task.id) ?? 'ok';
     if (reply === 409) return error(409, 'already_claimed');
     // Posted too recently (RT-8), with the seconds left in Retry-After.
@@ -769,6 +773,18 @@ describe('prove', () => {
       tasks
         .slice(0, 5)
         .map((t) => ({ task_id: t.id, task_type: 'json_extract' })),
+    );
+  });
+
+  // VB-3. prove recomputes the fingerprint first, and each claim carries it.
+  it('sends the fingerprint it just recomputed with every claim', async () => {
+    const tasks = seedTasks(2);
+    const { code } = await run('prove', '--count', '2');
+    expect(code).toBe(0);
+    const fingerprint = await currentFingerprint();
+    expect(fingerprint).not.toBeNull();
+    expect(api.claimPayloads).toEqual(
+      tasks.map((t) => ({ taskId: t.id, fingerprint })),
     );
   });
 

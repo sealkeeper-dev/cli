@@ -106,7 +106,8 @@ async function readFingerprintFile(p: Paths): Promise<FingerprintFile | null> {
 
 // The fingerprint as last computed, from fingerprint.json, or null when it
 // was never computed or the file does not parse. Never recomputes, never
-// throws. What a signed request sends (VB-3).
+// throws. What a task claim, submit and outcome report send (VB-3, see
+// sendWithFingerprint in tasks.ts).
 export async function currentFingerprint(
   p: Paths = paths(),
 ): Promise<Fingerprint | null> {
@@ -311,7 +312,7 @@ export function describeFingerprint(): string {
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from, and nothing is sent until a later release.`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else.`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),
