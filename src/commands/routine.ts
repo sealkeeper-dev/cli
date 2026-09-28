@@ -53,7 +53,7 @@ import {
   isAllowed,
   networkBudgetOf,
   networkOperatorsToday,
-  nextRoutineTemplate,
+  nextRoutinePost,
   type RoutineEntry,
   type RunEntry,
   type RunOutcome,
@@ -425,7 +425,7 @@ export function preview(
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
     `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper prove instructions. Otherwise it starts nothing.`,
     '',
-    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only ready made template tasks that SealKeeper checks, and only when the goal says posting is behind. Everything else waits for you in routine status.',
+    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only when the goal says posting is behind, adopting a ready made task whose answer SealKeeper knows, or a template task SealKeeper checks when none is waiting. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
     ...(npx ? [NPX_NOTE] : []),
     ...(plan.note === undefined ? [] : [plan.note]),
@@ -462,7 +462,7 @@ const LIMIT_TEXT: Record<keyof RoutineLimits, [string, string]> = {
     "of those, other operators' template tasks",
   ],
   confirmsPerDay: ['confirms-per-day', 'outcomes confirmed per day'],
-  postsPerDay: ['posts-per-day', 'template tasks posted per day'],
+  postsPerDay: ['posts-per-day', 'tasks posted or adopted per day'],
   minutesPerRun: [
     'minutes-per-run',
     'minutes per run, then the agent is stopped',
@@ -591,11 +591,13 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     }
 
     const goal = await loadGoal({ fetch: deps.fetch }).catch(() => null);
-    // The template to post once this run, when the goal says posting is
-    // behind and the day's post limit has room (POST-7).
+    // What to post once this run, when the goal says posting is behind and
+    // the day's post limit has room (POST-7). A ready made task adopted in
+    // the category of the template it would post, that template when none
+    // is waiting (RT-12).
     const post =
       posts.remaining > 0 && goal !== null && postingBehind(goal)
-        ? nextRoutineTemplate(entries)
+        ? nextRoutinePost(entries)
         : null;
     if (claims.remaining === 0 && confirms.remaining === 0 && post === null) {
       await spent();
@@ -756,7 +758,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
       return;
     }
     // tasks post in this run reads the choice from the run lock and posts
-    // nothing else.
+    // nothing else, the adoption or its template.
     if (post !== null) await setRunPost(runId, post, p);
     const agent = await runAgent(
       {

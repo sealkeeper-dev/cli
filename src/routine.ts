@@ -12,7 +12,7 @@ import {
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
-import { DAY_MS } from '@sealkeeper/schema';
+import { DAY_MS, TaskCategory } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import {
@@ -43,7 +43,10 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 // exclusively at the start of a run, so two runs never overlap, and says
 // nothing about which commands are in routine mode. Once the run has chosen
 // a template to post, it holds that too, and tasks post in the run posts
-// only that one, once (POST-7).
+// only that one, once (POST-7). With it, the category the run adopts a
+// ready made task in, the template's own, and then tasks post --adopt in
+// that category is the run's one post, with the template as its fallback
+// (RT-12).
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
 // a line. One run line per run, and a line for every claim, submit,
@@ -193,6 +196,13 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     // operator gets at most one such claim a day (RT-8).
     network: z.boolean().optional(),
     operator: z.string().optional(),
+    // On a post, true when it adopted a ready made task, with the category
+    // it adopted in, and on a template post made in place of an adoption
+    // why, candidate_none when none was waiting in that category and
+    // api_too_old when the API does not take adoptions yet (RT-12).
+    adopted: z.boolean().optional(),
+    category: z.string().optional(),
+    fallback: z.enum(['candidate_none', 'api_too_old']).optional(),
   }),
   // An operator whose task this agent failed, so the routine takes no
   // template task of that operator again (RT-8). tasks submit writes it on
@@ -229,9 +239,12 @@ const RoutineEntry = z.discriminatedUnion('kind', [
       // Today's counted tasks reached the daily ceiling (VOU-140). used and
       // cap are the counted tasks and the ceiling.
       'dailyCountCeiling',
+      // SealKeeper refused an adoption past its own daily cap (RT-12). used
+      // and cap are that cap, null when its answer did not say it.
+      'adoptsPerDay',
     ]),
-    used: z.number(),
-    cap: z.number(),
+    used: z.number().nullable(),
+    cap: z.number().nullable(),
   }),
   z.object({
     kind: z.literal('pause'),
@@ -439,6 +452,12 @@ const Lock = z.object({
   deadline: At,
   // The template this run posts, when it chose one.
   post: z.string().min(1).optional(),
+  // The category this run adopts a ready made task in, when it adopts
+  // (RT-12). post is then the template it posts when none is waiting.
+  adopt: TaskCategory.optional(),
+  // The task id of that adoption, made once, so a retry after a lost answer
+  // gets the same task back rather than adopting a second one.
+  taskId: z.uuid().optional(),
 });
 export type Lock = z.infer<typeof Lock>;
 
@@ -575,29 +594,56 @@ function processAlive(pid: number): boolean {
   }
 }
 
-// Records in the run lock the template runId chose to post. Nothing when
-// the lock is another run's or gone.
+// What a routine run chose to post. template is the template it posts,
+// adopt the category it adopts a ready made task in first, or null when it
+// posts the template straight away (RT-12). taskId is the id of that
+// adoption, which setRunPost makes and runChoice gives back.
+export type RunPost = {
+  template: string;
+  adopt: TaskCategory | null;
+  taskId?: string;
+};
+
+// Records in the run lock what runId chose to post, a template id alone or
+// a RunPost, with a new task id for an adoption unless the RunPost has one.
+// Nothing when the lock is another run's or gone.
 export async function setRunPost(
   runId: string,
-  post: string,
+  post: string | RunPost,
   p: Paths = paths(),
 ): Promise<void> {
   const lock = await readLock(p);
   if (lock === null || lock.runId !== runId) return;
+  const chosen =
+    typeof post === 'string'
+      ? { post }
+      : {
+          post: post.template,
+          ...(post.adopt === null
+            ? {}
+            : { adopt: post.adopt, taskId: post.taskId ?? randomUUID() }),
+        };
   await writeFileAtomic(
     routinePaths(p).lock,
-    `${JSON.stringify({ ...lock, post })}\n`,
+    `${JSON.stringify({ ...lock, ...chosen })}\n`,
   );
 }
 
-// The template runId chose to post, from its live run lock, or null when it
-// chose none or its lock is not live.
-export async function runPost(
+// What runId chose to post, from its live run lock, or null when it chose
+// nothing or its lock is not live.
+export async function runChoice(
   runId: string,
   p: Paths = paths(),
-): Promise<string | null> {
+): Promise<RunPost | null> {
   const lock = await readLiveLock(p);
-  return lock !== null && lock.runId === runId ? (lock.post ?? null) : null;
+  if (lock === null || lock.runId !== runId || lock.post === undefined) {
+    return null;
+  }
+  return {
+    template: lock.post,
+    adopt: lock.adopt ?? null,
+    ...(lock.taskId === undefined ? {} : { taskId: lock.taskId }),
+  };
 }
 
 // How long a command waits for another of the same run to let go of a
@@ -727,8 +773,10 @@ export async function activeRoutineRun(
 
 // What a tasks post asks for, as refuseInRoutine reads it. template is the
 // --template id, null for --type, --spec and --verify or the guided walk.
+// adopt is the --adopt category, null without it.
 export type PostAsk = {
   template: string | null;
+  adopt?: string | null;
   input: boolean;
   assignee: boolean;
   outsideCwd: boolean;
@@ -736,8 +784,9 @@ export type PostAsk = {
 
 // A command a routine run's agent may not use ends here, with the reason.
 // With post, tasks post passes when it asks for a template that makes its
-// own input and nothing else (POST-7). The daily post limit is checked as
-// it posts, see tasks-post.ts.
+// own input and nothing else (POST-7), or for --adopt and nothing else
+// (RT-12). The run's choice and the daily post limit are checked as it
+// posts, see tasks-post.ts.
 export async function refuseInRoutine(
   cmd: Command,
   command: string,
@@ -746,7 +795,7 @@ export async function refuseInRoutine(
   if ((await activeRoutineRun()) === null) return;
   const why =
     post === undefined
-      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, and posts only from a template`
+      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, and posts only by adopting a ready made task or from a template`
       : routinePostRefusal(post);
   if (why !== null) cmd.error(why);
 }
@@ -755,10 +804,12 @@ const ROUTINE_TEMPLATE_IDS = ROUTINE_TEMPLATES.map((t) => t.id).join(', ');
 
 // Why a routine run may not make this post, or null when it may.
 export function routinePostRefusal(post: PostAsk): string | null {
-  if (post.template === null) {
-    return `nothing posted. During a routine run tasks post takes only --template with one of ${ROUTINE_TEMPLATE_IDS}`;
+  const adopt = post.adopt ?? null;
+  if (post.template === null && adopt === null) {
+    return `nothing posted. During a routine run tasks post takes only --adopt <category> or --template with one of ${ROUTINE_TEMPLATE_IDS}`;
   }
-  const template = templateById(post.template);
+  const template =
+    post.template === null ? undefined : templateById(post.template);
   if (
     template !== undefined &&
     !ROUTINE_TEMPLATES.some((t) => t.id === template.id)
@@ -792,4 +843,12 @@ export function nextRoutineTemplate(entries: RoutineEntry[]): string {
     if ((posted.get(t.id) ?? 0) < (posted.get(best.id) ?? 0)) best = t;
   }
   return best.id;
+}
+
+// What a routine run posts (RT-12). The template nextRoutineTemplate picks,
+// and first a ready made task adopted in that template's category, so the
+// choice of template stands and the category comes from the template.
+export function nextRoutinePost(entries: RoutineEntry[]): RunPost {
+  const template = nextRoutineTemplate(entries);
+  return { template, adopt: templateById(template)?.category ?? null };
 }

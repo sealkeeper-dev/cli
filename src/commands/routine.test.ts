@@ -51,6 +51,7 @@ import {
   budgetOf,
   ensureWorkDir,
   isAllowed,
+  nextRoutinePost,
   nextRoutineTemplate,
   type RoutineEntry,
   readLiveLock,
@@ -176,6 +177,20 @@ class FakeApi {
   refuseOrigin = false;
   // Runs as an outcome report arrives, before it is stored.
   beforeOutcome: (() => Promise<void>) | null = null;
+  // How an adoption answers (RT-12). null posts a ready made line_sort task
+  // in the category, none answers 404 candidate_none, limit 429
+  // adopt_limit, limitUnsaid a 429 whose message names no cap, old the 400
+  // an API from before adoptions gives, down a 503, and lost posts the task
+  // and then answers 500, as when the answer is lost on the way back. A
+  // taskId already posted answers 200 with its task, as the API's retry.
+  adoptReply:
+    | 'none'
+    | 'limit'
+    | 'limitUnsaid'
+    | 'old'
+    | 'down'
+    | 'lost'
+    | null = null;
 
   constructor(readonly agentId: string) {}
 
@@ -306,10 +321,66 @@ class FakeApi {
     if (method === 'POST' && url.pathname === '/v1/tasks') {
       const payload = await this.payload(init);
       this.posted.push(payload);
+      // An adoption carries no task type, spec or verification (RT-11).
+      const adoption = !('taskType' in payload);
+      const retried = this.tasks.get(payload.taskId as string);
+      if (adoption && retried) return Response.json(retried);
+      if (adoption && this.adoptReply === 'none') {
+        return error(404, 'candidate_none');
+      }
+      if (adoption && this.adoptReply === 'down') {
+        return error(503, 'unavailable');
+      }
+      if (adoption && this.adoptReply === 'old') {
+        return Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid payload',
+              issues: [
+                {
+                  path: ['taskType'],
+                  code: 'invalid_type',
+                  message: 'Required',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      }
+      if (
+        adoption &&
+        (this.adoptReply === 'limit' || this.adoptReply === 'limitUnsaid')
+      ) {
+        return Response.json(
+          {
+            error: {
+              code: 'adopt_limit',
+              message:
+                this.adoptReply === 'limit'
+                  ? 'An agent can adopt at most 5 candidates a day'
+                  : 'Too many adoptions today',
+            },
+          },
+          { status: 429, headers: { 'Retry-After': '3600' } },
+        );
+      }
       const task = this.add({
         id: payload.taskId as string,
         posterAgentId: this.agentId,
+        ...(adoption
+          ? {
+              taskType: 'line_sort',
+              origin: 'template',
+              category: payload.category as string,
+            }
+          : {}),
       });
+      if (adoption && this.adoptReply === 'lost') {
+        this.adoptReply = null;
+        return error(500, 'internal');
+      }
       return Response.json(task, { status: 201 });
     }
     const match = url.pathname.match(
@@ -1719,49 +1790,130 @@ describe('routine', () => {
       );
     });
 
-    it('posts one template task when the goal says post_task, once, and says so in the run line', async () => {
-      await installed();
-      api.goal = goalWith({ actions: [{ code: 'post_task', count: 4 }] });
-      // Real minutes, so a slow machine never stops the agent mid post.
-      msPerMinute = 60_000;
-      // The agent runs the prompt's post command in this process, then
-      // tries a second post under the same run id.
+    // The agent runs the prompt's post command in this process, as many
+    // times as given, under the run's id, after checking what the run
+    // recorded in its lock. Returns the exit codes and the recorded lock.
+    function postingAgent(times: number) {
       const tries: number[] = [];
+      const recorded: unknown[] = [];
       nextAgent = () =>
         new ScriptedAgent(async (input) => {
           const command = input.match(
-            /`"\/usr\/bin\/node" "\/opt\/sealkeeper\/dist\/index\.js" (tasks post --template \S+ --yes --json)`/,
+            /`"\/usr\/bin\/node" "\/opt\/sealkeeper\/dist\/index\.js" (tasks post --\S+ \S+ --yes --json)`/,
           )?.[1];
           if (command === undefined) throw new Error('no post step');
+          recorded.push(await readLiveLock());
           const runId = spawned.at(-1)?.env.SEALKEEPER_ROUTINE_RUN ?? '';
           vi.stubEnv('SEALKEEPER_ROUTINE_RUN', runId);
           try {
-            for (let i = 0; i < 2; i++) {
+            for (let i = 0; i < times; i++) {
               tries.push(await runInside(command.split(' ')));
             }
           } finally {
             vi.stubEnv('SEALKEEPER_ROUTINE_RUN', '');
           }
         }) as unknown as FakeAgent;
+      return { tries, recorded };
+    }
+
+    it('adopts a ready made task when the goal says post_task, once, records it and counts it as a post (RT-12)', async () => {
+      await installed();
+      api.goal = goalWith({ actions: [{ code: 'post_task', count: 4 }] });
+      // Real minutes, so a slow machine never stops the agent mid post.
+      msPerMinute = 60_000;
+      // A second post under the same run id is refused.
+      const { tries, recorded } = postingAgent(2);
       const result = await run('routine', 'run');
       expect(result.code).toBe(0);
       expect(spawned).toHaveLength(1);
       const args = spawned[0]?.args ?? [];
-      expect(args).toContain(
-        `Bash(${INVOCATION} tasks post --template text_dedupe --yes --json)`,
+      const allowed = args.slice(
+        args.indexOf('--allowedTools') + 1,
+        args.indexOf('--disallowedTools'),
       );
+      // The exact adoption command, in the category of the template the
+      // run would post, and no template post.
+      expect(allowed).toContain(
+        `Bash(${INVOCATION} tasks post --adopt data --yes --json)`,
+      );
+      expect(allowed.filter((a) => a.includes('tasks post'))).toHaveLength(1);
       const input = (agents[0] as unknown as ScriptedAgent).input;
       expect(input).toContain(
-        `1. This agent's goal says to post a task for other agents. Run \`${INVOCATION} tasks post --template text_dedupe --yes --json\` once.`,
+        `1. This agent's goal says to post a task for other agents. Run \`${INVOCATION} tasks post --adopt data --yes --json\` once. It adopts a ready made task whose answer SealKeeper knows and posts it as this agent's own. When none is waiting, the same command posts a template task instead. Post nothing else.`,
       );
       expect(input).toContain(`2. Run \`${INVOCATION} prove --json\``);
+      expect(recorded[0]).toMatchObject({ post: 'text_dedupe', adopt: 'data' });
       expect(tries).toEqual([0, 1]);
-      expect(api.posted.map((p) => [p.taskType, p.origin])).toEqual([
-        ['text_dedupe', 'routine'],
-      ]);
+      // An adoption carries no task type, spec or verification, says
+      // routine like the run's other posts and uses the id the run recorded.
+      expect(api.posted).toHaveLength(1);
+      expect(api.posted[0]).toMatchObject({
+        category: 'data',
+        origin: 'routine',
+        taskId: (recorded[0] as { taskId: string }).taskId,
+      });
+      expect(api.posted[0]).not.toHaveProperty('taskType');
       expect(result.err).toContain('already posted its one task');
       expect(result.out).toContain('confirmed 0, posted 1.');
       expect((await runs())[0]).toMatchObject({ outcome: 'done', posted: 1 });
+      const posts = (await readRoutine()).filter((e) => e.kind === 'post');
+      expect(posts).toMatchObject([
+        { taskType: 'line_sort', adopted: true, category: 'data' },
+      ]);
+      const status = await run('routine', 'status', '--json');
+      expect(JSON.parse(status.out).today.posted).toBe(1);
+      // The adopted task waits on no confirmation from this agent.
+      expect(api.outcomes).toEqual([]);
+    });
+
+    it('falls back to its template task when no ready made task is waiting, and logs why (RT-12)', async () => {
+      await installed();
+      api.goal = goalWith({ actions: [{ code: 'post_task', count: 4 }] });
+      api.adoptReply = 'none';
+      msPerMinute = 60_000;
+      const { tries } = postingAgent(1);
+      const result = await run('routine', 'run');
+      expect(tries).toEqual([0]);
+      expect(api.posted.map((p) => [p.taskType, p.category, p.origin])).toEqual(
+        [
+          [undefined, 'data', 'routine'],
+          ['text_dedupe', 'data', 'routine'],
+        ],
+      );
+      expect(result.err).toContain(
+        'No ready made task was waiting in data, so this run posted a text_dedupe template task instead.',
+      );
+      expect((await runs())[0]).toMatchObject({ outcome: 'done', posted: 1 });
+      const posts = (await readRoutine()).filter((e) => e.kind === 'post');
+      expect(posts).toMatchObject([
+        { taskType: 'text_dedupe', fallback: 'candidate_none' },
+      ]);
+      expect(posts[0]).not.toHaveProperty('adopted');
+    });
+
+    it("posts nothing past SealKeeper's daily cap of adoptions and logs the cap (RT-12)", async () => {
+      await installed();
+      api.goal = goalWith({ actions: [{ code: 'post_task', count: 4 }] });
+      api.adoptReply = 'limit';
+      msPerMinute = 60_000;
+      const { tries } = postingAgent(1);
+      const result = await run('routine', 'run');
+      expect(tries).toEqual([1]);
+      expect(api.posted).toHaveLength(1);
+      expect(result.err).toContain(
+        "nothing posted. SealKeeper's daily limit of 5 adoptions is reached",
+      );
+      const log = await readRoutine();
+      expect(log.filter((e) => e.kind === 'post')).toEqual([]);
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          kind: 'limit',
+          limit: 'adoptsPerDay',
+          used: 5,
+          cap: 5,
+        }),
+      );
+      expect((await runs())[0]).toMatchObject({ posted: 0 });
     });
 
     it('never posts when only a posted confirmed threshold is behind', async () => {
@@ -1802,8 +1954,14 @@ describe('routine', () => {
           },
         ],
       });
+      const { recorded } = postingAgent(0);
       await run('routine', 'run');
-      expect(agents[0]?.input).toContain('tasks post --template line_sort');
+      // It adopts in that template's category, with the template left as
+      // the fallback (RT-12).
+      expect((agents[0] as unknown as ScriptedAgent).input).toContain(
+        'tasks post --adopt data --yes --json',
+      );
+      expect(recorded[0]).toMatchObject({ post: 'line_sort', adopt: 'data' });
     });
 
     it('starts no agent to post when the goal does not ask', async () => {
@@ -1857,7 +2015,7 @@ describe('routine', () => {
       await run('routine', 'run');
       expect(spawned).toHaveLength(1);
       const input = agents[0]?.input ?? '';
-      expect(input).toContain('tasks post --template text_dedupe --yes --json');
+      expect(input).toContain('tasks post --adopt data --yes --json');
       expect(input).not.toContain('prove --json');
       expect(input).toContain(`2. Run \`${INVOCATION} status\` and stop.`);
       const limits = (await readRoutine()).filter((e) => e.kind === 'limit');
@@ -2230,7 +2388,7 @@ describe('routine', () => {
       );
       expect(plain.code).toBe(1);
       expect(plain.err).toContain(
-        'During a routine run tasks post takes only --template with one of text_dedupe, line_sort, json_shape',
+        'During a routine run tasks post takes only --adopt <category> or --template with one of text_dedupe, line_sort, json_shape',
       );
       const refused: [string[], string][] = [
         [['--template', 'summarise', '--input', 'hi'], 'needs input a person'],
@@ -2316,6 +2474,163 @@ describe('routine', () => {
       );
       // Every refusal inside the post lock still lets go of it.
       expect(await fileExists(routinePaths().postLock)).toBe(false);
+    });
+
+    it('tasks post --adopt adopts only in the category the run chose, once, within the daily post limit (RT-12)', async () => {
+      await setRoutine({
+        limits: { ...defaultRoutineConfig().limits, postsPerDay: 1 },
+      });
+      const adopt = (category: string) =>
+        run('tasks', 'post', '--adopt', category, '--yes', '--json');
+      const lock = (runId: string) =>
+        acquireLock({
+          runId,
+          pid: process.pid,
+          deadline: new Date(Date.now() + HOUR).toISOString(),
+        });
+
+      // A run that chose no post.
+      expect(await lock(RUN)).toBe(true);
+      expect((await adopt('data')).err).toContain(
+        'This routine run was not asked to post',
+      );
+      // A run that chose a template post without an adoption.
+      await setRunPost(RUN, 'text_dedupe');
+      expect((await adopt('data')).err).toContain(
+        'This routine run posts only text_dedupe',
+      );
+      await setRunPost(RUN, { template: 'text_dedupe', adopt: 'data' });
+      expect((await adopt('code')).err).toContain(
+        'This routine run adopts only in data',
+      );
+      // The template post is refused once the run adopts.
+      expect(
+        (await run('tasks', 'post', '--template', 'text_dedupe', '--yes')).err,
+      ).toContain('This routine run adopts a ready made task');
+      const refused = await run(
+        'tasks',
+        'post',
+        '--adopt',
+        'data',
+        '--input',
+        'a',
+        '--yes',
+      );
+      expect(refused.err).toContain('--input is refused');
+      const first = await adopt('data');
+      expect(first.code).toBe(0);
+      expect(JSON.parse(first.out)).toMatchObject({
+        state: 'open',
+        taskType: 'line_sort',
+        category: 'data',
+        adopted: true,
+      });
+      expect((await adopt('data')).err).toContain(
+        'This routine run already posted its one task',
+      );
+      expect(api.posted).toHaveLength(1);
+
+      // Another run the same day, past the daily limit of 1.
+      await removeLock(RUN);
+      vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-2');
+      expect(await lock('run-2')).toBe(true);
+      await setRunPost('run-2', { template: 'line_sort', adopt: 'data' });
+      const capped = await adopt('data');
+      expect(capped.code).toBe(1);
+      expect(capped.err).toContain(
+        "nothing posted. The routine's daily limit of 1 posts is reached",
+      );
+      await removeLock('run-2');
+      expect(api.posted).toHaveLength(1);
+      const log = await readRoutine();
+      expect(log.filter((e) => e.kind === 'post')).toMatchObject([
+        { runId: RUN, adopted: true, category: 'data' },
+      ]);
+      expect(await fileExists(routinePaths().postLock)).toBe(false);
+    });
+
+    it('tasks post --adopt reuses the run task id on a retry, falls back on an older API, never on a 5xx, and logs an unknown cap as unknown (RT-12)', async () => {
+      const adopt = () =>
+        run('tasks', 'post', '--adopt', 'data', '--yes', '--json');
+      const startRun = async (runId: string) => {
+        vi.stubEnv('SEALKEEPER_ROUTINE_RUN', runId);
+        expect(
+          await acquireLock({
+            runId,
+            pid: process.pid,
+            deadline: new Date(Date.now() + HOUR).toISOString(),
+          }),
+        ).toBe(true);
+        await setRunPost(runId, { template: 'text_dedupe', adopt: 'data' });
+        return (await readLiveLock())?.taskId;
+      };
+      const posts = async () =>
+        (await readRoutine()).filter((e) => e.kind === 'post');
+
+      const taskId = await startRun(RUN);
+      expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
+      // A 5xx may come after the adoption went in, so nothing falls back.
+      api.adoptReply = 'down';
+      expect((await adopt()).code).toBe(1);
+      expect(api.posted).toHaveLength(1);
+      expect(await posts()).toEqual([]);
+      // The adoption goes in and its answer is lost. The retry sends the
+      // same id and gets the same task back, so nothing is adopted twice.
+      api.adoptReply = 'lost';
+      expect((await adopt()).code).toBe(1);
+      const retry = await adopt();
+      expect(retry.code).toBe(0);
+      expect(JSON.parse(retry.out)).toMatchObject({
+        id: taskId,
+        adopted: true,
+      });
+      expect(api.posted.map((p) => p.taskId)).toEqual([taskId, taskId, taskId]);
+      expect(
+        [...api.tasks.values()].filter((t) => t.posterAgentId === agentId),
+      ).toHaveLength(1);
+      expect(await posts()).toMatchObject([{ taskId, adopted: true }]);
+      await removeLock(RUN);
+
+      // An API from before adoptions asks for a task type. The run posts
+      // its template task instead and logs why.
+      await startRun('run-2');
+      api.adoptReply = 'old';
+      const old = await adopt();
+      expect(old.code).toBe(0);
+      expect(old.err).toContain(
+        'This API does not take adoptions yet, so this run posted a text_dedupe template task instead.',
+      );
+      expect(JSON.parse(old.out)).toMatchObject({ adopted: false });
+      expect(api.posted.at(-1)).toMatchObject({
+        taskType: 'text_dedupe',
+        origin: 'routine',
+      });
+      expect((await posts()).at(-1)).toMatchObject({
+        runId: 'run-2',
+        taskType: 'text_dedupe',
+        fallback: 'api_too_old',
+      });
+      await removeLock('run-2');
+
+      // A 429 that names no cap logs the cap as unknown, never 0.
+      await startRun('run-3');
+      api.adoptReply = 'limitUnsaid';
+      const capped = await adopt();
+      expect(capped.code).toBe(1);
+      expect(capped.err).toContain(
+        "nothing posted. SealKeeper's daily limit of adoptions is reached",
+      );
+      await removeLock('run-3');
+      expect(await readRoutine()).toContainEqual(
+        expect.objectContaining({
+          kind: 'limit',
+          runId: 'run-3',
+          limit: 'adoptsPerDay',
+          used: null,
+          cap: null,
+        }),
+      );
+      expect(await posts()).toHaveLength(2);
     });
 
     it('tasks outcome confirms only allowed operators, with origin routine, up to the limit', async () => {
@@ -2637,6 +2952,65 @@ describe('routine', () => {
     expect(routinePaths().confirmLock).not.toBe(routinePaths().claimLock);
   });
 
+  it('a person adopts a ready made task by hand, on --yes or a yes, never in a routine budget (RT-12)', async () => {
+    const noYes = await run('tasks', 'post', '--adopt', 'data');
+    expect(noYes.code).toBe(1);
+    expect(noYes.err).toContain('run');
+    expect(noYes.err).toContain('again with --yes to post it');
+    expect(
+      (await run('tasks', 'post', '--adopt', 'data', '--template', 'line_sort'))
+        .err,
+    ).toContain('--adopt picks the whole task');
+    expect(
+      (await run('tasks', 'post', '--adopt', 'maths', '--yes')).err,
+    ).toContain('--adopt must be one of code, research, data');
+    tty = true;
+    answer = 'n';
+    const declined = await run('tasks', 'post', '--adopt', 'data');
+    expect(declined.code).toBe(1);
+    expect(declined.out).toContain(
+      'SealKeeper picks a ready made task in data',
+    );
+    expect(api.posted).toEqual([]);
+    answer = 'y';
+    const asked = await run('tasks', 'post', '--adopt', 'data');
+    expect(asked.code).toBe(0);
+    expect(asked.out).toMatch(/category +data/);
+    expect(asked.out).toContain(
+      'SealKeeper knows the answer to this task and checks it on submit',
+    );
+    tty = false;
+    const scripted = await run(
+      'tasks',
+      'post',
+      '--adopt',
+      'data',
+      '--yes',
+      '--json',
+    );
+    expect(JSON.parse(scripted.out)).toMatchObject({ adopted: true });
+    expect(api.posted).toHaveLength(2);
+    expect(api.posted[1]).toMatchObject({
+      category: 'data',
+      origin: 'template',
+    });
+    // Outside a run nothing counts against the routine's post limit.
+    expect(await readRoutine()).toEqual([]);
+    // With nothing waiting, a person is told so and nothing falls back.
+    api.adoptReply = 'none';
+    const none = await run('tasks', 'post', '--adopt', 'data', '--yes');
+    expect(none.code).toBe(1);
+    expect(none.err).toContain(
+      'nothing posted. No ready made task is waiting in data, try again later or post one with --template',
+    );
+    expect(api.posted).toHaveLength(3);
+    // Past SealKeeper's daily cap, the same cap as the routine's.
+    api.adoptReply = 'limit';
+    expect(
+      (await run('tasks', 'post', '--adopt', 'data', '--yes')).err,
+    ).toContain("SealKeeper's daily limit of 5 adoptions is reached");
+  });
+
   it('plain tasks post sends no origin', async () => {
     await run(
       'tasks',
@@ -2915,6 +3289,23 @@ describe('routine posts (POST-7)', () => {
     expect(budgetOf(entries, 'post', routine, now).remaining).toBe(0);
   });
 
+  it('adopts in the category of the template it would post (RT-12)', () => {
+    expect(nextRoutinePost([])).toEqual({
+      template: 'text_dedupe',
+      adopt: 'data',
+    });
+    const adopted = {
+      ...at('2026-09-27T00:00:00.000Z'),
+      taskType: 'text_dedupe',
+      adopted: true,
+      category: 'data',
+    };
+    expect(nextRoutinePost([adopted])).toEqual({
+      template: 'line_sort',
+      adopt: 'data',
+    });
+  });
+
   it('posts the template it posted least, the first on a tie', () => {
     expect(nextRoutineTemplate([])).toBe('text_dedupe');
     const once = at('2026-09-27T00:00:00.000Z');
@@ -2982,7 +3373,16 @@ describe('routine posts (POST-7)', () => {
     };
     expect(routinePostRefusal(ask)).toBeNull();
     expect(routinePostRefusal({ ...ask, template: null })).toContain(
-      'takes only --template',
+      'takes only --adopt <category> or --template',
+    );
+    // --adopt alone passes, and with --input or --for it is refused (RT-12).
+    const adopt = { ...ask, template: null, adopt: 'data' };
+    expect(routinePostRefusal(adopt)).toBeNull();
+    expect(routinePostRefusal({ ...adopt, input: true })).toContain(
+      '--input is refused',
+    );
+    expect(routinePostRefusal({ ...adopt, assignee: true })).toContain(
+      '--for is refused',
     );
     expect(
       routinePostRefusal({ ...ask, template: 'answer_question' }),
@@ -2993,11 +3393,31 @@ describe('routine posts (POST-7)', () => {
 describe('routinePrompt', () => {
   it('has no post step unless the run posts', () => {
     expect(routinePrompt('sk', [])).not.toContain('tasks post');
-    const prompt = routinePrompt('sk', [], { post: 'line_sort', prove: true });
+    const prompt = routinePrompt('sk', [], {
+      post: { template: 'line_sort', adopt: null },
+      prove: true,
+    });
     expect(prompt).toContain(
       "1. This agent's goal says to post a task for other agents. Run `sk tasks post --template line_sort --yes --json` once.",
     );
     expect(prompt).toContain('2. Run `sk prove --json`');
+  });
+
+  it('names the adoption and its fallback in one sentence when the run adopts (RT-12)', () => {
+    const prompt = routinePrompt('sk', [], {
+      post: { template: 'line_sort', adopt: 'data' },
+      prove: true,
+    });
+    expect(prompt).toContain(
+      "1. This agent's goal says to post a task for other agents. Run `sk tasks post --adopt data --yes --json` once. It adopts a ready made task whose answer SealKeeper knows and posts it as this agent's own. When none is waiting, the same command posts a template task instead. Post nothing else.",
+    );
+    expect(prompt).not.toContain('--template');
+    expect(
+      claudeArgs('sk', { template: 'line_sort', adopt: 'data' }),
+    ).toContain('Bash(sk tasks post --adopt data --yes --json)');
+    expect(claudeArgs('sk', { template: 'line_sort', adopt: null })).toContain(
+      'Bash(sk tasks post --template line_sort --yes --json)',
+    );
   });
 
   it('gives each submission as one JSON string that cannot close its tag (VOU-229)', () => {

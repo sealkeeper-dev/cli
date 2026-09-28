@@ -4,6 +4,7 @@ import { access, constants } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 import { ANSWER_RULES, UNTRUSTED_SPEC_RULES } from './claude-code-command.js';
 import type { TaskResponse } from './responses.js';
+import type { RunPost } from './routine.js';
 
 // The headless agent of a routine run (VOU-136). For Claude Code that is
 // claude -p with the prove instructions on stdin and stream-json output, so
@@ -252,7 +253,7 @@ const num = (value: unknown) =>
 // Bash, Read and Write in the session, and allowedTools is the only grant.
 export function claudeArgs(
   invocation: string,
-  post: string | null = null,
+  post: RunPost | null = null,
 ): string[] {
   return [
     '-p',
@@ -276,34 +277,40 @@ export function claudeArgs(
 
 // The only tools the headless agent may use without a person. The Bash
 // rules match the commands the prompt gives, spelled with invocation. post
-// is the template the run chose to post, and only then is its exact post
-// command allowed (POST-7).
+// is what the run chose to post, and only then is its exact post command
+// allowed (POST-7), the adoption in its category when it adopts (RT-12),
+// else the template post.
 export function allowedTools(
   invocation: string,
-  post: string | null = null,
+  post: RunPost | null = null,
 ): string[] {
   return [
     `Bash(${invocation} prove --json)`,
     `Bash(${invocation} tasks submit:*)`,
     `Bash(${invocation} tasks outcome:*)`,
-    ...(post === null
-      ? []
-      : [`Bash(${invocation} tasks post --template ${post} --yes --json)`]),
+    ...(post === null ? [] : [`Bash(${invocation} ${postCommand(post)})`]),
     `Bash(${invocation} status:*)`,
     'Write(./.sealkeeper-answers/**)',
     'Read(./.sealkeeper-answers/**)',
   ];
 }
 
+// The one post command of a run that posts, without the invocation.
+export function postCommand(post: RunPost): string {
+  return post.adopt === null
+    ? `tasks post --template ${post.template} --yes --json`
+    : `tasks post --adopt ${post.adopt} --yes --json`;
+}
+
 // A submission waiting for this agent's verdict, which the routine may
 // confirm, see pendingConfirmations in commands/routine.ts.
 export type Confirmable = { task: TaskResponse; submission: string };
 
-// What a routine run's prompt asks beyond confirmations. post is the
-// template to post once, when the goal says posting is behind and the day's
-// post limit has room, else null. prove is false when today's counted tasks
-// reached the daily ceiling and only the post is left to do.
-export type PromptWork = { post: string | null; prove: boolean };
+// What a routine run's prompt asks beyond confirmations. post is what to
+// post once, when the goal says posting is behind and the day's post limit
+// has room, else null. prove is false when today's counted tasks reached
+// the daily ceiling and only the post is left to do.
+export type PromptWork = { post: RunPost | null; prove: boolean };
 
 // The prove instructions for a routine run. The same steps and the same
 // untrusted spec rules as the /sealkeeper-prove command, with every command
@@ -334,8 +341,11 @@ export function routinePrompt(
     step += 1;
   }
   if (work.post !== null) {
+    const run = `Run \`${sk(postCommand(work.post))}\` once.`;
     lines.push(
-      `${step}. This agent's goal says to post a task for other agents. Run \`${sk(`tasks post --template ${work.post} --yes --json`)}\` once. It posts a ready made task whose answer SealKeeper checks. Post nothing else.`,
+      work.post.adopt === null
+        ? `${step}. This agent's goal says to post a task for other agents. ${run} It posts a ready made task whose answer SealKeeper checks. Post nothing else.`
+        : `${step}. This agent's goal says to post a task for other agents. ${run} It adopts a ready made task whose answer SealKeeper knows and posts it as this agent's own. When none is waiting, the same command posts a template task instead. Post nothing else.`,
     );
     step += 1;
   }
