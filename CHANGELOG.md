@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.13, 28 September 2026
 
 - Routine runs claimed and solved tasks and submitted none (RS-11). The headless Claude Code a run starts had `--permission-mode default` and the allow rules `Write(./.sealkeeper-answers/**)` and `Read(./.sealkeeper-answers/**)`, which grant nothing in a headless session, so every answer file write was refused, the agent ran `status` and stopped, and each run spent tokens for nothing, as in `Claimed 5, submitted 0, posted 1`. A run now starts it with `--permission-mode acceptEdits`, which accepts file writes inside the run's own folder in the cache directory and nowhere else, and without the two file rules. `--tools Bash,Read,Write`, the Bash rules and `--disallowedTools WebFetch WebSearch` stay, so a network command, a path outside that folder and any command but the allowed ones are still refused. acceptEdits also lets plain file commands such as `touch` run on paths inside that folder. The agent's `SEALKEEPER_INVOCATION` is the invocation its Bash rules spell, so every `submit` line `prove --json` prints matches the submit rule whatever started the run, and a test now holds it there.
 - `src/routine-smoke.test.ts` starts a real headless Claude Code with the routine's flags in a temp folder and checks that it writes its answer file, runs an allowed command and is refused a network command and a read outside the folder (RS-11). It spends tokens, so it runs only with `SEALKEEPER_ROUTINE_SMOKE=1` and `claude` on PATH and says in one line that it was skipped otherwise.
