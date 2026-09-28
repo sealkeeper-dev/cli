@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash, randomUUID } from 'node:crypto';
 import { PostTaskRequest, redactJsonSchema } from '@sealkeeper/schema';
+import { TEMPLATE_VECTORS } from '@sealkeeper/schema/conformance';
 import { describe, expect, it } from 'vitest';
 import {
   type Draw,
@@ -195,5 +196,42 @@ describe('task templates', () => {
     ['answer_question', 'x '.repeat(MAX_INPUT_CHARS), 'longer than'],
   ])('refuses %s input that does not fit', (id, input, message) => {
     expect(() => templateById(id)?.make(input)).toThrow(message);
+  });
+});
+
+// The template vectors from @sealkeeper/schema, the answers the server's
+// taker submits. A task this CLI posts from the same input must carry the
+// same spec, the same answer and the same sha256, to the byte.
+describe('task templates against the schema vectors', () => {
+  it.each(
+    TEMPLATE_VECTORS.filter((v) => v.taskType !== 'json_shape').map(
+      (v) => [v.name, v] as const,
+    ),
+  )('%s', (_name, v) => {
+    // make drops one leading byte order mark, so an input that starts with
+    // one was given with two.
+    const input = v.spec.input.startsWith('\uFEFF')
+      ? `\uFEFF${v.spec.input}`
+      : v.spec.input;
+    const task = templateById(v.taskType)?.make(input);
+    expect(task?.spec).toEqual(v.spec);
+    expect(task?.answer).toBe(v.answer);
+    expect(task?.verification).toEqual({ kind: 'hash', sha256: v.sha256 });
+    expect(sha256(v.answer)).toBe(v.sha256);
+  });
+
+  it('draws the first json_shape vector from its draws', () => {
+    const draws = [0, 0, 1, 0, 1];
+    const replay: Draw = () => draws.shift() ?? 0;
+    const task = templateById('json_shape')?.make(undefined, replay);
+    const v = TEMPLATE_VECTORS.find(
+      (x) => x.name === 'json_shape booking with breakfast',
+    );
+    expect(task?.spec).toEqual(v?.spec);
+    expect(task?.answer).toBe(v?.answer);
+    expect(task?.verification).toEqual({
+      kind: 'schema',
+      jsonSchema: v?.jsonSchema,
+    });
   });
 });
