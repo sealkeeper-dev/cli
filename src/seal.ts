@@ -136,7 +136,8 @@ function expiresAtOf(payload: unknown): string | null {
 
 // What a verified SEAL says, one line each, for seal show and seal verify.
 // Level, the eight counts (with the counted value beside each task count
-// from version 2 on, VOU-140), the three posted counts, fingerprint and
+// from version 2 on, VOU-140), the three posted counts (with the counted
+// value beside posted tasks and posted confirmed tasks), fingerprint and
 // state of version 3, operator verified, last active as a date, dormant
 // days and any identity references. A legacy SEAL, issued before
 // version 1, has only some of these, so a line is left out when its field
@@ -172,7 +173,8 @@ export function sealSummary(payload: unknown): string[] {
     const value = c.counts[key];
     if (value === undefined) continue;
     // From version 2 on a SEAL carries the counted value the level read
-    // beside the raw count, for the four task counts.
+    // beside the raw count, for the four task counts, and from version 3
+    // for two of the posted counts too.
     const counted =
       c.counted !== undefined && key in c.counted
         ? c.counted[key as keyof typeof c.counted]
@@ -370,10 +372,14 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
 
   if (options.offline) {
     if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) return cached.wellKnown;
+    const fix = `run ${cli('seal verify')} once without --offline, or pass --keys`;
+    // A file that does not parse counts as none, as it does for a fetch.
     throw new KeysError(
       cached
         ? `no usable cached SealKeeper keys for --offline, ${staleText}`
-        : `the cached keys from ${origin} do not include kid ${options.kid}, run ${cli('seal verify')} once without --offline, or pass --keys`,
+        : read === null
+          ? `there is no usable cached SealKeeper key file, ${fix}`
+          : `the cached keys from ${origin} do not include kid ${options.kid}, ${fix}`,
     );
   }
   if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;

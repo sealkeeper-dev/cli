@@ -1573,6 +1573,40 @@ describe('tasks pull, submit and post', () => {
       expect(api.requests).toEqual([]);
     });
 
+    it.each([
+      [
+        'over 16384 bytes',
+        JSON.stringify({ text: 'x'.repeat(16384) }),
+        '--spec must be at most 16384 bytes',
+      ],
+      [
+        'over 500 keys',
+        JSON.stringify(
+          Object.fromEntries(
+            Array.from({ length: 501 }, (_, i) => [`k${i}`, 0]),
+          ),
+        ),
+        '--spec must have at most 500 keys',
+      ],
+    ])(
+      'refuses an inline --spec %s in one line (VOU-304)',
+      async (_, spec, message) => {
+        const { code, err } = await run(
+          'tasks',
+          'post',
+          '--type',
+          'summarise',
+          '--spec',
+          spec,
+          '--verify',
+          'counterparty',
+        );
+        expect(code).toBe(1);
+        expect(err).toBe(`${message}\n`);
+        expect(api.requests).toEqual([]);
+      },
+    );
+
     it('says an API from before the fields does not take category or size', async () => {
       // What an API before RT-2 answers, its strict payload refusing both.
       api.postReply = () =>
@@ -2809,6 +2843,30 @@ describe('tasks pull, submit and post', () => {
       expect(out).not.toContain('Category');
       const json = await run('tasks', 'show', task.id, '--json');
       expect(JSON.parse(json.out)).not.toHaveProperty('category');
+    });
+
+    it('tasks show refuses a prefix that matches several held tasks, and takes a longer one', async () => {
+      const held = (id: string) =>
+        api.add({
+          id,
+          state: 'claimed',
+          claimantAgentId: agentId,
+          claimedAt: new Date().toISOString(),
+        });
+      held('abcd1234-0000-4000-8000-000000000001');
+      const second = held('abcd5678-0000-4000-8000-000000000002');
+
+      const { code, out, err } = await run('tasks', 'show', 'abcd');
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe('abcd matches 2 tasks, give more of the id\n');
+      expect(
+        api.requests.filter((r) => r.path.startsWith('/v1/tasks/')),
+      ).toEqual([]);
+
+      const json = await run('tasks', 'show', 'ABCD5', '--json');
+      expect(json.code).toBe(0);
+      expect(JSON.parse(json.out).id).toBe(second.id);
     });
   });
 

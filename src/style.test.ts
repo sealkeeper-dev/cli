@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { describe, expect, it } from 'vitest';
 import {
+  asciiGlyphs,
   createStyle,
   indent,
   Styled,
@@ -163,6 +164,80 @@ describe('style', () => {
       expect(() => new Styled(Symbol('styled'), `${ESC}[31m`)).toThrow(
         TypeError,
       );
+    });
+  });
+
+  describe('glyphs (VOU-321)', () => {
+    // A code page reader that counts how often it is asked.
+    const reader = (page: number | null) => {
+      const calls = { n: 0 };
+      return {
+        calls,
+        codePage: () => {
+          calls.n += 1;
+          return page;
+        },
+      };
+    };
+
+    it('are ASCII on win32 unless the code page is 65001', () => {
+      expect(asciiGlyphs({ platform: 'win32', codePage: () => 437 })).toBe(
+        true,
+      );
+      expect(asciiGlyphs({ platform: 'win32', codePage: () => 850 })).toBe(
+        true,
+      );
+      expect(asciiGlyphs({ platform: 'win32', codePage: () => null })).toBe(
+        true,
+      );
+      expect(asciiGlyphs({ platform: 'win32', codePage: () => 65001 })).toBe(
+        false,
+      );
+    });
+
+    it('never read the code page off win32', () => {
+      for (const platform of ['darwin', 'linux'] as const) {
+        const { calls, codePage } = reader(437);
+        expect(asciiGlyphs({ platform, codePage })).toBe(false);
+        const s = createStyle(TTY, { env: {}, platform, codePage });
+        expect(stripStyle(s.tick())).toBe('✓');
+        expect(calls.n).toBe(0);
+      }
+    });
+
+    it('draw the mark, the tick and the box in ASCII on code page 437, styled or not', () => {
+      const { calls, codePage } = reader(437);
+      const s = createStyle(TTY, { env: {}, platform: 'win32', codePage });
+      s.bold('x');
+      // Nothing drawn yet, so nothing read.
+      expect(calls.n).toBe(0);
+      expect(stripStyle(s.mark())).toBe('*');
+      expect(stripStyle(s.tick())).toBe('+');
+      expect(s.box(['ab']).map(stripStyle)).toEqual([
+        '+----+',
+        '| ab |',
+        '+----+',
+      ]);
+      // Read once for the style, however many glyphs it draws.
+      expect(calls.n).toBe(1);
+      const plain = createStyle(PIPE, { env: {}, platform: 'win32', codePage });
+      expect(plain.tick().text).toBe('+');
+      expect(plain.mark().text).toBe('*');
+    });
+
+    it('stay UTF-8 on win32 with code page 65001', () => {
+      const s = createStyle(TTY, {
+        env: {},
+        platform: 'win32',
+        codePage: () => 65001,
+      });
+      expect(stripStyle(s.mark())).toBe('◉');
+      expect(stripStyle(s.tick())).toBe('✓');
+      expect(s.box(['ab']).map(stripStyle)).toEqual([
+        '╭────╮',
+        '│ ab │',
+        '╰────╯',
+      ]);
     });
   });
 });

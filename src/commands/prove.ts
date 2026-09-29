@@ -382,7 +382,7 @@ async function explain(
   const slash = s.bold('/sealkeeper-prove');
   say();
   say(
-    s.line`${s.gold('◉')} ${s.bold('SealKeeper prove')}   ${handleOf(config, slug)}`,
+    s.line`${s.mark()} ${s.bold('SealKeeper prove')}   ${handleOf(config, slug)}`,
   );
   say();
   // Tasks addressed to this agent first, listed and never claimed here.

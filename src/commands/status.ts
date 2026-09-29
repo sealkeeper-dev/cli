@@ -96,7 +96,8 @@ type Status = {
   profileUrl: string;
   // Today's UTC day, YYYY-MM-DD.
   day: string;
-  // Today's events per type, for the types this CLI sends.
+  // Today's events per type, for the types this CLI sends, each event_id
+  // once.
   counts: Partial<Record<EventType, number>>;
   tasks: { claimed: number; submitted: number };
   // Live from the API, the count on the public profile. null when the API
@@ -140,7 +141,7 @@ type Status = {
   competenceTypes: Record<string, { taskType: string; value: number }[]>;
   scoresFetchedAt: string | null;
   // Today's events in full, only with --show, left out the types this CLI
-  // never sends.
+  // never sends, each event_id once.
   events?: Event[];
 };
 
@@ -240,7 +241,7 @@ async function readStatus(
       loadGoal({ config, fetch: deps.fetch, now, paths: p }),
     ]);
   seen(live);
-  const events = logged.filter((event) => isSent(event.type));
+  const events = firstOfEach(logged.filter((event) => isSent(event.type)));
   const slug = await refreshOperatorSlug(config.agentId, live, p);
   const dormantDays = live?.standing?.dormant_days ?? null;
   const withheldNow =
@@ -337,6 +338,19 @@ async function noAdapterAndQuiet(
     if (size > 0) return false;
   }
   return true;
+}
+
+// The first line of each event_id, in log order. A line written twice, as
+// by a retried hook, is still one event. sync sends both lines and the API
+// keeps the first and counts the repeat as a duplicate, so status counts
+// what the API will hold.
+function firstOfEach(events: Event[]): Event[] {
+  const seen = new Set<string>();
+  return events.filter((event) => {
+    if (seen.has(event.event_id)) return false;
+    seen.add(event.event_id);
+    return true;
+  });
 }
 
 function countEvents(events: Event[]): Pick<Status, 'counts' | 'tasks'> {

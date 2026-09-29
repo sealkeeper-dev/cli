@@ -274,13 +274,16 @@ const sealClaims = {
     posted_distinct_operators: Count.optional(),
     posted_confirmed_tasks: Count.optional(),
   }),
-  // The counted evidence the level read, version 2 on (VOU-139).
+  // The counted evidence the level read, version 2 on (VOU-139), and the
+  // counted twins of posted_tasks and posted_confirmed_tasks, version 3 on.
   counted: z
     .object({
       verified_tasks: Count,
       seed_tasks: Count,
       server_checked_tasks: Count,
       confirmed_tasks: Count,
+      posted_tasks: Count.optional(),
+      posted_confirmed_tasks: Count.optional(),
     })
     .optional(),
   // The fingerprint the level was last confirmed under and the state, version

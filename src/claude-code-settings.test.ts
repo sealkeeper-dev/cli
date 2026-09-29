@@ -278,6 +278,78 @@ describe('Claude Code settings', () => {
     expect(await hasHooks(file())).toBe(false);
   });
 
+  describe('a build in a monorepo', () => {
+    // packages/cli in a checkout, with a package.json of the given name
+    // beside dist, or none when name is null. Returns the hook command a
+    // build there writes.
+    async function checkout(repo: string, name: string | null) {
+      const cli = join(dir, repo, 'packages', 'cli');
+      await mkdir(join(cli, 'dist'), { recursive: true });
+      if (name !== null) {
+        await writeFile(join(cli, 'package.json'), JSON.stringify({ name }));
+      }
+      return `"/usr/local/bin/node" "${join(cli, 'dist', 'index.js')}" hook claude-code`;
+    }
+
+    it('counts a SealKeeper build as ours, so a repeat install finds it', async () => {
+      const ours = await checkout('work', 'sealkeeper');
+      expect(isOurCommand(ours)).toBe(true);
+      await installHooks(file(), ours);
+      expect(await hasHooks(file(), ours)).toBe(true);
+      expect(await ourCommands(file())).toEqual([ours]);
+      const again = await installHooks(file(), ours);
+      expect(again).toEqual({ added: [], updated: [], removed: [] });
+    });
+
+    it('never claims the hook of another tool built at a path that looks alike', async () => {
+      const others = [
+        await checkout('other', 'other-tool'),
+        await checkout('scoped', '@sealkeeper/cli'),
+        await checkout('bare', null),
+        await checkout('sealkeeper', 'sealkeeper-helper'),
+      ];
+      const broken = await checkout('broken', null);
+      await writeFile(
+        join(dir, 'broken', 'packages', 'cli', 'package.json'),
+        'not json',
+      );
+      others.push(broken);
+      // Our package.json, but not the script a build writes.
+      await checkout('near', 'sealkeeper');
+      others.push(
+        `"/usr/local/bin/node" "${join(dir, 'near', 'packages', 'cli', 'dist', 'other.js')}" hook claude-code`,
+        `"/usr/local/bin/node" "${join(dir, 'near', 'packages', 'cli', 'index.js')}" hook claude-code`,
+        // Relative, so it runs from wherever Claude Code starts, and never
+        // read against the folder the CLI runs in. Tests run from the root
+        // of this repo, whose packages/cli/package.json names sealkeeper.
+        '"/usr/local/bin/node" "./packages/cli/dist/index.js" hook claude-code',
+        '"/usr/local/bin/node" "packages/cli/dist/index.js" hook claude-code',
+      );
+      for (const command of others) {
+        expect(isOurCommand(command), command).toBe(false);
+      }
+
+      const ours = await checkout('work', 'sealkeeper');
+      await writeFile(
+        file(),
+        JSON.stringify({
+          hooks: {
+            SessionStart: others.map((command) => ({
+              hooks: [{ type: 'command', command }],
+            })),
+          },
+        }),
+      );
+      expect(await hasHooks(file())).toBe(false);
+      await installHooks(file(), ours);
+      expect(await ourCommands(file())).toEqual([ours]);
+      expect(await uninstallHooks(file(), ours)).toBe(HOOK_EVENTS.length);
+      const left = JSON.parse(await readFile(file(), 'utf8')).hooks
+        .SessionStart as { hooks: { command: string }[] }[];
+      expect(left.map((group) => group.hooks[0]?.command)).toEqual(others);
+    });
+  });
+
   it('finds the Claude Code dir from CLAUDE_CONFIG_DIR, else under home', () => {
     expect(claudeConfigDir({}, '/home/alice')).toBe('/home/alice/.claude');
     expect(claudeConfigDir({ CLAUDE_CONFIG_DIR: '' }, '/home/alice')).toBe(

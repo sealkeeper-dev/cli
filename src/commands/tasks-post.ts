@@ -328,6 +328,13 @@ async function explicitPost(
     options.allowOutsideCwd,
   );
   if (!isJsonObject(spec)) cmd.error('--spec must be a JSON object');
+  // The bounds of the schema, said in one line as every other check here.
+  // The schema words its message from the name spec, so it reads as the
+  // flag with the dashes in front.
+  const bounded = PostTaskRequest.shape.spec.safeParse(spec);
+  if (!bounded.success) {
+    cmd.error(`--${bounded.error.issues[0]?.message ?? 'spec is too large'}`);
+  }
   const verification = await parseVerify(
     cmd,
     options.verify,

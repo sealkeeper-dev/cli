@@ -57,8 +57,13 @@ export function register(
       const deleteKey = options.deleteKey === true && options.yes === true;
       if (!(await exists(p.config))) {
         // After a plain logout only the key and the log are left. The key
-        // must still be deletable then, or no command could remove it.
-        if (deleteKey && (await exists(p.key))) {
+        // must still be deletable then, or no command could remove it, and
+        // --delete-key without --yes is refused as before a logout.
+        const hasKey = await exists(p.key);
+        if (options.deleteKey && !options.yes && hasKey) {
+          this.error(deleteKeyRefusal(p, 'this agent'));
+        }
+        if (deleteKey && hasKey) {
           const { removed, keyCopies } = await removeSession(p, true);
           const folders = await releaseFolders(p);
           if (json) {
@@ -95,13 +100,7 @@ export function register(
       const identity = agentId ? `agent ${agentId}` : 'this agent';
 
       if (options.deleteKey && !options.yes) {
-        this.error(
-          [
-            `--delete-key would delete the key at ${p.key}, any copies of it and the log at ${p.log} along with the local session.`,
-            `The identity of ${identity} would be gone for good and its track record could not be extended.`,
-            `Nothing was deleted. Run ${cli('logout --delete-key --yes')} to go ahead.`,
-          ].join('\n'),
-        );
+        this.error(deleteKeyRefusal(p, identity));
       }
 
       // The job first, so a scheduler that refuses stops logout with
@@ -148,6 +147,16 @@ export function register(
         );
       }
     });
+}
+
+// What --delete-key without --yes says, three lines, and nothing is
+// deleted.
+function deleteKeyRefusal(p: Paths, identity: string): string {
+  return [
+    `--delete-key would delete the key at ${p.key}, any copies of it and the log at ${p.log} along with the local session.`,
+    `The identity of ${identity} would be gone for good and its track record could not be extended.`,
+    `Nothing was deleted. Run ${cli('logout --delete-key --yes')} to go ahead.`,
+  ].join('\n');
 }
 
 // What logout --delete-key says it deleted. Each copy of the key is named

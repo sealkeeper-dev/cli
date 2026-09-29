@@ -422,7 +422,7 @@ function welcome(ui: Ui): void {
   const s = ui.err;
   note();
   for (const text of s.box([
-    s.line`${s.gold('◉')} ${s.bold('SealKeeper')} ${s.dim(`v${VERSION}`)}`,
+    s.line`${s.mark()} ${s.bold('SealKeeper')} ${s.dim(`v${VERSION}`)}`,
     '',
     ...TAGLINE,
   ])) {
@@ -572,9 +572,6 @@ async function init(
     }
   }
 
-  const clientId = githubClientId();
-  if (clientId === null) cmd.error(MISSING_CLIENT_ID);
-
   // An explicit --name must already be a valid name. The suggestion, the
   // repository name of the git remote and then the directory name, is only
   // a default, so it is made into one. Nobody to ask and no suggestion ends
@@ -618,6 +615,10 @@ async function init(
   if (!Config.shape.apiUrl.safeParse(apiUrl).success) {
     cmd.error(`invalid API URL ${apiUrl}, ${INSECURE_API_URL}`);
   }
+  // After the checks of what was typed, so a build without the client id
+  // still names a bad flag first.
+  const clientId = githubClientId();
+  if (clientId === null) cmd.error(MISSING_CLIENT_ID);
   // A URL from SEALKEEPER_API_URL alone is used for this run and never
   // saved, so config.json keeps the old URL or the default, and a variable
   // left set in one shell does not bind the agent to that API for good.
@@ -1072,7 +1073,7 @@ async function offerNudge(
   if (input === undefined || !input.isTTY) return;
   note(ui.err.line`${NUDGE_INTRO}`);
   const on = await askNudge(input, indent);
-  await setNudge(on, p);
+  await setNudge(on, p, deps.fetch);
   const s = ui.out;
   say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
 }

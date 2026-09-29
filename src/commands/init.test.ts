@@ -55,6 +55,7 @@ import {
 import { loadKey } from '../identity.js';
 import { appendEvent, countPending } from '../log.js';
 import { isManaged } from '../managed.js';
+import { nudgeLines } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { readRoutine } from '../routine.js';
@@ -199,6 +200,9 @@ type World = {
   // A real script the CLI runs from, which routine install copies. Unset
   // means PROGRAM or NPX_PROGRAM, whose scripts do not exist.
   bundle?: string;
+  // The goal GET /v1/agents/:id/goal answers with, for the agent and
+  // version registered last. Unset means that route fails.
+  goal?: Record<string, unknown>;
 };
 
 // A terminal that answers with each line in turn, then closes.
@@ -287,6 +291,15 @@ function fakeFetch(world: World): typeof fetch {
       return Response.json({
         agents: Array.from({ length: world.operatorAgents }, () => ({})),
         nextCursor: null,
+      });
+    }
+    const goalRoute =
+      /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})\/goal$/.exec(url);
+    if (goalRoute && world.goal !== undefined) {
+      return Response.json({
+        ...world.goal,
+        agentId: goalRoute[1],
+        version: world.registrations.at(-1)?.version,
       });
     }
     const agentRoute =
@@ -975,6 +988,25 @@ describe('sealkeeper init', () => {
     expect(world.fetchUrls).toEqual([]);
     expect(await readIfExists(paths(home).key)).toBe('');
   });
+
+  it.each([
+    [['--name', 'bad name!'], 'invalid agent name bad name!'],
+    [['--name', 'scout', '--runtime', 'gpt'], 'invalid runtime gpt'],
+    [
+      ['--name', 'scout', '--api-url', 'http://api.example.com'],
+      'invalid API URL http://api.example.com',
+    ],
+  ])(
+    'names a bad flag %j before a missing client id (VOU-311)',
+    async (flags, message) => {
+      vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
+      const result = await run(world, 'init', ...flags);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(message);
+      expect(result.err).not.toContain(MISSING_CLIENT_ID);
+      expect(world.fetchUrls).toEqual([]);
+    },
+  );
   describe('version on a repeat init', () => {
     // Registered on 0.1.0, then the version on this machine moved to 2.0.0.
     async function registeredThenMoved(): Promise<void> {
@@ -1977,6 +2009,63 @@ describe('sealkeeper init', () => {
         expect(result.out).toContain('  ✓ Session nudge on\n');
         expect(await readNudge(paths(home))).toBe(true);
         expect(isManaged(await readFile(skillFile(), 'utf8'))).toBe(true);
+      });
+
+      it('fills the goal cache after a yes, so the first session start has a summary', async () => {
+        await withClaudeCode();
+        world.goal = {
+          level: 'bronze',
+          nextLevel: 'silver',
+          thresholds: [
+            { name: 'verified_tasks', current: 60, required: 250, met: false },
+          ],
+          actions: [],
+          pending: { addressed: 2, outcomes: 0 },
+          asOf: '2026-09-25T10:15:00.000Z',
+        };
+        world.stdin = answeringEach(['y', 'y']);
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(world.fetchUrls.filter((u) => u.endsWith('/goal'))).toHaveLength(
+          1,
+        );
+        expect(
+          await nudgeLines('/sealkeeper-prove', { paths: paths(home) }),
+        ).toEqual([
+          'SealKeeper. Level bronze, 60 of 250 verified tasks to silver.',
+          '2 tasks addressed to you.',
+          '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+        ]);
+      });
+
+      it('says nothing more and still exits 0 when the goal cannot be read', async () => {
+        await withClaudeCode();
+        world.stdin = answeringEach(['y', 'y']);
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(result.out).toContain('  ✓ Session nudge on\n');
+        expect(result.err).not.toContain('goal');
+        expect(world.fetchUrls.filter((u) => u.endsWith('/goal'))).toHaveLength(
+          1,
+        );
+        await expect(stat(paths(home).goal)).rejects.toThrow('ENOENT');
+        expect(
+          await nudgeLines('/sealkeeper-prove', { paths: paths(home) }),
+        ).toEqual([]);
       });
 
       it('Enter is no, which is kept and not asked again', async () => {

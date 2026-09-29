@@ -92,6 +92,14 @@ describe('adapter claude-code', () => {
   // The command install writes, changed by tests that move the script.
   let command = HOOK_COMMAND;
 
+  // Every URL install asked for. The API never answers, so no test reaches
+  // the real one.
+  let fetched: string[] = [];
+  const offline = (async (input: string | URL | Request) => {
+    fetched.push(String(input));
+    throw new TypeError('fetch failed');
+  }) as typeof fetch;
+
   async function run(...args: string[]): Promise<RunResult> {
     const program = createProgram({
       adapter: {
@@ -100,6 +108,7 @@ describe('adapter claude-code', () => {
         hookCommand: () => command,
         stdin: stdin ? () => stdin as Input : undefined,
         paths: () => paths(sealkeeperHome()),
+        fetch: offline,
       },
     });
     throwOnExit(program);
@@ -135,6 +144,7 @@ describe('adapter claude-code', () => {
   beforeEach(async () => {
     command = HOOK_COMMAND;
     stdin = undefined;
+    fetched = [];
     root = await mkdtemp(join(tmpdir(), 'sealkeeper-adapter-'));
     home = join(root, 'home');
     project = join(root, 'project');
@@ -755,6 +765,12 @@ describe('adapter claude-code', () => {
       expect(err).toContain('three line SealKeeper summary');
       expect(out).toContain('session nudge is on');
       expect(await nudgeOf()).toBe(true);
+      // It tried to fill the goal cache once, and said nothing when it could
+      // not.
+      expect(fetched).toEqual([
+        `https://api.sealkeeper.run/v1/agents/${'A'.repeat(43)}/goal`,
+      ]);
+      expect(err).not.toContain('goal');
     });
 
     it('Enter is no, kept so it is not asked again', async () => {

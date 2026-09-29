@@ -52,6 +52,9 @@ export type AdapterDeps = {
   claudeDir?: () => string;
   stdin?: () => Input;
   paths?: () => Paths;
+  // Fills the goal cache when the nudge is turned on. The global fetch
+  // when unset.
+  fetch?: typeof fetch;
 };
 
 const defaultAdapterDeps: AdapterDeps = {
@@ -270,7 +273,7 @@ async function offerNudge(deps: AdapterDeps): Promise<void> {
   }
   if (config === null || (await readNudge(p)) !== undefined) return;
   const on = await askNudge(input);
-  await setNudge(on, p);
+  await setNudge(on, p, deps.fetch);
   stdout(on ? NUDGE_ON : NUDGE_OFF);
 }
 

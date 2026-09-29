@@ -212,6 +212,9 @@ export type Paths = {
   // older CLIs still parse that, see log.ts.
   cursorOffset: string;
   credential: string;
+  // Where card write last wrote the agent card, so the daily routine
+  // refreshes that file and no other, see card.ts.
+  cardWrite: string;
   // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
   score: string;
@@ -549,6 +552,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     cursor: join(home, 'cursor.json'),
     cursorOffset: join(home, 'cursor-offset.json'),
     credential: join(home, 'credential.json'),
+    cardWrite: join(home, 'card-write.json'),
     wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),
     inbox: join(home, 'inbox.json'),

@@ -14,6 +14,7 @@ import {
   startDetached,
   watchRun,
 } from './routine-watch.js';
+import { asciiGlyphs } from './style.js';
 
 const AT = '2026-09-28T10:00:00.000Z';
 const RUN = '0b6c7c3e-1b1e-4c55-8a7e-6c1f3d7a9e10';
@@ -137,11 +138,17 @@ describe('event lines (RS-9)', () => {
 });
 
 describe('the spinner (RS-9)', () => {
-  it('rewrites one line with the elapsed time, ASCII on Windows', () => {
+  it('rewrites one line with the elapsed time, ASCII in a Windows console on code page 437', () => {
     let written = '';
     const stream = { write: (text: string) => (written += text) };
     let now = 0;
-    const spinner = new Spinner(stream, '  ', 'win32', 0, () => now);
+    const spinner = new Spinner(
+      stream,
+      '  ',
+      asciiGlyphs({ platform: 'win32', codePage: () => 437 }),
+      0,
+      () => now,
+    );
     now = 65_000;
     spinner.draw();
     expect(written).toBe('\r\u001b[2K  | Running 1:05');
@@ -153,7 +160,13 @@ describe('the spinner (RS-9)', () => {
     written = '';
     spinner.clear();
     expect(written).toBe('');
-    const unicode = new Spinner(stream, '', 'darwin', 0, () => 7_000);
+    const unicode = new Spinner(
+      stream,
+      '',
+      asciiGlyphs({ platform: 'darwin' }),
+      0,
+      () => 7_000,
+    );
     unicode.draw();
     expect(written).toBe('\r\u001b[2K⠋ Running 0:07');
     expect(elapsed(12 * 60_000 + 5_000)).toBe('12:05');

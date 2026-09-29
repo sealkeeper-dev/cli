@@ -444,6 +444,8 @@ function behindWarning(behindMs: number): string {
 }
 
 // A wait in hours and minutes, rounded up to the minute and at least one.
+// A part that is zero is left out, so a whole number of hours reads as in
+// 11 hours, never 11 hours 0 minutes.
 function durationText(ms: number): string {
   const minutes = Math.max(1, Math.ceil(ms / 60_000));
   const h = Math.floor(minutes / 60);

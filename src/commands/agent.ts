@@ -465,6 +465,7 @@ async function stillRegistered(
 async function removeLocal(p: Paths): Promise<string[]> {
   for (const target of [
     p.credential,
+    p.cardWrite,
     p.wellKnown,
     p.score,
     p.inbox,

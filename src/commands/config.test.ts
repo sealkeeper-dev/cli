@@ -1,11 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readConfig, readNudge, writeConfig } from '../config.js';
+import { paths, readConfig, readNudge, writeConfig } from '../config.js';
 import { describeFingerprint } from '../fingerprint.js';
+import { NUDGE_ON, nudgeLines } from '../nudge.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
@@ -18,8 +19,15 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
+// What the API answers. Offline unless a test sets it, so no test reaches
+// the real API.
+let answer: typeof fetch;
+const offline = (async () => {
+  throw new TypeError('fetch failed');
+}) as typeof fetch;
+
 async function run(...args: string[]): Promise<RunResult> {
-  const program = createProgram();
+  const program = createProgram({ config: { fetch: answer } });
   throwOnExit(program);
   let out = '';
   let err = '';
@@ -50,6 +58,7 @@ describe('config', () => {
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-config-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
+    answer = offline;
   });
 
   afterEach(async () => {
@@ -127,6 +136,38 @@ describe('config', () => {
     expect(bad.code).toBe(1);
     expect(bad.err).toContain('nudge takes on or off');
     expect(await readNudge()).toBe(false);
+  });
+
+  it('nudge on fills the goal cache once, and says nothing more when it cannot', async () => {
+    await initialise();
+    const on = await run('config', 'nudge', 'on');
+    expect(on).toEqual({ code: 0, out: `${NUDGE_ON}\n`, err: '' });
+    await expect(stat(paths().goal)).rejects.toThrow('ENOENT');
+
+    const urls: string[] = [];
+    answer = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return Response.json({
+        agentId: AGENT_ID,
+        version: '1.0.0',
+        level: 'bronze',
+        nextLevel: 'silver',
+        thresholds: [],
+        actions: [],
+        pending: { addressed: 1, outcomes: 0 },
+        asOf: '2026-09-25T10:15:00.000Z',
+      });
+    }) as typeof fetch;
+    await run('config', 'nudge', 'on');
+    expect(urls).toEqual([
+      `https://api.sealkeeper.run/v1/agents/${AGENT_ID}/goal`,
+    ]);
+    expect(await nudgeLines('/sealkeeper-prove')).toContain(
+      '1 task addressed to you.',
+    );
+
+    await run('config', 'nudge', 'off');
+    expect(urls).toHaveLength(1);
   });
 
   it('rejects a state other than on or off', async () => {

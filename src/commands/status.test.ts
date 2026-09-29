@@ -429,6 +429,21 @@ describe('status', () => {
     expect(out).not.toContain('competence:lint');
   });
 
+  it('counts a line written twice once, as the API keeps one of them', async () => {
+    const start = event('session.start', { session_id: 's1' });
+    const claimed = event('task.claimed', TASK);
+    for (const e of [start, claimed, start, claimed, claimed]) {
+      await appendEvent(e);
+    }
+    const json = JSON.parse(
+      (await run(offline, 'status', '--show', '--json')).out,
+    );
+    expect(json.counts['session.start']).toBe(1);
+    expect(json.counts['task.claimed']).toBe(1);
+    expect(json.tasks).toEqual({ claimed: 1, submitted: 0 });
+    expect(json.events).toEqual([start, claimed]);
+  });
+
   it('names the new API address once when the API answers a redirect', async () => {
     const moved = (async (input: string | URL | Request) => {
       const url = new URL(String(input));

@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import type { Paths } from './config.js';
 import { type RoutineEntry, type RunEntry, readRoutine } from './routine.js';
+import { asciiGlyphs } from './style.js';
 
 // Watching a routine run as it works (RS-9). The first run that init and
 // routine install start runs detached, as the scheduler runs it, and the
@@ -165,8 +166,9 @@ export function elapsed(ms: number): string {
   return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
-// One line rewritten in place, a frame and the time since start. ASCII on
-// Windows, whose older consoles draw the braille frames as boxes.
+// One line rewritten in place, a frame and the time since start. ASCII when
+// asciiGlyphs in style.ts says so, as in a Windows console whose code page
+// is not UTF-8.
 export class Spinner {
   private frame = 0;
   private shown = false;
@@ -175,11 +177,11 @@ export class Spinner {
   constructor(
     private readonly stream: SpinnerStream,
     private readonly indent: string,
-    platform: NodeJS.Platform,
+    ascii: boolean,
     private readonly start: number,
     private readonly now: () => number = Date.now,
   ) {
-    this.frames = platform === 'win32' ? ASCII_FRAMES : FRAMES;
+    this.frames = ascii ? ASCII_FRAMES : FRAMES;
   }
 
   draw(): void {
@@ -223,7 +225,8 @@ export type WatchOptions = {
   // terminal.
   spinner: SpinnerStream | null;
   indent?: string;
-  platform?: NodeJS.Platform;
+  // ASCII frames, asciiGlyphs() when left out.
+  ascii?: boolean;
   // Calls stop on Ctrl-C and returns what undoes that, null when Ctrl-C
   // should not end the watching.
   interrupt: ((stop: () => void) => () => void) | null;
@@ -248,7 +251,7 @@ export async function watchRun(o: WatchOptions): Promise<WatchResult> {
       : new Spinner(
           o.spinner,
           o.indent ?? '',
-          o.platform ?? process.platform,
+          o.ascii ?? asciiGlyphs(),
           Date.now(),
         );
   let interrupted = false;

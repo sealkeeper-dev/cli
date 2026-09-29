@@ -456,11 +456,27 @@ describe('logout', () => {
     });
   });
 
-  it('without config, --delete-key alone keeps the key and exits 0', async () => {
-    await createKey({}, p);
+  it('without config, --delete-key alone refuses as before a logout and keeps the key (VOU-300)', async () => {
+    await initialise();
+    expect((await run('logout')).code).toBe(0);
+    const { code, out, err } = await run('logout', '--delete-key');
+    expect(code).toBe(1);
+    expect(out).toBe('');
+    expect(err).toBe(
+      [
+        `--delete-key would delete the key at ${p.key}, any copies of it and the log at ${p.log} along with the local session.`,
+        'The identity of this agent would be gone for good and its track record could not be extended.',
+        'Nothing was deleted. Run npx sealkeeper logout --delete-key --yes to go ahead.',
+        '',
+      ].join('\n'),
+    );
+    expect(await exists(p.key)).toBe(true);
+    expect(await exists(p.log)).toBe(true);
+  });
+
+  it('without config or key, --delete-key alone says there is nothing to log out', async () => {
     const { code, out } = await run('logout', '--delete-key');
     expect(code).toBe(0);
     expect(out).toBe('not initialised, nothing to log out\n');
-    expect(await exists(p.key)).toBe(true);
   });
 });

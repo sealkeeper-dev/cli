@@ -3,6 +3,7 @@ import { OperatorSlug } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
+  paths,
   ROUTINE_LIMIT_MAX,
   readNudge,
   writeConfig,
@@ -18,10 +19,20 @@ import { AUTO_SYNC_ON } from './sync.js';
 
 const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
+// fetch fills the goal cache when the nudge is turned on.
+export type ConfigDeps = { fetch: typeof fetch };
+
+export const defaultConfigDeps: ConfigDeps = {
+  fetch: (...args) => fetch(...args),
+};
+
 // Local settings. auto-sync in config.json, the nudge in nudge.json and the
 // routine's limits and allowlist in routine.json can be changed here, the
 // identity fields come from init.
-export function register(parent: Command): Command {
+export function register(
+  parent: Command,
+  deps: ConfigDeps = defaultConfigDeps,
+): Command {
   const config = parent
     .command('config')
     .description('Show or change local settings');
@@ -92,7 +103,7 @@ export function register(parent: Command): Command {
       }
       await requireConfig(this);
       const nudge = state === 'on';
-      await setNudge(nudge);
+      await setNudge(nudge, paths(), deps.fetch);
       if (wantsJson(this)) {
         stdout(JSON.stringify({ nudge }));
         return;

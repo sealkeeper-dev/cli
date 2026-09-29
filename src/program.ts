@@ -8,7 +8,10 @@ import {
 import { type AgentDeps, register as registerAgent } from './commands/agent.js';
 import { register as registerCard } from './commands/card.js';
 import { register as registerCheck } from './commands/check.js';
-import { register as registerConfig } from './commands/config.js';
+import {
+  type ConfigDeps,
+  register as registerConfig,
+} from './commands/config.js';
 import { register as registerEmit } from './commands/emit.js';
 import { register as registerGoal } from './commands/goal.js';
 import {
@@ -88,6 +91,7 @@ type ProgramDeps = {
   seal?: Partial<SealDeps>;
   routine?: RoutineDeps;
   whoami?: WhoamiDeps;
+  config?: ConfigDeps;
 };
 
 export function createProgram(deps: ProgramDeps = {}): Command {
@@ -121,7 +125,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerRate(program, deps.rate);
   registerAgent(program, deps.agent, deps.routine);
   registerWhoami(program, deps.whoami);
-  registerConfig(program);
+  registerConfig(program, deps.config);
   registerLogout(program, deps.routine);
   registerAdapter(program, deps.adapter);
   registerHook(program, deps.hook);

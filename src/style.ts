@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { execFileSync } from 'node:child_process';
 import { terminalSafe } from './output.js';
 
 // Terminal styling for the human output, ANSI escape codes only. Styling is
@@ -7,6 +8,10 @@ import { terminalSafe } from './output.js';
 // tests see the styled form. Off, every function hands its text back
 // unchanged and box() drops the border, so the plain form is the same words.
 // A command decides once per run and stream, with createStyle.
+//
+// The glyphs, the mark, the tick, the box border and the spinner frames of
+// routine-watch.ts, are ASCII in a Windows console whose code page is not
+// UTF-8, see asciiGlyphs.
 //
 // The escape codes are only safe because nothing else can put an ESC in a
 // styled line. Every plain string a style function takes, whether it came
@@ -55,7 +60,13 @@ function safe(part: Part): string {
 
 export type StyleStream = { isTTY?: boolean; columns?: number };
 
-export type StyleOptions = {
+export type GlyphOptions = {
+  platform?: NodeJS.Platform;
+  // The output code page of the console, null when it cannot be read.
+  codePage?: () => number | null;
+};
+
+export type StyleOptions = GlyphOptions & {
   json?: boolean;
   env?: NodeJS.ProcessEnv;
 };
@@ -68,6 +79,8 @@ export type Style = {
   green(text: Part): Styled;
   cyan(text: Part): Styled;
   grey(text: Part): Styled;
+  // The gold SealKeeper mark in front of a heading.
+  mark(): Styled;
   // A green check mark.
   tick(): Styled;
   // A tagged template. The literal text and every value are escaped unless
@@ -90,6 +103,51 @@ export function styleEnabled(
   if (env.NO_COLOR) return false;
   if (env.TERM === 'dumb') return false;
   return stream.isTTY === true;
+}
+
+// The code page that is UTF-8.
+const UTF8_CODE_PAGE = 65001;
+
+// The one glyph check. The CLI writes UTF-8, and a Windows console decodes
+// it with its code page, so on win32 every glyph is ASCII unless that code
+// page is 65001. Any other platform never reads the code page.
+export function asciiGlyphs({
+  platform = process.platform,
+  codePage = consoleCodePage,
+}: GlyphOptions = {}): boolean {
+  return platform === 'win32' && codePage() !== UTF8_CODE_PAGE;
+}
+
+// Short, so a slow or hung chcp never holds up a command.
+const CHCP_TIMEOUT_MS = 1_000;
+
+let readCodePage: number | null | undefined;
+
+// The output code page of the console, from chcp, read once per process
+// and only when a glyph is drawn on win32. chcp prints it as the last
+// number of one line in the language of Windows, as in the English line
+// `Active code page: 437`. null when chcp fails, which then reads as not
+// UTF-8. stdin is inherited so chcp shares this process's console and reads
+// its code page. With no stdio inherited, Node starts it with
+// CREATE_NO_WINDOW in a console of its own, which holds the system default
+// and not a code page the operator set for the session. windowsHide then
+// only hides a console chcp makes when this process has none.
+function consoleCodePage(): number | null {
+  if (readCodePage === undefined) {
+    try {
+      const out = execFileSync('chcp.com', {
+        encoding: 'latin1',
+        timeout: CHCP_TIMEOUT_MS,
+        windowsHide: true,
+        stdio: ['inherit', 'pipe', 'ignore'],
+      });
+      const found = /(\d+)\D*$/.exec(out)?.[1];
+      readCodePage = found === undefined ? null : Number(found);
+    } catch {
+      readCodePage = null;
+    }
+  }
+  return readCodePage;
 }
 
 // Text as the terminal shows it, without escape codes.
@@ -117,6 +175,13 @@ export function createStyle(
   options: StyleOptions = {},
 ): Style {
   const enabled = styleEnabled(stream, options);
+  // Decided on the first glyph, so a command that draws none never reads
+  // the code page.
+  let ascii: boolean | undefined;
+  const plain = (): boolean => {
+    ascii ??= asciiGlyphs(options);
+    return ascii;
+  };
   const wrap =
     (open: string, close: string) =>
     (part: Part): Styled => {
@@ -151,10 +216,15 @@ export function createStyle(
     if (columns && width + INDENT.length > columns) return lines;
     const pad = (l: Styled) =>
       styled(l.text + ' '.repeat(inner - visibleWidth(l)));
+    const [top, bottom, across, side] = plain()
+      ? ['++', '++', '-', '|']
+      : ['╭╮', '╰╯', '─', '│'];
+    const edge = (corners: string) =>
+      gold(`${corners[0]}${across.repeat(width - 2)}${corners[1]}`);
     return [
-      gold(`╭${'─'.repeat(width - 2)}╮`),
-      ...lines.map((l) => line`${gold('│')} ${pad(l)} ${gold('│')}`),
-      gold(`╰${'─'.repeat(width - 2)}╯`),
+      edge(top),
+      ...lines.map((l) => line`${gold(side)} ${pad(l)} ${gold(side)}`),
+      edge(bottom),
     ];
   }
 
@@ -166,7 +236,8 @@ export function createStyle(
     green,
     cyan: rgb(90, 170, 210),
     grey: rgb(140, 140, 135),
-    tick: () => green('✓'),
+    mark: () => gold(plain() ? '*' : '◉'),
+    tick: () => green(plain() ? '+' : '✓'),
     line,
     box,
   };

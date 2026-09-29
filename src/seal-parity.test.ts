@@ -22,7 +22,7 @@ import {
 } from '@sealkeeper/schema/conformance';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { checkHandshakeLine } from './handshake.js';
-import { checkSeal } from './seal.js';
+import { checkSeal, sealSummary } from './seal.js';
 
 const KID = 'sealkeeper-parity-1';
 const NOW = Date.parse('2026-09-24T12:00:00.000Z');
@@ -243,6 +243,42 @@ describe('seal verify against the SEAL conformance cases', () => {
       }),
     );
     expect(answers).toEqual(suite.cases.map((c) => [c.name, c.expected]));
+  });
+
+  it('prints each counted value a SEAL carries beside its count, the posted ones of version 3 too', async () => {
+    const counts = async (name: string) => {
+      const c = suite.cases.find((x) => x.name === name);
+      if (!c) throw new Error(`no case ${name}`);
+      const r = await checkSeal(
+        c.jws,
+        suite.wellKnown as never,
+        suite.nowSeconds * 1000,
+      );
+      expect(r.valid).toBe(true);
+      return sealSummary(r.payload).filter((line) => /tasks /.test(line));
+    };
+    expect(
+      await counts('version 3 with posted counts, fingerprint and state'),
+    ).toEqual([
+      'verified tasks 26, 17 counted',
+      'seed tasks 25, 17 counted',
+      'server checked tasks 1, 0 counted',
+      'confirmed tasks 0, 0 counted',
+      'posted tasks 4, 3 counted',
+      'posted confirmed tasks 1, 1 counted',
+    ]);
+    expect(await counts('version 2 with counted evidence')).toEqual([
+      'verified tasks 26, 17 counted',
+      'seed tasks 25, 17 counted',
+      'server checked tasks 1, 0 counted',
+      'confirmed tasks 0, 0 counted',
+    ]);
+    expect(await counts('a valid SEAL')).toEqual([
+      'verified tasks 26',
+      'seed tasks 25',
+      'server checked tasks 1',
+      'confirmed tasks 0',
+    ]);
   });
 
   it('says a SEAL issued ahead of the clock is not yet valid', async () => {

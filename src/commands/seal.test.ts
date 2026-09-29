@@ -522,8 +522,8 @@ describe('sealkeeper seal', () => {
       const lines = out.trimEnd().split('\n');
       expect(lines[0]).toBe('valid SEAL');
       expect(lines).toContain('seed tasks 25, 17 counted');
-      expect(lines).toContain('posted tasks 4');
-      expect(lines).toContain('posted confirmed tasks 1');
+      expect(lines).toContain('posted tasks 4, 3 counted');
+      expect(lines).toContain('posted confirmed tasks 1, 1 counted');
       expect(lines).toContain('posted distinct operators 2');
       expect(lines).toContain(
         `fingerprint BwjgHg-Z9sC4K05UnygMCN_CD7onYm12GfK83VEIpTQ since ${new Date(rest.iat * 1000).toISOString().slice(0, 10)}`,
@@ -1149,6 +1149,52 @@ describe('sealkeeper seal', () => {
         expect(code).toBe(2);
         expect(out).toBe('');
         expect(err.trimEnd().split('\n')).toHaveLength(1);
+        expect(err).toContain(
+          'there is no usable cached SealKeeper key file, run npx sealkeeper seal verify once without --offline, or pass --keys',
+        );
+        expect(requests).toEqual([]);
+      });
+
+      it('says the same when the cache file does not read', async () => {
+        await writeFile(paths().wellKnown, '{"fetchedAt":');
+        const { code, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
+        expect(err).toContain(
+          'there is no usable cached SealKeeper key file, run npx sealkeeper seal verify once without --offline, or pass --keys',
+        );
+        expect(requests).toEqual([]);
+      });
+
+      it('says the cache lacks the kid when the cache is there without it (VOU-301)', async () => {
+        await run(fetchFn, 'seal', 'verify', await currentSeal());
+        const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
+        await writeFile(
+          paths().wellKnown,
+          JSON.stringify({
+            ...cache,
+            wellKnown: {
+              keys: cache.wellKnown.keys.map((k: object) => ({
+                ...k,
+                kid: 'another-kid',
+              })),
+            },
+          }),
+        );
+        requests = [];
+        const { code, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--offline',
+        );
+        expect(code).toBe(2);
         expect(err).toContain(
           `the cached keys from ${API_URL} do not include kid ${KID}, run npx sealkeeper seal verify once without --offline, or pass --keys`,
         );

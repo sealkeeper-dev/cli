@@ -1,8 +1,8 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, join, sep, win32 } from 'node:path';
 import { writeFileAtomic } from './config.js';
 
 // Adds and removes the SealKeeper hooks in a Claude Code settings file. Hooks
@@ -157,7 +157,12 @@ function shellQuote(value: string): string {
 
 // "<node>" "<script>" hook claude-code, as hookCommand writes it.
 const ABSOLUTE = /^"((?:[^"\\]|\\.)*)" "((?:[^"\\]|\\.)*)" hook claude-code$/;
+// The sealkeeper package, installed by npm or in the npx cache.
 const OUR_SCRIPT = /[\\/]sealkeeper[\\/]dist[\\/]index\.js$/;
+// A build in the SealKeeper monorepo. Other monorepos have a
+// packages/cli/dist/index.js too, so it is ours only while the package.json
+// beside dist names sealkeeper.
+const CHECKOUT_SCRIPT = /[\\/]packages[\\/]cli[\\/]dist[\\/]index\.js$/;
 
 function unquote(value: string): string {
   return value.replace(/\\(.)/g, '$1');
@@ -174,12 +179,27 @@ export function parseHookCommand(
 }
 
 // Whether a command is one of ours. The absolute form whose script is a
-// sealkeeper package, or exactly the command being installed now, which
-// covers running from a checkout.
+// sealkeeper package or a build in the SealKeeper monorepo, or exactly the
+// command being installed now. It decides which hooks install rewrites and
+// uninstall removes, so it never matches a hook of another tool.
 export function isOurCommand(command: string, current?: string): boolean {
   if (command === current) return true;
   const parsed = parseHookCommand(command);
-  return parsed !== null && OUR_SCRIPT.test(parsed.script);
+  return parsed !== null && isOurScript(parsed.script);
+}
+
+// A build in a checkout counts only at an absolute path, since a relative
+// one runs from wherever Claude Code starts and would be read here against
+// the folder the CLI runs in. win32.isAbsolute takes a POSIX path too.
+function isOurScript(script: string): boolean {
+  if (OUR_SCRIPT.test(script)) return true;
+  if (!CHECKOUT_SCRIPT.test(script) || !win32.isAbsolute(script)) return false;
+  try {
+    const file = join(dirname(dirname(script)), 'package.json');
+    return JSON.parse(readFileSync(file, 'utf8'))?.name === 'sealkeeper';
+  } catch {
+    return false;
+  }
 }
 
 function realOrNull(path: string): string | null {

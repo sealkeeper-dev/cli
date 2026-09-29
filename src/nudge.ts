@@ -8,7 +8,7 @@ import {
   readNudge,
   writeNudge,
 } from './config.js';
-import { cachedGoal } from './goal.js';
+import { cachedGoal, loadGoal } from './goal.js';
 import { HIGHEST_ISSUED, plainName } from './level-text.js';
 import { dailyCeilingReached, todayOf } from './today.js';
 
@@ -18,7 +18,8 @@ import { dailyCeilingReached, todayOf } from './today.js';
 //
 // It is read from the cached goal only, so a session start never waits on
 // the network. A cache up to a day old is used, and the SessionEnd hook
-// refreshes it (claude-code.ts). No cache, an older one or no config means
+// refreshes it (claude-code.ts). Turning the nudge on fills it once, see
+// setNudge. No cache, an older one or no config means
 // no summary. It only runs once the operator said yes, nudge.json on, and
 // it only points at the prove flow, which claims seed tasks, at tasks
 // addressed to this agent and at outcomes this agent owes. Never at open
@@ -215,7 +216,17 @@ export async function nudgeLines(
 }
 
 // Writes the operator's answer to nudge.json, never config.json, which
-// CLI 0.4.4 and earlier read strictly.
-export async function setNudge(on: boolean, p: Paths = paths()): Promise<void> {
+// CLI 0.4.4 and earlier read strictly. Turning it on also fills the goal
+// cache once, as the SessionEnd hook refreshes it, since the summary reads
+// only that cache and the first session after would print nothing
+// (VOU-303). A cache under fifteen minutes old is kept. It is a side task,
+// so no answer, an error or no config leaves the cache as it was and says
+// nothing. fetch defaults to the global one.
+export async function setNudge(
+  on: boolean,
+  p: Paths = paths(),
+  fetch?: typeof globalThis.fetch,
+): Promise<void> {
   await writeNudge(on, p);
+  if (on) await loadGoal({ fetch, paths: p }).catch(() => null);
 }

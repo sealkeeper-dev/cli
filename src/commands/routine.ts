@@ -11,6 +11,7 @@ import {
   resolveApiUrl,
 } from '../api.js';
 import { type Input, readYesNo, streamInput } from '../ask.js';
+import { type CardRefresh, readCardRecord, refreshCard } from '../card.js';
 import { cliInvocation, cliProgram } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
@@ -832,6 +833,8 @@ export async function routineRun(
   const schedule = routine.schedule;
   const startedAt = new Date();
   let report: RunReport | null = null;
+  // What the refresh did with the card, unset when card write wrote none.
+  let card: string | null = null;
 
   const finish = async (
     outcome: RunOutcome,
@@ -849,6 +852,7 @@ export async function routineRun(
       ...tally(entries, runId),
       tokens: agent?.tokens ?? null,
       costUsd: agent?.costUsd ?? null,
+      ...(card === null ? {} : { card }),
     };
     await appendRoutine(entry, p);
     let paused: string | null = null;
@@ -896,6 +900,11 @@ export async function routineRun(
 
   // The rest of the run, while this run holds the lock.
   async function lockedRun(): Promise<void> {
+    // The card first, before the run decides whether there is work, so a
+    // run with nothing to do or its limits spent still refreshes it
+    // (VOU-383). In this process, never by the agent, and it spends no
+    // limit. It never fails the run.
+    card = await refreshCard(config, { fetch: deps.fetch }, p);
     const entries = await readRoutine(p);
     const claims = budgetOf(entries, 'claim', routine);
     const confirms = budgetOf(entries, 'confirm', routine);
@@ -1283,8 +1292,23 @@ export function runLine(entry: Omit<RunEntry, 'at'>): string {
     );
     parts.push(`${spent(entry)}.`);
   }
+  const card = entry.card === undefined ? undefined : CARD_TEXT.get(entry.card);
+  if (card !== undefined) parts.push(card);
   return parts.join(' ');
 }
+
+// What a run did with the card, by the value refreshCard returned. A value
+// a newer CLI wrote is left out.
+const CARD_TEXT = new Map<string, string>([
+  ['refreshed', 'Card refreshed.'],
+  ['current', 'Card up to date.'],
+  ['offline', 'Card kept, the API could not be reached.'],
+  ['withheld', 'Card kept, no SEAL is issued for this agent now.'],
+  ['gone', 'Card not refreshed, its file is gone.'],
+  ['changed', 'Card not refreshed, the file holds another card.'],
+  ['unwritable', 'Card not refreshed, its file could not be written.'],
+  ['failed', 'Card not refreshed, the SEAL could not be read.'],
+] satisfies [CardRefresh, string][]);
 
 const capital = (text: string) =>
   text.length === 0 ? text : `${text[0]?.toUpperCase()}${text.slice(1)}`;
@@ -1306,7 +1330,7 @@ async function status(
   deps: RoutineDeps,
   options: { files?: boolean } = {},
 ): Promise<void> {
-  await requireConfig(cmd);
+  const config = await requireConfig(cmd);
   const routine = await loadRoutineConfig(cmd);
   const p = paths();
   if (options.files === true) {
@@ -1328,6 +1352,7 @@ async function status(
   const transcript = existsSync(copyPaths(p).transcript)
     ? copyPaths(p).transcript
     : null;
+  const cardRecord = await readCardRecord(config.agentId, p);
 
   if (wantsJson(cmd)) {
     const copied = await copyVersion(p);
@@ -1347,6 +1372,10 @@ async function status(
         allowSlugs: routine.allowSlugs,
         lastRun,
         transcript,
+        card:
+          cardRecord === null
+            ? null
+            : { path: cardRecord.path, writtenAt: cardRecord.writtenAt },
         waiting,
         copy: {
           path: copyPaths(p).script,
@@ -1383,6 +1412,12 @@ async function status(
   );
   // Where the last run's transcript is, never what it says (RS-10).
   if (transcript !== null) stdout(`Transcript  ${tildePath(transcript)}`);
+  // The card card write last wrote, which each run refreshes (VOU-383).
+  if (cardRecord !== null) {
+    stdout(
+      `Card      ${tildePath(cardRecord.path)}, last written ${cardRecord.writtenAt}`,
+    );
+  }
   if (s !== undefined) {
     stdout('');
     for (const line of await jobSection(s, deps, p)) stdout(line);

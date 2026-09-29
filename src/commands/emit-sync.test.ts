@@ -1014,20 +1014,46 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(1);
     });
 
-    it('stops on version_limit at index 0, says when it clears and skips nothing', async () => {
-      await initialise();
-      await seed(2);
-      server.reply = () => rejectAt(0, 'version_limit', 'version');
-      const { code, out, err } = await api('sync');
-      expect(code).toBe(1);
-      expect(out).toBe('');
-      expect(err).toMatch(
-        /the limit clears at midnight UTC, in (\d+ hours? )?\d+ minutes?, sync again then, 2 events pending/,
+    describe('on version_limit at index 0', () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      // The time left rounds up to the minute, and a whole number of hours
+      // is said without minutes (VOU-514). Only Date is faked, so the clock
+      // stands at each time below.
+      it.each([
+        ['the first minute of an hour', '2026-09-27T13:00:30.000Z', '11 hours'],
+        [
+          'the middle of an hour',
+          '2026-09-27T13:30:00.000Z',
+          '10 hours 30 minutes',
+        ],
+        [
+          'the last minute of an hour',
+          '2026-09-27T13:59:30.000Z',
+          '10 hours 1 minute',
+        ],
+      ])(
+        'stops, says when it clears and skips nothing, in %s',
+        async (_, at, left) => {
+          vi.useFakeTimers({ toFake: ['Date'] });
+          vi.setSystemTime(new Date(at));
+          await initialise();
+          await seed(2);
+          server.reply = () => rejectAt(0, 'version_limit', 'version');
+          const { code, out, err } = await api('sync');
+          expect(code).toBe(1);
+          expect(out).toBe('');
+          expect(err).toContain(
+            `the limit clears at midnight UTC, in ${left}, sync again then, 2 events pending`,
+          );
+          expect(err).not.toContain('skipped');
+          expect(server.batches).toHaveLength(1);
+          expect((await readCursor()).lastAcked).toBeNull();
+          expect(await countPending()).toBe(2);
+        },
       );
-      expect(err).not.toContain('skipped');
-      expect(server.batches).toHaveLength(1);
-      expect((await readCursor()).lastAcked).toBeNull();
-      expect(await countPending()).toBe(2);
     });
 
     it('sends the events before a version_limit and keeps the rest', async () => {
