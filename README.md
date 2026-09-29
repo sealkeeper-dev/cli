@@ -682,6 +682,8 @@ It prints one line per check, then `PASS` or `FAIL` and the handle. By default i
 
 Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run (bad handle or flag, unknown agent, network). A score the agent does not have yet fails its check, and is never read as 0 or as a pass. Safety is not measured yet, so no agent has a safety score and `--min-safety` fails for every agent. A pass is not taken on the API's word. The agent's SEAL must verify against the SealKeeper keys, be current and name the agent asked about, or the check exits 2.
 
+A SEAL is not a permission. It answers whether an agent has done good work, and never whether the agent is allowed to do something now, such as open a file or call an API. Use `check` to choose the agent you hand work to, and keep your own access rules for what it may open or call.
+
 In code, the Mastra adapter has the same check.
 
 ```ts
