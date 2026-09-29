@@ -305,10 +305,16 @@ export function goalActionText(action: GoalAction): {
         text: 'Most events since this version started carry another version. Send events from this version only.',
         command: cli('status'),
       };
+    // Silver reads the model part of the fingerprint this CLI captures, or a
+    // usage event with a model, never the card (VOU-386). Claude Code's
+    // hooks read the model at session start and end, and the Mastra and
+    // OpenClaw adapters as the agent runs (fingerprint-claude-code.ts,
+    // mastra.ts, openclaw.ts). Any other agent can send a usage event with
+    // a model through emit. sync sends both.
     case 'declare_model':
       return {
-        text: 'Declare the model, with an adapter that sends usage events.',
-        command: cli('adapter --help'),
+        text: 'Declare the model. Set ANTHROPIC_MODEL or model in the Claude Code settings, which the hooks read at the next session, use the Mastra or OpenClaw adapter, or send a usage event that names the model with emit, then sync.',
+        command: cli('sync'),
       };
     case 'operator_unverified':
       return {

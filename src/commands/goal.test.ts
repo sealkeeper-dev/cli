@@ -646,6 +646,15 @@ describe('goalActionText', () => {
     });
   });
 
+  // VOU-386. Silver reads the model the CLI captures into the fingerprint,
+  // or a usage event with a model, never the card.
+  it('says how to declare the model the CLI captures', () => {
+    expect(goalActionText({ code: 'declare_model', count: null })).toEqual({
+      text: 'Declare the model. Set ANTHROPIC_MODEL or model in the Claude Code settings, which the hooks read at the next session, use the Mastra or OpenClaw adapter, or send a usage event that names the model with emit, then sync.',
+      command: 'sealkeeper sync',
+    });
+  });
+
   it('says something for a code it does not know', () => {
     expect(goalActionText({ code: 'rate_peers', count: 3 })).toEqual({
       text: 'Next step rate_peers, 3.',
