@@ -720,6 +720,7 @@ describe('the counted evidence steps', () => {
       'Diminishing returns per group',
       'Confirmer weight',
       'Check method and size',
+      'Pass rate',
       'Pair curve',
       'Task weight',
       'Share cap',
@@ -733,7 +734,7 @@ describe('the counted evidence steps', () => {
     expect(COUNTED_STEPS[0]).toContain('At most 20 verified tasks a day count');
     expect(COUNTED_STEPS[1]).toContain('25 of one group count about 17');
     expect(COUNTED_RULE).toContain(
-      'The SEAL standard, section 4, has the numbers for steps 3 to 7, at https://sealkeeper.run/seal/standard.',
+      'The SEAL standard, section 4, has the numbers for steps 3 to 8, at https://sealkeeper.run/seal/standard.',
     );
   });
 

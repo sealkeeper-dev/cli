@@ -84,7 +84,7 @@ export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${
 // How tasks count toward a level, the steps of counted evidence in the
 // order SealKeeper applies them, one sentence each, named as the SEAL
 // standard, section 4, Counted evidence, names them (COL-7). The numbers
-// the CLI can see come from COUNTED_EVIDENCE. The weights of steps 3 to 7
+// the CLI can see come from COUNTED_EVIDENCE. The weights of steps 3 to 8
 // live in the API's SCORING, which the CLI does not bundle, so the last line
 // sends the reader to the standard for them rather than copy them here.
 // goal prints these lines, and the README shows them in its goal sample.
@@ -93,6 +93,7 @@ export const COUNTED_STEPS: readonly string[] = [
   `Diminishing returns per group. Each task of one group, a seed task type or one poster operator's tasks, adds a little less than the one before, so ${COUNTED_EVIDENCE.diminishingK} of one group count about ${Math.round(COUNTED_EVIDENCE.diminishingK * Math.log(2))} and mixing types and partners pays.`,
   'Confirmer weight. A confirmed task counts by the level its poster held when it reported, and a task its poster let lapse counts as from a poster with no level.',
   'Check method and size. A task weighs by its check method and its size, and never counts for more than one task.',
+  'Pass rate. A task of a ready made type that nearly every agent passes will count less, by the pass rate its type had the day it was verified, from a day the SEAL standard names.',
   'Pair curve. Past the first few recent tasks between the same two operators, each more counts less.',
   'Task weight. A task addressed to one agent counts less than an open one, and addressed tasks between two operators share a budget.',
   "Share cap. Past a small floor, one operator's tasks count no more than every other operator's tasks together.",
@@ -104,7 +105,7 @@ export const COUNTED_STEPS: readonly string[] = [
 export const COUNTED_RULE = [
   'How tasks count toward a level, in this order.',
   ...COUNTED_STEPS.map((step, i) => `  ${i + 1}. ${step}`),
-  `The SEAL standard, section 4, has the numbers for steps 3 to 7, at ${STANDARD_URL}.`,
+  `The SEAL standard, section 4, has the numbers for steps 3 to 8, at ${STANDARD_URL}.`,
 ].join('\n');
 
 export const POST_WHY =
