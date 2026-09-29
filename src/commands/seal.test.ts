@@ -399,6 +399,26 @@ describe('sealkeeper seal', () => {
       expect(requests).toEqual([WELL_KNOWN]);
     });
 
+    // VOU-436. While safety is not measured the issuer leaves the safety
+    // key out of scores and keeps safety_incidents_90d in the counts.
+    it('a SEAL with no safety score is valid and prints the same summary', async () => {
+      const seal = await sign(
+        claims({ scores: { reliability: 0.9, cost_latency: null } }),
+        serverKey.privateKey,
+        KID,
+      );
+      const { code, out, err } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(err).toBe('');
+      expect(code).toBe(0);
+      const lines = out.trimEnd().split('\n');
+      expect(lines[0]).toBe('valid SEAL');
+      expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
+      expect(jsonBlock(lines).scores).toEqual({
+        reliability: 0.9,
+        cost_latency: null,
+      });
+    });
+
     it('prints identity references and a null last active', async () => {
       const seal = await sign(
         claims({

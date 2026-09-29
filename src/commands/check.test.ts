@@ -300,6 +300,35 @@ describe('sealkeeper check', () => {
     expect(help?.replace(/\s+/g, ' ')).toContain('default bronze');
   });
 
+  // VOU-436. Safety is not measured, so the API answers minSafety with a
+  // null actual for every agent, and the SEAL it carries has no safety key.
+  it('prints a minSafety check with no safety score as none yet, exit 1', async () => {
+    reply = () =>
+      Response.json({
+        ...failing,
+        checks: [
+          { name: 'minVerified', required: 1, actual: 7, ok: true },
+          { name: 'maxIncidents', required: 0, actual: 0, ok: true },
+          { name: 'minSafety', required: 0.5, actual: null, ok: false },
+        ],
+      });
+    const r = await run('check', 'alice/claude-code', '--min-safety', '0.5');
+    expect(r.code).toBe(1);
+    expect(r.err).toBe('');
+    expect(r.out).toBe(
+      [
+        'ok   verified tasks 7, need at least 1',
+        'ok   incidents 0, allow at most 0',
+        'FAIL safety none yet, need at least 0.5',
+        'FAIL alice/claude-code',
+        '',
+      ].join('\n'),
+    );
+    expect(urls).toEqual([
+      'https://api.test/v1/check/alice/claude-code?minSafety=0.5',
+    ]);
+  });
+
   it('--min-level sends minLevel and prints the level line', async () => {
     reply = () =>
       Response.json({
