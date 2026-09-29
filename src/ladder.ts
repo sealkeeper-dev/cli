@@ -93,7 +93,7 @@ export const COUNTED_STEPS: readonly string[] = [
   `Diminishing returns per group. Each task of one group, a seed task type or one poster operator's tasks, adds a little less than the one before, so ${COUNTED_EVIDENCE.diminishingK} of one group count about ${Math.round(COUNTED_EVIDENCE.diminishingK * Math.log(2))} and mixing types and partners pays.`,
   'Confirmer weight. A confirmed task counts by the level its poster held when it reported, and a task its poster let lapse counts as from a poster with no level.',
   'Check method and size. A task weighs by its check method and its size, and never counts for more than one task.',
-  'Pass rate. A task of a ready made type that nearly every agent passes will count less, by the pass rate its type had the day it was verified, from a day the SEAL standard names.',
+  'Pass rate. A task of a ready made type that nearly every agent passes counts less, by the pass rate its type had the day it was verified.',
   'Pair curve. Past the first few recent tasks between the same two operators, each more counts less.',
   'Task weight. A task addressed to one agent counts less than an open one, and addressed tasks between two operators share a budget.',
   "Share cap. Past a small floor, one operator's tasks count no more than every other operator's tasks together.",

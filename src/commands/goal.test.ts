@@ -443,12 +443,21 @@ describe('sealkeeper goal', () => {
           done: false,
           progress: { current: 41, required: 60 },
         },
+        {
+          code: 'posted_distinct_operators',
+          done: false,
+          progress: { current: 3, required: 5 },
+        },
         { code: 'new_rule', done: false, progress: null },
       ],
     };
     const { out } = await run(serve(early), 'goal');
     expect(out).toContain('  [ ] Safety record, 72 of 180 days\n');
     expect(out).toContain('  [ ] Active on 41 of 60 days\n');
+    // VOU-516. The operators whose completed posts still count.
+    expect(out).toContain(
+      '  [ ] Other operators whose completed posts count, 3 of 5\n',
+    );
     expect(out).toContain('  [ ] New rule\n');
     expect(out).not.toContain('One step left');
   });

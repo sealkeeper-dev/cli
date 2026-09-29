@@ -482,6 +482,10 @@ export function goalStepText(step: GoalStep): string {
       return withOf('Record spans', ' days');
     case 'verified_tasks':
       return withOf('Counted verified tasks');
+    // VOU-516. The operators whose completions of this agent's posts still
+    // count, not every operator that completed one.
+    case 'posted_distinct_operators':
+      return withOf('Other operators whose completed posts count');
     case 'reliability':
       return withOf('Reliability');
     case 'safety':
