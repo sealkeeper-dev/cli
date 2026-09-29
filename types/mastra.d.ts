@@ -19,11 +19,10 @@ export type SealKeeperSession = {
   end: () => Promise<void>;
 };
 
-// Wraps the execute of every tool in a record or an array and returns the
-// same shape. Each call emits tool.call with the tool id, duration and
-// outcome. Characters a tool name cannot hold become a dash. Arguments and results are never read. Errors are rethrown.
-// The tool names and schemas, and the model ids of steps, are hashed for
-// the fingerprint in fingerprint-sources.json. Only the hashes are kept.
+// Hashes the names and schemas of the tools in a record or an array for the
+// fingerprint in fingerprint-sources.json and returns the tools themselves,
+// unchanged. Their calls are not recorded. The model ids of steps are hashed
+// the same way. Only the hashes are kept.
 export declare function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
 >(tools: T): T;

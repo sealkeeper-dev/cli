@@ -17,6 +17,7 @@ import {
   allSettingsPaths,
   claudeCodeHooksIn,
   claudeConfigDir,
+  hasRetiredHooks,
   ourCommands,
   parseHookCommand,
 } from '../claude-code-settings.js';
@@ -58,6 +59,7 @@ import { type SealWithheld, withheldText } from '../responses.js';
 import { routineJobWarnings } from '../routine-copy.js';
 import { getScore, type ScoreCache } from '../score.js';
 import { unsubmittedClaims } from '../tasks.js';
+import { isSent } from '../taxonomy.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import { defaultSyncDeps } from './sync.js';
 
@@ -80,6 +82,7 @@ export type StatusDeps = {
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${cli('adapter claude-code install')} again, or npm i -g sealkeeper for a stable path.`;
+export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run ${cli('adapter claude-code install')} again to remove them, with --scope project for a project install.`;
 const QUIET_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
@@ -93,8 +96,8 @@ type Status = {
   profileUrl: string;
   // Today's UTC day, YYYY-MM-DD.
   day: string;
-  counts: Record<EventType, number>;
-  toolCalls: { total: number; ok: number; okRatio: number | null };
+  // Today's events per type, for the types this CLI sends.
+  counts: Partial<Record<EventType, number>>;
   tasks: { claimed: number; submitted: number };
   // Live from the API, the count on the public profile. null when the API
   // did not answer.
@@ -136,7 +139,8 @@ type Status = {
   // one, keyed by the category's dimension (RT-3). Never a dimension.
   competenceTypes: Record<string, { taskType: string; value: number }[]>;
   scoresFetchedAt: string | null;
-  // Today's events in full, only with --show.
+  // Today's events in full, only with --show, left out the types this CLI
+  // never sends.
   events?: Event[];
 };
 
@@ -178,6 +182,7 @@ export function register(
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
+      if (await toolHooksLeft(deps)) stderr(TOOL_HOOKS_LEFT);
       // The daily job's copy of the CLI, when it is out of date or gone
       // (RS-2).
       for (const line of await routineJobWarnings()) stderr(line);
@@ -222,7 +227,7 @@ async function readStatus(
     now,
     paths: p,
   });
-  const [events, pending, cursor, score, live, unsubmitted, inbox, goal] =
+  const [logged, pending, cursor, score, live, unsubmitted, inbox, goal] =
     await Promise.all([
       // From today through the newest day file, see readDaysFrom.
       readDaysFrom(day, p),
@@ -235,6 +240,7 @@ async function readStatus(
       loadGoal({ config, fetch: deps.fetch, now, paths: p }),
     ]);
   seen(live);
+  const events = logged.filter((event) => isSent(event.type));
   const slug = await refreshOperatorSlug(config.agentId, live, p);
   const dormantDays = live?.standing?.dormant_days ?? null;
   const withheldNow =
@@ -303,6 +309,15 @@ async function hooksGone(deps: StatusDeps): Promise<boolean> {
   return false;
 }
 
+// True when a settings file of the user or the project still holds the
+// tool call hooks an older CLI installed, which record nothing now.
+async function toolHooksLeft(deps: StatusDeps): Promise<boolean> {
+  const found = await Promise.all(
+    allSettingsPaths(claudeDirs(deps)).map((file) => hasRetiredHooks(file)),
+  );
+  return found.some(Boolean);
+}
+
 // True when neither Claude Code settings file holds our hooks and the log
 // has no event in the last seven UTC days, today included. The CLI cannot see
 // the Mastra or OpenClaw adapters, which live in other code, but they write
@@ -324,24 +339,18 @@ async function noAdapterAndQuiet(
   return true;
 }
 
-function countEvents(
-  events: Event[],
-): Pick<Status, 'counts' | 'toolCalls' | 'tasks'> {
-  const counts = Object.fromEntries(
-    EventType.options.map((type) => [type, 0]),
-  ) as Record<EventType, number>;
-  let ok = 0;
+function countEvents(events: Event[]): Pick<Status, 'counts' | 'tasks'> {
+  const counts: Partial<Record<EventType, number>> = Object.fromEntries(
+    EventType.options.filter(isSent).map((type) => [type, 0]),
+  );
   for (const event of events) {
-    counts[event.type]++;
-    if (event.type === 'tool.call' && event.payload.ok) ok++;
+    counts[event.type] = (counts[event.type] ?? 0) + 1;
   }
-  const total = counts['tool.call'];
   return {
     counts,
-    toolCalls: { total, ok, okRatio: total === 0 ? null : ok / total },
     tasks: {
-      claimed: counts['task.claimed'],
-      submitted: counts['task.submitted'],
+      claimed: counts['task.claimed'] ?? 0,
+      submitted: counts['task.submitted'] ?? 0,
     },
   };
 }
@@ -390,13 +399,10 @@ function printStatus(status: Status): void {
   printRows(rows);
 
   printRows(
-    EventType.options.map((type) => [`  ${type}`, String(status.counts[type])]),
+    Object.entries(status.counts).map(([type, n]) => [`  ${type}`, String(n)]),
   );
 
-  const { total, ok, okRatio } = status.toolCalls;
-  const ratio = okRatio === null ? '-' : `${Math.round(okRatio * 100)}%`;
   printRows([
-    ['tool calls', `${total}, ${ok} ok (${ratio})`],
     [
       'tasks',
       `${status.tasks.claimed} claimed, ${status.tasks.submitted} submitted`,

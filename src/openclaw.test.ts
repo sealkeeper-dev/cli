@@ -9,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Event } from '@sealkeeper/schema';
+import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_FILE, resetBackgroundSyncThrottle } from './background-sync.js';
 import { paths, readConfig, writeConfig, writeNudge } from './config.js';
@@ -20,6 +20,7 @@ import plugin, {
   type OpenClawPluginApiLike,
   sealKeeperPlugin,
 } from './openclaw.js';
+import { VERSION } from './version.js';
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -119,9 +120,7 @@ describe('openclaw adapter', () => {
     it('registers observation hooks, plus the nudge', () => {
       const { handlers } = registered();
       expect([...handlers.keys()].sort()).toEqual([
-        'after_tool_call',
         'before_prompt_build',
-        'before_tool_call',
         'llm_output',
         'model_call_ended',
         'session_end',
@@ -251,87 +250,31 @@ describe('openclaw adapter', () => {
     });
   });
 
+  // VOU-451. Tool calls are not recorded. The plugin no longer takes the
+  // tool hooks, so OpenClaw never hands it a tool call.
   describe('tool calls', () => {
-    it('emits tool.call with the reported duration and ok', async () => {
-      const { fire } = registered();
+    it('takes no tool hook and logs a run with tool calls as sessions and usage', async () => {
+      const { fire, handlers } = registered();
+      expect(handlers.has('before_tool_call')).toBe(false);
+      expect(handlers.has('after_tool_call')).toBe(false);
+      await fire('session_start', { sessionId: 's1' });
+      await fire('before_tool_call', { toolName: 'exec', toolCallId: 'c1' });
       await fire('after_tool_call', {
         toolName: 'exec',
-        toolCallId: 'call_1',
+        toolCallId: 'c1',
         durationMs: 250,
       });
-      await fire('after_tool_call', {
-        toolName: 'browser navigate',
-        durationMs: 10,
-        error: 'net::ERR_NAME_NOT_RESOLVED at https://private.example',
+      await fire('model_call_ended', { runId: 'run-1', durationMs: 40 });
+      await fire('llm_output', {
+        runId: 'run-1',
+        model: 'gpt-5.4',
+        usage: { input: 9, output: 4 },
       });
-      const events = await logged();
-      expect(events.map((e) => e.payload)).toEqual([
-        { tool: 'exec', duration_ms: 250, ok: true },
-        { tool: 'browser-navigate', duration_ms: 10, ok: false },
-      ]);
-      expect(JSON.stringify(events)).not.toContain('private.example');
-    });
-
-    it('times the call from before_tool_call when no duration is reported', async () => {
-      const { fire } = registered();
-      expect(
-        await fire('before_tool_call', { toolName: 'read', toolCallId: 'c9' }),
-      ).toBeUndefined();
-      await wait(30);
-      await fire('after_tool_call', { toolName: 'read' }, { toolCallId: 'c9' });
-      await fire('after_tool_call', { toolName: 'write' });
-      const [timed, untimed] = (await logged()).map(
-        (e) => e.payload as { duration_ms: number },
-      );
-      expect(timed?.duration_ms).toBeGreaterThanOrEqual(25);
-      expect(untimed?.duration_ms).toBe(0);
-    });
-
-    it('skips a call without a tool name', async () => {
-      const { fire } = registered();
-      await fire('after_tool_call', { toolName: '', durationMs: 1 });
-      await fire('after_tool_call', { durationMs: 1 });
-      expect(await logged()).toEqual([]);
-    });
-
-    it('never reads tool params, results or the context beyond ids', async () => {
-      const { fire } = registered();
-      const guarded = (what: string) => ({
-        get params(): unknown {
-          throw new Error(`${what} params were read`);
-        },
-        get result(): unknown {
-          throw new Error(`${what} result was read`);
-        },
-        get derivedPaths(): unknown {
-          throw new Error(`${what} paths were read`);
-        },
-      });
-      const ctx = {
-        toolName: 'edit',
-        get getSessionExtension(): unknown {
-          throw new Error('session extension was read');
-        },
-        get requester(): unknown {
-          throw new Error('requester was read');
-        },
-      };
-      await fire(
-        'before_tool_call',
-        withGetters({ toolName: 'edit', toolCallId: 't1' }, guarded('before')),
-        ctx,
-      );
-      await fire(
-        'after_tool_call',
-        withGetters(
-          { toolName: 'edit', toolCallId: 't1', durationMs: 3 },
-          guarded('after'),
-        ),
-        ctx,
-      );
-      const events = await logged();
-      expect(events.map((e) => e.payload)).toEqual([
-        { tool: 'edit', duration_ms: 3, ok: true },
+      await fire('session_end', { sessionId: 's1', durationMs: 900 });
+      expect((await logged()).map((e) => e.type)).toEqual([
+        'session.start',
+        'usage',
+        'session.end',
       ]);
     });
   });
@@ -448,12 +391,8 @@ describe('openclaw adapter', () => {
         get sessionId(): unknown {
           throw new Error('hostile');
         },
-        get toolName(): unknown {
-          throw new Error('hostile');
-        },
       };
       await expect(fire('session_start', hostile)).resolves.toBeUndefined();
-      await expect(fire('after_tool_call', hostile)).resolves.toBeUndefined();
       expect(await logged()).toEqual([]);
     });
 
@@ -463,9 +402,6 @@ describe('openclaw adapter', () => {
       const { fire } = registered();
       await expect(
         fire('session_start', { sessionId: 's' }),
-      ).resolves.toBeUndefined();
-      await expect(
-        fire('after_tool_call', { toolName: 'exec', durationMs: 1 }),
       ).resolves.toBeUndefined();
       await expect(
         fire('session_end', { sessionId: 's', durationMs: 1 }),
@@ -484,7 +420,10 @@ describe('openclaw adapter', () => {
   describe('background sync', () => {
     // Turns automatic sync on for a real key and counts what reaches the
     // API. The in-process throttle is reset so earlier tests do not hold it.
-    async function autoSyncOn(): Promise<{ requests: () => number }> {
+    async function autoSyncOn(): Promise<{
+      requests: () => number;
+      versions: () => (string | null)[];
+    }> {
       const { agentId } = await createKey();
       await writeConfig({
         agentId,
@@ -498,14 +437,16 @@ describe('openclaw adapter', () => {
       resetBackgroundSyncThrottle();
       vi.stubEnv('SEALKEEPER_API_URL', '');
       let requests = 0;
+      const versions: (string | null)[] = [];
       vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
         requests++;
+        versions.push(new Headers(init.headers).get(CLI_VERSION_HEADER));
         const { envelopes } = JSON.parse(String(init.body)) as {
           envelopes: string[];
         };
         return Response.json({ accepted: envelopes.length, duplicates: 0 });
       });
-      return { requests: () => requests };
+      return { requests: () => requests, versions: () => versions };
     }
 
     afterEach(() => {
@@ -523,6 +464,8 @@ describe('openclaw adapter', () => {
         expect(await readdir(home)).not.toContain(LOCK_FILE);
       });
       expect(api.requests()).toBe(1);
+      // It goes through the API client, so it says which CLI sends (VOU-453).
+      expect(api.versions()).toEqual([VERSION]);
       await fire('session_end', { sessionId: 's1' });
       await new Promise((done) => setTimeout(done, 50));
       expect(api.requests()).toBe(1);
@@ -530,8 +473,3 @@ describe('openclaw adapter', () => {
     });
   });
 });
-
-// Adds the getters of traps to base as getters. A spread would call them.
-function withGetters(base: object, traps: object): object {
-  return Object.defineProperties(base, Object.getOwnPropertyDescriptors(traps));
-}

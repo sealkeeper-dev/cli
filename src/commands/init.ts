@@ -48,6 +48,7 @@ import {
   invocationOf,
   isNpxCopy,
   refuseOutsideProject,
+  removeRetiredHooks,
   SettingsError,
   settingsPath,
   sharedProjectSettingsPath,
@@ -190,13 +191,13 @@ export const TAGLINE = [
   'anyone can check offline.',
 ];
 export const SHARED_SUMMARY = [
-  'Tool names, durations, outcomes, session boundaries and token counts,',
+  'Session boundaries, task outcomes, durations and token counts,',
   'each signed with your key. Never prompts, tool inputs or outputs,',
   'file contents or model output.',
 ];
 // Said on its own, since a repeat run has no summary above it.
 export const HOOKS_INTRO =
-  'The hooks record each session and tool call, names and timings only, into a local log.';
+  'The hooks record each session, its start and end, into a local log.';
 export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
 // Asked again after an answer that is not yes or no, up to this many
 // questions in all.
@@ -1392,6 +1393,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       const s = ui.out;
       say(s.line`${s.tick()} Hooks in ${tildePath(found)}`);
     }
+    await dropRetired(found, !inUser, dirs.cwd, hook, ui);
     await refreshCommand(found, !inUser, dirs.cwd, hook, ui);
     return 'present';
   }
@@ -1485,6 +1487,33 @@ async function moveFromShared(
   const moved = `Moved the hooks out of ${tildePath(shared)}, since they hold absolute paths on this machine and a repo commits that file`;
   if (ui === null) stderr(moved);
   else say(ui.out.line`${moved}`);
+}
+
+// Takes the tool call hooks an older CLI installed out of a settings file
+// that holds the current hooks, as adapter claude-code install does. A
+// project file outside the project, or one that cannot be changed, is left
+// as it is with a warning.
+async function dropRetired(
+  file: string,
+  project: boolean,
+  cwd: string,
+  hook: string,
+  ui: Ui | null,
+): Promise<void> {
+  let removed: string[];
+  try {
+    if (project) await refuseOutsideProject(cwd, [file]);
+    removed = await removeRetiredHooks(file, hook);
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    if (ui === null) stderr(error.message);
+    else note(ui.err.line`${error.message}`);
+    return;
+  }
+  if (removed.length === 0) return;
+  const line = `Removed the tool call hooks from ${tildePath(file)}, the hooks record sessions only`;
+  if (ui === null) stderr(line);
+  else say(ui.out.line`${line}`);
 }
 
 // The hooks question. Escape sequences such as arrow keys are taken out of

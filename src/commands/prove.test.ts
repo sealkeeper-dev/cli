@@ -597,7 +597,7 @@ describe('prove', () => {
         [
           '  Level none. Next bronze.',
           '  Claim 17 more seed tasks. npx sealkeeper prove',
-          '  Stay active on 2 more days. Levels need a record over time.',
+          '  Work on tasks on 2 more days. Only days with a task claimed, submitted, verified, posted or reported on count.',
           '',
           '',
         ].join('\n'),

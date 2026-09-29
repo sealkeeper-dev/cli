@@ -12,15 +12,15 @@ import { writeFileAtomic } from './config.js';
 
 // What follows the CLI invocation in every hook command we write.
 const HOOK_ARGS = 'hook claude-code';
-// PostToolUseFailure fires instead of PostToolUse when a tool call that
-// started fails, see claude-code.ts.
-export const HOOK_EVENTS = [
-  'SessionStart',
-  'SessionEnd',
+// The hooks record sessions only. Stop closes a session that never gets a
+// SessionEnd, see claude-code.ts.
+export const HOOK_EVENTS = ['SessionStart', 'SessionEnd', 'Stop'] as const;
+// The tool call hooks a CLI before 0.4.14 installed. They record nothing
+// now, and install takes ours out of each file it writes.
+export const RETIRED_HOOK_EVENTS = [
   'PreToolUse',
   'PostToolUse',
   'PostToolUseFailure',
-  'Stop',
 ] as const;
 
 export type Scope = 'user' | 'project';
@@ -190,10 +190,12 @@ function realOrNull(path: string): string | null {
   }
 }
 
-// updated lists the events where one of ours ran another command.
+// updated lists the events where one of ours ran another command, removed
+// the retired events whose hooks of ours were taken out.
 export type InstallResult = {
   added: string[];
   updated: string[];
+  removed: string[];
 };
 
 // A cloned repo can make .claude, its settings.json or its commands folder a
@@ -227,10 +229,11 @@ async function resolveExisting(path: string): Promise<string> {
   }
 }
 
-// Adds one hook entry per event that has none of ours yet, and rewrites
-// any of ours whose command differs from command, in place. Entries that
-// are not ours are never touched. Returns the events it added to and the
-// events where it rewrote a command, and writes only when there are some.
+// Adds one hook entry per event that has none of ours yet, rewrites any of
+// ours whose command differs from command, in place, and takes ours out of
+// the retired events. Entries that are not ours are never touched. Returns
+// the events it added to, rewrote and took hooks out of, and writes only
+// when there are some.
 export async function installHooks(
   file: string,
   command: string,
@@ -239,6 +242,7 @@ export async function installHooks(
   const hooks = hooksOf(settings.data, file) ?? {};
   const added: string[] = [];
   const updated: string[] = [];
+  const removed = dropOurs(hooks, RETIRED_HOOK_EVENTS, command).events;
   for (const event of HOOK_EVENTS) {
     const list = hooks[event] ?? [];
     if (!Array.isArray(list)) {
@@ -261,11 +265,47 @@ export async function installHooks(
     hooks[event] = list;
     added.push(event);
   }
-  if (added.length > 0 || updated.length > 0) {
+  if (added.length > 0 || updated.length > 0 || removed.length > 0) {
     settings.data.hooks = hooks;
     await writeSettings(file, settings);
   }
-  return { added, updated };
+  return { added, updated, removed };
+}
+
+// Takes our hooks out of the retired events only, as install does, and
+// leaves the rest of the file as it is. For init, which finds the current
+// hooks in and does not install again. Returns the events it took hooks out
+// of, and writes only when there are some.
+export async function removeRetiredHooks(
+  file: string,
+  current?: string,
+): Promise<string[]> {
+  const settings = await readSettings(file);
+  if (!settings.exists) return [];
+  const hooks = hooksOf(settings.data, file);
+  if (hooks === null) return [];
+  const { events } = dropOurs(hooks, RETIRED_HOOK_EVENTS, current);
+  if (events.length === 0) return [];
+  if (Object.keys(hooks).length === 0) delete settings.data.hooks;
+  await writeSettings(file, settings);
+  return events;
+}
+
+// Whether the file holds a hook of ours under a retired event. A missing or
+// unreadable file, or one that is not valid JSON, counts as none.
+export async function hasRetiredHooks(file: string): Promise<boolean> {
+  try {
+    const hooks = hooksOf((await readSettings(file)).data, file);
+    if (hooks === null) return false;
+    return RETIRED_HOOK_EVENTS.some((event) => {
+      const list = hooks[event];
+      return (
+        Array.isArray(list) && list.some((group) => ourHooks(group).length > 0)
+      );
+    });
+  } catch {
+    return false;
+  }
 }
 
 // Whether the file holds at least one of our hooks. A missing or unreadable
@@ -331,32 +371,47 @@ export async function uninstallHooks(
   const hooks = hooksOf(settings.data, file);
   if (hooks === null) return 0;
 
-  let removed = 0;
-  for (const [event, list] of Object.entries(hooks)) {
+  const { count } = dropOurs(hooks, Object.keys(hooks), current);
+  if (count === 0) return 0;
+  if (Object.keys(hooks).length === 0) delete settings.data.hooks;
+  await writeSettings(file, settings);
+  return count;
+}
+
+// Takes every hook of ours out of the named events, in place. A group left
+// with no hooks goes, then an event left with no groups. Returns how many
+// hooks it took out and the events it took them from.
+function dropOurs(
+  hooks: Record<string, unknown>,
+  events: readonly string[],
+  current?: string,
+): { count: number; events: string[] } {
+  let count = 0;
+  const changed: string[] = [];
+  for (const event of events) {
+    const list = hooks[event];
     if (!Array.isArray(list)) continue;
     let removedHere = 0;
     const kept: unknown[] = [];
     for (const group of list) {
-      const count = ourHooks(group, current).length;
-      if (count === 0) {
+      const n = ourHooks(group, current).length;
+      if (n === 0) {
         kept.push(group);
         continue;
       }
-      removedHere += count;
+      removedHere += n;
       const rest = (group as { hooks: unknown[] }).hooks.filter(
         (hook) => !isOurs(hook, current),
       );
       if (rest.length > 0) kept.push({ ...(group as Json), hooks: rest });
     }
     if (removedHere === 0) continue;
-    removed += removedHere;
+    count += removedHere;
+    changed.push(event);
     if (kept.length === 0) delete hooks[event];
     else hooks[event] = kept;
   }
-  if (removed === 0) return 0;
-  if (Object.keys(hooks).length === 0) delete settings.data.hooks;
-  await writeSettings(file, settings);
-  return removed;
+  return { count, events: changed };
 }
 
 type Settings = {

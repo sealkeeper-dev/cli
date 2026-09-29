@@ -1,8 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { encodeTasksCursor } from '@sealkeeper/schema';
+import {
+  CLI_VERSION_HEADER,
+  CliVersion,
+  encodeTasksCursor,
+} from '@sealkeeper/schema';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import {
+  type ApiClient,
   ApiError,
   createApiClient,
   redirectError,
@@ -10,6 +15,7 @@ import {
 } from './api.js';
 import { paths } from './config.js';
 import { tildePath } from './files.js';
+import { VERSION } from './version.js';
 
 const AGENT_ID = 'A'.repeat(43);
 const AGENT = {
@@ -642,5 +648,85 @@ describe('the request helper (cli-core-11)', () => {
     );
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(seen).toHaveLength(1);
+  });
+});
+
+describe('the CLI version header (VOU-453)', () => {
+  // One call per method of the client, typed so a method added later fails
+  // the type check until it is here too.
+  const every: Record<
+    Exclude<keyof ApiClient, 'apiUrl' | 'serverDate'>,
+    (api: ApiClient) => Promise<unknown>
+  > = {
+    request: (api) => api.request('/v1/x'),
+    call: (api) => api.call('/v1/x', z.unknown()),
+    registerAgent: (api) => api.registerAgent('a.b.c'),
+    getAgent: (api) => api.getAgent(AGENT_ID),
+    postEvents: (api) => api.postEvents(['a.b.c'], 'f.g.h'),
+    getCredential: (api) => api.getCredential(AGENT_ID),
+    getWellKnown: (api) => api.getWellKnown(),
+    getScore: (api) => api.getScore(AGENT_ID),
+    getGoal: (api) => api.getGoal(AGENT_ID),
+    listTasks: (api) => api.listTasks(),
+    listTasksPage: (api) => api.listTasksPage(),
+    listOpenTasks: (api) => api.listOpenTasks('a.b.c'),
+    getTask: (api) => api.getTask('t1'),
+    postTask: (api) => api.postTask('a.b.c'),
+    claimTask: (api) => api.claimTask('t1', 'a.b.c'),
+    submitTask: (api) => api.submitTask('t1', 'a.b.c'),
+    postOutcome: (api) => api.postOutcome('t1', 'a.b.c'),
+    readSubmission: (api) => api.readSubmission('t1', 'a.b.c'),
+    postRating: (api) => api.postRating('a.b.c'),
+    patchAgent: (api) => api.patchAgent(AGENT_ID, 'a.b.c'),
+    deleteAgent: (api) => api.deleteAgent(AGENT_ID, 'a.b.c'),
+  };
+
+  // Records the headers of every request and answers each with an error,
+  // which every method throws after the request went out.
+  function recording(sendVersion?: boolean) {
+    const sent: Record<string, string>[] = [];
+    const fetchFn = (async (_url: unknown, init?: RequestInit) => {
+      sent.push({ ...(init?.headers as Record<string, string>) });
+      return Response.json(
+        { error: { code: 'internal', message: 'no' } },
+        { status: 500 },
+      );
+    }) as typeof fetch;
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: fetchFn,
+      ...(sendVersion === undefined ? {} : { sendVersion }),
+    });
+    return { api, sent };
+  }
+
+  it('is a version the API accepts', () => {
+    expect(CliVersion.safeParse(VERSION).success).toBe(true);
+  });
+
+  it('goes with every request of the client, the version and nothing else', async () => {
+    const { api, sent } = recording();
+    for (const send of Object.values(every)) {
+      await send(api).catch(() => undefined);
+    }
+    expect(sent).toHaveLength(Object.keys(every).length);
+    for (const headers of sent) {
+      expect(headers[CLI_VERSION_HEADER]).toBe(VERSION);
+      expect(Object.keys(headers).sort()).toEqual(
+        headers['Content-Type'] === undefined
+          ? ['Accept', CLI_VERSION_HEADER]
+          : ['Accept', 'Content-Type', CLI_VERSION_HEADER],
+      );
+    }
+  });
+
+  it('stays off with sendVersion false', async () => {
+    const { api, sent } = recording(false);
+    await api.getWellKnown().catch(() => undefined);
+    await api.postEvents(['a.b.c']).catch(() => undefined);
+    expect(sent).toEqual([
+      { Accept: 'application/json' },
+      { Accept: 'application/json', 'Content-Type': 'application/json' },
+    ]);
   });
 });

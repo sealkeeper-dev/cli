@@ -2,8 +2,8 @@
 // What the in-process adapters (Mastra, OpenClaw) see of the fingerprint
 // parts, held for the life of the process. The hashes go to
 // fingerprint-sources.json only when a part changes, a new model id, a new
-// tool set or the framework version found once, never per tool call or
-// model step that shows nothing new. The fingerprint itself is recomputed
+// tool set or the framework version found once, never per model step that
+// shows nothing new. The fingerprint itself is recomputed
 // at sync and prove from that file, see fingerprint.ts.
 import { partHash } from '@sealkeeper/schema';
 import { paths as defaultPaths, type Paths, readConfig } from './config.js';

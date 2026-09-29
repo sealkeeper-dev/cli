@@ -10,13 +10,14 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Event } from '@sealkeeper/schema';
+import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_FILE, resetBackgroundSyncThrottle } from './background-sync.js';
 import { writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { countPending } from './log.js';
 import { sealKeeperSession, withSealKeeper } from './mastra.js';
+import { VERSION } from './version.js';
 
 class RateLimitError extends Error {}
 
@@ -64,37 +65,35 @@ describe('mastra adapter', () => {
     return lines;
   }
 
+  // VOU-451. Tool calls are not recorded. withSealKeeper keeps its
+  // signature and only reads the tool set for the fingerprint, see
+  // fingerprint.test.ts.
   describe('withSealKeeper', () => {
-    it('wraps a record and keeps keys and other fields', async () => {
+    it('returns the record it was given, every tool as it was', async () => {
       const original = {
         id: 'add',
         description: 'Adds one',
         inputSchema: { type: 'object' },
         execute: async (n: number) => n + 1,
       };
-      const tools = withSealKeeper({ add: original, noop: { id: 'noop' } });
-      expect(Object.keys(tools)).toEqual(['add', 'noop']);
-      expect(tools.add).not.toBe(original);
-      expect(tools.add.execute).not.toBe(original.execute);
-      expect(tools.add.description).toBe('Adds one');
-      expect(tools.add.inputSchema).toBe(original.inputSchema);
-      expect(tools.noop).toEqual({ id: 'noop' });
+      const record = { add: original, noop: { id: 'noop' } };
+      const tools = withSealKeeper(record);
+      expect(tools).toBe(record);
+      expect(tools.add).toBe(original);
+      expect(tools.add.execute).toBe(original.execute);
       expect(await tools.add.execute(1)).toBe(2);
+      expect(await logged()).toEqual([]);
     });
 
-    it('wraps an array', async () => {
-      const tools = withSealKeeper([
+    it('returns the array it was given', async () => {
+      const list = [
         { id: 'a', execute: async () => 'a' },
         { id: 'b', execute: async () => 'b' },
-      ]);
-      expect(Array.isArray(tools)).toBe(true);
+      ];
+      const tools = withSealKeeper(list);
+      expect(tools).toBe(list);
       expect(await tools[1]?.execute()).toBe('b');
-      const [event] = await logged();
-      expect(event).toMatchObject({
-        type: 'tool.call',
-        version: '3.1.0',
-        payload: { tool: 'b', ok: true },
-      });
+      expect(await logged()).toEqual([]);
     });
 
     it('keeps the prototype of a class based tool', async () => {
@@ -112,121 +111,27 @@ describe('mastra adapter', () => {
       expect(await tool?.execute()).toBe('from the prototype');
     });
 
-    it('emits tool.call with ok true and a duration on success', async () => {
-      const tools = withSealKeeper({
-        slow: {
-          id: 'slow-tool',
-          execute: async () => {
-            await new Promise((done) => setTimeout(done, 15));
-            return 'done';
-          },
-        },
-      });
-      expect(await tools.slow.execute()).toBe('done');
-      const events = await logged();
-      expect(events).toHaveLength(1);
-      const [event] = events;
-      expect(event?.type).toBe('tool.call');
-      expect(event?.payload).toEqual({
-        tool: 'slow-tool',
-        duration_ms: expect.any(Number),
-        ok: true,
-      });
-      const payload = event?.payload as { duration_ms: number };
-      expect(payload.duration_ms).toBeGreaterThanOrEqual(10);
-    });
-
-    it('emits ok false with the error class and rethrows the same error', async () => {
+    it('records no tool.call for a call that succeeds or throws', async () => {
       const boom = new RateLimitError('slow down');
       const tools = withSealKeeper({
+        ok: { id: 'ok', execute: async () => 'done' },
         search: {
           id: 'web-search',
           execute: async () => {
             throw boom;
           },
         },
-      });
-      await expect(tools.search.execute()).rejects.toBe(boom);
-      const [event] = await logged();
-      expect(event?.payload).toEqual({
-        tool: 'web-search',
-        duration_ms: expect.any(Number),
-        ok: false,
-        error_class: 'RateLimitError',
-      });
-    });
-
-    it('rethrows a sync throw and a non error value', async () => {
-      const tools = withSealKeeper({
         sync: {
           id: 'sync',
           execute: () => {
             throw new TypeError('bad');
           },
         },
-        odd: {
-          id: 'odd',
-          execute: () => Promise.reject(null),
-        },
       });
-      await expect(tools.sync.execute()).rejects.toBeInstanceOf(TypeError);
-      await expect(tools.odd.execute()).rejects.toBeNull();
-      const events = await logged();
-      expect(events.map((e) => e.payload)).toMatchObject([
-        { tool: 'sync', ok: false, error_class: 'TypeError' },
-        { tool: 'odd', ok: false, error_class: 'Unknown' },
-      ]);
-    });
-
-    it('never reads the arguments or the result', async () => {
-      const trap = (what: string) =>
-        new Proxy(
-          {},
-          {
-            get() {
-              throw new Error(`${what} was read`);
-            },
-            ownKeys() {
-              throw new Error(`${what} was enumerated`);
-            },
-          },
-        );
-      const input = {
-        get secret(): string {
-          throw new Error('argument was read');
-        },
-      };
-      const context = trap('context');
-      const result = {
-        get answer(): string {
-          throw new Error('result was read');
-        },
-      };
-      let received: unknown[] = [];
-      const tools = withSealKeeper({
-        guarded: {
-          id: 'guarded',
-          execute: (...args: unknown[]) => {
-            received = args;
-            return result;
-          },
-        },
-      });
-      const out = await (
-        tools.guarded.execute as unknown as (
-          ...args: unknown[]
-        ) => Promise<unknown>
-      )(input, context);
-      expect(out).toBe(result);
-      expect(received[0]).toBe(input);
-      expect(received[1]).toBe(context);
-      const [event] = await logged();
-      expect(event?.payload).toEqual({
-        tool: 'guarded',
-        duration_ms: expect.any(Number),
-        ok: true,
-      });
-      expect(JSON.stringify(event)).not.toContain('secret');
+      expect(await tools.ok.execute()).toBe('done');
+      await expect(tools.search.execute()).rejects.toBe(boom);
+      expect(() => tools.sync.execute()).toThrow(TypeError);
+      expect(await logged()).toEqual([]);
     });
   });
 
@@ -298,11 +203,7 @@ describe('mastra adapter', () => {
       expect(JSON.stringify(await logged())).not.toContain('alice');
     });
 
-    it('logs tool ids and model ids that break the name rule as names', async () => {
-      const [tool] = withSealKeeper([
-        { id: 'web search!', execute: async () => 'ok' },
-      ]);
-      await tool?.execute?.();
+    it('logs model ids that break the name rule as names', async () => {
       const session = sealKeeperSession('names');
       await session.onStepFinish({
         usage: { promptTokens: 1, completionTokens: 2 },
@@ -310,9 +211,6 @@ describe('mastra adapter', () => {
       });
       await session.end();
       const events = await logged();
-      expect(events.find((e) => e.type === 'tool.call')?.payload).toMatchObject(
-        { tool: 'web-search-', ok: true },
-      );
       expect(events.find((e) => e.type === 'usage')?.payload).toMatchObject({
         model: 'openai-gpt-4o',
       });
@@ -458,7 +356,10 @@ describe('mastra adapter', () => {
   describe('background sync', () => {
     // Turns automatic sync on for a real key and counts what reaches the
     // API. The in-process throttle is reset so earlier tests do not hold it.
-    async function autoSyncOn(): Promise<{ requests: () => number }> {
+    async function autoSyncOn(): Promise<{
+      requests: () => number;
+      versions: () => (string | null)[];
+    }> {
       const { agentId } = await createKey();
       await writeConfig({
         agentId,
@@ -472,14 +373,16 @@ describe('mastra adapter', () => {
       resetBackgroundSyncThrottle();
       vi.stubEnv('SEALKEEPER_API_URL', '');
       let requests = 0;
+      const versions: (string | null)[] = [];
       vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
         requests++;
+        versions.push(new Headers(init.headers).get(CLI_VERSION_HEADER));
         const { envelopes } = JSON.parse(String(init.body)) as {
           envelopes: string[];
         };
         return Response.json({ accepted: envelopes.length, duplicates: 0 });
       });
-      return { requests: () => requests };
+      return { requests: () => requests, versions: () => versions };
     }
 
     afterEach(() => {
@@ -489,19 +392,21 @@ describe('mastra adapter', () => {
 
     it('sends in the background once automatic sync is on, at most once per interval', async () => {
       const api = await autoSyncOn();
-      const [tool] = withSealKeeper([{ id: 'a', execute: async () => 'a' }]);
-      expect(await tool?.execute()).toBe('a');
+      sealKeeperSession('first');
       await vi.waitFor(async () => {
+        expect(await logged()).toHaveLength(1);
         expect(await countPending()).toBe(0);
         // The sync has ended, so the next event cannot join its last round.
         expect(await readdir(home)).not.toContain(LOCK_FILE);
       });
       expect(api.requests()).toBe(1);
-      // The next call inside five minutes only appends.
-      await tool?.execute();
+      // It goes through the API client, so it says which CLI sends (VOU-453).
+      expect(api.versions()).toEqual([VERSION]);
+      // The next events inside five minutes only append.
+      await sealKeeperSession('next').end();
       await new Promise((done) => setTimeout(done, 50));
       expect(api.requests()).toBe(1);
-      expect(await countPending()).toBe(1);
+      expect(await countPending()).toBe(2);
     });
 
     it('never throws into the agent when the API is down', async () => {
@@ -509,10 +414,9 @@ describe('mastra adapter', () => {
       vi.stubGlobal('fetch', async () => {
         throw new TypeError('fetch failed');
       });
-      const [tool] = withSealKeeper([{ id: 'a', execute: async () => 'a' }]);
-      expect(await tool?.execute()).toBe('a');
+      await expect(sealKeeperSession('a').end()).resolves.toBeUndefined();
       await new Promise((done) => setTimeout(done, 50));
-      expect(await countPending()).toBe(1);
+      expect(await countPending()).toBe(2);
     });
   });
 });

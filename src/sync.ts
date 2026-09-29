@@ -24,10 +24,12 @@ import {
   writeCursor,
 } from './log.js';
 import { stderr } from './output.js';
+import { isSent } from './taxonomy.js';
 
 // Sends pending events from the local log to the API. Each round reads up to
-// 500 pending events, drops the ones too old for the API to accept, signs
-// the rest, posts them to /v1/events and, on 200, moves the cursor past the
+// 500 pending events, drops the ones too old for the API to accept, skips
+// the types this CLI never sends (UNSENT_TYPES in taxonomy.ts), signs the
+// rest, posts them to /v1/events and, on 200, moves the cursor past the
 // last one sent. It loops until nothing is pending. Once a run has finished
 // it deletes the day files the log no longer needs, see pruneLog. It runs
 // when sync, emit, a hook or an adapter's background sync calls it.
@@ -260,11 +262,14 @@ async function sendRounds(
     // The cursor moves past them together with the fresh events around
     // them, in the one move each round makes, or on its own when the whole
     // round is stale. They are counted as dropped once the cursor is past
-    // them, so a round that stops early does not count them twice.
+    // them, so a round that stops early does not count them twice. A type
+    // never sent, such as a tool.call an older CLI logged, goes the same
+    // way and is not counted at all.
     const cutoff = staleCutoff(now());
     const fresh: { event: Event; at: number }[] = [];
     const stale: number[] = [];
     for (const [at, event] of pending.events.entries()) {
+      if (!isSent(event.type)) continue;
       if (Date.parse(event.occurred_at) < cutoff) stale.push(at);
       else fresh.push({ event, at });
     }

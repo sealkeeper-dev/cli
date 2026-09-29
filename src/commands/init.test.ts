@@ -61,7 +61,7 @@ import { readRoutine } from '../routine.js';
 import { copyPaths, copyVersion } from '../routine-copy.js';
 import type { Runner } from '../routine-scheduler.js';
 import { stripStyle } from '../style.js';
-import { describeTaxonomy, NEVER_LEAVES } from '../taxonomy.js';
+import { describeTaxonomy, isSent, NEVER_LEAVES } from '../taxonomy.js';
 import { VERSION } from '../version.js';
 import { INSTALL_COMMAND } from './adapter.js';
 import {
@@ -594,11 +594,13 @@ describe('sealkeeper init', () => {
   it('with --json still prints the full block on stderr, as before', async () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
-    for (const type of EventType.options) {
+    for (const type of EventType.options.filter(isSent)) {
       expect(result.err).toMatch(
         new RegExp(`^${type.replace('.', '\\.')}$`, 'm'),
       );
     }
+    // No hook or adapter sends it since 0.4.14 (VOU-451).
+    expect(result.err).not.toMatch(/^tool\.call$/m);
     expect(
       result.err.endsWith(`${describeTaxonomy()}\n\n${NOTHING_SENT}\n`),
     ).toBe(true);
@@ -850,10 +852,10 @@ describe('sealkeeper init', () => {
     expect((await run(world, 'init')).code).toBe(0);
     const logged = (n: number) => ({
       event_id: randomUUID(),
-      type: 'tool.call' as const,
+      type: 'session.end' as const,
       occurred_at: new Date().toISOString(),
       version: '0.1.0',
-      payload: { tool: 'Bash', duration_ms: n, ok: true },
+      payload: { session_id: 's1', duration_ms: n },
     });
     await appendEvent(logged(1), paths(home));
     await appendEvent(logged(2), paths(home));
@@ -883,10 +885,10 @@ describe('sealkeeper init', () => {
     // cursor and no key.
     const logged = (n: number) => ({
       event_id: randomUUID(),
-      type: 'tool.call' as const,
+      type: 'session.end' as const,
       occurred_at: new Date().toISOString(),
       version: '0.1.0',
-      payload: { tool: 'Bash', duration_ms: n, ok: true },
+      payload: { session_id: 's1', duration_ms: n },
     });
     await appendEvent(logged(1), paths(home));
     await appendEvent(logged(2), paths(home));
@@ -916,10 +918,10 @@ describe('sealkeeper init', () => {
     await appendEvent(
       {
         event_id: randomUUID(),
-        type: 'tool.call' as const,
+        type: 'session.end' as const,
         occurred_at: new Date().toISOString(),
         version: '0.1.0',
-        payload: { tool: 'Bash', duration_ms: 1, ok: true },
+        payload: { session_id: 's1', duration_ms: 1 },
       },
       paths(home),
     );
@@ -1221,6 +1223,80 @@ describe('sealkeeper init', () => {
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
+    // VOU-451. The hooks record sessions only, so a repeat init that finds
+    // ours takes out the tool call hooks an older install wrote.
+    it.each([
+      ['user', false],
+      ['project', true],
+    ])(
+      'a repeat init removes the tool call hooks from the %s settings and leaves the rest',
+      async (_scope, project) => {
+        await withClaudeCode();
+        const cwd = join(home, 'project');
+        world.cwd = cwd;
+        const file = project
+          ? join(cwd, '.claude', 'settings.local.json')
+          : settingsFile();
+        const ours = [{ hooks: [{ type: 'command', command: HOOK_COMMAND }] }];
+        const foreign = {
+          matcher: 'Bash',
+          hooks: [{ type: 'command', command: 'other-tool check' }],
+        };
+        await mkdir(dirname(file), { recursive: true });
+        await writeFile(
+          file,
+          JSON.stringify({
+            model: 'opus',
+            hooks: {
+              Stop: [
+                { hooks: [{ type: 'command', command: 'other-tool stop' }] },
+                ...ours,
+              ],
+              SessionStart: ours,
+              SessionEnd: ours,
+              PreToolUse: [foreign, ...ours],
+              PostToolUse: ours,
+              PostToolUseFailure: ours,
+            },
+          }),
+        );
+        const stdin = answering('');
+        world.stdin = stdin;
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(result.err).not.toContain(HOOKS_QUESTION);
+        expect(result.out).toContain(
+          `  Removed the tool call hooks from ${tildePath(file)}, the hooks record sessions only\n`,
+        );
+        const after = JSON.parse(await readFile(file, 'utf8'));
+        expect(after.model).toBe('opus');
+        expect(hooksIn(JSON.stringify(after))).toEqual([
+          'Stop',
+          'SessionStart',
+          'SessionEnd',
+        ]);
+        expect(after.hooks.PreToolUse).toEqual([foreign]);
+        expect(after.hooks.Stop[0]).toEqual({
+          hooks: [{ type: 'command', command: 'other-tool stop' }],
+        });
+
+        // Run again, there is nothing left to take out.
+        world = newWorld();
+        world.cwd = cwd;
+        world.stdin = answering('');
+        const again = await run(world, 'init');
+        expect(again.code).toBe(0);
+        expect(again.out).not.toContain('Removed the tool call hooks');
+      },
+    );
+
     it('moves current hooks in the shared project settings to the local file without asking', async () => {
       await withClaudeCode();
       const project = join(home, 'project');
@@ -1345,14 +1421,7 @@ describe('sealkeeper init', () => {
         '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks\n',
       );
       const after = await readFile(settingsFile(), 'utf8');
-      expect(hooksIn(after)).toEqual([
-        'Stop',
-        'SessionStart',
-        'SessionEnd',
-        'PreToolUse',
-        'PostToolUse',
-        'PostToolUseFailure',
-      ]);
+      expect(hooksIn(after)).toEqual(['Stop', 'SessionStart', 'SessionEnd']);
       expect(after).toContain('other-tool stop');
       const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
       expect(result.out).toContain(
@@ -1703,7 +1772,7 @@ describe('sealkeeper init', () => {
         expect(result.code).toBe(0);
         expect(stdin.reads).toBe(0);
         expect(result.err).not.toContain(HOOKS_QUESTION);
-        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(6);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(3);
         expect(result.out).toContain(
           `  ✓ Hooks in ${tildePath(settingsFile())}\n`,
         );
@@ -1727,7 +1796,7 @@ describe('sealkeeper init', () => {
         world.stdin = answering('y', false);
         const result = await run(world, 'init', '--name', 'scout', '--json');
         expect(result.code).toBe(0);
-        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(6);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(3);
         expect(result.err).toContain(`${HOOKS_BY_CLAUDE}\n`);
         const json = JSON.parse(result.out);
         expect(json.nextSteps[0]).toBe(NEXT_ROUTINE);
@@ -3060,13 +3129,13 @@ describe('sealkeeper init', () => {
             Profile  https://sealkeeper.run/agents/alice/scout
 
           What leaves this machine
-          Tool names, durations, outcomes, session boundaries and token counts,
+          Session boundaries, task outcomes, durations and token counts,
           each signed with your key. Never prompts, tool inputs or outputs,
           file contents or model output.
           Full list  npx sealkeeper what-is-shared
 
           Claude Code
-          The hooks record each session and tool call, names and timings only, into a local log.
+          The hooks record each session, its start and end, into a local log.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
           ✓ /sealkeeper-prove in <home>/claude/commands
           ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
@@ -3106,7 +3175,7 @@ describe('sealkeeper init', () => {
             Profile  https://sealkeeper.run/agents/alice/scout
 
           Claude Code
-          The hooks record each session and tool call, names and timings only, into a local log.
+          The hooks record each session, its start and end, into a local log.
           ✓ Hooks in <home>/claude/settings.json
 
           Next

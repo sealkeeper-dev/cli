@@ -128,6 +128,7 @@ export function register(
             path: file,
             added: result.added,
             updated: result.updated,
+            removed: result.removed,
             ...(options.scope === 'project' ? { movedFromShared: moved } : {}),
             command: { path: commandPath, result: command },
             skill: { path: skillFile, result: skill },
@@ -207,8 +208,9 @@ export function register(
 const PROVE_SLASH = 'the /sealkeeper-prove command';
 const SKILL = 'the sealkeeper skill';
 
-// What install did with the hooks, one line for what it added and one for
-// what it rewrote, or one saying nothing changed.
+// What install did with the hooks, one line each for what it added, what
+// it rewrote and the retired tool call hooks it took out, or one saying
+// nothing changed.
 export function hooksLines(result: InstallResult, file: string): string[] {
   const lines: string[] = [];
   if (result.added.length > 0) {
@@ -221,9 +223,15 @@ export function hooksLines(result: InstallResult, file: string): string[] {
       `updated sealkeeper hooks for ${result.updated.join(', ')} in ${file}`,
     );
   }
+  if (result.removed.length > 0) lines.push(retiredLine(result.removed, file));
   if (lines.length === 0)
     lines.push(`sealkeeper hooks already installed in ${file}`);
   return lines;
+}
+
+// Said when install took the tool call hooks of an older CLI out.
+export function retiredLine(events: string[], file: string): string {
+  return `removed sealkeeper hooks for ${events.join(', ')} from ${file}, the hooks record sessions only`;
 }
 
 // Said when install took hooks of ours out of the shared settings.json.

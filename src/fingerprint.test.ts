@@ -27,6 +27,7 @@ import {
   resetBackgroundSyncThrottle,
 } from './background-sync.js';
 import { handleHook } from './claude-code.js';
+import { HOOK_EVENTS, RETIRED_HOOK_EVENTS } from './claude-code-settings.js';
 import { type Paths, paths, writeConfig } from './config.js';
 import {
   type CapturedParts,
@@ -346,14 +347,7 @@ describe('Claude Code capture', () => {
 
     const hook = (event: string, session: string) =>
       handleHook(
-        {
-          event,
-          sessionId: session,
-          toolName: null,
-          toolUseId: null,
-          interrupted: false,
-          cwd: project,
-        },
+        { event, sessionId: session, cwd: project },
         { fetch: (async () => Response.json({})) as typeof fetch, paths: p },
       );
 
@@ -397,6 +391,30 @@ describe('Claude Code capture', () => {
       expect({ ...after.parts, tools: null }).toEqual({
         ...before.parts,
         tools: null,
+      });
+    });
+
+    // VOU-451. The hooks are SessionStart, SessionEnd and Stop. A tool
+    // event from an older install reads nothing.
+    it('is captured by the three hooks install writes, and by no tool event', async () => {
+      expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd', 'Stop']);
+      for (const event of RETIRED_HOOK_EVENTS) await hook(event, 's1');
+      await expect(readFile(p.fingerprintSources)).rejects.toThrow();
+
+      await hook('SessionStart', 's1');
+      const start = await refresh();
+      expect(start.parts.tools).toEqual({
+        hash: await h('mcp:github\nmcp:linear\ntool:mcp__github__create_issue'),
+      });
+      await writeFile(
+        join(project, '.mcp.json'),
+        JSON.stringify({ mcpServers: { sentry: {} } }),
+      );
+      await hook('Stop', 's1');
+      expect((await refresh()).parts).toEqual(start.parts);
+      await hook('SessionEnd', 's1');
+      expect((await refresh()).parts.tools).toEqual({
+        hash: await h('mcp:sentry\ntool:mcp__github__create_issue'),
       });
     });
 
@@ -476,7 +494,7 @@ describe('the Mastra adapter', () => {
   const sources = async () =>
     JSON.parse(await readFile(p.fingerprintSources, 'utf8')).mastra;
 
-  it('hashes the names and schemas of the wrapped tools and the model ids of steps', async () => {
+  it('hashes the names and schemas of the tools passed in and the model ids of steps', async () => {
     const add = {
       id: 'add',
       inputSchema: z.object({ a: z.number(), b: z.number() }),

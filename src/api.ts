@@ -1,5 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { ListTasksQuery, WELL_KNOWN_PATH } from '@sealkeeper/schema';
+import {
+  CLI_VERSION_HEADER,
+  ListTasksQuery,
+  WELL_KNOWN_PATH,
+} from '@sealkeeper/schema';
 import type { z } from 'zod';
 import {
   DEFAULT_API_URL,
@@ -27,6 +31,7 @@ import {
   WellKnown,
   withheldText,
 } from './responses.js';
+import { VERSION } from './version.js';
 
 // A small client for the SealKeeper API. Every response is parsed before
 // anything reads it, with the loose schemas in responses.ts, so a field the
@@ -99,7 +104,9 @@ export type ApiClient = {
   // One request to path, with the rules every request follows. https only,
   // or http to this machine, a redirect is never followed and throws an
   // ApiError naming the new address, and a request that gets no answer
-  // throws network_error. Any status comes back as it is.
+  // throws network_error. Any status comes back as it is. Each one carries
+  // this CLI's version in CLI_VERSION_HEADER, unless the client was made
+  // with sendVersion false.
   request(path: string, options?: RequestOptions): Promise<RawResponse>;
   // request, then the answer parsed with schema. A status outside ok
   // (200 when left out) or a body that does not parse throws an ApiError,
@@ -160,14 +167,23 @@ export type ApiClient = {
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
 // never holds up the hook that called it.
+//
+// Every request to the SealKeeper API says which CLI sent it, the version
+// string alone in CLI_VERSION_HEADER, so the API can count callers by
+// version (VOU-453). Nothing about the machine, the user or the folder goes
+// with it. sendVersion false leaves the header out, for a host that is not
+// the SealKeeper API, such as the site that serves the production keys.
 export function createApiClient(options: {
   apiUrl: string;
   fetch?: typeof fetch;
   timeoutMs?: number;
+  sendVersion?: boolean;
 }): ApiClient {
   const fetchFn = options.fetch ?? fetch;
   const apiUrl = options.apiUrl.replace(/\/+$/, '');
   const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const versionHeader: Record<string, string> =
+    options.sendVersion === false ? {} : { [CLI_VERSION_HEADER]: VERSION };
   let serverDate: number | null = null;
 
   async function request(
@@ -187,10 +203,11 @@ export function createApiClient(options: {
         method: method ?? (body === undefined ? 'GET' : 'POST'),
         headers:
           body === undefined
-            ? { Accept: 'application/json' }
+            ? { Accept: 'application/json', ...versionHeader }
             : {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
+                ...versionHeader,
               },
         body: body === undefined ? undefined : JSON.stringify(body),
         // A redirect would re-send a signed body, or the GitHub token at

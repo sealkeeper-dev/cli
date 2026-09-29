@@ -282,7 +282,7 @@ describe('sealkeeper goal', () => {
         '',
         'Next',
         '  Claim 12 more seed tasks. npx sealkeeper prove',
-        '  Stay active on 1 more day. Levels need a record over time.',
+        '  Work on tasks on 1 more day. Only days with a task claimed, submitted, verified, posted or reported on count.',
         '',
         'As of the scoring run at 2026-09-25T10:15:00.000Z.',
         '',

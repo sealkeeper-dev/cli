@@ -4,13 +4,14 @@ import { type Paths, paths } from './config.js';
 import { cli } from './invocation.js';
 import { type LogPosition, pendingEvents } from './log.js';
 import { pendingText, staleCutoff } from './sync.js';
-import { WIRE_FORM } from './taxonomy.js';
+import { isSent, WIRE_FORM } from './taxonomy.js';
 
 // The pending events exactly as sync would send them. sync signs the JSON
 // of each event as it is read from the log, so JSON.stringify of the same
 // event is the payload inside the signature, byte for byte. Events older
 // than the API accepts are left out, since sync drops them without sending,
-// and counted apart in stale (cli-adapters-tasks-11).
+// and counted apart in stale (cli-adapters-tasks-11). A type this CLI never
+// sends, see UNSENT_TYPES, is left out and not counted.
 
 // How many events the summary before a sync prints in full.
 export const PREVIEW_SAMPLE = 3;
@@ -27,7 +28,8 @@ export type Preview = {
   // full preview (--dry-run) keeps them, else it is empty.
   groups: { file: string; events: Event[] }[];
   // The last event read, so a confirmed send stops there. It can be one
-  // left out as too old, which that send drops. Null when nothing is pending.
+  // left out as too old or of a type never sent, which that send moves the
+  // cursor past. Null when the log holds nothing after the cursor.
   last: LogPosition | null;
 };
 
@@ -55,6 +57,7 @@ export async function readPreview(
   const types: Map<string, number>[] = [];
   for await (const { event, position } of pendingEvents(p, { now })) {
     preview.last = position;
+    if (!isSent(event.type)) continue;
     if (Date.parse(event.occurred_at) < cutoff) {
       preview.stale++;
       continue;

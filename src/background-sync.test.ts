@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { CLI_VERSION_HEADER } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApiClient } from './api.js';
 import {
@@ -27,6 +28,7 @@ import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { appendEvent, countPending, writeCursor } from './log.js';
 import { syncEvents } from './sync.js';
+import { VERSION } from './version.js';
 
 const API_URL = 'https://api.test';
 
@@ -38,13 +40,13 @@ function deadPid(): number {
   return child.pid;
 }
 
-function toolCall() {
+function sessionEnd() {
   return {
     event_id: randomUUID(),
-    type: 'tool.call' as const,
+    type: 'session.end' as const,
     occurred_at: new Date().toISOString(),
     version: '1.0.0',
-    payload: { tool: 'Bash', duration_ms: 1, ok: true },
+    payload: { session_id: 's1', duration_ms: 1 },
   };
 }
 
@@ -100,7 +102,7 @@ describe('background sync', () => {
 
   it('does nothing while automatic sync is not on', async () => {
     await initialise(undefined);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     expect(await run()).toBe('off');
     resetBackgroundSyncThrottle();
     await initialise(false);
@@ -110,23 +112,39 @@ describe('background sync', () => {
   });
 
   it('does nothing before init', async () => {
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     expect(await run()).toBe('off');
     expect(requests).toBe(0);
   });
 
   it('sends pending events when automatic sync is on', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
+    await appendEvent(sessionEnd(), p);
     expect(await run()).toBe('synced');
     expect(requests).toBe(1);
     expect(await countPending(p)).toBe(0);
   });
 
+  // VOU-453. The one gate every automatic sync goes through makes its
+  // client with createApiClient, so the batch says which CLI sends it.
+  it('sends the CLI version with the batch', async () => {
+    await initialise(true);
+    await appendEvent(sessionEnd(), p);
+    const versions: (string | null)[] = [];
+    const recording = (async (url: string, init: RequestInit = {}) => {
+      versions.push(new Headers(init.headers).get(CLI_VERSION_HEADER));
+      return accepting(url, init);
+    }) as typeof fetch;
+    expect(await backgroundSync({ fetch: recording, now, paths: p })).toBe(
+      'synced',
+    );
+    expect(versions).toEqual([VERSION]);
+  });
+
   it('prints nothing for a damaged log or a lost cursor line', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const file = p.logFile(new Date(clock).toISOString().slice(0, 10));
     await appendFile(file, 'not json\n');
     await appendFile(file, '{"v":1,"eve');
@@ -153,9 +171,9 @@ describe('background sync', () => {
 
   it('runs at most once every five minutes in one process', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     expect(await run()).toBe('synced');
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     clock += BACKGROUND_SYNC_INTERVAL_MS - 1;
     expect(await run()).toBe('throttled');
     expect(requests).toBe(1);
@@ -166,11 +184,11 @@ describe('background sync', () => {
 
   it('runs at most once every five minutes across processes, through the stamp file', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     expect(await run()).toBe('synced');
     // A second process has its own in-memory throttle.
     resetBackgroundSyncThrottle();
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     clock += 60_000;
     expect(await run()).toBe('throttled');
     expect(requests).toBe(1);
@@ -182,7 +200,7 @@ describe('background sync', () => {
 
   it('a failed sync still counts toward the throttle and does not throw', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const failing = (async () => {
       requests++;
       throw new TypeError('fetch failed');
@@ -201,7 +219,7 @@ describe('background sync', () => {
 
   it('stays out while another process holds the lock', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const lock = join(home, LOCK_FILE);
     await writeFile(lock, `${process.pid}\n`);
     await utimes(lock, clock / 1000, clock / 1000);
@@ -213,7 +231,7 @@ describe('background sync', () => {
 
   it('takes over a lock older than the stale age', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const lock = join(home, LOCK_FILE);
     // A running pid, so only the age lets it go.
     await writeFile(lock, `${process.pid}\n`);
@@ -226,7 +244,7 @@ describe('background sync', () => {
 
   it('takes over a fresh lock whose process is gone', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const lock = join(home, LOCK_FILE);
     await writeFile(lock, `${deadPid()}\n`);
     await utimes(lock, clock / 1000, clock / 1000);
@@ -245,7 +263,7 @@ describe('background sync', () => {
 
   it('keeps the age rule for a fresh lock with no pid in it', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     const lock = join(home, LOCK_FILE);
     await writeFile(lock, '');
     await utimes(lock, clock / 1000, clock / 1000);
@@ -255,7 +273,7 @@ describe('background sync', () => {
 
   it('two at once send one batch between them', async () => {
     await initialise(true);
-    await appendEvent(toolCall(), p);
+    await appendEvent(sessionEnd(), p);
     let release: () => void = () => {};
     const gate = new Promise<void>((done) => {
       release = done;
@@ -345,7 +363,7 @@ describe('background sync', () => {
     it('keeps the lock fresh between rounds of a long sync', async () => {
       await initialise(true);
       // Two rounds, since a round sends at most 500 events.
-      for (let i = 0; i < 501; i++) await appendEvent(toolCall(), p);
+      for (let i = 0; i < 501; i++) await appendEvent(sessionEnd(), p);
       const lock = join(home, LOCK_FILE);
       const stamps: number[] = [];
       // Each request takes three quarters of the stale age by the clock, so
@@ -379,7 +397,7 @@ describe('background sync', () => {
 
     it('stamps the lock before each request and before a rate limit wait inside one round', async () => {
       await initialise(true);
-      await appendEvent(toolCall(), p);
+      await appendEvent(sessionEnd(), p);
       const order: string[] = [];
       let posts = 0;
       const limited = (async (url: unknown, init?: RequestInit) => {
@@ -438,7 +456,7 @@ describe('background sync', () => {
 
     it('keeps a gated sync out while it holds the lock', async () => {
       await initialise(true);
-      await appendEvent(toolCall(), p);
+      await appendEvent(sessionEnd(), p);
       const outcome = await withSyncLock(() => run(), { paths: p });
       expect(outcome).toBe('locked');
       expect(requests).toBe(0);

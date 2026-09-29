@@ -16,15 +16,15 @@ import { readIfExists } from './files.js';
 import { observeClaudeCode } from './fingerprint-claude-code.js';
 import { fetchGoal } from './goal.js';
 import { cli } from './invocation.js';
-import { toolNameOf } from './names.js';
 import { type NudgeDeps, nudgeLines } from './nudge.js';
 import { stderr, stdout } from './output.js';
 
-export { toolNameOf } from './names.js';
-
 // The Claude Code hooks adapter. Claude Code runs `sealkeeper hook claude-code`
 // for each hook event with one JSON object on stdin. handleHook maps it to
-// the event taxonomy and appends to the local log. It never throws. Claude
+// the event taxonomy and appends to the local log. It records sessions only,
+// their start and end. A tool event, from the PreToolUse, PostToolUse or
+// PostToolUseFailure hooks a CLI before 0.4.14 installed, records nothing
+// until the install runs again and removes them. It never throws. Claude
 // Code adds what a SessionStart hook prints on stdout to the session's
 // context, so stdout carries only the session nudge (nudge.ts), and only on
 // SessionStart once the operator turned it on. Every other hook prints
@@ -37,12 +37,14 @@ export { toolNameOf } from './names.js';
 // Every other hook only appends, and SessionStart reads only the cache.
 const HOOK_SYNC_TIMEOUT_MS = WAITING_CALLER_LIMITS.timeoutMs;
 
-// Markers older than this belong to sessions or tool calls that never ended.
+// Markers older than this belong to sessions that never ended.
 export const STALE_MARKER_MS = 24 * 60 * 60 * 1000;
 
-// Session and tool use ids become file names, so only plain ids are used.
-// The cap matches the taxonomy's 64 character names.
+// Session ids become file names, so only plain ids are used. The cap
+// matches the taxonomy's 64 character names.
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
+// The start time of a tool call, which a CLI before 0.4.14 kept under this
+// prefix. None is written now, and the sweep removes any left behind.
 const TOOL_MARKER_PREFIX = 'tool.';
 // An ended session keeps its marker under this prefix until the stale sweep,
 // so a later SessionStart for the same id does not count a second session.
@@ -51,11 +53,6 @@ const ENDED_MARKER_PREFIX = 'ended.';
 type HookInput = {
   event: string;
   sessionId: string | null;
-  toolName: string | null;
-  toolUseId: string | null;
-  // PostToolUseFailure only. true when the user interrupted the call, so
-  // the failure is not the agent's.
-  interrupted: boolean;
   // The folder Claude Code runs in, which picks the agent, see
   // sealkeeperHome. null when the payload has no absolute path there.
   cwd: string | null;
@@ -73,9 +70,8 @@ type HookDeps = {
 export const CLAUDE_CODE_RUN = '/sealkeeper-prove';
 
 // Picks the few fields the adapter uses out of the raw stdin text, or null
-// when it is not a hook payload. Only tool_name is used, and a failure's
-// is_interrupt, read as a boolean. tool_input, tool_response and a
-// failure's error are never read, logged or emitted.
+// when it is not a hook payload. Only the event name, the session id and cwd
+// are read. Nothing a tool event carries is read, logged or emitted.
 export function parseHookInput(text: string): HookInput | null {
   let json: unknown;
   try {
@@ -91,9 +87,6 @@ export function parseHookInput(text: string): HookInput | null {
   return {
     event: raw.hook_event_name,
     sessionId: idOf(raw.session_id),
-    toolName: toolNameOf(raw.tool_name),
-    toolUseId: idOf(raw.tool_use_id),
-    interrupted: raw.is_interrupt === true,
     cwd: cwdOf(raw.cwd),
   };
 }
@@ -156,7 +149,7 @@ async function logHook(
       emit({ ...event, version: config.version }, p);
     // The fingerprint parts, read from the folder Claude Code runs in and
     // kept for the next sync or prove, see fingerprint-claude-code.ts. Only
-    // at session start and end, never per tool call. Never throws.
+    // at session start and end. Never throws.
     const observe = () =>
       observeClaudeCode(
         config.agentId,
@@ -211,37 +204,7 @@ async function logHook(
         if ((await readNudge(p)) === true) await refreshGoal(config, deps, p);
         return;
       }
-      case 'PreToolUse': {
-        if (input.toolUseId === null) return;
-        await writeMarker(p, TOOL_MARKER_PREFIX + input.toolUseId, now);
-        return;
-      }
-      // Claude Code fires PostToolUse after a tool call succeeds and
-      // PostToolUseFailure after one that started and failed, both with
-      // tool_name and tool_use_id (hooks reference, checked 27 September
-      // 2026). A call refused before it runs fires neither. The failure's
-      // error text is never read, so a failed call is ok false with no
-      // error_class. A failure with is_interrupt true is the user pressing
-      // Esc during the call, not the agent failing, so it only clears the
-      // PreToolUse marker and records nothing.
-      case 'PostToolUse':
-      case 'PostToolUseFailure': {
-        if (input.toolName === null) return;
-        const started =
-          input.toolUseId === null
-            ? null
-            : await takeMarker(p, TOOL_MARKER_PREFIX + input.toolUseId);
-        if (input.event === 'PostToolUseFailure' && input.interrupted) return;
-        await append({
-          type: 'tool.call',
-          payload: {
-            tool: input.toolName,
-            duration_ms: started === null ? 0 : durationMs(started, now),
-            ok: input.event === 'PostToolUse',
-          },
-        });
-        return;
-      }
+      // A tool event, and any other, records nothing.
       default:
         return;
     }
@@ -270,15 +233,6 @@ async function writeMarker(p: Paths, name: string, at: Date): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
     throw error;
   }
-}
-
-// Reads and deletes a marker. null when there is none. A marker that does
-// not hold a valid time gives an invalid date, which durationMs turns into 0.
-async function takeMarker(p: Paths, name: string): Promise<Date | null> {
-  const text = await readMarker(p, name);
-  if (text === null) return null;
-  await rm(join(p.sessions, name), { force: true });
-  return new Date(text.trim());
 }
 
 function readMarker(p: Paths, name: string): Promise<string | null> {
@@ -324,9 +278,10 @@ async function endSession(p: Paths, id: string): Promise<void> {
   }
 }
 
-// Removes markers untouched for a day. An open session marker with a Stop
-// time stands for a SessionEnd that never came, so it first emits
-// session.end with the duration from start to the last Stop.
+// Removes markers untouched for a day, and a tool call marker an older CLI
+// left at any age. An open session marker with a Stop time stands for a
+// SessionEnd that never came, so it first emits session.end with the
+// duration from start to the last Stop.
 async function removeStaleMarkers(
   p: Paths,
   now: Date,
@@ -342,7 +297,8 @@ async function removeStaleMarkers(
   for (const name of names) {
     const file = join(p.sessions, name);
     try {
-      if ((await stat(file)).mtimeMs >= cutoff) continue;
+      const tool = name.startsWith(TOOL_MARKER_PREFIX);
+      if (!tool && (await stat(file)).mtimeMs >= cutoff) continue;
       const session = ID.test(name) ? await readSession(p, name) : null;
       // Without force, only the hook that removes the file emits for it.
       await rm(file);

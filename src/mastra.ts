@@ -1,9 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The Mastra adapter, imported as sealkeeper/mastra. It runs in the agent's own
-// process and appends to the local log through emit from lib.ts. Once
-// automatic sync is on it also starts a background sync, at most once every
-// five minutes, see background-sync.ts. A failing emit or sync is swallowed
-// so it never throws into the agent, and the agent never waits on a sync.
+// process and appends sessions and usage to the local log through emit from
+// lib.ts. Tool calls are not recorded. Once automatic sync is on it also
+// starts a background sync, at most once every five minutes, see
+// background-sync.ts. A failing emit or sync is swallowed so it never throws
+// into the agent, and the agent never waits on a sync.
 // sealKeeperContext gives the session nudge for the agent's instructions.
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
@@ -12,8 +13,7 @@
 //   await assertTrusted('alice/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
 import { createHash, randomUUID } from 'node:crypto';
-import { EventPayload } from '@sealkeeper/schema';
-import { adapterNudge, clampMs, emitQueue, safeEmit } from './adapter-core.js';
+import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
 import { mastraVersion, toolLine } from './adapter-fingerprint.js';
 import {
   type CheckOptions,
@@ -28,9 +28,6 @@ import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
 export type { Check, CheckOptions, CheckResponse, CheckThresholds };
-
-// Limits come from the schema, so this file keeps no copy of them.
-const TOOL_CALL = EventPayload['tool.call'].shape;
 
 // Anything with an id and, usually, an execute. What createTool returns fits.
 export type MastraToolLike = {
@@ -50,52 +47,10 @@ function elapsed(start: number): number {
   return clampMs(performance.now() - start);
 }
 
-function errorClass(error: unknown): string {
-  const name = (error as { constructor?: { name?: unknown } } | null)
-    ?.constructor?.name;
-  return TOOL_CALL.tool.safeParse(name).success ? (name as string) : 'Unknown';
-}
-
-// Tool ids go through toolNameOf as in the other adapters, so an id with a
-// space or any other character outside the taxonomy still names the tool
-// rather than failing the event. A tool whose id leaves no name is not
-// wrapped.
-function wrapTool<T extends MastraToolLike>(tool: T): T {
-  const execute = tool.execute;
-  const name = toolNameOf(tool.id);
-  if (typeof execute !== 'function' || name === null) return tool;
-  const id: string = name;
-  // Arguments and results pass straight through and are never read, logged or emitted.
-  async function wrapped(this: unknown, ...args: never[]): Promise<unknown> {
-    const start = performance.now();
-    try {
-      const result = await execute?.apply(this, args);
-      await safeEmit({
-        type: 'tool.call',
-        payload: { tool: id, duration_ms: elapsed(start), ok: true },
-      });
-      return result;
-    } catch (error) {
-      await safeEmit({
-        type: 'tool.call',
-        payload: {
-          tool: id,
-          duration_ms: elapsed(start),
-          ok: false,
-          error_class: errorClass(error),
-        },
-      });
-      throw error;
-    }
-  }
-  // A copy with the same prototype, so the caller's tool is left untouched.
-  const copy = Object.create(Object.getPrototypeOf(tool)) as T;
-  return Object.assign(copy, tool, { execute: wrapped });
-}
-
 // The fingerprint parts this process sees (VB-2). Model ids from steps,
-// the names and schemas of every tool wrapped here and the @mastra/core
-// version. Only their hashes are written, see fingerprint-observer.ts.
+// the names and schemas of every tool passed to withSealKeeper and the
+// @mastra/core version. Only their hashes are written, see
+// fingerprint-observer.ts.
 const observer = createObserver('mastra');
 let frameworkLooked = false;
 
@@ -128,20 +83,15 @@ function observeTools(tools: readonly MastraToolLike[]): void {
   }
 }
 
-// Wraps the execute of every tool in a record or an array and returns the
-// same shape. Tools without an execute are returned as they are. The names
-// and schemas of the tools are hashed for the fingerprint.
+// Hashes the names and schemas of the tools in a record or an array for the
+// fingerprint and returns the tools themselves, unchanged. Their calls are
+// not recorded. Before 0.4.14 it wrapped each execute to emit tool.call, and
+// it keeps its signature so code that calls it keeps working.
 export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
 >(tools: T): T {
-  if (Array.isArray(tools)) {
-    observeTools(tools);
-    return tools.map((tool: MastraToolLike) => wrapTool(tool)) as never;
-  }
-  observeTools(Object.values(tools));
-  const out: Record<string, MastraToolLike> = {};
-  for (const [key, tool] of Object.entries(tools)) out[key] = wrapTool(tool);
-  return out as T;
+  observeTools(Array.isArray(tools) ? tools : Object.values(tools));
+  return tools;
 }
 
 // The usage payload of a step, or null when the step has no token counts or

@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   base64urlEncode,
+  CLI_VERSION_HEADER,
   type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
   LEGACY_ISSUER_UNTIL,
@@ -34,6 +35,7 @@ import {
   keysBaseUrl,
   recordApiUrl,
 } from '../seal.js';
+import { VERSION } from '../version.js';
 import type { SealDeps } from './seal.js';
 import { NO_FINGERPRINT } from './seal-handshake.js';
 import { NO_SEAL } from './seal-show.js';
@@ -961,6 +963,28 @@ describe('sealkeeper seal', () => {
         expect(requests).toEqual([WELL_KNOWN_URL]);
         const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
         expect(cache.origin).toBe('https://sealkeeper.run');
+      });
+
+      // VOU-453. The issuer's site is not the SealKeeper API, so it is not
+      // told which CLI asks. A local API is, like every other API request.
+      it('sends the CLI version to an API for the keys and never to the issuer site', async () => {
+        const versions: Record<string, string | null> = {};
+        const recording = (async (
+          input: string | URL | Request,
+          init?: RequestInit,
+        ) => {
+          versions[String(input)] = new Headers(init?.headers).get(
+            CLI_VERSION_HEADER,
+          );
+          return Response.json(published());
+        }) as typeof fetch;
+        await run(recording, 'seal', 'verify', await currentSeal());
+        vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+        await run(recording, 'seal', 'verify', await currentSeal());
+        expect(versions).toEqual({
+          [WELL_KNOWN_URL]: null,
+          [WELL_KNOWN]: VERSION,
+        });
       });
 
       it('fetches the keys for a SEAL of another issuer from the API', async () => {

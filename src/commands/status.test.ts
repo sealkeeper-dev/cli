@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,6 +29,7 @@ import {
   NO_ADAPTER,
   nextScoringLine,
   sealWithheld,
+  TOOL_HOOKS_LEFT,
 } from './status.js';
 
 const AGENT_ID = 'A'.repeat(43);
@@ -221,7 +222,9 @@ function event(type: Event['type'], payload: Event['payload']): Event {
 
 const TASK = { task_id: randomUUID(), task_type: 'lint' };
 
-// Seven events today. The cursor sits after the third, so four are pending.
+// Seven events today, three of them tool calls an older CLI logged, which
+// status leaves out (VOU-451). The cursor sits after the third, so the
+// three after it that are sent are pending.
 async function seedMixedLog(): Promise<Event[]> {
   const events = [
     event('session.start', { session_id: 's1' }),
@@ -393,19 +396,19 @@ describe('status', () => {
     );
     expect(lines).toContain(`today             ${dayOf(new Date())} UTC`);
     expect(lines).toContain('  session.start   1');
-    expect(lines).toContain('  tool.call       3');
     expect(lines).toContain('  task.claimed    1');
     expect(lines).toContain('  task.submitted  1');
     expect(lines).toContain('  incident        1');
     expect(lines).toContain('  usage           0');
-    expect(lines).toContain('tool calls        3, 2 ok (67%)');
+    expect(out).not.toContain('tool.call');
+    expect(out).not.toContain('tool calls');
     expect(lines).toContain('tasks             1 claimed, 1 submitted');
     expect(lines).toContain('verified tasks    2');
     expect(out).toMatch(
       /\nNext scoring run in about ([1-9]|1[0-5]) minutes?\n/,
     );
     expect(out).not.toContain('not submitted yet');
-    expect(lines).toContain('pending           4');
+    expect(lines).toContain('pending           3');
     expect(lines).toContain(`last sync         ${LAST_SYNC}`);
     expect(lines).toContain(
       'auto-sync         off, run npx sealkeeper sync to review and send',
@@ -446,7 +449,7 @@ describe('status', () => {
     const { code, out, ms } = await run(offline, 'status');
     expect(code).toBe(0);
     expect(ms).toBeLessThan(1000);
-    expect(out).toContain('pending           4\n');
+    expect(out).toContain('pending           3\n');
     expect(out).toContain('  reliability     -\n');
     expect(out).toContain('  provenance      -\n');
     expect(out).toContain('verified tasks    -\n');
@@ -947,14 +950,12 @@ describe('status', () => {
       counts: {
         'session.start': 1,
         'session.end': 0,
-        'tool.call': 3,
         'task.claimed': 1,
         'task.submitted': 1,
         'task.outcome': 0,
         incident: 1,
         usage: 0,
       },
-      toolCalls: { total: 3, ok: 2, okRatio: 2 / 3 },
       tasks: { claimed: 1, submitted: 1 },
       verifiedTasks: 2,
       level: null,
@@ -965,7 +966,7 @@ describe('status', () => {
       unsubmittedClaims: 0,
       addressedTasks: 0,
       nextScoringRunMinutes: expect.any(Number),
-      pending: 4,
+      pending: 3,
       lastSyncAt: LAST_SYNC,
       autoSync: false,
       scores: {
@@ -982,8 +983,8 @@ describe('status', () => {
   it('prints zeros and never when there is no log directory', async () => {
     const { code, out } = await run(offline, 'status');
     expect(code).toBe(0);
-    expect(out).toContain('  tool.call       0\n');
-    expect(out).toContain('tool calls        0, 0 ok (-)\n');
+    expect(out).not.toContain('tool.call');
+    expect(out).not.toContain('tool calls');
     expect(out).toContain('tasks             0 claimed, 0 submitted\n');
     expect(out).toContain('pending           0\n');
     expect(out).toContain('last sync         never\n');
@@ -992,10 +993,18 @@ describe('status', () => {
     expect(json).toMatchObject({
       pending: 0,
       lastSyncAt: null,
-      toolCalls: { total: 0, ok: 0, okRatio: null },
       scoresFetchedAt: null,
     });
-    expect(Object.values(json.counts)).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(json).not.toHaveProperty('toolCalls');
+    expect(json.counts).toEqual({
+      'session.start': 0,
+      'session.end': 0,
+      'task.claimed': 0,
+      'task.submitted': 0,
+      'task.outcome': 0,
+      incident: 0,
+      usage: 0,
+    });
   });
 
   it("--show lists today's events in full after the counts", async () => {
@@ -1003,17 +1012,21 @@ describe('status', () => {
     const { code, out } = await run(offline, 'status', '--show');
     expect(code).toBe(0);
     const lines = out.split('\n');
-    const header = lines.indexOf("today's events, 7, as they are sent");
+    const header = lines.indexOf("today's events, 4, as they are sent");
     expect(header).toBeGreaterThan(lines.indexOf('  usage           0'));
-    expect(lines.slice(header + 1, header + 8)).toEqual(
-      events.map((e) => JSON.stringify(e)),
+    expect(lines.slice(header + 1, header + 5)).toEqual(
+      events
+        .filter((e) => e.type !== 'tool.call')
+        .map((e) => JSON.stringify(e)),
     );
   });
 
   it('--show --json adds the events to the object', async () => {
     const events = await seedMixedLog();
     const { out } = await run(offline, 'status', '--show', '--json');
-    expect(JSON.parse(out).events).toEqual(events);
+    expect(JSON.parse(out).events).toEqual(
+      events.filter((e) => e.type !== 'tool.call'),
+    );
   });
 
   it('shows auto-sync on once it is on', async () => {
@@ -1116,6 +1129,58 @@ describe('status', () => {
     it('does not warn when something was recorded in the last 7 days', async () => {
       await eventDaysAgo(6);
       expect((await run(offline, 'status')).err).toBe('');
+    });
+  });
+
+  // VOU-451. The hooks record sessions only. An install before 0.4.14 also
+  // wrote PreToolUse, PostToolUse and PostToolUseFailure, which record
+  // nothing now.
+  describe('tool call hooks an older install left', () => {
+    async function writeHooks(file: string, events: string[]): Promise<void> {
+      const scriptDir = join(home, 'lib', 'node_modules', 'sealkeeper', 'dist');
+      await mkdir(scriptDir, { recursive: true });
+      const script = join(scriptDir, 'index.js');
+      await writeFile(script, '');
+      const ours = [
+        {
+          hooks: [
+            { type: 'command', command: hookCommand(process.execPath, script) },
+          ],
+        },
+      ];
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(
+        file,
+        JSON.stringify({
+          hooks: Object.fromEntries(events.map((event) => [event, ours])),
+        }),
+      );
+    }
+    const THREE = ['SessionStart', 'SessionEnd', 'Stop'];
+    const SIX = [...THREE, 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
+
+    it('reads three hooks as complete and says nothing', async () => {
+      await writeHooks(join(home, 'claude', 'settings.json'), THREE);
+      expect((await run(offline, 'status')).err).toBe('');
+    });
+
+    it('says in one line on stderr to run the install again', async () => {
+      await writeHooks(join(home, 'claude', 'settings.json'), SIX);
+      const { code, out, err } = await run(offline, 'status', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toMatchObject({ pending: 0 });
+      expect(TOOL_HOOKS_LEFT).toBe(
+        'The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper adapter claude-code install again to remove them, with --scope project for a project install.',
+      );
+      expect(err).toBe(`${TOOL_HOOKS_LEFT}\n`);
+    });
+
+    it('finds them in the project settings too', async () => {
+      await writeHooks(
+        join(home, 'project', '.claude', 'settings.local.json'),
+        SIX,
+      );
+      expect((await run(offline, 'status')).err).toBe(`${TOOL_HOOKS_LEFT}\n`);
     });
   });
 

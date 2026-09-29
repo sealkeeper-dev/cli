@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
@@ -68,14 +68,9 @@ const INVOCATION = invocationOf(HOOK_COMMAND);
 const PROVE_COMMAND_TEXT = proveCommandText(INVOCATION);
 
 const OUR_ENTRY = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
-const EVENTS = [
-  'SessionStart',
-  'SessionEnd',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-  'Stop',
-];
+const EVENTS = ['SessionStart', 'SessionEnd', 'Stop'];
+// The tool call hooks an install before 0.4.14 wrote next to them.
+const TOOL_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
 
 describe('adapter claude-code', () => {
   let root: string;
@@ -151,7 +146,7 @@ describe('adapter claude-code', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('install into a missing file creates it with the six hooks', async () => {
+  it('install into a missing file creates it with the three hooks', async () => {
     const { code, out } = await run('install');
     expect(code).toBe(0);
     expect(out).toBe(
@@ -263,7 +258,7 @@ describe('adapter claude-code', () => {
     const hooks = after.hooks as Record<string, unknown[]>;
     expect(after.model).toBe('opus');
     expect(after.permissions).toEqual(OTHER.permissions);
-    expect(hooks.PreToolUse).toEqual([OTHER.hooks.PreToolUse[0], OUR_ENTRY]);
+    expect(hooks.PreToolUse).toEqual(OTHER.hooks.PreToolUse);
     expect(hooks.Notification).toEqual(OTHER.hooks.Notification);
     for (const event of EVENTS) expect(hooks[event]?.at(-1)).toEqual(OUR_ENTRY);
     expect((await stat(userFile())).mode & 0o777).toBe(0o640);
@@ -272,6 +267,47 @@ describe('adapter claude-code', () => {
     await run('uninstall');
     expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
   });
+
+  // VOU-451. The hooks record sessions only, so a repeat install takes the
+  // tool call hooks of an older install out, in whichever file it writes.
+  it.each([
+    ['user', [], userFile],
+    ['project', ['--scope', 'project'], projectFile],
+  ] as const)(
+    'a repeat %s install over six hooks leaves three and every foreign hook',
+    async (_scope, args, file) => {
+      await mkdir(dirname(file()), { recursive: true });
+      const older = JSON.parse(OTHER_TEXT) as {
+        hooks: Record<string, unknown[]>;
+      };
+      for (const event of [...EVENTS, ...TOOL_EVENTS]) {
+        older.hooks[event] = [...(older.hooks[event] ?? []), OUR_ENTRY];
+      }
+      await writeFile(file(), `${JSON.stringify(older, null, 2)}\n`);
+      const { code, out } = await run('install', ...args, '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toMatchObject({
+        path: file(),
+        added: [],
+        updated: [],
+        removed: TOOL_EVENTS,
+      });
+      const after = await readJson(file());
+      const hooks = after.hooks as Record<string, unknown[]>;
+      expect(Object.keys(hooks)).toEqual([
+        'PreToolUse',
+        'Notification',
+        ...EVENTS,
+      ]);
+      expect(hooks.PreToolUse).toEqual(OTHER.hooks.PreToolUse);
+      for (const event of EVENTS) expect(hooks[event]).toEqual([OUR_ENTRY]);
+
+      await writeFile(file(), `${JSON.stringify(older, null, 2)}\n`);
+      expect((await run('install', ...args)).out).toContain(
+        `removed sealkeeper hooks for ${TOOL_EVENTS.join(', ')} from ${file()}, the hooks record sessions only\n`,
+      );
+    },
+  );
 
   it('install twice adds nothing the second time', async () => {
     await run('install');

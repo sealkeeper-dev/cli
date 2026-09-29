@@ -5,23 +5,37 @@ import { describe, expect, it } from 'vitest';
 import {
   commonFields,
   describeTaxonomy,
+  isSent,
   NEVER_LEAVES,
   taxonomyRows,
+  UNSENT_TEXT,
+  UNSENT_TYPES,
 } from './taxonomy.js';
 
 describe('describeTaxonomy', () => {
   const text = describeTaxonomy();
   const lines = text.split('\n');
 
-  it('names every event type on its own line, in taxonomy order', () => {
+  it('names every event type it sends on its own line, in taxonomy order', () => {
     const typeLines = lines.filter((l) =>
       (EventType.options as string[]).includes(l),
     );
-    expect(typeLines).toEqual(EventType.options);
+    expect(typeLines).toEqual(EventType.options.filter(isSent));
+  });
+
+  // VOU-451. tool.call stays in the taxonomy for older CLIs, and no hook or
+  // adapter here sends it.
+  it('leaves out tool.call and says why', () => {
+    expect(UNSENT_TYPES).toEqual(['tool.call']);
+    expect(lines).not.toContain('tool.call');
+    expect(text).toContain(`\n\n${UNSENT_TEXT}\n${NEVER_LEAVES}`);
+    expect(UNSENT_TEXT).toBe(
+      'tool.call stays in the taxonomy for older CLIs. This one never sends it, not even one an older CLI left in the log.',
+    );
   });
 
   it('lists every field of every payload schema under its type', () => {
-    for (const type of EventType.options) {
+    for (const type of EventType.options.filter(isSent)) {
       const start = lines.indexOf(type);
       const block = [];
       for (let i = start + 1; i < lines.length && lines[i] !== ''; i++) {
@@ -56,8 +70,8 @@ describe('describeTaxonomy', () => {
   });
 
   it('marks optional fields and spells out enums', () => {
-    const tool = taxonomyRows().find((r) => r.type === 'tool.call');
-    expect(tool?.fields.find((f) => f.name === 'error_class')?.optional).toBe(
+    const usage = taxonomyRows().find((r) => r.type === 'usage');
+    expect(usage?.fields.find((f) => f.name === 'latency_ms')?.optional).toBe(
       true,
     );
     const incident = taxonomyRows().find((r) => r.type === 'incident');

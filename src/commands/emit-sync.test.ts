@@ -151,6 +151,7 @@ function throwOnExit(cmd: Command): void {
   for (const sub of cmd.commands) throwOnExit(sub);
 }
 
+// A line an older CLI logged for a tool call. This CLI never sends one.
 function toolCall(n: number): Event {
   return {
     event_id: randomUUID(),
@@ -158,6 +159,16 @@ function toolCall(n: number): Event {
     occurred_at: new Date().toISOString(),
     version: '1.0.0',
     payload: { tool: 'Bash', duration_ms: n, ok: true },
+  };
+}
+
+function sessionEnd(n: number): Event {
+  return {
+    event_id: randomUUID(),
+    type: 'session.end',
+    occurred_at: new Date().toISOString(),
+    version: '1.0.0',
+    payload: { session_id: 's1', duration_ms: n },
   };
 }
 
@@ -249,7 +260,7 @@ describe('emit and sync', () => {
   }
 
   async function seed(count: number): Promise<Event[]> {
-    const events = Array.from({ length: count }, (_, n) => toolCall(n));
+    const events = Array.from({ length: count }, (_, n) => sessionEnd(n));
     for (const e of events) await appendEvent(e);
     return events;
   }
@@ -352,6 +363,26 @@ describe('emit and sync', () => {
       expect(err).toContain('invalid event');
       expect(err).toContain('prompt');
       expect(await countPending()).toBe(0);
+    });
+
+    // VOU-451. The hooks and adapters record sessions only. An adapter
+    // written for an older CLI that still emits tool.call keeps working.
+    it('with the type tool.call records nothing, says so in one line and exits 0', async () => {
+      await initialise();
+      const { code, out, err } = await api(
+        'emit',
+        '--type',
+        'tool.call',
+        '--payload',
+        '{"tool":"Bash","duration_ms":1,"ok":true}',
+      );
+      expect(code).toBe(0);
+      expect(out).toBe('');
+      expect(err).toBe(
+        'tool.call is no longer recorded, nothing was written\n',
+      );
+      expect(await logged()).toEqual([]);
+      expect(server.batches).toEqual([]);
     });
 
     it('rejects an unknown type', async () => {
@@ -623,6 +654,44 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
+    // VOU-451. The log is append only and keeps each line. No tool call
+    // leaves the machine, and a skipped line never holds the cursor back.
+    it('never sends the tool.call lines an older CLI logged and moves the cursor past them', async () => {
+      await initialise();
+      const events = [
+        toolCall(0),
+        sessionEnd(1),
+        toolCall(2),
+        toolCall(3),
+        sessionEnd(4),
+        toolCall(5),
+      ];
+      for (const e of events) await appendEvent(e);
+      expect(await countPending()).toBe(2);
+      const first = await api('sync');
+      expect(first.code).toBe(0);
+      expect(first.out).toBe('accepted 2, duplicates 0\n');
+      expect(server.batches).toEqual([[events[1], events[4]]]);
+      expect((await readCursor()).lastAcked?.eventId).toBe(events[5]?.event_id);
+      expect(await countPending()).toBe(0);
+
+      const second = await api('sync');
+      expect(second.out).toBe('accepted 0, duplicates 0\n');
+      expect(server.batches).toHaveLength(1);
+      expect(await logged()).toEqual(events);
+    });
+
+    it('moves the cursor past a log of tool.call lines alone and sends nothing', async () => {
+      await initialise();
+      const events = [toolCall(0), toolCall(1)];
+      for (const e of events) await appendEvent(e);
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 0, duplicates 0\n');
+      expect(server.batches).toEqual([]);
+      expect((await readCursor()).lastAcked?.eventId).toBe(events[1]?.event_id);
+    });
+
     it('records lastSyncAt on the cursor after an accepted batch', async () => {
       await initialise();
       await seed(2);
@@ -763,12 +832,13 @@ describe('emit and sync', () => {
       const long = 'x'.repeat(64);
       for (let n = 0; n < 500; n++) {
         await appendEvent({
-          ...toolCall(n),
+          ...sessionEnd(n),
+          type: 'usage',
           payload: {
-            tool: long,
-            duration_ms: n,
-            ok: false,
-            error_class: long,
+            tokens_in: 100_000_000,
+            tokens_out: 100_000_000,
+            latency_ms: 604_800_000,
+            model: long,
           },
         });
       }
@@ -851,7 +921,7 @@ describe('emit and sync', () => {
       ).toISOString();
       const events = [
         ...(await seed(2)),
-        { ...toolCall(2), occurred_at: edge },
+        { ...sessionEnd(2), occurred_at: edge },
       ];
       await appendEvent(events[2] as Event);
       events.push(...(await seed(2)));
@@ -1034,7 +1104,7 @@ describe('emit and sync', () => {
         // Two hours inside the old edge by this machine clock, so it is
         // signed and sent, but an hour past it by the API clock.
         const old: Event = {
-          ...toolCall(0),
+          ...sessionEnd(0),
           occurred_at: new Date(
             NOW.getTime() -
               EVENT_MAX_AGE_DAYS * 24 * 3600 * 1000 +
@@ -1090,7 +1160,7 @@ describe('emit and sync', () => {
         return { ...reply, headers: { Date: at(0) } };
       };
       const stampedAhead = (sec: number): Event => ({
-        ...toolCall(0),
+        ...sessionEnd(0),
         occurred_at: new Date(NOW.getTime() + sec * 1000).toISOString(),
       });
 
@@ -1185,7 +1255,7 @@ describe('emit and sync', () => {
         Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
       ).toISOString();
       const stale = Array.from({ length: 50 }, (_, n) => ({
-        ...toolCall(n),
+        ...sessionEnd(n),
         occurred_at: old,
       }));
       for (const e of stale) await appendEvent(e);
@@ -1214,9 +1284,9 @@ describe('emit and sync', () => {
         Date.now() - (EVENT_MAX_AGE_DAYS + 2) * 24 * 3600 * 1000,
       ).toISOString();
       const a = await seed(2);
-      await appendEvent({ ...toolCall(9), occurred_at: old });
+      await appendEvent({ ...sessionEnd(9), occurred_at: old });
       const b = await seed(1);
-      await appendEvent({ ...toolCall(9), occurred_at: old });
+      await appendEvent({ ...sessionEnd(9), occurred_at: old });
       const { code, err } = await api('sync');
       expect(code).toBe(0);
       expect(server.batches).toHaveLength(1);
@@ -1233,7 +1303,7 @@ describe('emit and sync', () => {
         Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
       ).toISOString();
       for (let n = 0; n < 3; n++) {
-        await appendEvent({ ...toolCall(n), occurred_at: old });
+        await appendEvent({ ...sessionEnd(n), occurred_at: old });
       }
       const { code, err } = await api('sync');
       expect(code).toBe(0);
@@ -1247,7 +1317,7 @@ describe('emit and sync', () => {
       const edge = new Date(
         Date.now() - EVENT_MAX_AGE_DAYS * 24 * 3600 * 1000 - 60_000,
       ).toISOString();
-      const kept = { ...toolCall(1), occurred_at: edge };
+      const kept = { ...sessionEnd(1), occurred_at: edge };
       await appendEvent(kept);
       const { code } = await api('sync');
       expect(code).toBe(0);
@@ -1266,7 +1336,7 @@ describe('emit and sync', () => {
       const stale = EVENT_MAX_AGE_DAYS + 3;
       for (const n of [oldest, oldest, stale]) {
         await appendEvent(
-          { ...toolCall(n), occurred_at: daysAgo(n).toISOString() },
+          { ...sessionEnd(n), occurred_at: daysAgo(n).toISOString() },
           paths(),
           daysAgo(n),
         );
@@ -1513,11 +1583,11 @@ describe('emit and sync', () => {
       const old = new Date(
         Date.now() - (EVENT_MAX_AGE_DAYS + 1) * 24 * 3600 * 1000,
       ).toISOString();
-      await appendEvent({ ...toolCall(9), occurred_at: old });
+      await appendEvent({ ...sessionEnd(9), occurred_at: old });
       input = { isTTY: true, answers: ['y'], asked: 0 };
       const { code, out, err } = await api('sync');
       expect(code).toBe(0);
-      expect(out).toContain(`  ${today()}  5 events  tool.call 5\n`);
+      expect(out).toContain(`  ${today()}  5 events  session.end 5\n`);
       expect(out).toContain('the first 3 of 5, as sent');
       expect(out).toContain(JSON.stringify(events[2]));
       expect(out).not.toContain(JSON.stringify(events[3]));
@@ -1527,6 +1597,23 @@ describe('emit and sync', () => {
       expect(server.batches).toEqual([events]);
       expect(err).toContain('dropped 1 event older than');
       expect(await countPending()).toBe(0);
+    });
+
+    it('first sync leaves tool.call lines out of the preview and moves past them', async () => {
+      await initialise('1.2.0', 'unset');
+      const events = [toolCall(0), sessionEnd(1), toolCall(2)];
+      for (const e of events) await appendEvent(e);
+      const dry = await api('sync', '--dry-run');
+      expect(dry.out).toContain('1 event pending, nothing sent yet.');
+      expect(dry.out).not.toContain('tool.call');
+      input = { isTTY: true, answers: ['y'], asked: 0 };
+      const { code, out, err } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toContain(`  ${today()}  1 event  session.end 1\n`);
+      expect(out).not.toContain('tool.call');
+      expect(err).toContain('send this event now');
+      expect(server.batches).toEqual([[events[1]]]);
+      expect((await readCursor()).lastAcked?.eventId).toBe(events[2]?.event_id);
     });
 
     it('first sync answered n sends nothing and leaves auto-sync off', async () => {
@@ -1616,7 +1703,7 @@ describe('emit and sync', () => {
         answers: ['y'],
         asked: 0,
         during: async () => {
-          await appendEvent(toolCall(9));
+          await appendEvent(sessionEnd(9));
         },
       };
       const { code, out } = await api('sync');

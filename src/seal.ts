@@ -378,10 +378,13 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   }
   if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;
 
+  // The issuer's own site is not the SealKeeper API, so it is not told
+  // which CLI asks (VOU-453). A local or staging API is.
   const api = createApiClient({
     apiUrl: base,
     fetch: options.fetch,
     timeoutMs: KEYS_TIMEOUT_MS,
+    sendVersion: base !== ISSUER_ORIGIN,
   });
   let fresh: WellKnown;
   try {

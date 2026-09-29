@@ -185,7 +185,7 @@ async function readSources(p: Paths): Promise<SourcesFile> {
 // Writes what an in-process adapter observed. A part given replaces the last
 // one written for that adapter, and a part left out keeps it, so a new
 // process that has not run a model step yet keeps the model set the last
-// one saw. Called only when an observation changes, never per tool call.
+// one saw. Called only when an observation changes.
 export async function observeParts(
   adapter: ObservingAdapter,
   parts: ObservedParts,

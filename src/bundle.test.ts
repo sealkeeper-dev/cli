@@ -12,13 +12,18 @@
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { isBuiltin } from 'node:module';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { CLI_VERSION_HEADER } from '@sealkeeper/schema';
 import { build } from 'tsup';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { options } from '../tsup.config.js';
+import { paths } from './config.js';
+import { copyPaths, writeCopy } from './routine-copy.js';
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(
@@ -282,7 +287,7 @@ describe('cli bundle', () => {
     expect(mastra).toMatch(/export\s*\{[^}]*\bsealKeeperSession\b/);
   });
 
-  it('the built adapter wraps a tool and records a session', async () => {
+  it('the built adapter passes a tool through and records a session', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-mastra-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
     try {
@@ -305,12 +310,7 @@ describe('cli bundle', () => {
         .trim()
         .split('\n')
         .map((line) => (JSON.parse(line) as { type: string }).type);
-      expect(types.sort()).toEqual([
-        'session.end',
-        'session.start',
-        'tool.call',
-        'usage',
-      ]);
+      expect(types.sort()).toEqual(['session.end', 'session.start', 'usage']);
     } finally {
       vi.unstubAllEnvs();
       await rm(home, { recursive: true, force: true });
@@ -350,7 +350,7 @@ describe('cli bundle', () => {
     });
   });
 
-  it('the built OpenClaw entry records a session, a tool call and usage', async () => {
+  it('the built OpenClaw entry records a session and usage, never a tool call', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-openclaw-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
     try {
@@ -380,12 +380,7 @@ describe('cli bundle', () => {
         .trim()
         .split('\n')
         .map((line) => (JSON.parse(line) as { type: string }).type);
-      expect(types).toEqual([
-        'session.start',
-        'tool.call',
-        'usage',
-        'session.end',
-      ]);
+      expect(types).toEqual(['session.start', 'usage', 'session.end']);
     } finally {
       vi.unstubAllEnvs();
       await rm(home, { recursive: true, force: true });
@@ -438,6 +433,55 @@ describe('cli bundle', () => {
   it('replaces the GitHub client id placeholder at build time', () => {
     expect(bundle).not.toContain('__GITHUB_CLIENT_ID__');
   });
+
+  // VOU-453. The daily job runs a copy of this bin, so the copy says which
+  // CLI sends each request, with the version the build injected.
+  it("the routine's copy of the bin sends its version to the API", async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sealkeeper-bin-'));
+    const versions: (string | undefined)[] = [];
+    const server = createServer((req, res) => {
+      const version = req.headers[CLI_VERSION_HEADER.toLowerCase()];
+      versions.push(Array.isArray(version) ? version.join() : version);
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { code: 'not_found', message: 'no' } }));
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    try {
+      const { port } = server.address() as AddressInfo;
+      await writeFile(
+        join(home, 'config.json'),
+        JSON.stringify({
+          agentId: 'A'.repeat(43),
+          operatorLogin: 'alice',
+          name: 'scout',
+          version: '1.0.0',
+          registeredAt: '2026-09-23T08:00:00Z',
+        }),
+      );
+      await writeCopy(join(outDir, 'index.js'), paths(home), pkg.version);
+      const code = await new Promise<number | null>((done) => {
+        const child = spawn(
+          process.execPath,
+          [copyPaths(paths(home)).script, 'status'],
+          {
+            env: {
+              ...process.env,
+              SEALKEEPER_HOME: home,
+              SEALKEEPER_API_URL: `http://127.0.0.1:${port}`,
+            },
+            stdio: 'ignore',
+          },
+        );
+        child.on('close', done);
+      });
+      expect(code).toBe(0);
+      expect(versions.length).toBeGreaterThan(0);
+      expect(new Set(versions)).toEqual(new Set([pkg.version]));
+    } finally {
+      server.close();
+      await rm(home, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   // A fetch that times out can leave a connect attempt open inside undici
   // for about ten seconds when the network drops packets. The bin must not

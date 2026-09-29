@@ -52,7 +52,10 @@ export function register(
       'incidents in the last 90 days allowed, default 0',
     )
     .option('--min-reliability <x>', 'reliability needed, 0 to 1')
-    .option('--min-safety <x>', 'safety needed, 0 to 1')
+    .option(
+      '--min-safety <x>',
+      'safety needed, 0 to 1, fails for every agent while safety is not measured',
+    )
     .option(
       '--min-level <level>',
       `level needed, one of the levels issued today, ${Level.options.join(', ')}, default bronze`,

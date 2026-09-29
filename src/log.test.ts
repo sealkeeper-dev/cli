@@ -58,10 +58,10 @@ function event(day: string, n: number): Event {
   const seconds = String(n % 60).padStart(2, '0');
   return {
     event_id: randomUUID(),
-    type: 'tool.call',
+    type: 'session.end',
     occurred_at: `${day}T10:00:${seconds}.000Z`,
     version: '1.0.0',
-    payload: { tool: 'Bash', duration_ms: n, ok: true },
+    payload: { session_id: 's1', duration_ms: n },
   };
 }
 
@@ -259,6 +259,28 @@ describe('log', () => {
     expect(await countPending()).toBe(0);
     await seedTwoDays();
     expect(await countPending()).toBe(5);
+  });
+
+  // VOU-451. A tool.call line an older CLI logged is never sent, so it is
+  // never pending, in either count, and init --force does not name it.
+  it('counts no tool.call line as pending', async () => {
+    const tool = (n: number): Event => ({
+      ...event(DAY2, n),
+      type: 'tool.call',
+      payload: { tool: 'Bash', duration_ms: n, ok: true },
+    });
+    for (const e of [tool(0), event(DAY2, 1), tool(2), event(DAY2, 3)]) {
+      await append(e);
+    }
+    await append(tool(4));
+    expect(await countPending()).toBe(2);
+    expect(await countPendingLines()).toBe(2);
+    // pendingEvents still reads every line, so sync can move past them.
+    let read = 0;
+    for await (const _ of pendingEvents()) read++;
+    expect(read).toBe(5);
+    expect(await cursorToEnd()).toBe(2);
+    expect(await countPending()).toBe(0);
   });
 
   it('counts pending lines from the cursor without parsing them', async () => {

@@ -13,6 +13,15 @@ import { cli } from './invocation.js';
 // what emit accepts and sync sends. Only the one line per field is written by
 // hand, and the types below make a field without one a compile error.
 
+// Types in the taxonomy that this CLI never sends. The hooks and adapters
+// recorded tool calls before 0.4.14. The API still accepts them from an
+// older CLI, and every sender here skips one an older CLI left in the log.
+export const UNSENT_TYPES: readonly EventType[] = ['tool.call'];
+
+export function isSent(type: EventType): boolean {
+  return !UNSENT_TYPES.includes(type);
+}
+
 type PayloadField = {
   [T in EventType]: keyof Payload<T>;
 }[EventType];
@@ -44,6 +53,8 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
 export const NEVER_LEAVES =
   'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine.';
 
+export const UNSENT_TEXT = `${UNSENT_TYPES.join(', ')} stays in the taxonomy for older CLIs. This one never sends it, not even one an older CLI left in the log.`;
+
 export const WIRE_FORM =
   'Each event is sent as exactly this JSON wrapped in a signature from your agent key, and nothing else.';
 
@@ -69,9 +80,10 @@ export function commonFields(): FieldRow[] {
     );
 }
 
-// One row per event type, in taxonomy order, with its payload fields.
+// One row per event type this CLI sends, in taxonomy order, with its
+// payload fields.
 export function taxonomyRows(): TypeRow[] {
-  return EventType.options.map((type) => {
+  return EventType.options.filter(isSent).map((type) => {
     const shape = EventPayload[type].shape as Record<string, z.ZodType>;
     return {
       type,
@@ -103,7 +115,7 @@ export function describeTaxonomy(): string {
     'and the fields listed under its type, nothing else.',
   ];
   for (const row of rows) out.push('', row.type, ...row.fields.map(line));
-  out.push('', NEVER_LEAVES);
+  out.push('', UNSENT_TEXT, NEVER_LEAVES);
   return out.join('\n');
 }
 

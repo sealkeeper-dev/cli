@@ -88,6 +88,23 @@ describe('deviceFlow', () => {
     });
   });
 
+  // VOU-453. The CLI version header goes to the SealKeeper API alone, so
+  // every request to GitHub carries these two headers and no other.
+  it('never sends GitHub the CLI version', async () => {
+    const { promise, calls } = run([
+      { error: 'authorization_pending' },
+      { access_token: TOKEN },
+    ]);
+    await promise;
+    expect(calls).toHaveLength(3);
+    for (const { init } of calls) {
+      expect(init.headers).toEqual({
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+      });
+    }
+  });
+
   it('adds five seconds to the interval on slow_down', async () => {
     const { promise, sleeps } = run([
       { error: 'slow_down', interval: 10 },

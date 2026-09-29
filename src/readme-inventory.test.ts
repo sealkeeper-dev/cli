@@ -1,11 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFileSync } from 'node:fs';
-import { WELL_KNOWN_URL } from '@sealkeeper/schema';
+import { CLI_VERSION_HEADER, WELL_KNOWN_URL } from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import { LOCK_FILE, STAMP_FILE } from './background-sync.js';
 import { proveCommandPath } from './claude-code-command.js';
 import {
   HOOK_EVENTS,
+  RETIRED_HOOK_EVENTS,
   settingsPath,
   sharedProjectSettingsPath,
 } from './claude-code-settings.js';
@@ -84,9 +85,13 @@ describe('the What init does inventory', () => {
 
   it('lists the files written into Claude Code and every hook event', () => {
     const user = settingsPath('user', { home: HOME, cwd: '/c' });
-    expect(text).toContain(`- \`${tilde(user)}\`, six hooks`);
-    expect(HOOK_EVENTS).toHaveLength(6);
+    expect(text).toContain(`- \`${tilde(user)}\`, three hooks`);
+    expect(HOOK_EVENTS).toHaveLength(3);
     for (const event of HOOK_EVENTS) expect(text).toContain(`\`${event}\``);
+    // The tool call hooks an older install wrote, which install takes out.
+    for (const event of RETIRED_HOOK_EVENTS) {
+      expect(text).toContain(`\`${event}\``);
+    }
     expect(text).toContain(`- \`${tilde(proveCommandPath(user))}\`, `);
     expect(text).toContain(`- \`${tilde(skillPath(user))}\`, `);
     expect(text).toContain('`CLAUDE_CONFIG_DIR`');
@@ -153,10 +158,23 @@ describe('the What init does inventory', () => {
   it('points at what-is-shared for the fields and makes no hashes only claim', () => {
     expect(text).toContain('`npx sealkeeper what-is-shared`');
     expect(text).toContain(
-      'Events are metadata only, tool names, durations, outcomes, token counts and the model id. Never prompts, tool arguments, outputs or file contents. Hashes stand in where a check needs evidence.',
+      'Events are metadata only, session boundaries, durations, outcomes, token counts and the model id. Never prompts, tool arguments, outputs or file contents. Hashes stand in where a check needs evidence.',
     );
     expect(README).not.toMatch(/only hash/i);
     // The field table is linked, not repeated.
     expect(text).not.toContain('| `tool.call` |');
+  });
+});
+
+// VOU-453. What leaves your machine names the header every API request
+// carries as the schema spells it.
+describe('What leaves your machine', () => {
+  it('names the CLI version header', () => {
+    const start = README.indexOf('\n## What leaves your machine\n');
+    expect(start).toBeGreaterThan(-1);
+    const end = README.indexOf('\n## ', start + 1);
+    expect(README.slice(start, end)).toContain(
+      `Every request to the SealKeeper API carries the header \`${CLI_VERSION_HEADER}\`, which holds the version of the CLI that sends it`,
+    );
   });
 });

@@ -2,10 +2,11 @@
 // The OpenClaw adapter, imported as sealkeeper/openclaw. OpenClaw loads plugins
 // into the Gateway process and calls register(api) once, where the plugin
 // subscribes to typed hooks with api.on(name, handler). This file is such a
-// plugin entry. It appends to the local log through emit from lib.ts and,
-// once automatic sync is on, starts a background sync at most once every
-// five minutes (background-sync.ts). It swallows every failure so it never
-// throws into the agent, and the agent never waits on a sync.
+// plugin entry. It appends sessions and usage to the local log through emit
+// from lib.ts, never tool calls, and, once automatic sync is on, starts a
+// background sync at most once every five minutes (background-sync.ts). It
+// swallows every failure so it never throws into the agent, and the agent
+// never waits on a sync.
 //
 // OpenClaw is typed by shape only, so this file imports nothing from it. The
 // hook names and fields match OpenClaw's source (src/plugins/hook-types.ts
@@ -28,8 +29,8 @@ import { quietly } from './output.js';
 // Limits come from the schema, so this file keeps no copy of them.
 const NAME = EventPayload['session.start'].shape.session_id;
 
-// Open sessions, tool calls and runs are held in memory until they end. A
-// Gateway runs for weeks, so each map drops its oldest entry past this size.
+// Open sessions and runs are held in memory until they end. A Gateway runs
+// for weeks, so each map drops its oldest entry past this size.
 const MAX_OPEN = 10_000;
 
 // The part of OpenClaw's plugin api this adapter uses. OpenClaw passes each
@@ -113,11 +114,10 @@ function observeFramework(observer: FingerprintObserver): void {
 }
 
 // Wires the hooks. Every handler reads only names, ids, durations and
-// counts. Tool params and results, prompts, messages and model output are
-// never read, logged or emitted.
+// counts. Tool calls, prompts, messages and model output are never read,
+// logged or emitted.
 function register(api: OpenClawPluginApiLike): void {
   const sessions = bounded<number>();
-  const tools = bounded<number>();
   // Model time per run since its last llm_output, from model_call_ended.
   const runs = bounded<number>();
 
@@ -173,35 +173,6 @@ function register(api: OpenClawPluginApiLike): void {
       payload: {
         session_id: id,
         duration_ms: msOf(field(event, 'durationMs')) ?? since(start),
-      },
-    };
-  });
-
-  // Only notes when the call began, for an after_tool_call without its own
-  // duration. It returns nothing, so it never changes or blocks the call.
-  on('before_tool_call', (event, ctx) => {
-    const id = idOf(field(event, 'toolCallId') ?? field(ctx, 'toolCallId'));
-    if (id !== null) tools.put(id, performance.now());
-    return null;
-  });
-
-  // The error is a message, so only whether it is set is looked at. It is
-  // never emitted, and no error class is sent for OpenClaw.
-  on('after_tool_call', (event, ctx) => {
-    const tool = toolNameOf(field(event, 'toolName'));
-    const id = idOf(field(event, 'toolCallId') ?? field(ctx, 'toolCallId'));
-    const started = id === null ? undefined : tools.get(id);
-    if (id !== null) tools.delete(id);
-    if (tool === null) return null;
-    const error = field(event, 'error');
-    return {
-      type: 'tool.call',
-      payload: {
-        tool,
-        duration_ms:
-          msOf(field(event, 'durationMs')) ??
-          (started === undefined ? 0 : since(started)),
-        ok: !(typeof error === 'string' && error.length > 0),
       },
     };
   });
@@ -282,7 +253,7 @@ export function sealKeeperPlugin(): SealKeeperOpenClawPlugin {
     id: 'sealkeeper',
     name: 'SealKeeper',
     description:
-      'Records session, tool call and usage metadata in the local SealKeeper log.',
+      'Records session and usage metadata in the local SealKeeper log.',
     register,
   };
 }

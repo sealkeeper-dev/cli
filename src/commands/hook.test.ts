@@ -13,11 +13,11 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import type { Event } from '@sealkeeper/schema';
+import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_FILE, resetBackgroundSyncThrottle } from '../background-sync.js';
-import { parseHookInput, STALE_MARKER_MS, toolNameOf } from '../claude-code.js';
+import { parseHookInput, STALE_MARKER_MS } from '../claude-code.js';
 import {
   bindFolder,
   namedHome,
@@ -33,8 +33,10 @@ import {
   readCursor,
   readDay,
 } from '../log.js';
+import { toolNameOf } from '../names.js';
 import { NUDGE_CACHE_MAX_MS, type NudgeGoal } from '../nudge.js';
 import { createProgram } from '../program.js';
+import { VERSION } from '../version.js';
 import { readStdin } from './hook.js';
 
 const API_URL = 'https://api.test';
@@ -94,14 +96,20 @@ function throwOnExit(cmd: Command): void {
 describe('hook claude-code', () => {
   let home: string;
   let fetches: string[];
+  // The CLI version header of each request, in the same order (VOU-453).
+  let versions: (string | null)[];
   // The cached goal the session nudge reads, and every read of it.
   let goal: NudgeGoal | null | Error;
   let goalReads: { maxAgeMs: number }[];
   // What GET /goal answers, 404 while null.
   let goalAnswer: Record<string, unknown> | null;
 
-  const fakeFetch = (async (input: string | URL | Request) => {
+  const fakeFetch = (async (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
     fetches.push(String(input));
+    versions.push(new Headers(init?.headers).get(CLI_VERSION_HEADER));
     if (String(input).endsWith('/goal')) {
       return goalAnswer === null
         ? Response.json(
@@ -203,6 +211,7 @@ describe('hook claude-code', () => {
     vi.stubEnv('SEALKEEPER_HOME', home);
     vi.stubEnv('SEALKEEPER_API_URL', '');
     fetches = [];
+    versions = [];
     goal = null;
     goalReads = [];
     goalAnswer = null;
@@ -438,15 +447,15 @@ describe('hook claude-code', () => {
     return err;
   }
 
-  async function seedToolCalls(count: number): Promise<void> {
+  async function seedSessions(count: number): Promise<void> {
     for (let n = 0; n < count; n++) {
       await appendEvent(
         {
           event_id: randomUUID(),
-          type: 'tool.call',
+          type: 'session.start',
           occurred_at: new Date().toISOString(),
           version: '1.2.0',
-          payload: { tool: 'Bash', duration_ms: n, ok: true },
+          payload: { session_id: `seeded-${n}` },
         },
         paths(home),
       );
@@ -478,7 +487,7 @@ describe('hook claude-code', () => {
   it('SessionEnd stops starting rounds after its deadline', async () => {
     await initialise();
     await hook(payloads.sessionStart());
-    await seedToolCalls(1000);
+    await seedSessions(1000);
     // Each request takes 2.5 seconds on the clock the sync reads. Rounds
     // start at 0 and 2.5 seconds, and the 3 second deadline stops the third.
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -522,95 +531,48 @@ describe('hook claude-code', () => {
     expect(await countPending(paths(home))).toBe(2);
   }, 15_000);
 
-  it('PreToolUse then PostToolUse emits tool.call with the duration between them', async () => {
+  // VOU-451. The hooks record sessions only. A machine keeps the tool
+  // hooks of an older install until the install runs again, and each of
+  // them records nothing, prints nothing and exits 0.
+  it.each([
+    ['PreToolUse', payloads.pre('toolu_01ABCdef')],
+    ['PostToolUse', payloads.post('toolu_01ABCdef')],
+    ['PostToolUseFailure', payloads.failure('toolu_01ABCdef')],
+    [
+      'an interrupted PostToolUseFailure',
+      payloads.failure('toolu_02', 'Bash', true),
+    ],
+  ])('%s records nothing', async (_label, payload) => {
     await initialise();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
-    const pre = await hook(payloads.pre('toolu_01ABCdef'));
+    const { err } = await hook(payload);
+    expect(err).toBe('');
     expect(await logged()).toEqual([]);
-    expect(await markers()).toEqual(['tool.toolu_01ABCdef']);
-
-    vi.setSystemTime(new Date('2026-09-23T10:00:01.234Z'));
-    const post = await hook(payloads.post('toolu_01ABCdef'));
-    const events = await logged();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: 'tool.call',
-      payload: { tool: 'Bash', duration_ms: 1_234, ok: true },
-    });
     expect(await markers()).toEqual([]);
     expect(fetches).toEqual([]);
-
-    for (const text of [pre.err, post.err]) {
-      expect(text).not.toContain('secret');
-    }
   });
 
-  it('PreToolUse then PostToolUseFailure emits tool.call with ok false and no error text', async () => {
-    await initialise();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
-    await hook(payloads.pre('toolu_04fail'));
-    vi.setSystemTime(new Date('2026-09-23T10:00:02.000Z'));
-    const failed = await hook(payloads.failure('toolu_04fail'));
-    const events = await logged();
-    expect(events).toHaveLength(1);
-    expect(events[0]?.payload).toEqual({
-      tool: 'Bash',
-      duration_ms: 2_000,
-      ok: false,
-    });
-    // The marker is taken, so a failed call leaves none behind.
-    expect(await markers()).toEqual([]);
-    const day = await readFile(paths(home).logFile(dayOf(new Date())), 'utf8');
-    for (const text of [day, failed.err, failed.out]) {
-      expect(text).not.toContain('secret');
-      expect(text).not.toContain('Exit code');
-    }
-  });
-
-  it('a PostToolUseFailure the user interrupted records nothing and clears the marker', async () => {
-    await initialise();
-    await hook(payloads.pre('toolu_05esc'));
-    expect(await markers()).toEqual(['tool.toolu_05esc']);
-    const interrupted = await hook(
-      payloads.failure('toolu_05esc', 'Bash', true),
-    );
-    expect(interrupted.code).toBe(0);
-    expect(await logged()).toEqual([]);
-    expect(await markers()).toEqual([]);
-  });
-
-  it('PostToolUse without a PreToolUse marker has duration 0', async () => {
-    await initialise();
-    await hook(payloads.post('toolu_02', 'mcp__github__create_issue'));
-    const [event] = await logged();
-    expect(event?.payload).toEqual({
-      tool: 'mcp__github__create_issue',
-      duration_ms: 0,
-      ok: true,
-    });
-  });
-
-  it('nothing from tool_input or tool_response reaches the log or stderr', async () => {
-    await initialise();
+  it('a session with tool events in it logs only its start and end', async () => {
+    await initialise(false);
     const results = [
+      await hook(payloads.sessionStart()),
       await hook(payloads.pre('toolu_03')),
       await hook(payloads.post('toolu_03')),
+      await hook(payloads.pre('toolu_04')),
+      await hook(payloads.failure('toolu_04')),
+      await hook(payloads.stop()),
+      await hook(payloads.sessionEnd()),
     ];
+    expect((await logged()).map((e) => e.type)).toEqual([
+      'session.start',
+      'session.end',
+    ]);
+    expect(await markers()).toEqual([`ended.${SESSION}`]);
     const day = await readFile(paths(home).logFile(dayOf(new Date())), 'utf8');
     for (const text of [day, ...results.map((r) => r.err)]) {
-      expect(text).not.toContain('secret-input');
-      expect(text).not.toContain('secret-output');
-      expect(text).not.toContain('clean up');
-      expect(text).not.toContain(CWD);
+      expect(text).not.toContain('secret');
+      expect(text).not.toContain('Bash');
+      expect(text).not.toContain('toolu_');
     }
-    const [event] = await logged();
-    expect(Object.keys(event?.payload ?? {}).sort()).toEqual([
-      'duration_ms',
-      'ok',
-      'tool',
-    ]);
   });
 
   it.each([
@@ -659,7 +621,7 @@ describe('hook claude-code', () => {
     expect(await readdir(home)).toEqual(['config.json']);
   });
 
-  it('removes markers older than a day', async () => {
+  it('removes markers older than a day, and a tool call marker at any age', async () => {
     await initialise();
     const dir = paths(home).sessions;
     await mkdir(dir, { recursive: true });
@@ -674,7 +636,8 @@ describe('hook claude-code', () => {
     await utimes(oldEnded, past, past);
 
     await hook(payloads.sessionStart());
-    expect((await markers()).sort()).toEqual([SESSION, 'tool.toolu_fresh']);
+    // An older CLI wrote the tool call markers, and none is written now.
+    expect(await markers()).toEqual([SESSION]);
   });
 
   describe('session nudge', () => {
@@ -775,6 +738,18 @@ describe('hook claude-code', () => {
       expect(fetches).toEqual([`${API_URL}/v1/agents/${agentId}/goal`]);
       const cache = JSON.parse(await readFile(paths(home).goal, 'utf8'));
       expect(cache.goal.pending).toEqual({ addressed: 1, outcomes: 0 });
+    });
+
+    // VOU-453. Both requests of a SessionEnd go through the API client.
+    it('SessionEnd sends the CLI version with the sync and the goal read', async () => {
+      const agentId = await initialise(true, true);
+      await hook(payloads.sessionStart());
+      await hook(payloads.sessionEnd());
+      expect(fetches).toEqual([
+        `${API_URL}/v1/events`,
+        `${API_URL}/v1/agents/${agentId}/goal`,
+      ]);
+      expect(versions).toEqual([VERSION, VERSION]);
     });
 
     it('SessionEnd sends nothing for the goal with the nudge off', async () => {

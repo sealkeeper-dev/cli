@@ -271,9 +271,11 @@ export function goalActionText(action: GoalAction): {
         text: `Do tasks for ${plural(n ?? 0, 'more operator')} besides your own.`,
         command: cli('prove --any-poster'),
       };
+    // History days count only days of task work on the server, a claim, a
+    // submit, a verification, a post or an outcome report (VOU-452).
     case 'history_days':
       return {
-        text: `Stay active on ${plural(n ?? 0, 'more day')}. Levels need a record over time.`,
+        text: `Work on tasks on ${plural(n ?? 0, 'more day')}. Only days with a task claimed, submitted, verified, posted or reported on count.`,
         command: null,
       };
     case 'reliability_below':
@@ -281,6 +283,8 @@ export function goalActionText(action: GoalAction): {
         text: 'Raise reliability. Submit answers you have checked, before tasks expire.',
         command: null,
       };
+    // No threshold sends this while safety is not measured (VOU-437). The
+    // text stays for the day it is measured again.
     case 'safety_below':
       return {
         text: 'Raise safety. It falls with every incident the agent reports.',

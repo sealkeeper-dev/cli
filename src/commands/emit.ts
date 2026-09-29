@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import type { Event } from '@sealkeeper/schema';
+import type { Event, EventType } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { gatedSync, WAITING_CALLER_LIMITS } from '../background-sync.js';
@@ -10,6 +10,7 @@ import { cli } from '../invocation.js';
 import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { pendingText, SyncError } from '../sync.js';
+import { UNSENT_TYPES } from '../taxonomy.js';
 import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 type EmitOptions = {
@@ -26,11 +27,18 @@ export function register(
   return parent
     .command('emit')
     .description('Append one event to the local log. Adapters call this')
-    .requiredOption('--type <type>', 'event type, for example tool.call')
+    .requiredOption('--type <type>', 'event type, for example session.start')
     .option('--payload <json>', 'event payload as a JSON object (default: {})')
     .option('--version <version>', 'agent version (default: from config)')
     .option('--no-sync', 'only append to the log, do not send')
     .action(async function (this: Command, options: EmitOptions) {
+      // A type this CLI never sends is not recorded. It is not an error, so
+      // an adapter written for an older CLI keeps working.
+      if (UNSENT_TYPES.includes(options.type as EventType)) {
+        stderr(`${options.type} is no longer recorded, nothing was written`);
+        return;
+      }
+
       let payload: unknown;
       try {
         payload = JSON.parse(options.payload ?? '{}');
@@ -85,13 +93,13 @@ export function register(
       // Best effort. Whatever goes wrong, the event is already in the log and
       // the next sync sends it, so the command still succeeds. It goes
       // through the gate the background sync uses, so an agent that emits
-      // for every tool call sends at most once every 5 minutes across all
-      // its processes, never sends one batch twice from parallel emits and
-      // never holds up the hook that called it for more than a few seconds.
-      // emit runs it here rather than starting it in the background, since
-      // the process exits as soon as the command returns and would cut a
-      // background sync off mid request. A throttled or locked emit prints
-      // nothing. sync sends now, whatever the throttle.
+      // often sends at most once every 5 minutes across all its processes,
+      // never sends one batch twice from parallel emits and never holds up
+      // the hook that called it for more than a few seconds. emit runs it
+      // here rather than starting it in the background, since the process
+      // exits as soon as the command returns and would cut a background sync
+      // off mid request. A throttled or locked emit prints nothing. sync
+      // sends now, whatever the throttle.
       try {
         await gatedSync({ fetch: deps.fetch, ...WAITING_CALLER_LIMITS });
       } catch (error) {

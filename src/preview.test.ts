@@ -19,13 +19,13 @@ import { WIRE_FORM } from './taxonomy.js';
 const NOW = new Date('2026-09-24T12:00:00.000Z');
 const DAY_MS = 24 * 3600 * 1000;
 
-function toolCall(at: Date): Event {
+function sessionEnd(at: Date): Event {
   return {
     event_id: randomUUID(),
-    type: 'tool.call',
+    type: 'session.end',
     occurred_at: at.toISOString(),
     version: '1.0.0',
-    payload: { tool: 'Bash', duration_ms: 1, ok: true },
+    payload: { session_id: 's1', duration_ms: 1 },
   };
 }
 
@@ -60,15 +60,15 @@ describe('sync preview', () => {
   const append = (e: Event, at: Date = NOW) => appendEvent(e, p, at);
 
   it('leaves out events older than the window and does not count them', async () => {
-    const stale = toolCall(ago((EVENT_MAX_AGE_DAYS + 1) * DAY_MS));
+    const stale = sessionEnd(ago((EVENT_MAX_AGE_DAYS + 1) * DAY_MS));
     // Appended late, so it sits in today's file between fresh ones.
-    const a = toolCall(NOW);
+    const a = sessionEnd(NOW);
     await append(a);
     await append(stale);
     const b = sessionStart(NOW);
     await append(b);
     // Just inside the window and its margin, so the API decides.
-    const edge = toolCall(ago(EVENT_MAX_AGE_DAYS * DAY_MS + 60_000));
+    const edge = sessionEnd(ago(EVENT_MAX_AGE_DAYS * DAY_MS + 60_000));
     await append(edge);
 
     const preview = await readPreview(p, { now: NOW, full: true });
@@ -80,9 +80,9 @@ describe('sync preview', () => {
   });
 
   it('points last at a stale event after the fresh ones, so the send drops it', async () => {
-    const fresh = toolCall(NOW);
+    const fresh = sessionEnd(NOW);
     await append(fresh);
-    const stale = toolCall(ago(30 * DAY_MS));
+    const stale = sessionEnd(ago(30 * DAY_MS));
     await append(stale);
     const preview = await readPreview(p, { now: NOW });
     expect(preview.count).toBe(1);
@@ -90,7 +90,7 @@ describe('sync preview', () => {
   });
 
   it('counts nothing when every pending event is stale, and says how many it drops', async () => {
-    await append(toolCall(ago(20 * DAY_MS)));
+    await append(sessionEnd(ago(20 * DAY_MS)));
     const preview = await readPreview(p, { now: NOW });
     expect(preview.count).toBe(0);
     expect(preview.stale).toBe(1);
@@ -101,10 +101,10 @@ describe('sync preview', () => {
   });
 
   it('counts stale events apart in the summary and in --dry-run', async () => {
-    const fresh = toolCall(NOW);
+    const fresh = sessionEnd(NOW);
     await append(fresh);
-    await append(toolCall(ago(20 * DAY_MS)));
-    await append(toolCall(ago(30 * DAY_MS)));
+    await append(sessionEnd(ago(20 * DAY_MS)));
+    await append(sessionEnd(ago(30 * DAY_MS)));
     const summary = summaryLines(await readPreview(p, { now: NOW }), p);
     expect(summary.at(-2)).toBe(
       `1 event pending, nothing sent yet. 2 events older than ${EVENT_MAX_AGE_DAYS} days are left out, sync drops them without sending.`,
@@ -124,9 +124,9 @@ describe('sync preview', () => {
 
   it('summarises by day and type with a small sample, and keeps no full list', async () => {
     const yesterday = ago(DAY_MS);
-    const day1 = [sessionStart(yesterday), toolCall(yesterday)];
+    const day1 = [sessionStart(yesterday), sessionEnd(yesterday)];
     for (const e of day1) await append(e, yesterday);
-    const day2 = [toolCall(NOW), toolCall(NOW), sessionStart(NOW)];
+    const day2 = [sessionEnd(NOW), sessionEnd(NOW), sessionStart(NOW)];
     for (const e of day2) await append(e);
 
     const preview = await readPreview(p, { now: NOW });
@@ -139,14 +139,14 @@ describe('sync preview', () => {
         count: 2,
         types: [
           ['session.start', 1],
-          ['tool.call', 1],
+          ['session.end', 1],
         ],
       },
       {
         file: '2026-09-24.jsonl',
         count: 3,
         types: [
-          ['tool.call', 2],
+          ['session.end', 2],
           ['session.start', 1],
         ],
       },
@@ -154,8 +154,8 @@ describe('sync preview', () => {
 
     expect(summaryLines(preview, p)).toEqual([
       `pending events by day, in ${p.log}`,
-      '  2026-09-23  2 events  session.start 1, tool.call 1',
-      '  2026-09-24  3 events  tool.call 2, session.start 1',
+      '  2026-09-23  2 events  session.start 1, session.end 1',
+      '  2026-09-24  3 events  session.end 2, session.start 1',
       '',
       'the first 3 of 5, as sent',
       ...[...day1, ...day2].slice(0, 3).map((e) => JSON.stringify(e)),
@@ -168,12 +168,12 @@ describe('sync preview', () => {
   });
 
   it('shows every event in the summary when there are only a few', async () => {
-    const e = toolCall(NOW);
+    const e = sessionEnd(NOW);
     await append(e);
     const lines = summaryLines(await readPreview(p, { now: NOW }), p);
     expect(lines).toEqual([
       `pending events by day, in ${p.log}`,
-      '  2026-09-24  1 event  tool.call 1',
+      '  2026-09-24  1 event  session.end 1',
       '',
       'as sent',
       JSON.stringify(e),
@@ -184,7 +184,7 @@ describe('sync preview', () => {
   });
 
   it('prints every event for --dry-run', async () => {
-    const all = Array.from({ length: 5 }, () => toolCall(NOW));
+    const all = Array.from({ length: 5 }, () => sessionEnd(NOW));
     for (const e of all) await append(e);
     const preview = await readPreview(p, { now: NOW, full: true });
     expect(previewLines(preview, p)).toEqual([

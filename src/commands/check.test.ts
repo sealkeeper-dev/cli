@@ -300,6 +300,16 @@ describe('sealkeeper check', () => {
     expect(help?.replace(/\s+/g, ' ')).toContain('default bronze');
   });
 
+  // VOU-436. The help of --min-safety says what the answer below shows.
+  it('says in the help that --min-safety fails for every agent while safety is not measured', () => {
+    const help = createProgram()
+      .commands.find((c) => c.name() === 'check')
+      ?.helpInformation();
+    expect(help?.replace(/\s+/g, ' ')).toContain(
+      '--min-safety <x> safety needed, 0 to 1, fails for every agent while safety is not measured',
+    );
+  });
+
   // VOU-436. Safety is not measured, so the API answers minSafety with a
   // null actual for every agent, and the SEAL it carries has no safety key.
   it('prints a minSafety check with no safety score as none yet, exit 1', async () => {

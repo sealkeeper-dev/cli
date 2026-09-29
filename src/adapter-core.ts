@@ -7,7 +7,7 @@ import { cli } from './invocation.js';
 import { nudgeLines } from './nudge.js';
 import { quietly } from './output.js';
 
-const MAX_MS = EventPayload['tool.call'].shape.duration_ms.maxValue ?? 0;
+const MAX_MS = EventPayload['session.end'].shape.duration_ms.maxValue ?? 0;
 
 // A duration in whole milliseconds within the range the schema accepts.
 export function clampMs(ms: number): number {

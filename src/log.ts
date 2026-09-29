@@ -6,6 +6,7 @@ import { EVENT_MAX_AGE_DAYS, Event } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 import { stderr } from './output.js';
+import { isSent, UNSENT_TYPES } from './taxonomy.js';
 
 // The local event log. Append-only JSONL, one file per UTC day under
 // paths().log, named YYYY-MM-DD.jsonl. A line goes to the file of the day it
@@ -260,7 +261,8 @@ export async function readPending(
   return { events, positions, last: positions.at(-1) ?? null };
 }
 
-// How many events are pending. It never warns, since it is only a count.
+// How many events are pending. A type this CLI never sends, see
+// UNSENT_TYPES, is not pending. It never warns, since it is only a count.
 // The reads that send say what is wrong with the log, and a warning from
 // here could reach the output of the background sync, which never prints.
 export async function countPending(
@@ -269,7 +271,9 @@ export async function countPending(
 ): Promise<number> {
   let count = 0;
   const quiet = { now: options.now, warn: () => {} };
-  for await (const _ of pendingEvents(p, quiet)) count++;
+  for await (const { event } of pendingEvents(p, quiet)) {
+    if (isSent(event.type)) count++;
+  }
   return count;
 }
 
@@ -277,8 +281,9 @@ export async function countPending(
 // "N events waiting". It reads only the cursor's day file and the ones after
 // it, leaves out day files too old to send and never parses a line, so it
 // stays cheap on a log that has grown for weeks while automatic sync was
-// off. A line that countPending would skip as invalid is counted here, which
-// is fine for a hint.
+// off. A line of a type never sent is found without a parse and not
+// counted. A line that countPending would skip as invalid is counted here,
+// which is fine for a hint.
 export async function countPendingLines(
   p: Paths = paths(),
   now: Date = new Date(),
@@ -372,7 +377,7 @@ export async function* pendingEvents(
 // Moves the cursor past every event in the log, for a new key that must
 // never sign and send the events an old key logged, as after init --force.
 // A cursor.json that does not parse is replaced. Returns how many events
-// were still waiting to be sent.
+// were still waiting to be sent, as countPending counts them.
 export async function cursorToEnd(
   p: Paths = paths(),
   now: Date = new Date(),
@@ -388,7 +393,7 @@ export async function cursorToEnd(
   let skipped = 0;
   for await (const entry of pendingEvents(p, { now, warn: () => {} })) {
     last = entry.position;
-    skipped++;
+    if (isSent(entry.event.type)) skipped++;
   }
   if (last !== null) {
     await writeCursor({ v: CURSOR_VERSION, lastAcked: last }, p);
@@ -399,7 +404,8 @@ export async function cursorToEnd(
 // Moves the cursor past the day files too old to send. Every read already
 // leaves them out by name. Moving past them lets sync count them as dropped
 // once and pruneLog delete them later. Returns how many lines were moved
-// past, counted without parsing them, or 0 when the cursor did not move.
+// past, counted without parsing them and without the lines of a type never
+// sent, or 0 when the cursor did not move.
 export async function skipStaleDays(
   p: Paths = paths(),
   options: ReadOptions = {},
@@ -421,7 +427,7 @@ export async function skipStaleDays(
         : 0;
     for await (const line of readLines(path, start)) {
       if (line.partial || line.text.length === 0) continue;
-      count++;
+      if (!holdsUnsent(line.text)) count++;
       // The event id is read off the line without a parse. A line with no
       // usable id is counted but never becomes the cursor.
       const id = EVENT_ID.exec(line.text)?.[1];
@@ -497,14 +503,25 @@ async function resumeAt(
   return null;
 }
 
-// Non empty lines that end in a newline, from byte start on. A partial
-// trailing line from a crash mid write is not an event yet.
+// Non empty lines that end in a newline, from byte start on, left out the
+// lines of a type never sent. A partial trailing line from a crash mid write
+// is not an event yet.
 async function completeLines(path: string, start: number): Promise<number> {
   let count = 0;
   for await (const line of readLines(path, start)) {
-    if (!line.partial && line.text.length > 0) count++;
+    if (!line.partial && line.text.length > 0 && !holdsUnsent(line.text)) {
+      count++;
+    }
   }
   return count;
+}
+
+// appendEvent writes the type as "type":"<type>", and no payload has a type
+// field, so this finds a line of a type never sent without a parse.
+const UNSENT_NEEDLES = UNSENT_TYPES.map((type) => `"type":"${type}"`);
+
+function holdsUnsent(text: string): boolean {
+  return UNSENT_NEEDLES.some((needle) => text.includes(needle));
 }
 
 // Day files in name order, which is append order. Other files are ignored.
