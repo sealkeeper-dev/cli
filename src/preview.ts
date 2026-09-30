@@ -3,6 +3,7 @@ import { EVENT_MAX_AGE_DAYS, type Event } from '@sealkeeper/schema';
 import { type Paths, paths } from './config.js';
 import { cli } from './invocation.js';
 import { type LogPosition, pendingEvents } from './log.js';
+import { declaredModel } from './model-name.js';
 import { pendingText, staleCutoff } from './sync.js';
 import { isSent, WIRE_FORM } from './taxonomy.js';
 
@@ -31,6 +32,9 @@ export type Preview = {
   // left out as too old or of a type never sent, which that send moves the
   // cursor past. Null when the log holds nothing after the cursor.
   last: LogPosition | null;
+  // The model name the send declares beside the events, as text (VOU-566),
+  // null when there is none.
+  model: string | null;
 };
 
 type PreviewOptions = {
@@ -53,6 +57,9 @@ export async function readPreview(
     sample: [],
     groups: [],
     last: null,
+    model:
+      (await declaredModel({ paths: p, now: () => now.getTime() }))?.name ??
+      null,
   };
   const types: Map<string, number>[] = [];
   for await (const { event, position } of pendingEvents(p, { now })) {
@@ -103,8 +110,17 @@ export function previewLines(preview: Preview, p: Paths = paths()): string[] {
       ...(preview.stale > 0 ? [staleText(preview.stale)] : []),
     ].join(' '),
     WIRE_FORM,
+    besideText(preview.model),
   );
   return lines;
+}
+
+// What leaves beside the events, the fingerprint and the model name, which
+// is the one value that leaves as text (VOU-46, VOU-566).
+export function besideText(model: string | null): string {
+  return model === null
+    ? "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one and none is set."
+    : `Beside them go the agent's fingerprint, SHA-256 hashes only, and the model name ${model}, as text.`;
 }
 
 // Said for events older than the window, which sync drops unsent.
@@ -145,6 +161,7 @@ export function summaryLines(preview: Preview, p: Paths = paths()): string[] {
   lines.push(
     `${pendingText(preview.count)}, nothing sent yet. ${preview.stale > 0 ? staleText(preview.stale) : `Events older than ${EVENT_MAX_AGE_DAYS} days are not sent.`}`,
     WIRE_FORM,
+    besideText(preview.model),
   );
   return lines;
 }

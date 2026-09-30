@@ -23,6 +23,7 @@ import {
   skipStaleDays,
   writeCursor,
 } from './log.js';
+import { declaredModel } from './model-name.js';
 import { stderr } from './output.js';
 import { isSent } from './taxonomy.js';
 
@@ -216,13 +217,18 @@ async function sendRounds(
   };
 
   // The fingerprint this run declares (VB-4), fingerprint.json as sync or
-  // prove last wrote it, never computed here. Signed on its own when the
-  // first batch goes and sent beside the envelopes until a batch is
-  // accepted with it. When the API refuses it, as an API from before the
-  // field does, the batch goes again without it and the rest of the run
-  // sends none.
+  // prove last wrote it, never computed here, with the model name beside it
+  // as text when an adapter read one or one is set (VOU-566). Signed on its
+  // own when the first batch goes and sent beside the envelopes until a
+  // batch is accepted with it. When the API refuses it with a model name,
+  // as an API from before the name does, it is signed again without the
+  // name and the batch goes again. When the API refuses it without one, as
+  // an API from before the fingerprint does, the batch goes again without
+  // it and the rest of the run sends none.
   let fingerprintDue = true;
+  let modelDue = true;
   let fingerprintJws: string | undefined;
+  let jwsNamesModel = false;
   const fingerprintToSend = async (s: Signer): Promise<string | undefined> => {
     if (!fingerprintDue) return undefined;
     if (fingerprintJws === undefined) {
@@ -231,7 +237,13 @@ async function sendRounds(
         fingerprintDue = false;
         return undefined;
       }
-      fingerprintJws = await s.sign({ fingerprint });
+      const model = modelDue
+        ? (await declaredModel({ paths: p, now }))?.name
+        : undefined;
+      jwsNamesModel = model !== undefined;
+      fingerprintJws = await s.sign(
+        model === undefined ? { fingerprint } : { fingerprint, model },
+      );
     }
     return fingerprintJws;
   };
@@ -317,6 +329,12 @@ async function sendRounds(
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         if (fingerprint !== undefined && refusesFingerprint(error)) {
+          if (jwsNamesModel) {
+            modelDue = false;
+            fingerprintJws = undefined;
+            fingerprint = await fingerprintToSend(roundSigner);
+            continue;
+          }
           fingerprintDue = false;
           fingerprint = undefined;
           continue;

@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Paths, paths } from './config.js';
 import { resetInvocation } from './invocation.js';
 import { appendEvent } from './log.js';
+import { writeModelSet } from './model-name.js';
 import {
+  besideText,
   PREVIEW_SAMPLE,
   previewLines,
   readPreview,
@@ -106,7 +108,7 @@ describe('sync preview', () => {
     await append(sessionEnd(ago(20 * DAY_MS)));
     await append(sessionEnd(ago(30 * DAY_MS)));
     const summary = summaryLines(await readPreview(p, { now: NOW }), p);
-    expect(summary.at(-2)).toBe(
+    expect(summary.at(-3)).toBe(
       `1 event pending, nothing sent yet. 2 events older than ${EVENT_MAX_AGE_DAYS} days are left out, sync drops them without sending.`,
     );
     const full = previewLines(
@@ -119,6 +121,7 @@ describe('sync preview', () => {
       '',
       `1 event pending, nothing sent yet. 2 events older than ${EVENT_MAX_AGE_DAYS} days are left out, sync drops them without sending.`,
       WIRE_FORM,
+      besideText(null),
     ]);
   });
 
@@ -164,6 +167,7 @@ describe('sync preview', () => {
       '',
       '5 events pending, nothing sent yet. Events older than 7 days are not sent.',
       WIRE_FORM,
+      besideText(null),
     ]);
   });
 
@@ -180,7 +184,21 @@ describe('sync preview', () => {
       '',
       '1 event pending, nothing sent yet. Events older than 7 days are not sent.',
       WIRE_FORM,
+      besideText(null),
     ]);
+  });
+
+  it('names the model name that goes beside the events, as text', async () => {
+    await append(sessionEnd(NOW));
+    await writeModelSet('gpt-4.1', p);
+    const preview = await readPreview(p, { now: NOW });
+    expect(preview.model).toBe('gpt-4.1');
+    const line =
+      "Beside them go the agent's fingerprint, SHA-256 hashes only, and the model name gpt-4.1, as text.";
+    expect(summaryLines(preview, p).at(-1)).toBe(line);
+    expect(
+      previewLines(await readPreview(p, { now: NOW, full: true }), p).at(-1),
+    ).toBe(line);
   });
 
   it('prints every event for --dry-run', async () => {
@@ -193,6 +211,7 @@ describe('sync preview', () => {
       '',
       '5 events pending, nothing sent yet.',
       WIRE_FORM,
+      besideText(null),
     ]);
   });
 });

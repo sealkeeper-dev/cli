@@ -20,6 +20,7 @@ import {
 } from './commands/hook.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
+import { register as registerModel } from './commands/model.js';
 import { register as registerProve } from './commands/prove.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
 import {
@@ -126,6 +127,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerAgent(program, deps.agent, deps.routine);
   registerWhoami(program, deps.whoami);
   registerConfig(program, deps.config);
+  registerModel(program);
   registerLogout(program, deps.routine);
   registerAdapter(program, deps.adapter);
   registerHook(program, deps.hook);

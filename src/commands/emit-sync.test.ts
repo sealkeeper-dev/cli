@@ -39,6 +39,7 @@ import {
   readCursor,
   readDay,
 } from '../log.js';
+import { writeModelSet } from '../model-name.js';
 import { createProgram } from '../program.js';
 import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
@@ -767,6 +768,51 @@ describe('emit and sync', () => {
         true,
         false,
       ]);
+      expect(await countPending()).toBe(0);
+    });
+
+    // VOU-566. The model name goes beside the fingerprint in the same
+    // signed declaration, as text.
+    it('sends the model name set by hand beside the fingerprint', async () => {
+      await initialise();
+      await seed(1);
+      await writeModelSet('gpt-4.1', paths());
+      expect((await api('sync')).code).toBe(0);
+      const [first] = server.fingerprints;
+      if (first === undefined) throw new Error('no fingerprint sent');
+      const { payload } = await verify(first, publicKeyFromAgentId(agentId));
+      expect(unsigned(payload)).toEqual({
+        fingerprint: await currentFingerprint(),
+        model: 'gpt-4.1',
+      });
+    });
+
+    it('sends the fingerprint again without the model name when an API from before it refuses the name', async () => {
+      await initialise();
+      await seed(2);
+      await writeModelSet('gpt-4.1', paths());
+      const named = (jws: string) =>
+        'model' in
+        JSON.parse(
+          Buffer.from(jws.split('.')[1] ?? '', 'base64url').toString('utf8'),
+        );
+      // A strict declaration from before the name.
+      server.reply = (events, fingerprint) =>
+        fingerprint !== undefined && named(fingerprint)
+          ? apiError(400, 'validation_failed', [
+              {
+                path: ['fingerprint'],
+                code: 'unrecognized_keys',
+                message: 'Unrecognized key: "model"',
+              },
+            ])
+          : accept(events);
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 2, duplicates 0\n');
+      expect(
+        server.fingerprints.map((f) => (f === undefined ? 'none' : named(f))),
+      ).toEqual([true, false]);
       expect(await countPending()).toBe(0);
     });
 
@@ -1539,6 +1585,7 @@ describe('emit and sync', () => {
         '',
         '2 events pending, nothing sent yet.',
         WIRE,
+        "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one and none is set.",
         '',
       ]);
       expect(server.batches).toEqual([]);

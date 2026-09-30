@@ -5,8 +5,8 @@ import { stdout } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
 // Prints the full What leaves this machine block, then the fingerprint
-// parts, of which only hashes leave. init prints a short version and
-// points here.
+// parts, of which only hashes leave, and the model name, which leaves as
+// text. init prints a short version and points here.
 export function register(parent: Command): Command {
   return parent
     .command('what-is-shared')

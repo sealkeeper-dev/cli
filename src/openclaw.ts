@@ -23,7 +23,7 @@ import {
   type FingerprintObserver,
 } from './fingerprint-observer.js';
 import type { EmitInput } from './lib.js';
-import { toolNameOf } from './names.js';
+import { modelNameOf, toolNameOf } from './names.js';
 import { quietly } from './output.js';
 
 // Limits come from the schema, so this file keeps no copy of them.
@@ -100,8 +100,9 @@ function bounded<V>(): Map<string, V> & { put: (k: string, v: V) => void } {
 
 // The fingerprint parts OpenClaw shows (VB-2). The framework version once,
 // at register, and each model id llm_output reports. The tool set is not
-// declared, since OpenClaw shows tools one call at a time. Only hashes are
-// written, see fingerprint-observer.ts.
+// declared, since OpenClaw shows tools one call at a time. Hashes are
+// written, and the model id also as the model name, in text, see
+// fingerprint-observer.ts.
 function observeFramework(observer: FingerprintObserver): void {
   void quietly(async () => {
     try {
@@ -192,9 +193,10 @@ function register(api: OpenClawPluginApiLike): void {
   // stay null. From the event only usage, model and runId are read. Without
   // a model time for the run nothing is recorded, rather than a latency of 0.
   on('llm_output', (event, ctx) => {
-    const model = toolNameOf(field(event, 'model'));
+    const raw = field(event, 'model');
+    const model = toolNameOf(raw);
     // Written only the first time this process sees the id.
-    if (model !== null) void observer.model(model);
+    if (model !== null) void observer.model(model, modelNameOf(raw));
     const run = idOf(field(event, 'runId') ?? field(ctx, 'runId'));
     if (run === null) return null;
     const latency = runs.get(run);

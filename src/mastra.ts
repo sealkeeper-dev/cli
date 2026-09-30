@@ -23,7 +23,7 @@ import {
 } from './check.js';
 import { createObserver } from './fingerprint-observer.js';
 import type { EmitInput } from './lib.js';
-import { toolNameOf } from './names.js';
+import { modelNameOf, toolNameOf } from './names.js';
 import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
 
@@ -49,8 +49,8 @@ function elapsed(start: number): number {
 
 // The fingerprint parts this process sees (VB-2). Model ids from steps,
 // the names and schemas of every tool passed to withSealKeeper and the
-// @mastra/core version. Only their hashes are written, see
-// fingerprint-observer.ts.
+// @mastra/core version. Their hashes are written, and the model id also as
+// the model name, in text, see fingerprint-observer.ts.
 const observer = createObserver('mastra');
 let frameworkLooked = false;
 
@@ -131,22 +131,29 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
   };
 }
 
-// response.modelId, else step.model.modelId, else step.model as a name.
-function modelIdOf(response: unknown, model: unknown): string | null {
-  return (
-    toolNameOf(
-      (response as { modelId?: unknown } | null | undefined)?.modelId,
-    ) ??
-    toolNameOf((model as { modelId?: unknown } | null | undefined)?.modelId) ??
-    toolNameOf(model)
-  );
+// response.modelId, else step.model.modelId, else step.model, the first
+// that gives a name, as it is written.
+function rawModelIdOf(response: unknown, model: unknown): unknown {
+  return [
+    (response as { modelId?: unknown } | null | undefined)?.modelId,
+    (model as { modelId?: unknown } | null | undefined)?.modelId,
+    model,
+  ].find((id) => toolNameOf(id) !== null);
 }
 
-// The model id of a step for the fingerprint, with or without usage.
-function stepModelId(step: unknown): string | null {
+// The model id of a step as a name.
+function modelIdOf(response: unknown, model: unknown): string | null {
+  return toolNameOf(rawModelIdOf(response, model));
+}
+
+// The model id of a step for the fingerprint, with or without usage, and
+// the model name it gives (modelNameOf).
+function stepModel(step: unknown): { id: string; name: string | null } | null {
   if (typeof step !== 'object' || step === null) return null;
   const { response, model } = step as { response?: unknown; model?: unknown };
-  return modelIdOf(response, model);
+  const raw = rawModelIdOf(response, model);
+  const id = toolNameOf(raw);
+  return id === null ? null : { id, name: modelNameOf(raw) };
 }
 
 // A session id is kept only when it is a plain id, letters, digits, _ and
@@ -187,9 +194,9 @@ export function sealKeeperSession(
       let input: EmitInput | null = null;
       try {
         input = usageOf(step, latencyMs);
-        const id = stepModelId(step);
+        const seen = stepModel(step);
         // Written only the first time this process sees the id.
-        if (id !== null) void observer.model(id);
+        if (seen !== null) void observer.model(seen.id, seen.name);
       } catch {
         // A step that throws when read is skipped.
       }

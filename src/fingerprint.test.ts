@@ -418,12 +418,17 @@ describe('Claude Code capture', () => {
       });
     });
 
-    it('keeps only hashes in the sources file', async () => {
+    // VOU-566. The one model id goes as text, the model name sync
+    // declares. Everything else stays a hash.
+    it('keeps hashes and the model name only in the sources file', async () => {
       await hook('SessionStart', 's1');
       const text = await readFile(p.fingerprintSources, 'utf8');
-      for (const secret of ['github', 'claude-sonnet', '2.1.283', 'secret']) {
+      for (const secret of ['github', '2.1.283', 'secret']) {
         expect(text).not.toContain(secret);
       }
+      const source = JSON.parse(text)['claude-code'];
+      expect(source.model_name).toBe('claude-sonnet-4-5');
+      expect(text.split('claude-sonnet-4-5')).toHaveLength(2);
     });
   });
 });
@@ -514,7 +519,9 @@ describe('the Mastra adapter', () => {
     );
     await session.end();
     const text = await readFile(p.fingerprintSources, 'utf8');
-    expect(text).not.toContain('gpt-alice');
+    // The model id as the model name, as text (VOU-566), and nothing else.
+    expect((await sources())?.model_name).toBe('gpt-alice');
+    expect(text.split('gpt-alice')).toHaveLength(2);
     expect(text).not.toContain('lookup');
   });
 
@@ -581,6 +588,7 @@ describe('the OpenClaw adapter', () => {
     await vi.waitFor(async () => {
       const file = JSON.parse(await readFile(p.fingerprintSources, 'utf8'));
       expect(file.openclaw.model_set).toBe(await h('alice-llm'));
+      expect(file.openclaw.model_name).toBe('alice-llm');
       expect(file.openclaw.tools).toBeUndefined();
     });
   });

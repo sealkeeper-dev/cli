@@ -3,8 +3,10 @@
 // parts, held for the life of the process. The hashes go to
 // fingerprint-sources.json only when a part changes, a new model id, a new
 // tool set or the framework version found once, never per model step that
-// shows nothing new. The fingerprint itself is recomputed
-// at sync and prove from that file, see fingerprint.ts.
+// shows nothing new. The model name of the first model id goes too, as
+// text, the one value here that is not a hash (VOU-566). The fingerprint
+// itself is recomputed at sync and prove from that file, see
+// fingerprint.ts.
 import { partHash } from '@sealkeeper/schema';
 import { paths as defaultPaths, type Paths, readConfig } from './config.js';
 import {
@@ -20,8 +22,9 @@ import {
 import { quietly } from './output.js';
 
 export type FingerprintObserver = {
-  // A model id seen on a step or in a hook, already a name (toolNameOf).
-  model: (id: string) => Promise<void>;
+  // A model id seen on a step or in a hook, already a name (toolNameOf),
+  // and the model name it gives (modelNameOf), null when none.
+  model: (id: string, name: string | null) => Promise<void>;
   // One line per tool, keyed by the tool name, as in name<TAB>schemas. A
   // name seen again replaces its line.
   tools: (lines: ReadonlyMap<string, string>) => Promise<void>;
@@ -38,6 +41,7 @@ export function createObserver(
   paths?: () => Paths,
 ): FingerprintObserver {
   const models = new Set<string>();
+  let name: string | undefined;
   const tools = new Map<string, string>();
   const written: ObservedParts = {};
   let queue: Promise<void> = Promise.resolve();
@@ -67,11 +71,20 @@ export function createObserver(
   };
 
   return {
-    model: (id) => {
+    // The model name goes with the set, as text (VOU-566), the name of the
+    // first model id this process sees, kept for the life of the process.
+    // A process that runs two models, one to plan and one for the steps,
+    // so names the same one at every sync and never records a change of
+    // model it did not make. When the first id gives no name, none is
+    // written and an earlier process's name is cleared. Written only when
+    // the set grows, never per step.
+    model: (id, idName) => {
       if (models.has(id)) return queue;
       models.add(id);
+      if (models.size === 1) name = idName ?? undefined;
       return write(async (agentId) => ({
         model_set: await partHash(agentId, modelSetContent(models)),
+        model_name: name,
       }));
     },
     tools: (lines) => {

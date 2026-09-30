@@ -2,8 +2,10 @@
 // The fingerprint parts of a Claude Code agent. Read only in the SessionStart
 // and SessionEnd hooks, from the folder the hook payload names, and kept as
 // the claude-code source in fingerprint-sources.json, which sync and prove
-// read from any folder. Only hashes come out of here. Model ids, server and
-// tool names and the version stay on this machine.
+// read from any folder. Hashes come out of here, and the one model id as
+// text, the model name sync declares (VOU-566), less an ARN's account and
+// region (modelNameOf). Server and tool names and the version stay on this
+// machine.
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
@@ -24,7 +26,7 @@ import {
   linesContent,
   modelSetContent,
 } from './fingerprint-content.js';
-import { toolNameOf } from './names.js';
+import { modelNameOf, toolNameOf } from './names.js';
 
 export type ClaudeCodeWhere = {
   // The folder Claude Code runs in, the hook payload's cwd. The project is
@@ -80,6 +82,15 @@ export async function captureClaudeCode(
   agentId: string,
   where: ClaudeCodeWhere,
 ): Promise<CapturedParts> {
+  return (await readClaudeCode(agentId, where)).parts;
+}
+
+// The parts and the model name of the one model id they hash, null when
+// none is set or the id gives no name.
+async function readClaudeCode(
+  agentId: string,
+  where: ClaudeCodeWhere,
+): Promise<{ parts: CapturedParts; name: string | null }> {
   const project = await projectDir(where.cwd, where.home);
   // Highest precedence first, the way Claude Code merges them.
   const files = [
@@ -100,11 +111,19 @@ export async function captureClaudeCode(
     project === where.cwd ? null : objectOf(projects?.[where.cwd]),
   ].flatMap((o) => Object.keys(objectOf(o?.mcpServers) ?? {}));
   const hash = (content: string) => partHash(agentId, content);
+  const raw = modelIdOf(settings, where.env);
+  const model = toolNameOf(raw);
   return {
-    model_set: await modelPart(settings, where.env, hash),
-    prompt: FINGERPRINT_NOT_DECLARED,
-    tools: await toolsPart(settings, mcp, userServers, hash),
-    framework: await frameworkPart(where.env, hash),
+    parts: {
+      model_set:
+        model === null
+          ? FINGERPRINT_NOT_DECLARED
+          : await hash(modelSetContent([model])),
+      prompt: FINGERPRINT_NOT_DECLARED,
+      tools: await toolsPart(settings, mcp, userServers, hash),
+      framework: await frameworkPart(where.env, hash),
+    },
+    name: modelNameOf(raw),
   };
 }
 
@@ -116,8 +135,10 @@ export async function observeClaudeCode(
   p: Paths,
 ): Promise<void> {
   try {
-    const parts = await captureClaudeCode(agentId, where);
+    const { parts, name } = await readClaudeCode(agentId, where);
     const observed: ObservedParts = {};
+    // The model the model part hashes, as a name, the one sync declares.
+    if (name !== null) observed.model_name = name;
     if (parts.model_set !== FINGERPRINT_NOT_DECLARED) {
       observed.model_set = parts.model_set;
     }
@@ -133,25 +154,20 @@ export async function observeClaudeCode(
 
 type Hash = (content: string) => Promise<string>;
 
-// One model id. ANTHROPIC_MODEL in the environment, then ANTHROPIC_MODEL in
-// a settings file's env block, which Claude Code puts in its environment,
-// then a settings file's model. Not declared when none is set, since
-// Claude Code's own default is not written anywhere.
-async function modelPart(
-  settings: Json[],
-  env: NodeJS.ProcessEnv,
-  hash: Hash,
-): Promise<CapturedPart> {
+// One model id, as it is written. ANTHROPIC_MODEL in the environment, then
+// ANTHROPIC_MODEL in a settings file's env block, which Claude Code puts in
+// its environment, then a settings file's model, which may be an alias
+// such as opus. The model part hashes it through toolNameOf, the model
+// name is modelNameOf of it. null when none is set, since Claude Code's
+// own default is not written anywhere, and the model part is then not
+// declared.
+function modelIdOf(settings: Json[], env: NodeJS.ProcessEnv): string | null {
   const candidates = [
     readEnv('ANTHROPIC_MODEL', env),
     ...settings.map((s) => stringOf(objectOf(s.env)?.ANTHROPIC_MODEL)),
     ...settings.map((s) => stringOf(s.model)),
   ];
-  for (const candidate of candidates) {
-    const id = toolNameOf(candidate);
-    if (id !== null) return hash(modelSetContent([id]));
-  }
-  return FINGERPRINT_NOT_DECLARED;
+  return candidates.find((c) => toolNameOf(c) !== null) ?? null;
 }
 
 // MCP server names from .mcp.json, from ~/.claude.json (userServers) and

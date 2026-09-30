@@ -16,6 +16,10 @@
 // - mastra and openclaw, written by the adapters in the agent's own process
 //   as they see a change (observeParts).
 // - Prompt is not declared by any source yet.
+//
+// Each source also keeps the model name it read, as text, never hashed and
+// never a part (VOU-566). Sync sends the chosen source's name beside the
+// fingerprint, see model-name.ts.
 import {
   FINGERPRINT_NOT_DECLARED,
   FINGERPRINT_PARTS,
@@ -31,6 +35,7 @@ import { z } from 'zod';
 import { type Paths, paths, readConfig, writeFileAtomic } from './config.js';
 import { readEnv } from './env.js';
 import { exists, readIfExists } from './files.js';
+import { cli } from './invocation.js';
 
 // A part whose hash differed from the capture before it on each of the last
 // this many captures reads unstable (D-VB-4). The file keeps this many.
@@ -137,12 +142,15 @@ export async function recordCapture(
 }
 
 // What an in-process adapter observed, as part hashes. A part it has not
-// seen is left out.
+// seen is left out. model_name is the one model id the source last read, as
+// text, not a part (VOU-566). A value this CLI cannot read drops alone, so
+// it never costs the source its hashes.
 const Observed = z.object({
   at: z.number().int().min(0),
   model_set: Sha256Base64url.optional(),
   tools: Sha256Base64url.optional(),
   framework: Sha256Base64url.optional(),
+  model_name: z.string().optional().catch(undefined),
 });
 export type Observed = z.infer<typeof Observed>;
 export type ObservedParts = Omit<Observed, 'at'>;
@@ -241,13 +249,14 @@ async function declaredSource(
   return readEnv('CLAUDECODE', env) !== undefined ? 'claude-code' : null;
 }
 
-// The parts from fingerprint-sources.json. Sources older than
-// SOURCE_MAX_AGE_SECONDS are ignored. Of the rest, the one that matches the
-// declared runtime wins, else the newest. Nothing is declared when none is
-// left. Never reads the project, so the folder it runs in does not matter.
-export async function captureParts(
+// The source that decides the fingerprint, from fingerprint-sources.json.
+// Sources older than SOURCE_MAX_AGE_SECONDS are ignored. Of the rest, the
+// one that matches the declared runtime wins, else the newest. undefined
+// when none is left. Never reads the project, so the folder it runs in
+// does not matter. The model name sync declares comes from the same one.
+export async function chosenSource(
   options: CaptureOptions = {},
-): Promise<CapturedParts> {
+): Promise<{ name: FingerprintSource; observed: Observed } | undefined> {
   const p = options.paths ?? paths();
   const now = Math.floor((options.now?.() ?? Date.now()) / 1000);
   const sources = await readSources(p);
@@ -258,9 +267,17 @@ export async function captureParts(
       : [];
   });
   const declared = await declaredSource(p, options.env ?? process.env);
-  const chosen =
+  return (
     fresh.find((s) => s.name === declared) ??
-    fresh.sort((a, b) => b.observed.at - a.observed.at)[0];
+    fresh.sort((a, b) => b.observed.at - a.observed.at)[0]
+  );
+}
+
+// The parts of the chosen source. Nothing is declared when there is none.
+export async function captureParts(
+  options: CaptureOptions = {},
+): Promise<CapturedParts> {
+  const chosen = await chosenSource(options);
   if (chosen === undefined) return NOTHING_DECLARED;
   const { observed } = chosen;
   return {
@@ -309,15 +326,20 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
     'the framework and its version, for example Claude Code 2.1.283 or the installed @mastra/core',
 };
 
+// The model name block of what-is-shared (VOU-566).
+export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, from ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report, else the name you set with ${cli('model set')}. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output. ${cli('model show')} prints it.`;
+
 export function describeFingerprint(): string {
   const width = Math.max(...FINGERPRINT_PARTS.map((n) => n.length)) + 2;
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits, outcome reports and each sync send those hashes and nothing else.`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else, and each sync sends them with the model name below.`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),
     `A part reads not_declared when this machine cannot see it, and unstable when it changed on each of the last ${FINGERPRINT_WINDOW} captures.`,
+    '',
+    MODEL_NAME_TEXT,
   ].join('\n');
 }
