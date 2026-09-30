@@ -674,6 +674,7 @@ describe('the CLI version header (VOU-453)', () => {
     postTask: (api) => api.postTask('a.b.c'),
     claimTask: (api) => api.claimTask('t1', 'a.b.c'),
     submitTask: (api) => api.submitTask('t1', 'a.b.c'),
+    releaseTask: (api) => api.releaseTask('t1', 'a.b.c'),
     postOutcome: (api) => api.postOutcome('t1', 'a.b.c'),
     readSubmission: (api) => api.readSubmission('t1', 'a.b.c'),
     postRating: (api) => api.postRating('a.b.c'),

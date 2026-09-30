@@ -149,6 +149,9 @@ export type ApiClient = {
   postTask(envelope: string): Promise<TaskResponse>;
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
   submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
+  // POST /v1/tasks/:id/release, signed by the claimant (VOU-572). An API
+  // from before it answers 404 not_found.
+  releaseTask(taskId: string, envelope: string): Promise<TaskResponse>;
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
   // POST /v1/tasks/:id/submission, signed by the poster. The task with its
   // submission and both sides' outcome reports.
@@ -347,6 +350,8 @@ export function createApiClient(options: {
       taskCall(taskPath(taskId, '/claim'), [200], envelope),
     submitTask: (taskId, envelope) =>
       taskCall(taskPath(taskId, '/submit'), [200], envelope),
+    releaseTask: (taskId, envelope) =>
+      taskCall(taskPath(taskId, '/release'), [200], envelope),
     postOutcome: (taskId, envelope) =>
       taskCall(taskPath(taskId, '/outcome'), [200], envelope),
     readSubmission: (taskId, envelope) =>

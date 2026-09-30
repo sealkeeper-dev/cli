@@ -25,7 +25,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, createApiClient } from '../api.js';
 import type { Input } from '../ask.js';
-import { ANSWER_RULES } from '../claude-code-command.js';
+import { answerRules } from '../claude-code-command.js';
 import {
   bindFolder,
   type Config,
@@ -2034,9 +2034,22 @@ describe('routine', () => {
         prompt.indexOf('sk prove --json'),
       );
       // The same answer rules as /sealkeeper-prove, the 3 failed submits a
-      // claim allows included.
-      expect(prompt).toContain(ANSWER_RULES);
+      // claim allows included, with the release a task it gives up on gets
+      // spelled with the run's invocation, which its allow rules take.
+      expect(prompt).toContain(answerRules('sk'));
       expect(prompt).toContain('A claim allows 3 failed submits.');
+      expect(prompt).toContain(
+        "If it fails a second time, do not submit that task again. Run `sk tasks release <id>` with that task's id",
+      );
+      expect(claudeArgs('sk')).toContain('Bash(sk tasks release:*)');
+      // The spec rules allow that release by name, before the answer rules
+      // name it, so a cautious agent does not leave the claim instead.
+      const allowed =
+        'the only commands you run are the ones above and the release in the answer rules below.';
+      expect(prompt).toContain(allowed);
+      expect(prompt.indexOf(allowed)).toBeLessThan(
+        prompt.indexOf('Run `sk tasks release <id>`'),
+      );
     });
 
     it("takes other operators' template tasks 30 minutes after they are posted, before seed tasks (RT-8)", async () => {
@@ -2420,6 +2433,8 @@ describe('routine', () => {
       expect(allowed).toEqual([
         `Bash(${INVOCATION} prove --json)`,
         `Bash(${INVOCATION} tasks submit:*)`,
+        // A task it gives up on is released (VOU-572).
+        `Bash(${INVOCATION} tasks release:*)`,
         `Bash(${INVOCATION} tasks outcome:*)`,
         // No post rule on a run that chose no post (POST-7).
         `Bash(${INVOCATION} status:*)`,

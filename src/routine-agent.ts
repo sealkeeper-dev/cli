@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
-import { ANSWER_RULES, UNTRUSTED_SPEC_RULES } from './claude-code-command.js';
+import { answerRules, UNTRUSTED_SPEC_RULES } from './claude-code-command.js';
 import type { TaskResponse } from './responses.js';
 import type { RunPost } from './routine.js';
 
@@ -391,6 +391,7 @@ export function allowedTools(
   return [
     `Bash(${invocation} prove --json)`,
     `Bash(${invocation} tasks submit:*)`,
+    `Bash(${invocation} tasks release:*)`,
     `Bash(${invocation} tasks outcome:*)`,
     ...(post === null ? [] : [`Bash(${invocation} ${postCommand(post)})`]),
     `Bash(${invocation} status:*)`,
@@ -465,7 +466,7 @@ export function routinePrompt(
     '',
     UNTRUSTED_SPEC_RULES,
     '',
-    ANSWER_RULES,
+    answerRules(invocation),
   );
   if (confirm.length > 0) {
     lines.push(

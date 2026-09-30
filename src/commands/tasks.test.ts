@@ -95,6 +95,7 @@ import {
   NOTHING_ADDRESSED,
   NOTHING_AVAILABLE,
 } from './tasks-pull.js';
+import { OLD_API } from './tasks-release.js';
 import { AWAITING_POSTER } from './tasks-submit.js';
 
 const API_URL = 'https://api.test';
@@ -176,6 +177,10 @@ class FakeApi {
   barred = new Set<string>();
   // False for an API from before POST /v1/tasks/open.
   openRoute = true;
+  // False for an API from before POST /v1/tasks/:id/release (VOU-572).
+  releaseRoute = true;
+  // Replaces the answer to a release when set.
+  releaseReply: (() => Response) | null = null;
   // Replaces the answer to the signed open list when set.
   openReply: (() => Response) | null = null;
   // True for an API from before VB-3, whose strict payloads refuse a
@@ -285,7 +290,7 @@ class FakeApi {
       });
     }
     const match = url.pathname.match(
-      /^\/v1\/tasks\/([^/]+)(?:\/(claim|submit|outcome|submission))?$/,
+      /^\/v1\/tasks\/([^/]+)(?:\/(claim|submit|release|outcome|submission))?$/,
     );
     if (method === 'GET' && match && !match[2]) {
       const task = this.tasks.get(match[1] ?? '');
@@ -370,6 +375,10 @@ class FakeApi {
     }
     const id = match?.[1] ?? '';
     if (request.payload.taskId !== id) this.errors.push(`taskId ${id}`);
+    // An API from before releases has no such route, whatever the task.
+    if (match?.[2] === 'release' && !this.releaseRoute) {
+      return error(404, 'not_found');
+    }
     const task = this.tasks.get(id);
     if (!task) return error(404, 'not_found');
 
@@ -419,6 +428,21 @@ class FakeApi {
             : { state: 'verified', verifiedAt: now }),
         });
         return Response.json(shown(task));
+      }
+      case 'release': {
+        if (this.releaseReply) return this.releaseReply();
+        if (task.claimantAgentId !== this.agentId) {
+          return error(403, 'not_claimant');
+        }
+        // An open task goes back to the pool, an addressed one expires with
+        // the claim kept.
+        Object.assign(
+          task,
+          task.assignee
+            ? { state: 'expired' }
+            : { state: 'open', claimantAgentId: null, claimedAt: null },
+        );
+        return Response.json({ ...shown(task), released: true });
       }
       case 'outcome': {
         if (this.outcomeReply) return this.outcomeReply();
@@ -997,6 +1021,90 @@ describe('tasks pull, submit and post', () => {
       expect(err).toBe(
         'abcd1234 is not a task id, copy the full id from the board\n',
       );
+      expect(api.requests).toEqual([]);
+    });
+  });
+
+  // VOU-572. The claimant gives a claim back, one line either way.
+  describe('release', () => {
+    const held = (extra: Partial<TaskResponse> = {}) =>
+      api.add({
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+        ...extra,
+      });
+
+    it('releases a claim in one line, signed for the task', async () => {
+      const task = held();
+      const { code, out, err } = await run('tasks', 'release', task.id);
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(out).toBe(
+        `Released ${task.id}. It is back for other agents to claim, and this agent cannot claim it again.\n`,
+      );
+      expect(api.posts().map((r) => r.path)).toEqual([
+        `/v1/tasks/${task.id}/release`,
+      ]);
+      expect(api.posts()[0]?.payload).toEqual({ taskId: task.id });
+      expect(api.tasks.get(task.id)?.state).toBe('open');
+    });
+
+    it('says an addressed task expired, and prints one object with --json', async () => {
+      const task = held({
+        assignee: { id: agentId, handle: 'alice/summariser' },
+      });
+      const { code, out } = await run('tasks', 'release', task.id);
+      expect(code).toBe(0);
+      expect(out).toBe(
+        `Released ${task.id}. It was addressed to this agent, so it has expired. This agent cannot claim it again.\n`,
+      );
+      const other = held();
+      const json = await run('tasks', 'release', other.id, '--json');
+      expect(JSON.parse(json.out)).toEqual({
+        id: other.id,
+        state: 'open',
+        released: true,
+      });
+    });
+
+    it('prints the API message of a refusal in one line', async () => {
+      const task = held();
+      const message =
+        'This agent has given back 3 claims today, by release or at the failed submit cap, and cannot release another in this UTC day. It can release a claim again from 2026-10-01T00:00:00Z';
+      api.releaseReply = () =>
+        Response.json(
+          { error: { code: 'release_cap', message } },
+          { status: 409, headers: { 'Retry-After': '3600' } },
+        );
+      const { code, out, err } = await run('tasks', 'release', task.id);
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${message}\n`);
+      api.releaseReply = null;
+      const notMine = api.add({ state: 'claimed', claimantAgentId: THIRD });
+      const refused = await run('tasks', 'release', notMine.id);
+      expect(refused.code).toBe(1);
+      expect(refused.err).toBe('failed with not_claimant\n');
+    });
+
+    it('says in one line that an older API cannot release, and leaves the claim', async () => {
+      api.releaseRoute = false;
+      const task = held();
+      const { code, out, err } = await run('tasks', 'release', task.id);
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${OLD_API}\n`);
+      expect(api.tasks.get(task.id)?.state).toBe('claimed');
+      // An unknown task reads as one, not as an older API.
+      const missing = await run('tasks', 'release', randomUUID());
+      expect(missing.err).toBe(`${NOT_FOUND}\n`);
+    });
+
+    it('refuses anything but a full task id before any request', async () => {
+      const { code, err } = await run('tasks', 'release', 'abcd1234');
+      expect(code).toBe(1);
+      expect(err).toBe('task id must be a UUID, got abcd1234\n');
       expect(api.requests).toEqual([]);
     });
   });

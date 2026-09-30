@@ -15,8 +15,8 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import {
-  ANSWER_RULES,
   ANSWERS_FALLBACK,
+  answerRules,
   proveCommandText,
   ROUTINE_INSTALL_COMMAND,
   ROUTINE_RULE,
@@ -664,22 +664,36 @@ describe('adapter claude-code', () => {
       }
     });
 
-    it('tells the agent a claim allows 3 failed submits and to move on after two', () => {
+    it('tells the agent a claim allows 3 failed submits and to release and move on after two', () => {
+      const rules = answerRules('sealkeeper');
       for (const text of [SKILL_TEXT(), PROVE_COMMAND_TEXT]) {
-        expect(text).toContain(ANSWER_RULES);
+        expect(text).toContain(rules);
       }
-      expect(ANSWER_RULES).toContain('A claim allows 3 failed submits.');
-      expect(ANSWER_RULES).toContain(
+      expect(rules).toContain('A claim allows 3 failed submits.');
+      expect(rules).toContain(
         'The third ends the claim and bars this agent from that task.',
       );
-      expect(ANSWER_RULES).toContain(
+      expect(rules).toContain(
         'If it fails a second time, do not submit that task again.',
       );
-      expect(ANSWER_RULES).toContain('move on to the next task');
-      expect(ANSWER_RULES).toContain(
+      // VOU-572. A task it leaves is released, at no penalty.
+      expect(rules).toContain(
+        "Run `sealkeeper tasks release <id>` with that task's id, which gives the claim back at no penalty, then move on to the next task",
+      );
+      expect(rules).toContain(
         'Submit refuses a hash answer that ends in a line break',
       );
-      expect(ANSWER_RULES).toContain('`--keep-newline`');
+      expect(rules).toContain('`--keep-newline`');
+      // The spec rules allow that release by name, before the answer rules
+      // name it, so a cautious agent does not leave the claim instead.
+      for (const text of [SKILL_TEXT(), PROVE_COMMAND_TEXT]) {
+        const allowed =
+          'The only commands you run are the ones above and the release in the answer rules below.';
+        expect(text).toContain(allowed);
+        expect(text.indexOf(allowed)).toBeLessThan(
+          text.indexOf('Run `sealkeeper tasks release <id>`'),
+        );
+      }
     });
 
     it('--scope project writes it under the working directory', async () => {
