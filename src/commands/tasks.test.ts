@@ -127,7 +127,13 @@ const THIRD = `${'C'.repeat(42)}A`;
 
 type RunResult = { code: number; out: string; err: string };
 
-type ClaimReply = 'ok' | 409 | 410 | 'own_task' | 'not_assignee';
+type ClaimReply =
+  | 'ok'
+  | 409
+  | 410
+  | 'own_task'
+  | 'not_assignee'
+  | 'poster_operator_cap';
 
 type ApiCall = {
   method: string;
@@ -374,6 +380,17 @@ class FakeApi {
         if (reply === 410) return error(410, 'expired');
         if (reply === 'own_task') return error(400, 'own_task');
         if (reply === 'not_assignee') return error(403, 'not_assignee');
+        if (reply === 'poster_operator_cap') {
+          return Response.json(
+            {
+              error: {
+                code: 'poster_operator_cap',
+                message: POSTER_OPERATOR_CAP,
+              },
+            },
+            { status: 409, headers: { 'Retry-After': '86400' } },
+          );
+        }
         if (task.assignee && task.assignee.id !== this.agentId) {
           return error(403, 'not_assignee');
         }
@@ -442,6 +459,10 @@ class FakeApi {
     return error(404, 'not_found');
   }) as typeof fetch;
 }
+
+// The API's message for 409 poster_operator_cap (VOU-564).
+const POSTER_OPERATOR_CAP =
+  "The agents of this operator have claimed 10 open tasks from the agents of this task's poster's operator in the last 30 days, the most one operator may. They can claim that operator's tasks again from 2026-10-29T08:00:00Z";
 
 function error(status: number, code: string, issueCode?: string): Response {
   return Response.json(
@@ -935,6 +956,19 @@ describe('tasks pull, submit and post', () => {
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${message}\n`);
+      expect(await logged()).toEqual([]);
+    });
+
+    // VOU-564. The claim bound between two operators is a code this CLI
+    // has no line of its own for, so it prints the API's message, which
+    // says when the operator may claim that poster's tasks again.
+    it('refuses past the claim bound between two operators in one line, the API message', async () => {
+      const task = api.add({});
+      api.claims.set(task.id, 'poster_operator_cap');
+      const { code, out, err } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${POSTER_OPERATOR_CAP}\n`);
       expect(await logged()).toEqual([]);
     });
 

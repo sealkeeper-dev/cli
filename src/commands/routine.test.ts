@@ -186,7 +186,10 @@ class FakeApi {
   failClaim = new Set<string>();
   // Claims of these task ids answer 409 with the code given, or 400 about
   // origin as an API from before the claim's origin (RT-8).
-  claimReply = new Map<string, 'already_claimed' | 'too_new' | 'origin'>();
+  claimReply = new Map<
+    string,
+    'already_claimed' | 'too_new' | 'origin' | 'poster_operator_cap'
+  >();
   // Every claim asked for, by task id, and the origin each one signed.
   claimAsked: { taskId: string; origin: unknown }[] = [];
   // The level each agent answer carries, bronze unless set. null leaves it
@@ -2890,6 +2893,46 @@ describe('routine', () => {
           reason: 'too_new',
         }),
       );
+    });
+
+    // VOU-564. A network claim past the claim bound between two operators
+    // is a 409 this CLI has no case for. It is a lost claim like one another
+    // agent took. No claim line, so the day's claim limit is not spent on
+    // it, and the run goes on to the next operator's task and seed tasks.
+    it('prove moves on past a poster_operator_cap refusal without spending the daily claim limit', async () => {
+      await setRoutine({
+        limits: {
+          ...defaultRoutineConfig().limits,
+          claimsPerDay: 2,
+          networkClaimsPerDay: 2,
+        },
+      });
+      const capped = api.add({
+        posterAgentId: BOB_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: new Date(Date.now() - 50 * 60_000).toISOString(),
+      });
+      api.claimReply.set(capped.id, 'poster_operator_cap');
+      const next = api.add({
+        posterAgentId: CAROL_AGENT,
+        origin: 'template',
+        taskType: 'line_sort',
+        postedAt: new Date(Date.now() - 45 * 60_000).toISOString(),
+      });
+      const seed = api.add();
+      const result = await run('prove', '--json');
+      expect(result.code).toBe(0);
+      expect(api.claimAsked.map((c) => c.taskId)).toEqual([
+        capped.id,
+        next.id,
+        seed.id,
+      ]);
+      expect(api.claimed).toEqual([next.id, seed.id]);
+      const claims = (await readRoutine()).flatMap((e) =>
+        e.kind === 'claim' ? [e.taskId] : [],
+      );
+      expect(claims).toEqual([next.id, seed.id]);
     });
 
     it('prove takes at most one of 20 unsolvable template tasks from one operator and still claims seed tasks (RT-8)', async () => {
