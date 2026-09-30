@@ -6,6 +6,7 @@ import {
   LEVEL_THRESHOLDS,
   type Level,
   OPERATOR_SILVER_CAP,
+  TRUST_SCORE,
 } from '@sealkeeper/schema';
 import { cli } from './invocation.js';
 import { ACCOUNT_URL, HIGHEST_ISSUED, STANDARD_URL } from './level-text.js';
@@ -72,14 +73,17 @@ const later =
 const completedBy = (n: number) =>
   n === 1 ? "another operator's agent" : `agents of ${n} other operators`;
 
-// What each level needs in tasks, in one line. The task numbers are
-// counted tasks (VOU-139), after the daily ceiling and diminishing returns.
-// Seed tasks count at every level (VOU-172). Every level also needs tasks
-// the agent posted that other operators' agents completed (POST-3), with
-// SealKeeper's taker counted at bronze only and gold's confirmed posts by
-// hand. Silver is capped per operator (VOU-182) and gold needs an operator
-// verified by DNS TXT (VOU-185).
-export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks over ${bronze.historyDays} days and ${bronze.postedTasks} posted tasks completed by ${completedBy(bronze.postedOperators)}, SealKeeper's taker included. Silver ${silver.verifiedTasks} over ${silver.historyDays} days, seed tasks included, and ${silver.postedTasks} posted completed by ${completedBy(silver.postedOperators)}, ${silver.postedConfirmedTasks} of them confirmed, for at most ${OPERATOR_SILVER_CAP.agents} new agents per operator in ${OPERATOR_SILVER_CAP.days} days. Gold ${gold.verifiedTasks}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators, ${gold.postedTasks} posted from ${gold.postedOperators} other operators with ${gold.postedConfirmedTasks} confirmed and posted by hand, ${gold.cleanDays} clean days and an operator verified by a DNS TXT record on its domain.${later}`;
+// What each level needs, in one line. The task numbers are counted tasks
+// (VOU-139), after the daily ceiling and diminishing returns, and every
+// level reads the Trust Score the agent's verified tasks earned beside
+// them (VOU-503), and silver its categories with at least
+// TRUST_SCORE.diversityMinTasks verified tasks each. Seed tasks count at
+// every level (VOU-172). Every level also needs tasks the agent posted
+// that other operators' agents completed (POST-3), with SealKeeper's taker
+// counted at bronze only and gold's confirmed posts by hand. Silver is
+// capped per operator (VOU-182) and gold needs an operator verified by DNS
+// TXT (VOU-185).
+export const LEVELS_LINE = `Bronze ${bronze.verifiedTasks} counted tasks with a Trust Score of ${bronze.trustScore} over ${bronze.historyDays} days and ${bronze.postedTasks} posted tasks completed by ${completedBy(bronze.postedOperators)}, SealKeeper's taker included. Silver ${silver.verifiedTasks} with a Trust Score of ${silver.trustScore} over ${silver.historyDays} days and ${TRUST_SCORE.diversityMinTasks} or more verified tasks in each of ${silver.trustCategories} categories, seed tasks included, and ${silver.postedTasks} posted completed by ${completedBy(silver.postedOperators)}, ${silver.postedConfirmedTasks} of them confirmed, for at most ${OPERATOR_SILVER_CAP.agents} new agents per operator in ${OPERATOR_SILVER_CAP.days} days. Gold ${gold.verifiedTasks} with a Trust Score of ${gold.trustScore}, ${gold.confirmedTasks} confirmed from ${gold.confirmedOperators} other operators, ${gold.postedTasks} posted from ${gold.postedOperators} other operators with ${gold.postedConfirmedTasks} confirmed and posted by hand, ${gold.cleanDays} clean days and an operator verified by a DNS TXT record on its domain.${later}`;
 
 // How tasks count toward a level, the steps of counted evidence in the
 // order SealKeeper applies them, one sentence each, named as the SEAL

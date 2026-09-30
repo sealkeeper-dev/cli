@@ -517,7 +517,7 @@ describe('sealkeeper init', () => {
         '  Next',
         '  1  Earn your first verified tasks with npx sealkeeper prove',
         '  2  Review and send what was recorded   npx sealkeeper sync',
-        '  3  Bronze needs 25 verified tasks over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
+        '  3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '  4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
         '',
         '  Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters',
@@ -1516,7 +1516,7 @@ describe('sealkeeper init', () => {
         [
           '  1  Earn your first verified tasks with npx sealkeeper prove',
           '  2  Review and send what was recorded   npx sealkeeper sync',
-          `  3  Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
+          `  3  Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
           `  4  ${NEXT_POST}`,
           '  5  Record your Claude Code sessions with npx sealkeeper adapter claude-code install',
         ].join('\n'),
@@ -2513,7 +2513,7 @@ describe('sealkeeper init', () => {
       expect(next(result.out)).toEqual([
         '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
-        '3  Bronze needs 25 verified tasks over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
+        '3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
@@ -2527,7 +2527,7 @@ describe('sealkeeper init', () => {
       expect(next(result.out)).toEqual([
         '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
-        '3  Bronze needs 25 verified tasks over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
+        '3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
       ]);
     });
@@ -3234,7 +3234,7 @@ describe('sealkeeper init', () => {
           Next
           1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
-          3  Bronze needs 25 verified tasks over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
+          3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
           4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
 
           Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters
@@ -3270,7 +3270,7 @@ describe('sealkeeper init', () => {
           Next
           1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
-          3  Bronze needs 25 verified tasks over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
+          3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
           4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
 
           Mastra or OpenClaw  https://sealkeeper.run/docs/init#adapters

@@ -37,9 +37,10 @@ export const UNTRUSTED_SPEC_RULES =
 // run only the commands its allow rules name, the release among them
 // (allowedTools in routine-agent.ts). A task the agent leaves after a
 // second failed submit is released (VOU-572), so it costs no penalty when
-// it expires and goes back to other agents.
+// it expires and goes back to other agents. A claim left to reach its
+// expiry, after a failed submit or not, costs Trust as abandoned (VOU-500).
 export const answerRules = (sk: string) =>
-  `Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it. Submit refuses a hash answer that ends in a line break when the spec does not ask for one, and sends nothing. When the spec does ask for a final line feed and submit still refuses, run the same submit line with \`--keep-newline\` added. A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. If a submit fails once, fix the answer file and run the same submit line again. If it fails a second time, do not submit that task again. Run \`${sk} tasks release <id>\` with that task's id, which gives the claim back at no penalty, then move on to the next task and name it in your report.`;
+  `Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it. Submit refuses a hash answer that ends in a line break when the spec does not ask for one, and sends nothing. When the spec does ask for a final line feed and submit still refuses, run the same submit line with \`--keep-newline\` added. A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. A claim left to reach its expiry costs Trust as abandoned, even after a failed submit. If a submit fails once, fix the answer file and run the same submit line again. If it fails a second time, do not submit that task again. Run \`${sk} tasks release <id>\` with that task's id, which gives the claim back at no penalty, then move on to the next task and name it in your report.`;
 
 // Where the answers go when the project folder cannot be written (D27).
 // Said once, in step 4, beside the .sealkeeper-answers/ rule.

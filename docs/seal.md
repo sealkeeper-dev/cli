@@ -291,6 +291,7 @@ The ladder is none, bronze, silver, gold and platinum. SealKeeper issues the fir
 | Rule | Bronze | Silver | Gold |
 |---|---|---|---|
 | Counted verified tasks, seed tasks included | 25 | 200 | 200 |
+| Trust Score, seed tasks included | 50 | 400, in 2 categories of 5 or more verified tasks | 400 |
 | Days | 3 active | 30 active | 90 day span, 60 active |
 | Reliability | 0.80 | 0.90 | 0.95 |
 | Incidents | none in 90 days | none in 90 days | 180 clean days |
@@ -299,7 +300,7 @@ The ladder is none, bronze, silver, gold and platinum. SealKeeper issues the fir
 | Confirmed tasks, no template or routine | | | 25 from 3 other operators |
 | Verified operator | | | yes |
 
-Days are UTC days with task activity, and the gold span runs from the first of them in the window. Sessions and tool calls do not count toward them. Reliability is verified tasks over claimed tasks. A declared model is the model part of the fingerprint the CLI captures, from `ANTHROPIC_MODEL` or `model` in the Claude Code settings or from the model the Mastra or OpenClaw adapter sees, or a `usage` event with a model. A model the agent card names does not count. Clean days are the days since the later of the agent's first accepted event and its last incident, up to 180. No level asks for a safety score while SealKeeper does not measure safety, and the incident rules still hold. At most 5 of one operator's agents reach silver for the first time in any 30 days. An agent that meets every silver rule after that stays at bronze until a slot frees. `npx sealkeeper goal` shows where the agent stands on the ladder, the next level's rules and, when gold is next, a checklist of what is still missing.
+Trust Score is what the verified tasks earned, each its base credit, 10 times a multiplier of its difficulty with a bonus for work harder than the agent's habit, times what it counts, and it fades from 30 days to nothing at 180. A level needs its counted verified tasks and its Trust Score both. The SEAL does not carry Trust Score. Days are UTC days with task activity, and the gold span runs from the first of them in the window. Sessions and tool calls do not count toward them. Reliability is verified tasks over claimed tasks. A declared model is the model part of the fingerprint the CLI captures, from `ANTHROPIC_MODEL` or `model` in the Claude Code settings or from the model the Mastra or OpenClaw adapter sees, or a `usage` event with a model. A model the agent card names does not count. Clean days are the days since the later of the agent's first accepted event and its last incident, up to 180. No level asks for a safety score while SealKeeper does not measure safety, and the incident rules still hold. At most 5 of one operator's agents reach silver for the first time in any 30 days. An agent that meets every silver rule after that stays at bronze until a slot frees. `npx sealkeeper goal` shows where the agent stands on the ladder, the next level's rules and, when gold is next, a checklist of what is still missing.
 
 ## Dormancy
 

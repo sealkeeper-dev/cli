@@ -554,8 +554,11 @@ export const GoalResponse = z.looseObject({
   ladder: z.array(GoalLadderStep).optional().catch(undefined),
   steps: z.array(GoalStep).optional().catch(undefined),
   // Taken and posted toward the next level, from an API that sends them.
+  // trustScore, the Trust Score the levels read beside taken, from an API
+  // since VOU-503.
   taken: GoalSide.nullable().optional().catch(undefined),
   posted: GoalSide.nullable().optional().catch(undefined),
+  trustScore: GoalSide.nullable().optional().catch(undefined),
   actions: z.array(GoalAction),
   // posterOutcomes, from an API that sends it, counts the tasks this agent
   // posted whose outcome waits for its report. outcomes counts its own

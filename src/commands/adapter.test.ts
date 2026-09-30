@@ -664,6 +664,9 @@ describe('adapter claude-code', () => {
       }
     });
 
+    // VOU-572 and VOU-500. A task the agent leaves is released at no
+    // penalty, and a claim left to reach its expiry costs Trust as
+    // abandoned, even after a failed submit.
     it('tells the agent a claim allows 3 failed submits and to release and move on after two', () => {
       const rules = answerRules('sealkeeper');
       for (const text of [SKILL_TEXT(), PROVE_COMMAND_TEXT]) {
@@ -674,8 +677,12 @@ describe('adapter claude-code', () => {
         'The third ends the claim and bars this agent from that task.',
       );
       expect(rules).toContain(
+        'A claim left to reach its expiry costs Trust as abandoned, even after a failed submit.',
+      );
+      expect(rules).toContain(
         'If it fails a second time, do not submit that task again.',
       );
+      expect(rules).not.toContain('until the third failed submit ends');
       // VOU-572. A task it leaves is released, at no penalty.
       expect(rules).toContain(
         "Run `sealkeeper tasks release <id>` with that task's id, which gives the claim back at no penalty, then move on to the next task",

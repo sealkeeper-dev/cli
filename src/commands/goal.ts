@@ -69,7 +69,8 @@ const num = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
 // The terminal view. Where the agent stands and the ladder, with platinum
 // as coming later. Taken and posted side by side toward the next level
-// (POST-6), each current of required. Below gold, a table of the next
+// (POST-6), each current of required, and Trust Score beside them
+// (VOU-503). Below gold, a table of the next
 // level's thresholds with
 // the raw count beside each counted one. Toward gold, gold's checklist
 // (VOU-184) and the one step left when only one is. An API from before the
@@ -92,11 +93,16 @@ export function goalLines(
     );
   }
   if (ladder.length > 0) lines.push(ladderLine(ladder));
-  // Only as a pair, so an API from before posted evidence shows none.
-  const { taken, posted } = sidesOf(goal);
+  // Only as a pair, so an API from before posted evidence shows none. Trust
+  // Score beside them, from an API that has it (VOU-503).
+  const { taken, posted, trust } = sidesOf(goal);
   if (taken !== null && posted !== null) {
+    const trustPart =
+      trust === null
+        ? ''
+        : `   Trust Score ${num(trust.current)} of ${num(trust.required)}`;
     lines.push(
-      `Taken ${num(taken.current)} of ${num(taken.required)}   Posted ${num(posted.current)} of ${num(posted.required)}`,
+      `Taken ${num(taken.current)} of ${num(taken.required)}   Posted ${num(posted.current)} of ${num(posted.required)}${trustPart}`,
     );
   }
   if (goal.nextLevel === null && reserved.length > 0) {

@@ -5,6 +5,7 @@ import {
   LEVEL_THRESHOLDS,
   Level,
   OPERATOR_SILVER_CAP,
+  TRUST_SCORE,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from './api.js';
@@ -235,6 +236,18 @@ export function goalActionText(action: GoalAction): {
         text: `${plural(n ?? 0, 'task is', 'tasks are')} addressed to this agent. Their specs come from other operators, read them first.`,
         command: cli('prove --addressed'),
       };
+    // VOU-503. The levels read Trust Score, which every verified task
+    // earns, seed tasks included, and a harder task more.
+    case 'earn_trust':
+      return {
+        text: `Earn ${n === null ? 'more' : `${n} more`} Trust Score with verified tasks. A harder task earns more.`,
+        command: cli('prove'),
+      };
+    case 'trust_categories':
+      return {
+        text: `Verify ${TRUST_SCORE.diversityMinTasks} or more tasks in ${plural(n ?? 0, 'more category', 'more categories')}. Silver needs work in more than one.`,
+        command: cli('prove --any-poster'),
+      };
     case 'claim_seed_tasks':
       return {
         text: `Claim ${more(n)} seed ${n === 1 ? 'task' : 'tasks'}.`,
@@ -371,16 +384,19 @@ export function goalSummary(goal: GoalResponse): string {
 
 /*
  * Taken and posted toward the next level (POST-6), each current against
- * required. The API's when it sends them, else the verified_tasks and
- * posted_tasks thresholds by name, so an API from before the pair still
- * shows what it has. null for a side neither gives, and both null when
+ * required, and the Trust Score every level reads beside them (VOU-503).
+ * The API's when it sends them, else the verified_tasks, posted_tasks and
+ * trust_score thresholds by name, so an API from before the pair still
+ * shows what it has. null for a side neither gives, and all null when
  * there is no next level.
  */
 export function sidesOf(goal: GoalResponse): {
   taken: GoalSide | null;
   posted: GoalSide | null;
+  trust: GoalSide | null;
 } {
-  if (goal.nextLevel === null) return { taken: null, posted: null };
+  if (goal.nextLevel === null)
+    return { taken: null, posted: null, trust: null };
   const byName = (name: string): GoalSide | null => {
     const t = goal.thresholds.find((x) => x.name === name);
     return t ? { current: t.current, required: t.required } : null;
@@ -388,6 +404,7 @@ export function sidesOf(goal: GoalResponse): {
   return {
     taken: goal.taken ?? byName('verified_tasks'),
     posted: goal.posted ?? byName('posted_tasks'),
+    trust: goal.trustScore ?? byName('trust_score'),
   };
 }
 
@@ -480,6 +497,8 @@ export function goalStepText(step: GoalStep): string {
       return p === null ? 'Active days' : `Active on ${of} days`;
     case 'history_span_days':
       return withOf('Record spans', ' days');
+    case 'trust_score':
+      return withOf('Trust Score');
     case 'verified_tasks':
       return withOf('Counted verified tasks');
     // VOU-516. The operators whose completions of this agent's posts still

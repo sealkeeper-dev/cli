@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
-import { goalActionText, loadGoal } from '../goal.js';
+import { goalActionText, goalStepText, loadGoal } from '../goal.js';
 import { resetInvocation } from '../invocation.js';
 import { COUNTED_RULE, COUNTED_STEPS } from '../ladder.js';
 import { saveOperatorSlug } from '../operator-slug.js';
@@ -319,6 +319,53 @@ describe('sealkeeper goal', () => {
     const { code, out } = await run(serve(older), 'goal');
     expect(code).toBe(0);
     expect(out).toContain('Taken 30 of 25   Posted 2 of 5\n');
+  });
+
+  // VOU-503. Every level reads Trust Score beside the counted tasks, so it
+  // shows beside Taken and Posted, from trustScore or else the trust_score
+  // threshold.
+  it('prints Trust Score beside Taken and Posted', async () => {
+    const trust = answer({
+      level: 'none',
+      nextLevel: 'bronze',
+      thresholds: [
+        {
+          name: 'verified_tasks',
+          current: 8,
+          required: 25,
+          met: false,
+          raw: 9,
+        },
+        {
+          name: 'trust_score',
+          current: 30.5,
+          required: 50,
+          met: false,
+          raw: null,
+        },
+        { name: 'posted_tasks', current: 2, required: 5, met: false, raw: 2 },
+      ],
+      taken: { current: 8, required: 25 },
+      posted: { current: 2, required: 5 },
+      trustScore: { current: 30.5, required: 50 },
+      actions: [
+        { code: 'post_task', count: 3 },
+        { code: 'earn_trust', count: 20 },
+      ],
+    });
+    const { code, out } = await run(serve(trust), 'goal');
+    expect(code).toBe(0);
+    expect(out).toContain(
+      'Taken 8 of 25   Posted 2 of 5   Trust Score 30.50 of 50\n',
+    );
+    expect(out).toContain(
+      '  Earn 20 more Trust Score with verified tasks. A harder task earns more. npx sealkeeper prove',
+    );
+    const { trustScore: _, ...older } = trust as Record<string, unknown>;
+    const again = await run(serve(older), 'goal');
+    expect(again.out).toContain(
+      'Taken 8 of 25   Posted 2 of 5   Trust Score 30.50 of 50\n',
+    );
   });
 
   it('names the agent by the stored operator slug', async () => {
@@ -639,6 +686,25 @@ describe('goalActionText', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     resetInvocation();
+  });
+
+  // VOU-503. The levels read Trust Score and silver its categories.
+  it('says the Trust steps in plain words with their commands', () => {
+    expect(goalActionText({ code: 'earn_trust', count: 250 })).toEqual({
+      text: 'Earn 250 more Trust Score with verified tasks. A harder task earns more.',
+      command: 'sealkeeper prove',
+    });
+    expect(goalActionText({ code: 'trust_categories', count: 1 })).toEqual({
+      text: 'Verify 5 or more tasks in 1 more category. Silver needs work in more than one.',
+      command: 'sealkeeper prove --any-poster',
+    });
+    expect(
+      goalStepText({
+        code: 'trust_score',
+        done: true,
+        progress: { current: 512.25, required: 400 },
+      }),
+    ).toBe('Trust Score, 512.25 of 400');
   });
 
   it('says a step in plain words with its command', () => {

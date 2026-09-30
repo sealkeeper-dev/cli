@@ -1265,7 +1265,7 @@ function genericSteps(s: Style, hooks: HooksResult): Styled[] {
       ? s.line`In Claude Code, run ${s.bold('/sealkeeper-prove')} to earn your first verified tasks`
       : s.line`Earn your first verified tasks with ${s.bold(cli('prove'))}`,
     s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
-    s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
+    s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
     s.line`${NEXT_POST}`,
   ];
   if (hooks === 'not-installed') {
