@@ -73,7 +73,10 @@ import {
   assigneeCap,
   assigneeOperatorCap,
   badCategory,
+  badDifficulty,
   badSize,
+  DIFFICULTY_HELP,
+  difficultyNeedsConfirm,
   KEY_IN_TASK,
   MAX_INPUT_FILE_BYTES,
   NO_OPTIONS_JSON,
@@ -1468,6 +1471,8 @@ describe('tasks pull, submit and post', () => {
         taskType: 'summarise',
         spec: { words: 100 },
         verification,
+        // Always sent, summarise's own as a template type (D-TS-3).
+        difficulty: 3,
       });
       expect(JSON.parse(out)).toMatchObject({
         id: payload?.taskId,
@@ -1648,6 +1653,164 @@ describe('tasks pull, submit and post', () => {
       expect(postRefusal(failed(['spec']), undefined)).not.toBe(
         API_TOO_OLD_FOR_FIELDS,
       );
+    });
+
+    // D-TS-3. --difficulty, sent on every post, the template's for a
+    // template task type when not given, else 2.
+    it.each([1, 2, 3, 4, 5])(
+      'posts --difficulty %i on a counterparty task',
+      async (difficulty) => {
+        const { code } = await run(
+          'tasks',
+          'post',
+          '--type',
+          'review',
+          '--spec',
+          '{}',
+          '--verify',
+          'counterparty',
+          '--difficulty',
+          String(difficulty),
+        );
+        expect(code).toBe(0);
+        expect(PostTaskRequest.parse(api.posts()[0]?.payload).difficulty).toBe(
+          difficulty,
+        );
+      },
+    );
+
+    it.each([
+      ['review', 2],
+      ['summarise', 3],
+      ['line_sort', 1],
+    ])(
+      'sends difficulty for --type %s without the flag',
+      async (type, difficulty) => {
+        const { code } = await run(
+          'tasks',
+          'post',
+          '--type',
+          type,
+          '--spec',
+          '{}',
+          '--verify',
+          'counterparty',
+        );
+        expect(code).toBe(0);
+        expect(PostTaskRequest.parse(api.posts()[0]?.payload).difficulty).toBe(
+          difficulty,
+        );
+      },
+    );
+
+    it.each(['0', '6', '2.5', '2.0', '1e0', ' 2', 'two', '-1'])(
+      'refuses --difficulty %j before anything is read or sent',
+      async (value) => {
+        const { code, err } = await run(
+          'tasks',
+          'post',
+          '--type',
+          'review',
+          '--spec',
+          '@/no/such/file',
+          '--verify',
+          'counterparty',
+          '--difficulty',
+          value,
+        );
+        expect(code).toBe(1);
+        expect(err).toBe(`${badDifficulty(value)}\n`);
+        expect(api.requests).toEqual([]);
+      },
+    );
+
+    it.each([
+      [`hash:${'a'.repeat(64)}`, '4'],
+      [`hash:${'a'.repeat(64)}`, '5'],
+    ])(
+      'refuses --verify %s at --difficulty %s before signing',
+      async (verify, value) => {
+        const { code, err } = await run(
+          'tasks',
+          'post',
+          '--type',
+          'review',
+          '--spec',
+          '{}',
+          '--verify',
+          verify,
+          '--difficulty',
+          value,
+        );
+        expect(code).toBe(1);
+        expect(err).toBe(`${difficultyNeedsConfirm(Number(value))}\n`);
+        expect(api.requests).toEqual([]);
+      },
+    );
+
+    it('says an API from before difficulty does not take it', async () => {
+      // What an API before VOU-496 answers, its strict payload refusing it.
+      api.postReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid payload',
+              issues: [
+                {
+                  path: [],
+                  code: 'unrecognized_keys',
+                  message: 'Unrecognized key: "difficulty"',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      const { code, err } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'review',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${API_TOO_OLD_FOR_FIELDS}\n`);
+    });
+
+    it('prints the poster guide in the help of --difficulty', () => {
+      for (const line of [
+        '1 a single step with one obvious answer',
+        '2 a few steps and no judgement',
+        '3 several steps, some judgement and one clear test of success',
+        '4 several steps and unclear input, you confirm the result',
+        '5 open ended and expert level, you confirm the result',
+        '4 and up go with --verify counterparty only',
+      ]) {
+        expect(DIFFICULTY_HELP).toContain(line);
+      }
+    });
+
+    it('refuses --difficulty beside --template and --adopt, and alone', async () => {
+      for (const [flags, message] of [
+        [['--template', 'text_dedupe', '--yes'], TEMPLATE_SETS_FIELDS],
+        [['--adopt', 'data', '--yes'], '--adopt picks the whole task'],
+        [[], '--category, --size and --difficulty go with --type'],
+      ] as const) {
+        const { code, err } = await run(
+          'tasks',
+          'post',
+          ...flags,
+          '--difficulty',
+          '2',
+        );
+        expect(code).toBe(1);
+        expect(err).toContain(message);
+      }
+      expect(api.requests).toEqual([]);
     });
 
     it('refuses --category and --size beside --template', async () => {
@@ -2092,8 +2255,13 @@ describe('tasks pull, submit and post', () => {
       expect(payload.taskType).toBe('text_dedupe');
       // A template post says so, for the gold rule (VOU-134).
       expect(payload.origin).toBe('template');
-      // And carries the template's category and size (RT-2).
-      expect(payload).toMatchObject({ category: 'data', size: 's' });
+      // And carries the template's category, size and difficulty (RT-2,
+      // D-TS-3).
+      expect(payload).toMatchObject({
+        category: 'data',
+        size: 's',
+        difficulty: 1,
+      });
       const input = String(payload.spec.input);
       const answer = `${[...new Set(input.split('\n'))].join('\n')}\n`;
       expect(payload.verification).toEqual({
@@ -2199,8 +2367,13 @@ describe('tasks pull, submit and post', () => {
       const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
       expect(payload.spec.input).toBe('What is the capital of Norway?');
       expect(payload.origin).toBe('template');
-      // The guided walk sends the template's category and size (RT-2).
-      expect(payload).toMatchObject({ category: 'conversation', size: 's' });
+      // The guided walk sends the template's category, size and difficulty
+      // (RT-2, D-TS-3).
+      expect(payload).toMatchObject({
+        category: 'conversation',
+        size: 's',
+        difficulty: 2,
+      });
       expect(payload).not.toHaveProperty('assignee');
     });
 
@@ -2835,6 +3008,23 @@ describe('tasks pull, submit and post', () => {
         size: 's',
         disclosure: 'public',
       });
+    });
+
+    it('tasks show prints the difficulty with the other fields (D-TS-3)', async () => {
+      const task = api.add({
+        category: 'data',
+        checkMethod: 'confirm',
+        size: 's',
+        difficulty: 4,
+        disclosure: 'public',
+      });
+      const { code, out } = await run('tasks', 'show', task.id);
+      expect(code).toBe(0);
+      expect(out.split('\n')[1]).toBe(
+        'Category data. check confirm. size s. difficulty 4. disclosure public.',
+      );
+      const json = await run('tasks', 'show', task.id, '--json');
+      expect(JSON.parse(json.out)).toMatchObject({ size: 's', difficulty: 4 });
     });
 
     it('tasks show leaves the fields line out for an API that sends none', async () => {

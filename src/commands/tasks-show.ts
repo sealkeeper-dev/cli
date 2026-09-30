@@ -113,13 +113,14 @@ async function heldIds(
 }
 
 // The real task fields on one line under the first, such as "Category
-// data. check hash. size s. disclosure public.", each one the API sent.
-// Null from an API before them, which sends none.
+// data. check hash. size s. difficulty 2. disclosure public.", each one the
+// API sent. Null from an API before them, which sends none.
 export function fieldsLine(task: TaskResponse): string | null {
   const parts = [
     ['category', task.category],
     ['check', task.checkMethod],
     ['size', task.size],
+    ['difficulty', task.difficulty?.toString()],
     ['disclosure', task.disclosure],
   ].flatMap(([label, value]) =>
     value === undefined ? [] : [`${label} ${value}`],
@@ -134,6 +135,7 @@ const fieldsEntry = (task: TaskResponse) => ({
   ...(task.category === undefined ? {} : { category: task.category }),
   ...(task.checkMethod === undefined ? {} : { check_method: task.checkMethod }),
   ...(task.size === undefined ? {} : { size: task.size }),
+  ...(task.difficulty === undefined ? {} : { difficulty: task.difficulty }),
   ...(task.disclosure === undefined ? {} : { disclosure: task.disclosure }),
 });
 

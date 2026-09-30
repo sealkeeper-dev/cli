@@ -154,6 +154,9 @@ export const TaskResponse = z.object({
   checkMethod: z.string().optional(),
   size: z.string().optional(),
   disclosure: z.string().optional(),
+  // How hard the task is, 1 to 5 (D-TS-3). Any number, for the same
+  // reason, and absent from an API before it.
+  difficulty: z.number().optional(),
   // The poster with its handle and level, in list answers from an API
   // since RT-8, so the routine tells a poster's operator and level without
   // a lookup. A shape this CLI cannot read counts as absent, and then the

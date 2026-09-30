@@ -3,13 +3,18 @@ import { randomUUID } from 'node:crypto';
 import {
   AdoptTaskRequest,
   AgentRef,
+  DIFFICULTY_CONFIRM_MIN,
   MAX_TASK_SPEC_BYTES,
   PostTaskRequest,
   TASK_CATEGORIES,
   TASK_DEFAULT_TTL_HOURS,
+  TASK_DIFFICULTIES,
+  TASK_DIFFICULTY_DEFAULT,
+  TASK_DIFFICULTY_GUIDE,
   TASK_MAX_TTL_DAYS,
   TASK_SIZES,
   TaskCategory,
+  TaskDifficulty,
   type TaskOrigin,
   TaskSize,
   type VerificationSpec,
@@ -100,6 +105,7 @@ type PostOptions = {
   for?: string;
   category?: string;
   size?: string;
+  difficulty?: string;
   adopt?: string;
 };
 
@@ -126,15 +132,29 @@ export const assigneeCap = (ref: string): string =>
 export const assigneeOperatorCap = (ref: string): string =>
   `${ref} already has the most open tasks from your agents, try again once it claims some`;
 
-// The refusals of --category and --size, one line each.
+// The refusals of --category, --size and --difficulty, one line each.
 export const badCategory = (value: string): string =>
   `--category must be one of ${TASK_CATEGORIES.join(', ')}, got ${value}`;
 export const badSize = (value: string): string =>
   `--size must be one of ${TASK_SIZES.join(', ')}, got ${value}`;
+export const badDifficulty = (value: string): string =>
+  `--difficulty must be a whole number from ${TASK_DIFFICULTIES[0]} to ${TASK_DIFFICULTIES.at(-1)}, got ${value}`;
+export const difficultyNeedsConfirm = (difficulty: number): string =>
+  `--difficulty ${difficulty} needs your confirmation of the result, so it goes with --verify counterparty only`;
 export const API_TOO_OLD_FOR_FIELDS =
-  'nothing posted. This API is older than this CLI and does not take category or size yet';
+  'nothing posted. This API is older than this CLI and does not take category, size or difficulty yet';
 export const TEMPLATE_SETS_FIELDS =
-  '--template sets its own category and size, leave out --category and --size';
+  '--template sets its own category, size and difficulty, leave out --category, --size and --difficulty';
+
+// The help of --difficulty, the poster's guide from @sealkeeper/schema.
+export const DIFFICULTY_HELP = `how hard the task is, ${TASK_DIFFICULTIES.map((d) => `${d} ${TASK_DIFFICULTY_GUIDE[d]}`).join('. ')}. ${DIFFICULTY_CONFIRM_MIN} and up go with --verify counterparty only (default: the template's for a template task type, else ${TASK_DIFFICULTY_DEFAULT})`;
+
+// --difficulty as a TaskDifficulty, or null for anything but the digits
+// of one, so 2.0, 1e0 and a space are refused too.
+const difficultyOf = (value: string): TaskDifficulty | null => {
+  const parsed = TaskDifficulty.safeParse(Number(value));
+  return /^\d+$/.test(value) && parsed.success ? parsed.data : null;
+};
 
 // The refusals and lines of --adopt (RT-12), one line each.
 export const badAdopt = (value: string): string =>
@@ -218,6 +238,7 @@ export function register(
       '--size <size>',
       `how big the task is, ${TASK_SIZES.join(' or ')} (default: s)`,
     )
+    .option('--difficulty <1 to 5>', DIFFICULTY_HELP)
     .action(async function (
       this: Command,
       options: PostOptions,
@@ -240,6 +261,7 @@ export function register(
           options.for !== undefined ||
           options.category !== undefined ||
           options.size !== undefined ||
+          options.difficulty !== undefined ||
           options.allowOutsideCwd === true
         ) {
           this.error(ADOPT_ALONE);
@@ -255,7 +277,11 @@ export function register(
             '--template replaces --type, --spec and --verify, give one or the other',
           );
         }
-        if (options.category !== undefined || options.size !== undefined) {
+        if (
+          options.category !== undefined ||
+          options.size !== undefined ||
+          options.difficulty !== undefined
+        ) {
           this.error(TEMPLATE_SETS_FIELDS);
         }
         await templatePost(this, deps, options.template, options);
@@ -274,14 +300,24 @@ export function register(
       ) {
         this.error(badSize(options.size));
       }
+      if (
+        options.difficulty !== undefined &&
+        difficultyOf(options.difficulty) === null
+      ) {
+        this.error(badDifficulty(options.difficulty));
+      }
       if (options.input !== undefined) {
         this.error('--input goes with --template');
       }
       if (options.yes === true) this.error('--yes goes with --template');
       if (given.length === 0) {
-        if (options.category !== undefined || options.size !== undefined) {
+        if (
+          options.category !== undefined ||
+          options.size !== undefined ||
+          options.difficulty !== undefined
+        ) {
           this.error(
-            '--category and --size go with --type, --spec and --verify',
+            '--category, --size and --difficulty go with --type, --spec and --verify',
           );
         }
         if (wantsJson(this)) this.error(NO_OPTIONS_JSON);
@@ -340,6 +376,20 @@ async function explicitPost(
     options.verify,
     options.allowOutsideCwd,
   );
+  // Always sent, so the post says what it is (D-TS-8). Without the flag, the
+  // template's for a template task type, which the API holds it to, else
+  // the default. From DIFFICULTY_CONFIRM_MIN up the API refuses it on a
+  // hash or schema task, said here so nothing is signed for it.
+  const difficulty =
+    options.difficulty === undefined
+      ? (templateById(options.type)?.difficulty ?? TASK_DIFFICULTY_DEFAULT)
+      : (difficultyOf(options.difficulty) as TaskDifficulty);
+  if (
+    difficulty >= DIFFICULTY_CONFIRM_MIN &&
+    verification.kind !== 'counterparty'
+  ) {
+    cmd.error(difficultyNeedsConfirm(difficulty));
+  }
   const draft: Draft = {
     taskType: options.type,
     spec,
@@ -350,6 +400,7 @@ async function explicitPost(
       ? {}
       : { category: options.category as TaskCategory }),
     ...(options.size === undefined ? {} : { size: options.size as TaskSize }),
+    difficulty,
   };
   await postAndPrint(cmd, deps, requestOf(cmd, draft));
 }
@@ -368,6 +419,8 @@ type Draft = {
   // task type and takes size s.
   category?: TaskCategory;
   size?: TaskSize;
+  // Every way in gives one (D-TS-3), and an API before it refuses the post.
+  difficulty?: TaskDifficulty;
 };
 
 // The request for a draft, validated as the API will validate it. Ends the
@@ -394,6 +447,7 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
     ...(draft.origin === undefined ? {} : { origin: draft.origin }),
     ...(draft.category === undefined ? {} : { category: draft.category }),
     ...(draft.size === undefined ? {} : { size: draft.size }),
+    ...(draft.difficulty === undefined ? {} : { difficulty: draft.difficulty }),
   });
   if (!request.success) cmd.error(z.prettifyError(request.error));
   return request.data;
@@ -862,6 +916,7 @@ const draftOf = (task: TemplateTask): Draft => ({
   verification: task.verification,
   category: task.category,
   size: task.size,
+  difficulty: task.difficulty,
 });
 
 // A JSON argument given inline or as @path to a file, for --spec and
@@ -1105,7 +1160,7 @@ export function previewLines(
     '',
     `type     ${task.taskType}`,
     `category ${task.category}`,
-    `size     ${task.size}`,
+    `size     ${task.size}, difficulty ${task.difficulty}, ${TASK_DIFFICULTY_GUIDE[task.difficulty]}`,
     `check    ${CHECKS[template.kind]}`,
     `for      ${request.assignee ?? 'any agent of another operator'}`,
     `expires  in ${hours} hour${hours === 1 ? '' : 's'}`,
@@ -1181,22 +1236,24 @@ function ownAgent(ref: string, slug: string, agentId: string): boolean {
   );
 }
 
-// True when a validation_failed names category or size, which an API from
-// before RT-2 refuses as unrecognized keys of the payload, path [] and the
-// keys in the message, and a newer one would name by path.
+// True when a validation_failed names category, size or difficulty, which
+// an API from before RT-2, or before VOU-496 for difficulty, refuses as
+// unrecognized keys of the payload, path [] and the keys in the message,
+// and a newer one would name by path.
 function namesNewFields(error: ApiError): boolean {
   if (error.code !== 'validation_failed') return false;
-  const field = /^(category|size)$/;
+  const field = /^(category|size|difficulty)$/;
   return error.issues.some(
     (issue) =>
       issue.path.some((p) => typeof p === 'string' && field.test(p)) ||
       (issue.code === 'unrecognized_keys' &&
-        /"(category|size)"/.test(issue.message)),
+        /"(category|size|difficulty)"/.test(issue.message)),
   );
 }
 
 // One line per refusal of the post route. The assignee codes name what
-// --for gave. An API that does not take category or size says so.
+// --for gave. An API that does not take category, size or difficulty says
+// so.
 // Everything else is the shared refusal.
 export function postRefusal(
   error: ApiError,

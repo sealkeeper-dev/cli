@@ -5,6 +5,7 @@ import {
   solveTemplate,
   TASK_TEMPLATES,
   type TaskCategory,
+  type TaskDifficulty,
   type TaskSize,
   type TaskTemplateId,
   TEMPLATE_MAX_INPUT_CHARS,
@@ -35,9 +36,11 @@ export type TemplateTask = {
   taskType: string;
   spec: TemplateSpec;
   verification: TemplateVerification;
-  // The template's category and size, which its post carries (RT-2).
+  // The template's category, size and difficulty, which its post carries
+  // (RT-2, D-TS-3).
   category: TaskCategory;
   size: TaskSize;
+  difficulty: TaskDifficulty;
   // The answer that passes, for hash and schema tasks. For tests and the
   // poster's own preview only, never part of the task.
   answer?: string;
@@ -52,6 +55,7 @@ export type Template = {
   kind: TemplateKind;
   category: TaskCategory;
   size: TaskSize;
+  difficulty: TaskDifficulty;
   // One line on what the task asks and who checks it.
   about: string;
   input: TemplateInput;
@@ -96,7 +100,7 @@ const WORDING: Record<TaskTemplateId, { about: string; inputHint?: string }> = {
 // answer, both from solveTemplate.
 function withAnswer(
   draft: TemplateDraft,
-  fields: Pick<TemplateTask, 'category' | 'size'>,
+  fields: Pick<TemplateTask, 'category' | 'size' | 'difficulty'>,
 ): TemplateTask {
   const { taskType, spec, verification } = draft;
   if (verification.kind === 'counterparty') {
@@ -118,7 +122,11 @@ function withAnswer(
 export const TEMPLATES: readonly Template[] = TASK_TEMPLATES.map(
   (t): Template => {
     const { about, inputHint } = WORDING[t.id];
-    const fields = { category: t.category, size: t.size };
+    const fields = {
+      category: t.category,
+      size: t.size,
+      difficulty: t.difficulty,
+    };
     return {
       id: t.id,
       kind: t.kind,
