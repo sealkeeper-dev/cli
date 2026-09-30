@@ -4,7 +4,7 @@ import {
   Dimension,
   RatingRequest,
   RatingValue,
-  TASK_CATEGORIES,
+  STORED_TASK_CATEGORIES,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
@@ -78,9 +78,12 @@ function validate(
   if (!AgentId.safeParse(agentId).success) {
     cmd.error(`not an agent id: ${agentId}`);
   }
+  // A rating names a dimension an agent can be scored on, so competence
+  // takes every stored category, conversation and other included, as
+  // Dimension does.
   if (!Dimension.safeParse(options.dimension).success) {
     cmd.error(
-      `--dimension must be reliability, safety, cost_latency, provenance or competence:<category>, where category is one of ${TASK_CATEGORIES.join(', ')}, got ${options.dimension}`,
+      `--dimension must be reliability, safety, cost_latency, provenance or competence:<category>, where category is one of ${STORED_TASK_CATEGORIES.join(', ')}, got ${options.dimension}`,
     );
   }
   const value = /^\d+$/.test(options.value) ? Number(options.value) : NaN;

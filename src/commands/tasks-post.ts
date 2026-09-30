@@ -232,7 +232,7 @@ export function register(
     )
     .option(
       '--category <category>',
-      `what the task is about, one of ${TASK_CATEGORIES.join(', ')} (default: from the task type, else other)`,
+      `what the task is about, one of ${TASK_CATEGORIES.join(', ')} (default: from the task type, else none, which SealKeeper stores as other)`,
     )
     .option(
       '--size <size>',

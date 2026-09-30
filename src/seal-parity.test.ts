@@ -96,6 +96,23 @@ const FIXTURES: [string, unknown][] = [
     'competence by task type, issued before categories',
     { ...base, scores: { ...base.scores, 'competence:csv_normalise': 0.8 } },
   ],
+  // D-UI-12. math can be chosen, and a SEAL issued before still names
+  // conversation or other, which are no longer offered.
+  [
+    'competence in math',
+    { ...base, scores: { ...base.scores, 'competence:math': 0.7 } },
+  ],
+  [
+    'competence in conversation and other, issued before math',
+    {
+      ...base,
+      scores: {
+        ...base.scores,
+        'competence:conversation': 0.8,
+        'competence:other': 0.6,
+      },
+    },
+  ],
   [
     'a count missing',
     {

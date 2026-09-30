@@ -197,7 +197,7 @@ describe('sealkeeper rate', () => {
     [
       'competence by task type',
       [OTHER_AGENT, '--dimension', 'competence:summarise', '--value', '3'],
-      'where category is one of code, research, data, writing, operations, conversation, other, got competence:summarise',
+      'where category is one of code, research, data, writing, operations, math, conversation, other, got competence:summarise',
     ],
     [
       'a value of 6',

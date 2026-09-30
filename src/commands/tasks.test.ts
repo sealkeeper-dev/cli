@@ -1540,6 +1540,28 @@ describe('tasks pull, submit and post', () => {
       });
     });
 
+    it('posts --category math and names the six in its refusal (D-UI-12)', async () => {
+      const { code } = await run(
+        'tasks',
+        'post',
+        '--type',
+        'integer_sum',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+        '--category',
+        'math',
+      );
+      expect(code).toBe(0);
+      expect(PostTaskRequest.parse(api.posts()[0]?.payload)).toMatchObject({
+        category: 'math',
+      });
+      expect(badCategory('ops')).toBe(
+        '--category must be one of code, research, data, writing, operations, math, got ops',
+      );
+    });
+
     it('leaves category and size out when not given, for the API to derive', async () => {
       const { code } = await run(
         'tasks',
@@ -1560,6 +1582,10 @@ describe('tasks pull, submit and post', () => {
     it.each([
       [['--category', 'cooking'], badCategory('cooking')],
       [['--category', 'Data'], badCategory('Data')],
+      // No longer offered (D-UI-12). A post from an older CLI still names
+      // them, and the API still takes it.
+      [['--category', 'conversation'], badCategory('conversation')],
+      [['--category', 'other'], badCategory('other')],
       [['--size', 'l'], badSize('l')],
     ])('refuses %j before anything is read or sent', async (flags, message) => {
       const { code, err } = await run(
@@ -2368,9 +2394,9 @@ describe('tasks pull, submit and post', () => {
       expect(payload.spec.input).toBe('What is the capital of Norway?');
       expect(payload.origin).toBe('template');
       // The guided walk sends the template's category, size and difficulty
-      // (RT-2, D-TS-3).
+      // (RT-2, D-TS-3). answer_question is in writing since D-UI-12.
       expect(payload).toMatchObject({
-        category: 'conversation',
+        category: 'writing',
         size: 's',
         difficulty: 2,
       });

@@ -3631,6 +3631,12 @@ describe('routine', () => {
     expect(
       (await run('tasks', 'post', '--adopt', 'maths', '--yes')).err,
     ).toContain('--adopt must be one of code, research, data');
+    // conversation and other are no longer offered (D-UI-12).
+    expect(
+      (await run('tasks', 'post', '--adopt', 'conversation', '--yes')).err,
+    ).toContain(
+      '--adopt must be one of code, research, data, writing, operations, math, got conversation',
+    );
     tty = true;
     answer = 'n';
     const declined = await run('tasks', 'post', '--adopt', 'data');
