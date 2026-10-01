@@ -68,9 +68,12 @@ import {
 } from '../routine.js';
 import {
   type AgentProcess,
+  allowedTools,
   type Confirmable,
   claudeArgs,
   escapeCmdArgument,
+  GAME_RULES,
+  gameSteps,
   routinePrompt,
   runAgent,
   type Spawner,
@@ -214,7 +217,178 @@ class FakeApi {
     | 'lost'
     | null = null;
 
+  // The game (GAME-14). null answers every game, duel and challenge route
+  // with 404, as an API from before the game. An accept and a claim of a
+  // challenge task use one game unit each, and past cap answer 429
+  // game_cap_reached, as the API does.
+  game: { enabled: boolean; cap: number; usedToday: number } | null = null;
+  duels = new Map<string, FakeDuel>();
+  // The tasks of this agent's entry in the current weekly challenge.
+  challenge: string[] = [];
+  // The code a rematch answers 409 with, or null to invite.
+  rematchReply: string | null = null;
+  // The signed game, duel and challenge requests, as method and path.
+  gameCalls: string[] = [];
+
   constructor(readonly agentId: string) {}
+
+  // A duel or challenge task addressed to this agent, posted by the seed
+  // agent, as createGameTasks makes one.
+  addGameTask(origin: 'duel' | 'challenge'): TaskResponse {
+    return this.add({
+      origin,
+      assignee: { id: this.agentId, handle: 'alice/scout' },
+      spec: { instruction: 'Sort the lines.', input: 'b\na' },
+    });
+  }
+
+  // A duel with RIVAL, this agent the opponent, active with its task
+  // unless over says otherwise.
+  addDuel(over: Partial<FakeDuel> = {}): FakeDuel {
+    const duel: FakeDuel = {
+      id: randomUUID(),
+      category: 'data',
+      state: 'active',
+      origin: 'seek',
+      challenger: { agentId: BOB_AGENT, handle: 'bob/rival' },
+      opponent: {
+        agentId: this.agentId,
+        handle: 'alice/scout',
+        taskId: this.addGameTask('duel').id,
+      },
+      invitedAt: null,
+      startedAt: new Date(Date.now() - HOUR).toISOString(),
+      deadlineAt: new Date(Date.now() + 47 * HOUR).toISOString(),
+      decidedAt: null,
+      result: null,
+      forfeit: false,
+      ...over,
+    };
+    this.duels.set(duel.id, duel);
+    return duel;
+  }
+
+  // One game unit, or the 429 the API answers past the cap.
+  private unit(): Response | null {
+    const game = this.game;
+    if (game === null) return error(404, 'not_found');
+    if (game.usedToday >= game.cap) {
+      return Response.json(
+        {
+          error: {
+            code: 'game_cap_reached',
+            message: `This agent has used its ${game.cap} game units for today. They start again at 00:00 UTC`,
+          },
+        },
+        { status: 429 },
+      );
+    }
+    game.usedToday += 1;
+    return null;
+  }
+
+  // The duel as a side of it sees it in a signed answer.
+  private duelView(d: FakeDuel) {
+    return { ...d, later: 'kept' };
+  }
+
+  // The game, duel and challenge routes, or null for any other path.
+  private async gameRoute(
+    method: string,
+    path: string,
+    init?: RequestInit,
+  ): Promise<Response | null> {
+    if (
+      !path.startsWith('/v1/game') &&
+      !path.startsWith('/v1/duels') &&
+      !path.startsWith('/v1/challenges')
+    ) {
+      return null;
+    }
+    if (this.game === null) return error(404, 'not_found');
+    if (method === 'GET' && path === '/v1/game/categories') {
+      return Response.json({
+        categories: [{ category: 'code' }, { category: 'data' }],
+      });
+    }
+    const payload = await this.payload(init);
+    this.gameCalls.push(`${method} ${path}`);
+    const game = this.game;
+    if (path === '/v1/game/status') {
+      return Response.json({
+        ...game,
+        resetAt: new Date(Date.now() + HOUR).toISOString(),
+      });
+    }
+    if (path === '/v1/duels/inbox' || path === '/v1/duels/mine') {
+      const state =
+        path === '/v1/duels/inbox' ? 'invited' : String(payload.state);
+      return Response.json({
+        duels: [...this.duels.values()]
+          .filter((d) => d.state === state)
+          .map((d) => this.duelView(d)),
+        nextCursor: null,
+      });
+    }
+    if (path === '/v1/duels/seek') {
+      const seek = {
+        id: randomUUID(),
+        category: payload.category,
+        state: 'open',
+        expiresAt: new Date(Date.now() + 24 * HOUR).toISOString(),
+        duelId: null,
+      };
+      return Response.json({ seek }, { status: 201 });
+    }
+    if (path === '/v1/challenges/current') {
+      return Response.json({
+        isoWeek: '2026-W40',
+        category: 'data',
+        closesAt: new Date(Date.now() + 72 * HOUR).toISOString(),
+        entered: true,
+        rank: null,
+        tasks: this.challenge.map((taskId) => {
+          const task = this.tasks.get(taskId);
+          return {
+            taskId,
+            state: task?.state === 'open' ? 'unclaimed' : task?.state,
+            correct: null,
+          };
+        }),
+      });
+    }
+    const action = path.match(
+      /^\/v1\/duels\/([^/]+)\/(accept|decline|rematch)$/,
+    );
+    const duel = this.duels.get(action?.[1] ?? '');
+    if (!action || !duel) return error(404, 'not_found');
+    if (action[2] === 'accept') {
+      const refused = this.unit();
+      if (refused) return refused;
+      Object.assign(duel, {
+        state: 'active',
+        startedAt: new Date().toISOString(),
+        deadlineAt: new Date(Date.now() + 48 * HOUR).toISOString(),
+      });
+      duel.opponent.taskId = this.addGameTask('duel').id;
+      return Response.json(this.duelView(duel));
+    }
+    if (action[2] === 'decline') {
+      duel.state = 'declined';
+      return Response.json(this.duelView(duel));
+    }
+    if (this.rematchReply !== null) return error(409, this.rematchReply);
+    const next = this.addDuel({
+      state: 'invited',
+      origin: 'rematch',
+      challenger: { agentId: this.agentId, handle: 'alice/scout' },
+      opponent: { agentId: BOB_AGENT, handle: 'bob/rival' },
+      invitedAt: new Date().toISOString(),
+      startedAt: null,
+      deadlineAt: null,
+    });
+    return Response.json(this.duelView(next), { status: 201 });
+  }
 
   add(overrides: Partial<TaskResponse> = {}): TaskResponse {
     const task: TaskResponse = {
@@ -279,6 +453,8 @@ class FakeApi {
       const seed = q.get('seed');
       const matching = [...this.tasks.values()].filter((t) => {
         if (t.state !== state) return false;
+        // Game tasks are found only through their game, as the API lists.
+        if (t.origin === 'duel' || t.origin === 'challenge') return false;
         // poster, claimant and seed as the API filters them (VOU-208).
         if (q.has('poster') && t.posterAgentId !== q.get('poster')) {
           return false;
@@ -405,12 +581,21 @@ class FakeApi {
       }
       return Response.json(task, { status: 201 });
     }
+    const game = await this.gameRoute(method, url.pathname, init);
+    if (game !== null) return game;
     const match = url.pathname.match(
       /^\/v1\/tasks\/([^/]+)(\/claim|\/submission|\/outcome|\/submit)?$/,
     );
     const task = this.tasks.get(match?.[1] ?? '');
     if (!match || !task) return error(404, 'not_found');
-    if (method === 'GET' && !match[2]) return Response.json(task);
+    // A game task's spec shows only in its claim and submit answers.
+    if (method === 'GET' && !match[2]) {
+      return Response.json(
+        task.origin === 'duel' || task.origin === 'challenge'
+          ? { ...task, spec: {} }
+          : task,
+      );
+    }
     const payload = await this.payload(init);
     if (match[2] === '/claim') {
       this.claimAsked.push({ taskId: task.id, origin: payload.origin });
@@ -441,6 +626,10 @@ class FakeApi {
         );
       }
       if (reply) return error(409, reply);
+      if (task.origin === 'challenge') {
+        const refused = this.unit();
+        if (refused) return refused;
+      }
       Object.assign(task, {
         state: 'claimed',
         claimantAgentId: this.agentId,
@@ -473,6 +662,22 @@ class FakeApi {
     return Response.json(task);
   }) as typeof fetch;
 }
+
+// A duel as FakeApi keeps it. Only this agent's side carries a taskId.
+type FakeDuel = {
+  id: string;
+  category: string;
+  state: string;
+  origin: string;
+  challenger: { agentId: string; handle: string; taskId?: string };
+  opponent: { agentId: string; handle: string; taskId?: string };
+  invitedAt: string | null;
+  startedAt: string | null;
+  deadlineAt: string | null;
+  decidedAt: string | null;
+  result: string | null;
+  forfeit: boolean;
+};
 
 function error(status: number, code: string): Response {
   return Response.json(
@@ -2734,6 +2939,266 @@ describe('routine', () => {
     });
   });
 
+  describe('the game section (GAME-14)', () => {
+    beforeEach(async () => {
+      await installed();
+      // Real minutes, so a slow machine never stops the agent mid section.
+      msPerMinute = 60_000;
+    });
+
+    // The agent's --allowedTools.
+    const allowedOf = (args: string[]) =>
+      args.slice(
+        args.indexOf('--allowedTools') + 1,
+        args.indexOf('--disallowedTools'),
+      );
+
+    // An agent that runs script in this process under the run's id, from
+    // the working folder, as the game section has it run the commands.
+    // play runs one command and keeps its exit code, read does the same and
+    // gives what the command printed, and solve writes an answer file and
+    // submits it.
+    function gameAgent(
+      script: (
+        play: (...args: string[]) => Promise<number>,
+        read: (...args: string[]) => Promise<string>,
+      ) => Promise<void>,
+    ): number[] {
+      const codes: number[] = [];
+      nextAgent = () =>
+        new ScriptedAgent(async () => {
+          const runId = spawned.at(-1)?.env.SEALKEEPER_ROUTINE_RUN ?? '';
+          vi.stubEnv('SEALKEEPER_ROUTINE_RUN', runId);
+          const work = routinePaths().work;
+          vi.spyOn(process, 'cwd').mockReturnValue(work);
+          await mkdir(join(work, '.sealkeeper-answers'), { recursive: true });
+          const play = async (...args: string[]) => {
+            const code = await runInside(args);
+            codes.push(code);
+            return code;
+          };
+          // The run captures stdout already, so this passes each chunk on
+          // to it and keeps a copy.
+          const read = async (...args: string[]) => {
+            const write = process.stdout.write;
+            let printed = '';
+            process.stdout.write = ((chunk: string) => {
+              printed += String(chunk);
+              return write.call(process.stdout, chunk);
+            }) as typeof process.stdout.write;
+            try {
+              await play(...args);
+            } finally {
+              process.stdout.write = write;
+            }
+            return printed;
+          };
+          try {
+            await script(play, read);
+          } finally {
+            vi.stubEnv('SEALKEEPER_ROUTINE_RUN', '');
+          }
+        }) as unknown as FakeAgent;
+      return codes;
+    }
+
+    function solve(
+      play: (...args: string[]) => Promise<number>,
+      taskId: string,
+    ): Promise<number> {
+      const file = join(routinePaths().work, '.sealkeeper-answers', taskId);
+      return writeFile(file, 'a\nb').then(() =>
+        play('tasks', 'submit', taskId, '--file', file),
+      );
+    }
+
+    it('with the game off starts no agent for it, and gives a run with task work no game section or rules', async () => {
+      api.game = { enabled: false, cap: 5, usedToday: 0 };
+      // A duel task this agent holds is played by the game, never by prove.
+      const held = api.addGameTask('duel');
+      Object.assign(held, { state: 'claimed', claimantAgentId: agentId });
+      let result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(spawned).toEqual([]);
+      expect((await runs())[0]).toMatchObject({ outcome: 'nothing' });
+      expect((await runs())[0]).not.toHaveProperty('game');
+      expect(api.gameCalls).toEqual(['POST /v1/game/status']);
+
+      api.add();
+      result = await run('routine', 'run');
+      expect(spawned).toHaveLength(1);
+      const input = agents[0]?.input ?? '';
+      expect(input).toContain(`Run \`${INVOCATION} prove --json\``);
+      expect(input).not.toContain('game status');
+      expect(
+        allowedOf(spawned[0]?.args ?? []).filter((rule) =>
+          / (game|duel|challenge|tasks show|tasks claim)\b/.test(rule),
+        ),
+      ).toEqual([]);
+      expect((await runs())[1]).not.toHaveProperty('game');
+      expect((await run('routine', 'status')).out).not.toContain('Game ');
+    });
+
+    it('starts the agent for the game alone when there is no task work, with only the game commands added', async () => {
+      api.game = { enabled: true, cap: 5, usedToday: 0 };
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      const input = agents[0]?.input ?? '';
+      expect(input).not.toContain('prove --json');
+      expect(input).toContain(
+        `1. Then play the game. Run \`${INVOCATION} game status --json\`.`,
+      );
+      expect(input).toContain(`6. Run \`${INVOCATION} status\` and stop.`);
+      // The rules of a run without the game, and the game's added.
+      const allowed = allowedOf(spawned[0]?.args ?? []);
+      expect(allowed).toEqual(allowedTools(INVOCATION, null, true));
+      expect(
+        allowed.filter((r) => !allowedTools(INVOCATION).includes(r)),
+      ).toEqual(GAME_RULES.map((rule) => `Bash(${INVOCATION} ${rule})`));
+      expect((await runs())[0]).toMatchObject({
+        outcome: 'done',
+        game: { accepted: 0, played: 0, challenge: 0, seeks: 0 },
+      });
+    });
+
+    it('starts no agent with the game on and no units left unless a duel runs', async () => {
+      api.game = { enabled: true, cap: 2, usedToday: 2 };
+      await run('routine', 'run');
+      expect(spawned).toEqual([]);
+      api.addDuel();
+      await run('routine', 'run');
+      expect(spawned).toHaveLength(1);
+      expect(agents[0]?.input).toContain('game status --json');
+    });
+
+    it('accepts until the cap, plays its duel task, stops the challenge at the cap and counts it all in status', async () => {
+      api.game = { enabled: true, cap: 1, usedToday: 0 };
+      // Two invites from bob, no task on either side before the accept.
+      const invite = () =>
+        api.addDuel({
+          state: 'invited',
+          origin: 'challenge',
+          opponent: { agentId, handle: 'alice/scout' },
+          invitedAt: new Date().toISOString(),
+          startedAt: null,
+          deadlineAt: null,
+        });
+      const first = invite();
+      const second = invite();
+      api.challenge = [
+        api.addGameTask('challenge').id,
+        api.addGameTask('challenge').id,
+      ];
+      // The task states the duel step read from tasks show --json.
+      const states: unknown[] = [];
+      const codes = gameAgent(async (play, read) => {
+        await play('game', 'status', '--json');
+        await play('duel', 'inbox', '--json');
+        await play('duel', 'accept', first.id);
+        // The cap is reached mid step, so the second invite is declined.
+        await play('duel', 'accept', second.id);
+        await play('duel', 'decline', second.id);
+        await play('duel', 'list', '--state', 'active', '--json');
+        const taskId = first.opponent.taskId ?? '';
+        // The duel step's rule on the real tasks show answer. Claim only
+        // while its state is open, and leave it once played.
+        for (let i = 0; i < 2; i += 1) {
+          const { state } = JSON.parse(
+            await read('tasks', 'show', taskId, '--json'),
+          );
+          states.push(state);
+          if (state !== 'open') continue;
+          await play('tasks', 'claim', taskId, '--json');
+          await solve(play, taskId);
+        }
+        await play('challenge', 'current', '--json');
+        await play('tasks', 'claim', api.challenge[0] ?? '', '--json');
+        await play('game', 'status', '--json');
+      });
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(codes).toEqual([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+      expect(states).toEqual(['open', 'verified']);
+      expect(result.err).toContain(
+        'This agent has used its 1 game units for today. They start again at 00:00 UTC',
+      );
+      expect(second.state).toBe('declined');
+      expect(api.claimed).toEqual([first.opponent.taskId]);
+      expect(api.submitted).toHaveLength(1);
+      // A refusal of the game is a normal outcome, the run is done.
+      const [line] = await runs();
+      expect(line).toMatchObject({
+        outcome: 'done',
+        claimed: 0,
+        submitted: 1,
+        game: { accepted: 1, played: 1, challenge: 0, seeks: 0 },
+      });
+      // The game claim spends no daily claim limit.
+      expect(
+        JSON.parse((await run('routine', 'status', '--json')).out).today
+          .claimed,
+      ).toBe(0);
+      expect((await run('routine', 'status')).out).toContain(
+        'Game      last run accepted 1 invite, played 1 duel, submitted 0 challenge tasks, opened 0 seeks\n',
+      );
+    });
+
+    it('rematches a lost duel and opens no seek', async () => {
+      api.game = { enabled: true, cap: 5, usedToday: 0 };
+      const lost = api.addDuel({
+        state: 'finished',
+        result: 'challenger_win',
+        decidedAt: new Date(Date.now() - 2 * 24 * HOUR).toISOString(),
+      });
+      const codes = gameAgent(async (play) => {
+        await play('duel', 'list', '--state', 'finished', '--json');
+        await play('duel', 'rematch', lost.id);
+      });
+      await run('routine', 'run');
+      expect(codes).toEqual([0, 0]);
+      expect(api.gameCalls).toContain(`POST /v1/duels/${lost.id}/rematch`);
+      expect(api.gameCalls).not.toContain('POST /v1/duels/seek');
+      expect((await runs())[0]?.game).toEqual({
+        accepted: 0,
+        played: 0,
+        challenge: 0,
+        seeks: 0,
+      });
+    });
+
+    it('seeks in the auto category when the rematch meets the pair limit, and counts the challenge task', async () => {
+      api.game = { enabled: true, cap: 5, usedToday: 0 };
+      api.rematchReply = 'pair_duel_limit';
+      const lost = api.addDuel({
+        state: 'finished',
+        result: 'challenger_win',
+        decidedAt: new Date(Date.now() - 24 * HOUR).toISOString(),
+      });
+      api.challenge = [api.addGameTask('challenge').id];
+      const codes = gameAgent(async (play) => {
+        const taskId = api.challenge[0] ?? '';
+        await play('tasks', 'claim', taskId, '--json');
+        await solve(play, taskId);
+        await play('duel', 'rematch', lost.id);
+        await play('duel', 'seek', '--category', 'auto', '--json');
+      });
+      const result = await run('routine', 'run');
+      expect(codes).toEqual([0, 0, 1, 0]);
+      expect(result.err).toContain(
+        'these two agents started a duel in this category in the last 7 days',
+      );
+      expect(api.gameCalls).toContain('POST /v1/duels/seek');
+      expect((await runs())[0]).toMatchObject({
+        outcome: 'done',
+        game: { accepted: 0, played: 0, challenge: 1, seeks: 1 },
+      });
+      expect((await run('routine', 'status')).out).toContain(
+        'Game      last run accepted 0 invites, played 0 duels, submitted 1 challenge task, opened 1 seek\n',
+      );
+    });
+  });
+
   describe('inside a routine run', () => {
     const RUN = 'run-1';
 
@@ -3417,6 +3882,27 @@ describe('routine', () => {
       expect(result.code).toBe(1);
       expect(result.err).toContain('not available during a routine run');
       expect(api.claimed).toEqual([]);
+    });
+
+    it('tasks claim takes a duel or challenge task of this agent, and no game task of another (GAME-14)', async () => {
+      const own = api.addGameTask('challenge');
+      api.game = { enabled: true, cap: 5, usedToday: 0 };
+      let result = await run('tasks', 'claim', own.id, '--json');
+      expect(result.code).toBe(0);
+      // The spec arrives with the claim, the only answer that has it.
+      expect(JSON.parse(result.out).task.spec).toEqual(own.spec);
+      const other = api.add({
+        origin: 'duel',
+        assignee: { id: BOB_AGENT, handle: 'bob/rival' },
+      });
+      result = await run('tasks', 'claim', other.id);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('not available during a routine run');
+      expect(api.claimed).toEqual([own.id]);
+      // A game claim writes no claim line, so no daily claim limit counts it.
+      expect((await readRoutine()).filter((e) => e.kind === 'claim')).toEqual(
+        [],
+      );
     });
 
     it('tasks claim is refused, whoever posted the task', async () => {
@@ -4155,6 +4641,101 @@ describe('routinePrompt', () => {
     expect(claudeArgs('sk', { template: 'line_sort', adopt: null })).toContain(
       'Bash(sk tasks post --template line_sort --yes --json)',
     );
+  });
+
+  it('plays the game after the task work only when asked, with the outcomes that are no failure (GAME-14)', () => {
+    expect(routinePrompt('sk', [])).not.toContain('game status');
+    const prompt = routinePrompt('sk', [], {
+      post: null,
+      prove: true,
+      game: true,
+    });
+    expect(prompt).toContain('4. Run the `submit` command of each task');
+    // An empty prove goes on to the game, never past it to the last step.
+    expect(prompt).toContain(
+      'An empty array means there is nothing to claim, go on to step 5.',
+    );
+    expect(prompt).not.toContain('nothing to claim, go to the last step');
+    expect(routinePrompt('sk', [])).toContain(
+      'An empty array means there is nothing to claim, go to the last step.',
+    );
+    expect(prompt).toContain(
+      '5. Then play the game. Run `sk game status --json`.',
+    );
+    expect(prompt).toContain('10. Run `sk status` and stop.\n\nIn the game');
+    expect(prompt).toContain(
+      'A duel or challenge task has one submit, and a wrong answer ends its claim',
+    );
+    // The rule of 3 failed submits names the exception, here and in the
+    // prove instructions they share.
+    expect(prompt).toContain(
+      'A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. The exception is a duel task, with one submit, and a weekly challenge task, with one submit. A wrong answer to one ends its claim and stands as its answer, so never submit it again or release it.',
+    );
+  });
+
+  // A snapshot, so any change to what the unattended agent is told shows
+  // in review.
+  it('the game section reads as it did (GAME-14)', () => {
+    expect(
+      gameSteps((args) => `sk ${args}`, 5).join('\n'),
+    ).toMatchInlineSnapshot(`
+      "5. Then play the game. Run \`sk game status --json\`. When \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.
+      6. Run \`sk duel inbox --json\`. For each duel in \`duels\`, in order, run \`sk duel accept <duel id>\`. Once an accept says this agent has used its game units for today, accept no more and run \`sk duel decline <duel id>\` for each invite left. An accept that says the other agent has used its game units leaves that invite for a later run.
+      7. Run \`sk duel list --state active --json\`. In each duel, this agent's side is the one with a \`taskId\`. Run \`sk tasks show <task id> --json\` with that id. Only when its \`state\` is \`open\` has this agent not claimed it yet, then run \`sk tasks claim <task id> --json\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Any other state means it was claimed or submitted before, leave it.
+      8. Run \`sk challenge current --json\`. For each task in \`tasks\` whose \`state\` is \`unclaimed\`, one at a time, run \`sk tasks claim <task id> --json\` with its \`taskId\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Submit each before the next claim. Stop once a claim says this agent has used its game units for today.
+      9. Run \`sk game status --json\` again. Only when this agent has game units left, run \`sk duel list --state finished --json\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last 7 days, take the latest and run \`sk duel rematch <duel id>\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`sk duel seek --category auto --json\` once."
+    `);
+  });
+
+  it('allows every command of the game section and nothing broader (GAME-14)', () => {
+    const sk = '"/usr/bin/node" "/opt/cli.js"';
+    const added = allowedTools(sk, null, true).filter(
+      (rule) => !allowedTools(sk).includes(rule),
+    );
+    expect(added).toEqual(GAME_RULES.map((rule) => `Bash(${sk} ${rule})`));
+    expect(claudeArgs(sk, null, true)).toEqual(expect.arrayContaining(added));
+    expect(claudeArgs(sk)).not.toEqual(expect.arrayContaining([added[0]]));
+    // Every command the section spells, its placeholders filled in, and the
+    // rule it matches. A rule ending :* matches its words and what follows.
+    const commands = [
+      ...gameSteps((args) => `${sk} ${args}`, 1)
+        .join('\n')
+        .matchAll(/`([^`]+)`/g),
+    ]
+      .map((m) => m[1] ?? '')
+      .filter((c) => c.startsWith(sk))
+      .map((c) => c.replace(/<[^>]+>/g, randomUUID()));
+    const matches = (rule: string, command: string) =>
+      rule.endsWith(':*')
+        ? command.startsWith(`${rule.slice(0, -2)} `)
+        : command === rule;
+    const used = new Set<string>();
+    for (const command of commands) {
+      const rule = GAME_RULES.find((r) => matches(`${sk} ${r}`, command));
+      expect(rule, command).toBeDefined();
+      used.add(rule ?? '');
+    }
+    // No rule the section never uses.
+    expect([...used].sort()).toEqual([...GAME_RULES].sort());
+    // The rules for an id take that command alone, never the switch, a
+    // challenge of a chosen agent or a seek in a category of the agent's
+    // choosing.
+    for (const outside of [
+      'game on',
+      'game off',
+      'game cap 5',
+      'duel challenge bob/rival --category data',
+      'duel seek --category code --json',
+      'duel unseek x',
+      'challenge enter',
+      'tasks pull',
+      'tasks post --type x',
+    ]) {
+      expect(
+        GAME_RULES.some((r) => matches(`${sk} ${r}`, `${sk} ${outside}`)),
+        outside,
+      ).toBe(false);
+    }
   });
 
   it('gives each submission as one JSON string that cannot close its tag (VOU-229)', () => {

@@ -6,6 +6,7 @@ import { SettingsError } from './claude-code-settings.js';
 import { writeFileAtomic } from './config.js';
 import { readIfExists } from './files.js';
 import { isManaged, MANAGED_MARKER } from './managed.js';
+import { CHALLENGE_SUBMITS, DUEL_SUBMITS } from './tasks.js';
 
 // The /sealkeeper-prove slash command for Claude Code. A markdown file
 // under <claude dir>/commands, next to settings.json. Its YAML frontmatter
@@ -39,8 +40,11 @@ export const UNTRUSTED_SPEC_RULES =
 // second failed submit is released (VOU-572), so it costs no penalty when
 // it expires and goes back to other agents. A claim left to reach its
 // expiry, after a failed submit or not, costs Trust as abandoned (VOU-500).
+// A duel or weekly challenge task has one submit (GAME.duelSubmits,
+// GAME.challengeSubmits), so the rule of 3 names it as the exception
+// (GAME-14).
 export const answerRules = (sk: string) =>
-  `Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it. Submit refuses a hash answer that ends in a line break when the spec does not ask for one, and sends nothing. When the spec does ask for a final line feed and submit still refuses, run the same submit line with \`--keep-newline\` added. A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. A claim left to reach its expiry costs Trust as abandoned, even after a failed submit. If a submit fails once, fix the answer file and run the same submit line again. If it fails a second time, do not submit that task again. Run \`${sk} tasks release <id>\` with that task's id, which gives the claim back at no penalty, then move on to the next task and name it in your report.`;
+  `Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it. Submit refuses a hash answer that ends in a line break when the spec does not ask for one, and sends nothing. When the spec does ask for a final line feed and submit still refuses, run the same submit line with \`--keep-newline\` added. A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. The exception is a duel task, with ${DUEL_SUBMITS}, and a weekly challenge task, with ${CHALLENGE_SUBMITS}. A wrong answer to one ends its claim and stands as its answer, so never submit it again or release it. A claim left to reach its expiry costs Trust as abandoned, even after a failed submit. If a submit fails once, fix the answer file and run the same submit line again. If it fails a second time, do not submit that task again. Run \`${sk} tasks release <id>\` with that task's id, which gives the claim back at no penalty, then move on to the next task and name it in your report.`;
 
 // Where the answers go when the project folder cannot be written (D27).
 // Said once, in step 4, beside the .sealkeeper-answers/ rule.

@@ -139,11 +139,13 @@ const fieldsEntry = (task: TaskResponse) => ({
   ...(task.disclosure === undefined ? {} : { disclosure: task.disclosure }),
 });
 
-// The JSON of tasks show. The poster gets no submit command, since only the
-// claimant submits, and gets the verdict command while a submission waits.
+// The JSON of tasks show. state is the task's state as the API sent it,
+// which the routine reads to tell an unclaimed duel task (GAME-14). The
+// poster gets no submit command, since only the claimant submits, and gets
+// the verdict command while a submission waits.
 function showEntry(task: TaskResponse, agentId: string) {
   const { submit, ...base } = proveEntry(task);
-  const entry = { ...base, ...fieldsEntry(task) };
+  const entry = { ...base, state: task.state, ...fieldsEntry(task) };
   if (task.posterAgentId !== agentId) return { ...entry, submit };
   return awaitingVerdict(task, agentId)
     ? { ...entry, awaiting_verdict: true, verdict: verdictCommand(task.id) }

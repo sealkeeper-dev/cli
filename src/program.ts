@@ -7,6 +7,7 @@ import {
 } from './commands/adapter.js';
 import { type AgentDeps, register as registerAgent } from './commands/agent.js';
 import { register as registerCard } from './commands/card.js';
+import { register as registerChallenge } from './commands/challenge.js';
 import { register as registerCheck } from './commands/check.js';
 import {
   type ConfigDeps,
@@ -126,6 +127,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerGoal(program, deps.tasks);
   registerGame(program, deps.tasks);
   registerDuel(program, deps.tasks);
+  registerChallenge(program, deps.tasks);
   registerRoutine(program, deps.routine);
   registerRate(program, deps.rate);
   registerAgent(program, deps.agent, deps.routine);

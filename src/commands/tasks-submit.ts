@@ -18,11 +18,18 @@ import {
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import { operatorSlugOf, type TaskResponse } from '../responses.js';
-import { activeRoutineRun, appendRoutine, readRoutine } from '../routine.js';
 import {
+  activeRoutineRun,
+  appendRoutine,
+  logGameAction,
+  readRoutine,
+} from '../routine.js';
+import {
+  CHALLENGE_SUBMITS,
   DUEL_SUBMITS,
   defaultTasksDeps,
   failOnApiError,
+  isGameTask,
   openTaskSession,
   printFields,
   recordEvent,
@@ -31,6 +38,24 @@ import {
 } from '../tasks.js';
 
 export const AWAITING_POSTER = 'the poster must confirm the outcome';
+
+// What the line break refusal says a wrong answer costs, by the task's
+// origin.
+function submitsLeft(origin: string | undefined): string {
+  if (origin === 'duel') return `a duel side has ${DUEL_SUBMITS}`;
+  if (origin === 'challenge') {
+    return `a challenge task has ${CHALLENGE_SUBMITS}`;
+  }
+  return `a claim allows ${MAX_FAILED_SUBMITS} failed submits`;
+}
+
+// In a routine run, notes a duel or challenge task SealKeeper answered,
+// right or wrong, for routine status (GAME-14). Any other task notes
+// nothing here.
+async function noteGameSubmit(task: TaskResponse): Promise<void> {
+  if (!isGameTask(task)) return;
+  await logGameAction(task.origin === 'duel' ? 'duel' : 'challenge', task.id);
+}
 
 type SubmitOptions = {
   file?: string;
@@ -134,7 +159,7 @@ export function register(
       // JSON is never signed or sent. A hash task's digest goes only to its
       // poster, so the server alone checks a hash answer and says so with a
       // 422. Each failed submit costs one of the tries a claim allows, the
-      // one submit of a duel side ends it, so a hash answer with the line break most editors add is refused here
+      // one submit of a duel side or a challenge task ends it, so a hash answer with the line break most editors add is refused here
       // unless the spec asks for one or --keep-newline says to send it.
       const { verification } = task;
       if (
@@ -144,7 +169,7 @@ export function register(
         !specAsksFinalLineFeed(task.spec)
       ) {
         this.error(
-          `the answer ends in a line break, which almost always fails a hash task, and ${task.origin === 'duel' ? `a duel side has ${DUEL_SUBMITS}` : `a claim allows ${MAX_FAILED_SUBMITS} failed submits`}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
+          `the answer ends in a line break, which almost always fails a hash task, and ${submitsLeft(task.origin)}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
         );
       }
       if (verification.kind === 'schema') {
@@ -189,12 +214,15 @@ export function register(
           if (failed) {
             const reason = error.issues[0]?.code ?? 'unknown';
             await noteBarred(api, id, signer.agentId, runId);
+            await noteGameSubmit(task);
             this.error(`verification failed: ${reason}. ${error.message}`);
           }
-          // A duel side past its 48 hours gets the duel's line.
+          // A duel side past its 48 hours gets the duel's line, and a
+          // challenge task from the week's close on the challenge's.
           if (
             error instanceof ApiError &&
-            error.code === 'duel_deadline_passed'
+            (error.code === 'duel_deadline_passed' ||
+              error.code === 'challenge_closed')
           ) {
             this.error(refusal(error));
           }
@@ -212,6 +240,7 @@ export function register(
             taskType: result.taskType,
             state: result.state,
           });
+          await noteGameSubmit(task);
         }
       }
 

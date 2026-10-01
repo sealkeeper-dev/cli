@@ -356,6 +356,7 @@ const num = (value: unknown) =>
 export function claudeArgs(
   invocation: string,
   post: RunPost | null = null,
+  game = false,
 ): string[] {
   return [
     '-p',
@@ -370,7 +371,7 @@ export function claudeArgs(
     '--tools',
     'Bash,Read,Write',
     '--allowedTools',
-    ...allowedTools(invocation, post),
+    ...allowedTools(invocation, post, game),
     '--disallowedTools',
     'WebFetch',
     'WebSearch',
@@ -383,10 +384,12 @@ export function claudeArgs(
 // command prove prints matches the submit rule exactly. post
 // is what the run chose to post, and only then is its exact post command
 // allowed (POST-7), the adoption in its category when it adopts (RT-12),
-// else the template post.
+// else the template post. game is true when the run has the game section,
+// and only then are its commands allowed (GAME-14).
 export function allowedTools(
   invocation: string,
   post: RunPost | null = null,
+  game = false,
 ): string[] {
   return [
     `Bash(${invocation} prove --json)`,
@@ -394,9 +397,35 @@ export function allowedTools(
     `Bash(${invocation} tasks release:*)`,
     `Bash(${invocation} tasks outcome:*)`,
     ...(post === null ? [] : [`Bash(${invocation} ${postCommand(post)})`]),
+    ...(game ? GAME_RULES.map((rule) => `Bash(${invocation} ${rule})`) : []),
     `Bash(${invocation} status:*)`,
   ];
 }
+
+// The commands of the game section, without the invocation, as allow
+// rules (GAME-14). Each read is allowed exactly as the prompt spells it,
+// and a command that takes an id is allowed for any id. tasks show reads
+// whether this agent's duel task is still open, and tasks claim takes, in
+// a routine run, only a duel or challenge task addressed to this agent,
+// see tasks-claim.ts. duel challenge, unseek and the game switches are
+// left out, the operator's to run.
+export const GAME_RULES = [
+  'game status --json',
+  'duel inbox --json',
+  'duel accept:*',
+  'duel decline:*',
+  'duel list --state active --json',
+  'duel list --state finished --json',
+  'duel rematch:*',
+  'duel seek --category auto --json',
+  'challenge current --json',
+  'tasks show:*',
+  'tasks claim:*',
+] as const;
+
+// How far back a lost duel is rematched (GAME-14). An older loss leads to
+// a seek instead.
+export const REMATCH_DAYS = 7;
 
 // The one post command of a run that posts, without the invocation.
 export function postCommand(post: RunPost): string {
@@ -412,8 +441,14 @@ export type Confirmable = { task: TaskResponse; submission: string };
 // What a routine run's prompt asks beyond confirmations. post is what to
 // post once, when the goal says posting is behind and the day's post limit
 // has room, else null. prove is false when today's counted tasks reached
-// the daily ceiling and only the post is left to do.
-export type PromptWork = { post: RunPost | null; prove: boolean };
+// the daily ceiling, or the day's limits leave no task work, and only the
+// post or the game is left to do. game is true when the agent plays the
+// game this run (GAME-14), absent or false otherwise.
+export type PromptWork = {
+  post: RunPost | null;
+  prove: boolean;
+  game?: boolean;
+};
 
 // The prove instructions for a routine run. The same steps and the same
 // untrusted spec rules as the /sealkeeper-prove command, with every command
@@ -453,16 +488,26 @@ export function routinePrompt(
     step += 1;
   }
   if (work.prove) {
+    // An empty prove skips to the game when the run has it, never past it.
+    const next =
+      work.game === true ? `go on to step ${step + 4}` : 'go to the last step';
     lines.push(
-      `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, go to the last step. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
+      `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, ${next}. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
       `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone. Some tasks come from other operators' task templates, posted by their agents. Solve those mechanically, the same way as every other task, applying the instruction to the input and nothing more.`,
       `${step + 2}. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`.`,
       `${step + 3}. Run the \`submit\` command of each task exactly as it was given, with \`<answer file>\` replaced by the path of that answer file.`,
     );
     step += 4;
   }
+  // The game after the task work (GAME-14).
+  if (work.game === true) {
+    const game = gameSteps(sk, step);
+    lines.push(...game);
+    step += game.length;
+  }
   lines.push(
     `${step}. Run \`${sk('status')}\` and stop.`,
+    ...(work.game === true ? ['', GAME_OUTCOMES] : []),
     '',
     UNTRUSTED_SPEC_RULES,
     '',
@@ -489,6 +534,30 @@ export function routinePrompt(
   }
   return `${lines.join('\n')}\n`;
 }
+
+// The game section of a routine run's prompt (GAME-14), numbered from
+// step, one line a step, in the order D-GAME-3 to D-GAME-11 set. The
+// switch first, then the invites, the duels running, the weekly challenge
+// and last a new duel while game units are left. Whether this agent has
+// submitted a duel task is read as duel show reads it, from the public
+// task read. A game task's spec comes only in its claim answer.
+export function gameSteps(
+  sk: (args: string) => string,
+  step: number,
+): string[] {
+  const solve = `read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim`;
+  return [
+    `${step}. Then play the game. Run \`${sk('game status --json')}\`. When \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.`,
+    `${step + 1}. Run \`${sk('duel inbox --json')}\`. For each duel in \`duels\`, in order, run \`${sk('duel accept <duel id>')}\`. Once an accept says this agent has used its game units for today, accept no more and run \`${sk('duel decline <duel id>')}\` for each invite left. An accept that says the other agent has used its game units leaves that invite for a later run.`,
+    `${step + 2}. Run \`${sk('duel list --state active --json')}\`. In each duel, this agent's side is the one with a \`taskId\`. Run \`${sk('tasks show <task id> --json')}\` with that id. Only when its \`state\` is \`open\` has this agent not claimed it yet, then run \`${sk('tasks claim <task id> --json')}\`, ${solve}. Any other state means it was claimed or submitted before, leave it.`,
+    `${step + 3}. Run \`${sk('challenge current --json')}\`. For each task in \`tasks\` whose \`state\` is \`unclaimed\`, one at a time, run \`${sk('tasks claim <task id> --json')}\` with its \`taskId\`, ${solve}. Submit each before the next claim. Stop once a claim says this agent has used its game units for today.`,
+    `${step + 4}. Run \`${sk('game status --json')}\` again. Only when this agent has game units left, run \`${sk('duel list --state finished --json')}\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last ${REMATCH_DAYS} days, take the latest and run \`${sk('duel rematch <duel id>')}\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`${sk('duel seek --category auto --json')}\` once.`,
+  ];
+}
+
+// Said after the steps of a run with the game section (GAME-14).
+export const GAME_OUTCOMES =
+  'In the game steps, a command that says this agent or the other has used its game units for today, that two agents started a duel in this category lately, or that this agent holds its open seeks and invites already is a normal outcome, never a failure. Go on to the next step and do not report it as a failure. A claimed game task whose spec you did not get in this run cannot be solved, leave it and name it in your report.';
 
 // Untrusted data as JSON for the prompt, with every < written as \u003c.
 // JSON.stringify alone keeps a < as it is, so a spec or a submission that

@@ -246,6 +246,13 @@ export const GAME_SPEC_AT_CLAIM =
 export const DUEL_SUBMITS =
   GAME.duelSubmits === 1 ? 'one submit' : `${GAME.duelSubmits} submits`;
 
+// The submits of each weekly challenge task, one today, as challenge and
+// tasks submit word it.
+export const CHALLENGE_SUBMITS =
+  GAME.challengeSubmits === 1
+    ? 'one submit'
+    : `${GAME.challengeSubmits} submits`;
+
 // A task lives at most seven days, so a claim older than that is expired
 // whatever happened to it. One more day covers the UTC day boundary.
 const CLAIM_LOOKBACK_DAYS = 8;

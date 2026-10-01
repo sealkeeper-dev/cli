@@ -35,7 +35,8 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 // the run id. Only that variable puts a command in routine mode, where
 // prove, tasks outcome and tasks submit apply the routine rules whatever
 // their options, tasks post takes only a template that makes its own input,
-// and tasks claim and tasks pull are refused. A command the operator runs in
+// tasks claim takes only a duel or weekly challenge task addressed to this
+// agent (GAME-14) and tasks pull is refused. A command the operator runs in
 // another terminal while a run is going is a normal command. The Bash rules the agent gets allow only commands that
 // keep the variable, see routine-agent.ts.
 //
@@ -50,9 +51,9 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
 // a line. One run line per run, and a line for every claim, submit, failed
-// submit, confirmation, post, skip, limit, pause and resume, and one for
-// each prove once its claims are in. The daily caps are counted from it,
-// per UTC day. A first run's watcher reads the lines of its run as they
+// submit, confirmation, post, skip, limit, pause, resume and game action,
+// and one for each prove once its claims are in. The daily caps are counted
+// from it, per UTC day. A first run's watcher reads the lines of its run as they
 // come, see routine-watch.ts (RS-9).
 
 export const ROUTINE_RUN_ENV = 'SEALKEEPER_ROUTINE_RUN';
@@ -188,6 +189,17 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     // still reads (VOU-383). Absent when card write wrote none, and on
     // lines written before it.
     card: z.string().optional(),
+    // What the run's game section did (GAME-14), counted from its game
+    // lines. Present only on a run whose agent had the game section, so
+    // absent with the game off and on lines written before it.
+    game: z
+      .object({
+        accepted: z.number().int(),
+        played: z.number().int(),
+        challenge: z.number().int(),
+        seeks: z.number().int(),
+      })
+      .optional(),
   }),
   z.object({
     kind: z.enum(['claim', 'submit', 'confirm', 'post']),
@@ -227,6 +239,19 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskId: z.string(),
     taskType: z.string().optional(),
     reason: z.string(),
+  }),
+  // A game action in a routine run (GAME-14), written by the command that
+  // did it once SealKeeper took it. accept is an invite duel accept
+  // started, duel and challenge a duel or challenge task tasks submit
+  // answered, right or wrong, and seek a seek duel seek opened. id is the
+  // duel, task or seek, so a retry that SealKeeper answers again counts
+  // once. Its own kind, so no daily limit counts it.
+  z.object({
+    kind: z.literal('game'),
+    at: At,
+    runId: z.string(),
+    action: z.enum(['accept', 'duel', 'challenge', 'seek']),
+    id: z.string(),
   }),
   // A prove in a routine run once its claims are in (RS-9). claimed is the
   // tasks it claimed now, tasks all it handed the agent, the tasks the
@@ -290,12 +315,29 @@ const RoutineEntry = z.discriminatedUnion('kind', [
 export type RoutineEntry = z.infer<typeof RoutineEntry>;
 export type RunEntry = Extract<RoutineEntry, { kind: 'run' }>;
 export type SkipEntry = Extract<RoutineEntry, { kind: 'skip' }>;
+export type GameEntry = Extract<RoutineEntry, { kind: 'game' }>;
 
 type NewEntry = RoutineEntry extends infer E
   ? E extends RoutineEntry
     ? Omit<E, 'at'> & { at?: string }
     : never
   : never;
+
+// Notes a game action in routine.jsonl when this process works for a
+// routine run (GAME-14), and nothing for a normal command. A line that
+// cannot be written is left out, since the action already stands.
+export async function logGameAction(
+  action: GameEntry['action'],
+  id: string,
+): Promise<void> {
+  const runId = await activeRoutineRun();
+  if (runId === null) return;
+  try {
+    await appendRoutine({ kind: 'game', runId, action, id });
+  } catch {
+    // Not counted.
+  }
+}
 
 // Appends one line. at defaults to now.
 export async function appendRoutine(
@@ -829,7 +871,7 @@ export async function refuseInRoutine(
   if ((await activeRoutineRun()) === null) return;
   const why =
     post === undefined
-      ? `${command} is not available during a routine run. A routine run claims through prove only, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, and posts only by adopting a ready made task or from a template`
+      ? `${command} is not available during a routine run. A routine run claims through prove, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, claims by id only its own duel and weekly challenge tasks, and posts only by adopting a ready made task or from a template`
       : routinePostRefusal(post);
   if (why !== null) cmd.error(why);
 }

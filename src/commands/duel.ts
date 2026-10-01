@@ -24,11 +24,13 @@ import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type {
+  AgentTrustResponse,
   DuelResponse,
   DuelSideView,
   ListDuelsResponse,
   TaskResponse,
 } from '../responses.js';
+import { logGameAction } from '../routine.js';
 import { durationText } from '../sync.js';
 import {
   DUEL_SUBMITS,
@@ -49,7 +51,9 @@ import { configApiUrl } from './check.js';
 // are signed for this agent alone, so its own task id reaches it and no
 // other. duel show and duel categories read public routes. --json prints
 // the API answer as it came. Nothing here touches the local log, and a
-// duel never moves a score, a level or the SEAL.
+// duel never moves a score, a level or the SEAL. In a routine run, accept
+// and seek note what they did in routine.jsonl for routine status
+// (GAME-14).
 
 // What an API from before duels answers every duel route with, 404.
 export const OLD_API = 'this SealKeeper API has no duels yet';
@@ -77,6 +81,11 @@ export const BAD_ID = (what: string, value: string) =>
 export const NO_DUEL = 'no duel with this id';
 export const NO_SEEK = 'no open seek of this agent with this id';
 export const NO_AGENT = (ref: string) => `no agent ${ref}`;
+export const NO_CATEGORY = 'no category can hold a duel yet';
+
+// The word duel seek takes in place of a category, to have one picked
+// (GAME-14), see autoCategory.
+export const AUTO_CATEGORY = 'auto';
 
 export function register(
   parent: Command,
@@ -91,13 +100,20 @@ export function register(
   duel
     .command('seek')
     .description('Ask for a duel with any agent in a category')
-    .requiredOption('--category <category>', 'the category of the duel')
+    .requiredOption(
+      '--category <category>',
+      `the category of the duel, or ${AUTO_CATEGORY} for the one this agent has the most verified tasks in`,
+    )
     .action(async function (this: Command): Promise<void> {
-      const { category } = this.opts<{ category: string }>();
-      if (!TaskCategory.safeParse(category).success) {
-        this.error(BAD_CATEGORY(category));
+      const { category: asked } = this.opts<{ category: string }>();
+      if (asked !== AUTO_CATEGORY && !TaskCategory.safeParse(asked).success) {
+        this.error(BAD_CATEGORY(asked));
       }
       const { signer, api } = await openTaskSession(this, deps);
+      const category =
+        asked === AUTO_CATEGORY
+          ? await pickCategory(this, api, signer.agentId)
+          : asked;
       const answer = await attempt(this, api, async () =>
         api.seekDuel(
           await signer.sign(
@@ -105,6 +121,7 @@ export function register(
           ),
         ),
       );
+      await logGameAction('seek', answer.seek.id);
       if (wantsJson(this)) {
         stdout(JSON.stringify(answer));
         return;
@@ -235,6 +252,9 @@ export function register(
     .argument('<duel-id>', 'the duel id duel inbox printed')
     .action(async function (this: Command, id: string): Promise<void> {
       const answer = await duelAction(this, deps, id, 'accept');
+      if (answer.duel.state === 'active') {
+        await logGameAction('accept', answer.duel.id);
+      }
       printDuel(this, answer.duel, answer.me, startedLines);
     });
 
@@ -364,6 +384,53 @@ export function register(
 }
 
 const HOUR_MS = 3_600_000;
+
+// The category duel seek --category auto picks (GAME-14). Of the duelable
+// categories, in the order SealKeeper lists them, the one this agent has
+// the most verified tasks in, the first on a tie, and the first when it
+// has none in any. null when no category can hold a duel.
+export function autoCategory(
+  duelable: string[],
+  counts: AgentTrustResponse['categories'],
+): string | null {
+  const tasks = new Map(counts.map((c) => [c.category, c.tasks]));
+  let picked: string | null = null;
+  let most = -1;
+  for (const category of duelable) {
+    const n = tasks.get(category) ?? 0;
+    if (n > most) {
+      picked = category;
+      most = n;
+    }
+  }
+  return picked;
+}
+
+// The category for --category auto, or the command ended with one line.
+// The duelable categories come from the public GET /v1/game/categories,
+// less any this CLI does not know, and the verified tasks of each from
+// the agent's public Trust answer, GET /v1/agents/:id/trust. A Trust read
+// that fails, as on an API from before it, counts as no verified tasks,
+// so the pick is the first duelable category.
+async function pickCategory(
+  cmd: Command,
+  api: ApiClient,
+  agentId: string,
+): Promise<string> {
+  const { categories } = await attempt(cmd, api, () => api.gameCategories());
+  const duelable = categories
+    .map((c) => c.category)
+    .filter((c) => TaskCategory.safeParse(c).success);
+  let counts: AgentTrustResponse['categories'] = [];
+  try {
+    counts = (await api.getTrust(agentId)).categories;
+  } catch (error) {
+    if (!(error instanceof ApiError)) throw error;
+  }
+  const picked = autoCategory(duelable, counts);
+  if (picked === null) cmd.error(NO_CATEGORY);
+  return picked;
+}
 
 // The request, or the command ended with one line. A 404 is an API from
 // before duels or a seek, duel or agent that is not there, told apart by

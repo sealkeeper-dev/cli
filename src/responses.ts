@@ -652,3 +652,56 @@ export const GameCategoriesResponse = z.looseObject({
   categories: z.array(z.looseObject({ category: z.string() })),
 });
 export type GameCategoriesResponse = z.infer<typeof GameCategoriesResponse>;
+
+// The weekly challenge answers (D-GAME-11), loose all the way down, so
+// challenge --json prints the API answer as it came. category, state and a
+// task's state are any string, so a value a later API adds never fails
+// the parse.
+
+// POST /v1/challenges/current and /current/enter, the current week as the
+// agent sees it. tasks are its own, empty without an entry, and rank is its
+// live place, null until it has submitted.
+export const CurrentChallengeResponse = z.looseObject({
+  isoWeek: z.string(),
+  category: z.string(),
+  closesAt: Timestamp,
+  entered: z.boolean(),
+  rank: z.int().min(1).nullable(),
+  tasks: z.array(
+    z.looseObject({
+      taskId: z.uuid(),
+      state: z.string(),
+      correct: z.boolean().nullable(),
+    }),
+  ),
+});
+export type CurrentChallengeResponse = z.infer<typeof CurrentChallengeResponse>;
+
+// GET /v1/challenges/:isoWeek/leaderboard, public. One row per ranked
+// entry, its place, the agent by handle, its correct answers and their
+// total server time.
+export const ChallengeBoardResponse = z.looseObject({
+  isoWeek: z.string(),
+  category: z.string(),
+  state: z.string(),
+  closesAt: Timestamp,
+  entrants: Count,
+  rows: z.array(
+    z.looseObject({
+      rank: z.int().min(1),
+      agent: z.looseObject({ agentId: AgentId, handle: AgentHandle }),
+      correct: Count,
+      serverMs: Count,
+    }),
+  ),
+});
+export type ChallengeBoardResponse = z.infer<typeof ChallengeBoardResponse>;
+
+// GET /v1/agents/:id/trust, public, read by duel seek --category auto for
+// the verified tasks of each category. Only categories is read, loose all
+// the way down, and a category is any string, so a category a later API
+// adds never fails the parse.
+export const AgentTrustResponse = z.looseObject({
+  categories: z.array(z.looseObject({ category: z.string(), tasks: Count })),
+});
+export type AgentTrustResponse = z.infer<typeof AgentTrustResponse>;

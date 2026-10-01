@@ -172,6 +172,12 @@ describe('the routine refreshes the card', () => {
     });
   }
 
+  // The requests of the run but the game status read every run makes
+  // before it decides whether to start the agent (GAME-14), so what is
+  // left is what the card refresh read.
+  const cardRequests = () =>
+    requests.filter((url) => url !== `${API_URL}/v1/game/status`);
+
   async function lastRun(): Promise<Extract<RoutineEntry, { kind: 'run' }>> {
     const run = (await readRoutine())
       .filter(
@@ -312,7 +318,7 @@ describe('the routine refreshes the card', () => {
     await installed();
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
-    expect(requests).toEqual([]);
+    expect(cardRequests()).toEqual([]);
     await expect(stat(cardFile)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(stat(paths().cardWrite)).rejects.toMatchObject({
       code: 'ENOENT',
@@ -342,7 +348,7 @@ describe('the routine refreshes the card', () => {
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
     expect(await readFile(cardFile, 'utf8')).toBe(before);
-    expect(requests).toEqual([]);
+    expect(cardRequests()).toEqual([]);
     expect(await lastRun()).not.toHaveProperty('card');
   });
 
@@ -395,7 +401,7 @@ describe('the routine refreshes the card', () => {
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
     expect(await readFile(cardFile, 'utf8')).toBe(edited);
-    expect(requests).toEqual([]);
+    expect(cardRequests()).toEqual([]);
     expect(await lastRun()).toMatchObject({ card: 'changed' });
   });
 

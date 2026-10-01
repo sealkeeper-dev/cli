@@ -1,11 +1,16 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  allowedTools,
   claudeArgs,
   findOnPath,
+  routinePrompt,
   runAgent,
   spawnAgent,
 } from './routine-agent.js';
@@ -25,9 +30,28 @@ import {
 //
 // Without SEALKEEPER_ROUTINE_SMOKE=1, or without claude on PATH, it is
 // skipped.
+//
+// The game section (GAME-14) runs against a local stack too, when
+// SEALKEEPER_ROUTINE_SMOKE_HOME also names the CLI home of an agent
+// registered on a local API with the game on, its apiUrl in config.json,
+// and the CLI is built (pnpm --filter sealkeeper build). It starts claude
+// with the built CLI as the invocation, the game rules and the routine
+// prompt with the game section alone, as a run with no task work, and
+// passes when the game status read ran and no command of the section was
+// refused by the rules. A command SealKeeper refuses, such as one past the
+// game cap, still counts as allowed.
+//
+//   SEALKEEPER_ROUTINE_SMOKE=1 SEALKEEPER_ROUTINE_SMOKE_HOME=~/.sealkeeper/agents/smoke pnpm --filter sealkeeper exec vitest run src/routine-smoke.test.ts
 
 const enabled = process.env.SEALKEEPER_ROUTINE_SMOKE === '1';
 const claude = enabled ? await findOnPath('claude') : null;
+const smokeHome = process.env.SEALKEEPER_ROUTINE_SMOKE_HOME ?? '';
+const built = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  'dist',
+  'index.js',
+);
 
 // Stands in for the CLI's invocation in the Bash rules. echo only prints.
 const INVOCATION = 'echo sealkeeper-smoke';
@@ -51,6 +75,21 @@ type Block = {
   is_error?: boolean;
   content?: unknown;
 };
+
+// The environment claude starts with, as the scheduler starts it, with the
+// real home, where the Claude Code login lives, rather than the empty one
+// the tests get, and not as a session of the Claude Code this test may run
+// under.
+function agentEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_'),
+      ),
+    ),
+    HOME: userInfo().homedir,
+  };
+}
 
 // The Bash calls in a stream-json transcript, each with its result.
 function bashCalls(
@@ -102,17 +141,7 @@ describe('routine smoke (RS-11)', () => {
     'writes the answer file, runs the allowed command and is refused the other',
     async () => {
       cwd = await realpath(await mkdtemp(join(tmpdir(), 'sealkeeper-smoke-')));
-      // As the scheduler starts it, with the real home, where the Claude
-      // Code login lives, rather than the empty one the tests get, and not
-      // as a session of the Claude Code this test may run under.
-      const env = {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) => key !== 'CLAUDECODE' && !key.startsWith('CLAUDE_CODE_'),
-          ),
-        ),
-        HOME: userInfo().homedir,
-      };
+      const env = agentEnvironment();
       const transcriptPath = join(cwd, 'last-run.jsonl');
       const result = await runAgent(
         {
@@ -168,5 +197,98 @@ describe('routine smoke (RS-11)', () => {
       }
     },
     6 * 60_000,
+  );
+});
+
+describe('routine smoke, the game section against a local stack (GAME-14)', () => {
+  if (claude === null || smokeHome === '' || !existsSync(built)) {
+    const why = `routine game smoke skipped, ${claude === null ? 'set SEALKEEPER_ROUTINE_SMOKE=1 with claude on PATH' : smokeHome === '' ? 'set SEALKEEPER_ROUTINE_SMOKE_HOME to a home registered on a local API' : 'build the CLI first'}`;
+    process.stderr.write(`${why}\n`);
+    it.skip(why, () => undefined);
+    return;
+  }
+
+  let cwd = '';
+  afterAll(async () => {
+    if (cwd !== '') await rm(cwd, { recursive: true, force: true });
+  });
+
+  it(
+    'runs the game commands the section names, none refused by the rules',
+    async () => {
+      cwd = await realpath(
+        await mkdtemp(join(tmpdir(), 'sealkeeper-game-smoke-')),
+      );
+      const invocation = `"${process.execPath}" "${built}"`;
+      const transcriptPath = join(cwd, 'last-run.jsonl');
+      const result = await runAgent(
+        {
+          command: claude,
+          args: claudeArgs(invocation, null, true),
+          input: routinePrompt(invocation, [], {
+            post: null,
+            prove: false,
+            game: true,
+          }),
+          cwd,
+          // The routine rules, for the home named, as a run sets them.
+          env: {
+            ...agentEnvironment(),
+            SEALKEEPER_HOME: smokeHome,
+            SEALKEEPER_ROUTINE_RUN: randomUUID(),
+            SEALKEEPER_INVOCATION: invocation,
+          },
+          timeoutMs: 10 * 60_000,
+          tokenCap: 600_000,
+          transcript: { path: transcriptPath },
+        },
+        spawnAgent,
+      );
+      const calls = bashCalls(await readFile(transcriptPath, 'utf8'));
+      process.stderr.write(
+        `${[
+          `claude exited ${result.exitCode}, ${result.tokens ?? 0} tokens, $${(result.costUsd ?? 0).toFixed(4)}`,
+          ...calls.map(
+            (c) =>
+              `Bash ${c.command} -> ${c.error ? 'error' : 'ran'} ${c.result.slice(0, 160)}`,
+          ),
+        ].join('\n')}\n`,
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.stoppedFor).toBeNull();
+      expect(result.exitCode).toBe(0);
+
+      // The section starts with the switch, read through its rule.
+      const status = calls.find((c) =>
+        c.command.startsWith(`${invocation} game status --json`),
+      );
+      expect(status?.error).toBe(false);
+      // Every command of the CLI it ran is one the run's rules allow, a
+      // submit of a game task included, and the rules refused none of
+      // them. An answer SealKeeper refuses is an error of the command,
+      // never a refusal by the rules. A rule ending :* matches its words
+      // alone or with more after them.
+      const rules = allowedTools(invocation, null, true).map((rule) =>
+        rule.slice(`Bash(${invocation} `.length, -1),
+      );
+      const ours = calls.filter((c) => c.command.startsWith(invocation));
+      expect(ours.length).toBeGreaterThan(0);
+      for (const call of ours) {
+        const rest = call.command.slice(invocation.length + 1);
+        expect(
+          rules.some((rule) =>
+            rule.endsWith(':*')
+              ? rest === rule.slice(0, -2) ||
+                rest.startsWith(`${rule.slice(0, -2)} `)
+              : rest === rule,
+          ),
+          call.command,
+        ).toBe(true);
+        expect(call.result, call.command).not.toMatch(
+          /requested permissions|haven't granted/i,
+        );
+      }
+    },
+    11 * 60_000,
   );
 });

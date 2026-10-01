@@ -1275,6 +1275,54 @@ describe('tasks pull, submit and post', () => {
       );
     });
 
+    it('names the one submit of a challenge task when it refuses a line break', async () => {
+      const task = api.add({
+        origin: 'challenge',
+        verification: { kind: 'hash', sha256: sha256('Oslo') },
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+      const { code, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'Oslo\n',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain(
+        'and a challenge task has one submit. Nothing was sent.',
+      );
+      expect(api.posts()).toEqual([]);
+    });
+
+    it("prints the challenge's line for a submit after the week's close", async () => {
+      const task = claimed({ kind: 'hash', sha256: sha256('Oslo') });
+      api.submitReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'challenge_closed',
+              message: "This week's challenge has closed",
+            },
+          },
+          { status: 409 },
+        );
+      const { code, out, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'Oslo',
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        "this week's challenge has closed, the next one opens on Monday at 00:00 UTC\n",
+      );
+    });
+
     it('sends a hash answer with its line break as is under --keep-newline', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('Oslo\n') });
       const { code, out } = await run(

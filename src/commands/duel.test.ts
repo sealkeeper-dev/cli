@@ -18,12 +18,14 @@ import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import type { DuelResponse } from '../responses.js';
 import {
+  autoCategory,
   BAD_AGENT,
   BAD_CATEGORY,
   BAD_ID,
   BAD_STATE,
   LIST_LIMIT,
   NO_AGENT,
+  NO_CATEGORY,
   NO_DUEL,
   NO_SEEK,
   OLD_API,
@@ -82,6 +84,11 @@ class FakeDuels {
   // Runs once after the next public read of a duel, to move it on between
   // that read and the next.
   afterRead: (() => void) | null = null;
+  // The categories GET /v1/game/categories lists, in its order.
+  categories = ['code', 'data'];
+  // The verified tasks of each category in the agent's Trust answer, or
+  // null for an API that answers the Trust read with 404.
+  trust: Record<string, number> | null = {};
 
   constructor(readonly agentId: string) {}
 
@@ -144,7 +151,20 @@ class FakeDuels {
       this.sent.push({ method, path });
       if (path === '/v1/game/categories') {
         return Response.json({
-          categories: [{ category: 'code' }, { category: 'data' }],
+          categories: this.categories.map((category) => ({ category })),
+          later: 'kept',
+        });
+      }
+      if (path === `/v1/agents/${this.agentId}/trust`) {
+        if (this.trust === null) return notFound('Not found');
+        return Response.json({
+          agentId: this.agentId,
+          trust: 120,
+          categories: Object.entries(this.trust).map(([category, tasks]) => ({
+            category,
+            trust: tasks * 10,
+            tasks,
+          })),
           later: 'kept',
         });
       }
@@ -467,6 +487,91 @@ describe('sealkeeper duel', () => {
         'chess is not a category, see npx sealkeeper duel categories',
       );
       expect(api.sent).toEqual([]);
+    });
+
+    describe('--category auto (GAME-14)', () => {
+      const seekCategory = async (...more: string[]) => {
+        const result = await run('duel', 'seek', '--category', 'auto', ...more);
+        expect(result.code).toBe(0);
+        return api.signed()[0]?.payload?.category;
+      };
+
+      it('picks the duelable category with the most verified tasks', async () => {
+        api.categories = ['code', 'research', 'data', 'math'];
+        // writing has more, but no duel can be played in it.
+        api.trust = { code: 3, data: 9, math: 2, writing: 40 };
+        expect(await seekCategory()).toBe('data');
+        expect(api.sent.map((s) => `${s.method} ${s.path}`)).toEqual([
+          'GET /v1/game/categories',
+          `GET /v1/agents/${me}/trust`,
+          'POST /v1/duels/seek',
+        ]);
+      });
+
+      it('takes the first in the list order on a tie', async () => {
+        api.categories = ['code', 'research', 'data', 'math'];
+        api.trust = { math: 6, data: 6, code: 1 };
+        expect(await seekCategory()).toBe('data');
+      });
+
+      it('takes the first duelable category with no verified tasks in any', async () => {
+        api.categories = ['research', 'data'];
+        api.trust = { writing: 12 };
+        expect(await seekCategory()).toBe('research');
+        api.sent = [];
+        api.trust = {};
+        expect(await seekCategory()).toBe('research');
+      });
+
+      it('takes the first duelable category when the Trust read is refused', async () => {
+        api.categories = ['math', 'code'];
+        api.trust = null;
+        expect(await seekCategory()).toBe('math');
+      });
+
+      it('leaves out a category this CLI does not know, and --json prints the answer unchanged', async () => {
+        api.categories = ['chess', 'code'];
+        api.trust = { chess: 50 };
+        const result = await run(
+          'duel',
+          'seek',
+          '--category',
+          'auto',
+          '--json',
+        );
+        expect(result.code).toBe(0);
+        expect(api.signed()[0]?.payload?.category).toBe('code');
+        expect(JSON.parse(result.out).seek.category).toBe('code');
+      });
+
+      it('says so in one line and seeks nothing when no category can hold a duel', async () => {
+        api.categories = [];
+        const result = await run('duel', 'seek', '--category', 'auto');
+        expect(result.code).toBe(1);
+        expect(result.err).toBe(`${NO_CATEGORY}\n`);
+        expect(api.signed()).toEqual([]);
+      });
+
+      it('says the API has no duels when it has no game categories', async () => {
+        api.gone = true;
+        const result = await run('duel', 'seek', '--category', 'auto');
+        expect(result.code).toBe(1);
+        expect(result.err).toBe(`${OLD_API}\n`);
+      });
+
+      it('picks the same as autoCategory', () => {
+        expect(autoCategory(['code', 'data'], [])).toBe('code');
+        expect(
+          autoCategory(
+            ['code', 'data'],
+            [
+              { category: 'data', tasks: 1 },
+              { category: 'code', tasks: 1 },
+            ],
+          ),
+        ).toBe('code');
+        expect(autoCategory([], [{ category: 'code', tasks: 4 }])).toBeNull();
+      });
     });
 
     it('unseek sends the seek id in the path and the payload', async () => {

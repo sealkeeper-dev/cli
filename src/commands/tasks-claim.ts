@@ -11,9 +11,10 @@ import {
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
-import { refuseInRoutine } from '../routine.js';
+import { activeRoutineRun, refuseInRoutine } from '../routine.js';
 import {
   defaultTasksDeps,
+  isGameTask,
   openTaskSession,
   recordEvent,
   sendWithFingerprint,
@@ -57,10 +58,18 @@ export function register(
       if (!z.uuid().safeParse(taskId).success) {
         this.error(`${id} is not a task id, copy the full id from the board`);
       }
-      // A routine run claims through prove only, never a task picked by id
-      // from anyone (VOU-138).
-      await refuseInRoutine(this, 'tasks claim');
       const { config, signer, api } = await openTaskSession(this, deps);
+      // A routine run claims through prove, never a task picked by id from
+      // anyone (VOU-138), but for a duel or weekly challenge task addressed
+      // to this agent, which its game section claims by id (GAME-14). Such
+      // a claim is bounded by the game cap SealKeeper holds, so it writes
+      // no claim line and spends no daily claim limit.
+      if (
+        (await activeRoutineRun()) !== null &&
+        !(await ownGameTask(api, taskId, signer.agentId))
+      ) {
+        await refuseInRoutine(this, 'tasks claim');
+      }
 
       let task: TaskResponse;
       let fresh = true;
@@ -143,6 +152,22 @@ export function claimRefusal(error: ApiError): string {
       return NOT_FOUND;
     default:
       return refusal(error);
+  }
+}
+
+// True when the task is a duel or weekly challenge task addressed to this
+// agent, from the public task read. A read that fails is false, so a
+// routine run claims nothing it could not check.
+async function ownGameTask(
+  api: ApiClient,
+  taskId: string,
+  agentId: string,
+): Promise<boolean> {
+  try {
+    const task = await api.getTask(taskId);
+    return isGameTask(task) && task.assignee?.id === agentId;
+  } catch {
+    return false;
   }
 }
 

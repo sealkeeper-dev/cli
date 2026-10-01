@@ -15,7 +15,10 @@ import { readEnv } from './env.js';
 import { tildePath } from './files.js';
 import {
   AgentResponse,
+  AgentTrustResponse,
+  ChallengeBoardResponse,
   CredentialResponse,
+  CurrentChallengeResponse,
   DuelResponse,
   type ErrorIssue,
   ErrorResponse,
@@ -136,6 +139,9 @@ export type ApiClient = {
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
   getScore(agentId: string): Promise<ScoreResponse>;
+  // GET /v1/agents/:id/trust, public, its categories with their verified
+  // tasks. An API from before Trust Score answers 404 not_found.
+  getTrust(agentId: string): Promise<AgentTrustResponse>;
   // GET /v1/agents/:id/goal, parsed loosely with unknown keys kept.
   getGoal(agentId: string): Promise<GoalResponse>;
   // One page of GET /v1/tasks, the tasks alone.
@@ -197,6 +203,18 @@ export type ApiClient = {
   duelInbox(envelope: string): Promise<ListDuelsResponse>;
   // GET /v1/duels/:id, public, the duel without any taskId.
   getDuel(duelId: string): Promise<DuelResponse>;
+  // POST /v1/challenges/current, the signed read of the current week's
+  // challenge, and POST /v1/challenges/current/enter, the entry, each
+  // signed over { issuedAt }. The agent's own tasks and rank. An API from
+  // before challenges answers 404 not_found.
+  currentChallenge(envelope: string): Promise<CurrentChallengeResponse>;
+  enterChallenge(envelope: string): Promise<CurrentChallengeResponse>;
+  // GET /v1/challenges/:isoWeek/leaderboard, public, the first limit rows
+  // of the week's board. 404 for a week with no challenge.
+  challengeBoard(
+    isoWeek: string,
+    limit: number,
+  ): Promise<ChallengeBoardResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -367,6 +385,8 @@ export function createApiClient(options: {
     },
     getWellKnown: () => call(WELL_KNOWN_PATH, WellKnown),
     getScore: (agentId) => call(agentPath(agentId, '/score'), ScoreResponse),
+    getTrust: (agentId) =>
+      call(agentPath(agentId, '/trust'), AgentTrustResponse),
     getGoal: (agentId) => call(agentPath(agentId, '/goal'), GoalResponse),
     async listTasks(query = {}) {
       return (await listTasksPage(query)).tasks;
@@ -445,6 +465,21 @@ export function createApiClient(options: {
     duelInbox: (envelope) =>
       call('/v1/duels/inbox', ListDuelsResponse, { body: { envelope } }),
     getDuel: (duelId) => call(duelPath(duelId), DuelResponse),
+    currentChallenge: (envelope) =>
+      call('/v1/challenges/current', CurrentChallengeResponse, {
+        body: { envelope },
+      }),
+    // 201 for a new entry, 200 for the one the agent had.
+    enterChallenge: (envelope) =>
+      call('/v1/challenges/current/enter', CurrentChallengeResponse, {
+        body: { envelope },
+        ok: [200, 201],
+      }),
+    challengeBoard: (isoWeek, limit) =>
+      call(
+        `/v1/challenges/${encodeURIComponent(isoWeek)}/leaderboard?limit=${limit}`,
+        ChallengeBoardResponse,
+      ),
   };
 }
 

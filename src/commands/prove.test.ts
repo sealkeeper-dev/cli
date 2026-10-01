@@ -2067,6 +2067,7 @@ describe('prove', () => {
         type: 'json_extract',
         expires_at: task.expiresAt,
         spec: task.spec,
+        state: 'claimed',
         submit: submitCommand(task.id),
       });
     });

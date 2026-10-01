@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { ListDuelsRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import {
   type ApiClient,
@@ -50,6 +51,7 @@ import {
   budgetOf,
   ensureWorkDir,
   failureStreak,
+  type GameEntry,
   isAllowed,
   networkBudgetOf,
   networkOperatorsToday,
@@ -58,6 +60,7 @@ import {
   type RoutineEntry,
   type RunEntry,
   type RunOutcome,
+  type RunPost,
   readLiveLock,
   readRoutine,
   removeLock,
@@ -114,6 +117,7 @@ import {
 import { createStyle } from '../style.js';
 import { dailyCeilingReached, todayOf } from '../today.js';
 import { VERSION } from '../version.js';
+import { readGameStatus } from './game.js';
 import {
   logSkips,
   PosterLookup,
@@ -131,8 +135,11 @@ import { awaitingVerdict, fetchSubmission } from './tasks-outcome.js';
 // short block and a yes, and offers the first run (RS-1, RS-3). The job runs
 // a copy of this CLI under the home (RS-2) with routine run, which checks whether there is
 // anything to do within the day's limits and, only then, starts the agent
-// headless with the prove instructions. Everything a run does is held to
-// the routine rules in routine.ts and logged in routine.jsonl. status shows
+// headless with the prove instructions. When the game is on for the agent
+// and it has game units left or a duel running, the agent plays the game
+// after the task work, and a run with no task work starts it for the game
+// alone (GAME-14, gameSteps in routine-agent.ts). Everything a run does is
+// held to the routine rules in routine.ts and logged in routine.jsonl. status shows
 // the schedule, the last run and what waits for a person. pause, resume and
 // remove are the kill switch.
 
@@ -835,6 +842,8 @@ export async function routineRun(
   let report: RunReport | null = null;
   // What the refresh did with the card, unset when card write wrote none.
   let card: string | null = null;
+  // Whether the agent has the game section (GAME-14).
+  let game = false;
 
   const finish = async (
     outcome: RunOutcome,
@@ -853,6 +862,7 @@ export async function routineRun(
       tokens: agent?.tokens ?? null,
       costUsd: agent?.costUsd ?? null,
       ...(card === null ? {} : { card }),
+      ...(game ? { game: gameTally(entries, runId) } : {}),
     };
     await appendRoutine(entry, p);
     let paused: string | null = null;
@@ -905,13 +915,111 @@ export async function routineRun(
     // (VOU-383). In this process, never by the agent, and it spends no
     // limit. It never fails the run.
     card = await refreshCard(config, { fetch: deps.fetch }, p);
+    const tasks = await taskWork();
+    if (tasks.kind === 'failed') {
+      await finish('failed', tasks.reason, null);
+      return;
+    }
+    // The game (GAME-14), apart from the task work and its limits, since
+    // SealKeeper holds it to the game cap. A run whose task work stopped
+    // still starts the agent for the game alone.
+    const session = tasks.session ?? (await openSession());
+    game = 'api' in session && (await playsGame(session.api, session.signer));
+    if (tasks.kind === 'stop' && !game) {
+      await finish(tasks.outcome, tasks.reason, null);
+      return;
+    }
+    const work: TaskPlan =
+      tasks.kind === 'work' ? tasks : { confirm: [], post: null, prove: false };
+
+    const { invocation } = cliOf(deps);
+    let workDir: string;
+    try {
+      workDir = await ensureWorkDir(p);
+    } catch (error) {
+      await finish(
+        'failed',
+        `no working directory: ${(error as Error).message}`,
+        null,
+      );
+      return;
+    }
+    // tasks post in this run reads the choice from the run lock and posts
+    // nothing else, the adoption or its template.
+    const { post } = work;
+    if (post !== null) await setRunPost(runId, post, p);
+    const agent = await runAgent(
+      {
+        command: agentCommand,
+        args: claudeArgs(invocation, post, game),
+        input: routinePrompt(invocation, work.confirm, {
+          post,
+          prove: work.prove,
+          game,
+        }),
+        cwd: workDir,
+        env: agentEnv(runId, invocation, p),
+        timeoutMs,
+        tokenCap: routine.limits.tokensPerRun,
+        // Kept for the operator, never printed (RS-10).
+        transcript: { path: copyPaths(p).transcript },
+      },
+      deps.spawner ?? spawnAgent,
+    );
+
+    if (agent.stoppedFor !== null) {
+      const used =
+        agent.stoppedFor === 'minutesPerRun' ? minutes : (agent.tokens ?? 0);
+      const cap =
+        agent.stoppedFor === 'minutesPerRun'
+          ? minutes
+          : routine.limits.tokensPerRun;
+      await appendRoutine(
+        { kind: 'limit', runId, limit: agent.stoppedFor, used, cap },
+        p,
+      );
+    }
+    if (agent.error !== undefined) {
+      await finish('failed', `the agent did not start: ${agent.error}`, null);
+    } else if (agent.stoppedFor === 'minutesPerRun') {
+      await finish('failed', `stopped after ${minutes} minutes`, agent);
+    } else if (agent.stoppedFor === 'tokensPerRun') {
+      await finish(
+        'stopped',
+        `stopped at the limit of ${routine.limits.tokensPerRun} tokens`,
+        agent,
+      );
+    } else if (agent.exitCode !== 0) {
+      await finish(
+        'failed',
+        `the agent exited with ${agent.exitCode}. If it could not log in, its Claude Code runs without your settings files, so a login from an apiKeyHelper or an env block in settings.json does not reach it`,
+        agent,
+      );
+    } else {
+      await finish('done', undefined, agent);
+    }
+  }
+
+  // The task work of the run, read before any agent starts. stop is why
+  // there is none, with the outcome the run ends with when the game does
+  // not start the agent either, failed ends the run whatever the game.
+  async function taskWork(): Promise<
+    | {
+        kind: 'stop';
+        outcome: RunOutcome;
+        reason: string;
+        session?: Session;
+      }
+    | { kind: 'failed'; reason: string }
+    | ({ kind: 'work' } & TaskPlan & { session: Session })
+  > {
     const entries = await readRoutine(p);
     const claims = budgetOf(entries, 'claim', routine);
     const confirms = budgetOf(entries, 'confirm', routine);
     const posts = budgetOf(entries, 'post', routine);
-    // Stops with a limit line for each spent limit. The post limit is
-    // named only when it is spent too.
-    const spent = async (): Promise<void> => {
+    // A limit line for each spent limit. The post limit is named only when
+    // it is spent too.
+    const spent = async () => {
       for (const [limit, budget] of [
         ['claimsPerDay', claims],
         ['confirmsPerDay', confirms],
@@ -923,15 +1031,18 @@ export async function routineRun(
           p,
         );
       }
-      await finish('stopped', 'the daily limits are spent', null);
+      return {
+        kind: 'stop',
+        outcome: 'stopped',
+        reason: 'the daily limits are spent',
+      } as const;
     };
     if (
       claims.remaining === 0 &&
       confirms.remaining === 0 &&
       posts.remaining === 0
     ) {
-      await spent();
-      return;
+      return spent();
     }
 
     const goal = await loadGoal({ fetch: deps.fetch, paths: p }).catch(
@@ -946,8 +1057,7 @@ export async function routineRun(
         ? nextRoutinePost(entries)
         : null;
     if (claims.remaining === 0 && confirms.remaining === 0 && post === null) {
-      await spent();
-      return;
+      return spent();
     }
     if (
       goal !== null &&
@@ -956,12 +1066,11 @@ export async function routineRun(
       goal.pending.outcomes === 0 &&
       (goal.pending.posterOutcomes ?? 0) === 0
     ) {
-      await finish(
-        'nothing',
-        `level ${shownLevel(goal.level)} is ${HIGHEST_ISSUED}`,
-        null,
-      );
-      return;
+      return {
+        kind: 'stop',
+        outcome: 'nothing',
+        reason: `level ${shownLevel(goal.level)} is ${HIGHEST_ISSUED}`,
+      };
     }
     // Counted evidence (VOU-140). Once today's counted tasks reach the daily
     // ceiling, more work today would verify and count toward nothing, so the
@@ -981,12 +1090,11 @@ export async function routineRun(
         p,
       );
       if (post === null) {
-        await finish(
-          'stopped',
-          `today's ${today.ceiling} counted tasks are done, more would not count until midnight UTC`,
-          null,
-        );
-        return;
+        return {
+          kind: 'stop',
+          outcome: 'stopped',
+          reason: `today's ${today.ceiling} counted tasks are done, more would not count until midnight UTC`,
+        };
       }
     }
 
@@ -994,27 +1102,9 @@ export async function routineRun(
     // here rather than through openTaskSession, which ends the command on a
     // missing or broken key. That exit would skip the finally that removes
     // the run lock and leave no run line (cli-adapters-tasks-5).
-    let api: ApiClient;
-    let signer: Signer;
-    try {
-      api = createApiClient({
-        apiUrl: resolveApiUrl({ config: config.apiUrl }),
-        fetch: deps.fetch,
-      });
-      signer = await loadSigner(api.apiUrl, p);
-    } catch (error) {
-      if (error instanceof KeyError || error instanceof ApiError) {
-        await finish(
-          'failed',
-          error instanceof KeyError
-            ? `the agent key could not be loaded: ${error.message}`
-            : `could not read the API: ${error.message}`,
-          null,
-        );
-        return;
-      }
-      throw error;
-    }
+    const session = await openSession();
+    if (!('api' in session)) return { kind: 'failed', reason: session.error };
+    const { api, signer } = session;
     let held: TaskResponse[] = [];
     let found: RoutineCandidates = { tasks: [], skipped: [] };
     let confirm: Confirmable[] = [];
@@ -1067,12 +1157,10 @@ export async function routineRun(
       }
     } catch (error) {
       if (error instanceof ApiError) {
-        await finish(
-          'failed',
-          `could not read the API: ${error.message}`,
-          null,
-        );
-        return;
+        return {
+          kind: 'failed',
+          reason: `could not read the API: ${error.message}`,
+        };
       }
       throw error;
     }
@@ -1083,74 +1171,35 @@ export async function routineRun(
       confirm.length === 0 &&
       post === null
     ) {
-      const why =
-        claims.remaining === 0
-          ? 'the daily claim limit is spent and nothing waits for a confirmation'
-          : "no seed tasks, allowed addressed tasks, other operators' template tasks or confirmations to do";
-      await finish('nothing', why, null);
-      return;
+      return {
+        kind: 'stop',
+        outcome: 'nothing',
+        reason:
+          claims.remaining === 0
+            ? 'the daily claim limit is spent and nothing waits for a confirmation'
+            : "no seed tasks, allowed addressed tasks, other operators' template tasks or confirmations to do",
+        session,
+      };
     }
+    return { kind: 'work', confirm, post, prove: !ceiling, session };
+  }
 
-    const { invocation } = cliOf(deps);
-    let work: string;
+  // The API client and the agent key, or why they could not be had.
+  async function openSession(): Promise<Session> {
     try {
-      work = await ensureWorkDir(p);
+      const api = createApiClient({
+        apiUrl: resolveApiUrl({ config: config.apiUrl }),
+        fetch: deps.fetch,
+      });
+      return { api, signer: await loadSigner(api.apiUrl, p) };
     } catch (error) {
-      await finish(
-        'failed',
-        `no working directory: ${(error as Error).message}`,
-        null,
-      );
-      return;
-    }
-    // tasks post in this run reads the choice from the run lock and posts
-    // nothing else, the adoption or its template.
-    if (post !== null) await setRunPost(runId, post, p);
-    const agent = await runAgent(
-      {
-        command: agentCommand,
-        args: claudeArgs(invocation, post),
-        input: routinePrompt(invocation, confirm, { post, prove: !ceiling }),
-        cwd: work,
-        env: agentEnv(runId, invocation, p),
-        timeoutMs,
-        tokenCap: routine.limits.tokensPerRun,
-        // Kept for the operator, never printed (RS-10).
-        transcript: { path: copyPaths(p).transcript },
-      },
-      deps.spawner ?? spawnAgent,
-    );
-
-    if (agent.stoppedFor !== null) {
-      const used =
-        agent.stoppedFor === 'minutesPerRun' ? minutes : (agent.tokens ?? 0);
-      const cap =
-        agent.stoppedFor === 'minutesPerRun'
-          ? minutes
-          : routine.limits.tokensPerRun;
-      await appendRoutine(
-        { kind: 'limit', runId, limit: agent.stoppedFor, used, cap },
-        p,
-      );
-    }
-    if (agent.error !== undefined) {
-      await finish('failed', `the agent did not start: ${agent.error}`, null);
-    } else if (agent.stoppedFor === 'minutesPerRun') {
-      await finish('failed', `stopped after ${minutes} minutes`, agent);
-    } else if (agent.stoppedFor === 'tokensPerRun') {
-      await finish(
-        'stopped',
-        `stopped at the limit of ${routine.limits.tokensPerRun} tokens`,
-        agent,
-      );
-    } else if (agent.exitCode !== 0) {
-      await finish(
-        'failed',
-        `the agent exited with ${agent.exitCode}. If it could not log in, its Claude Code runs without your settings files, so a login from an apiKeyHelper or an env block in settings.json does not reach it`,
-        agent,
-      );
-    } else {
-      await finish('done', undefined, agent);
+      if (error instanceof KeyError) {
+        return { error: `the agent key could not be loaded: ${error.message}` };
+      }
+      if (error instanceof ApiError) {
+        return { error: `could not read the API: ${error.message}` };
+      }
+      throw error;
     }
   }
 }
@@ -1174,6 +1223,64 @@ export function agentEnv(
     SEALKEEPER_ROUTINE_RUN: runId,
     SEALKEEPER_INVOCATION: invocation,
     ...(homeEnv(p) === undefined ? {} : { SEALKEEPER_HOME: p.home }),
+  };
+}
+
+// What a run's agent does beside the game, see PromptWork.
+type TaskPlan = {
+  confirm: Confirmable[];
+  post: RunPost | null;
+  prove: boolean;
+};
+
+// The API client and the agent key of a run, or why they could not be had.
+type Session = { api: ApiClient; signer: Signer } | { error: string };
+
+// Whether the run's agent plays the game (GAME-14). True when the game is
+// on for this agent and it has game units left today, or a duel of it is
+// running, whose task waits to be played whatever the units. Read with the
+// signed game status and, with no units left, one signed page of one of
+// its active duels. A read that fails, as on an API from before the game,
+// is false, so the run goes on without the game.
+export async function playsGame(
+  api: ApiClient,
+  signer: Signer,
+): Promise<boolean> {
+  try {
+    const status = await readGameStatus({ api, signer });
+    if (!status.enabled) return false;
+    if (status.usedToday < status.cap) return true;
+    const request = {
+      state: 'active',
+      limit: 1,
+      issuedAt: new Date().toISOString(),
+    };
+    ListDuelsRequest.parse(request);
+    return (await api.myDuels(await signer.sign(request))).duels.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// What a run's game section did, from its game lines, each duel, task or
+// seek once (GAME-14).
+export function gameTally(
+  entries: RoutineEntry[],
+  runId: string,
+): NonNullable<RunEntry['game']> {
+  const count = (action: GameEntry['action']) =>
+    new Set(
+      entries.flatMap((e) =>
+        e.kind === 'game' && e.runId === runId && e.action === action
+          ? [e.id]
+          : [],
+      ),
+    ).size;
+  return {
+    accepted: count('accept'),
+    played: count('duel'),
+    challenge: count('challenge'),
+    seeks: count('seek'),
   };
 }
 
@@ -1297,6 +1404,11 @@ export function runLine(entry: Omit<RunEntry, 'at'>): string {
   return parts.join(' ');
 }
 
+// The game line of routine status, the last run's counts (GAME-14).
+export function gameText(game: NonNullable<RunEntry['game']>): string {
+  return `last run accepted ${plural(game.accepted, 'invite', 'invites')}, played ${plural(game.played, 'duel', 'duels')}, submitted ${plural(game.challenge, 'challenge task', 'challenge tasks')}, opened ${plural(game.seeks, 'seek', 'seeks')}`;
+}
+
 // What a run did with the card, by the value refreshCard returned. A value
 // a newer CLI wrote is left out.
 const CARD_TEXT = new Map<string, string>([
@@ -1410,6 +1522,9 @@ async function status(
       ? `Last run  ${lastRun.at}. ${runLine(lastRun)}`
       : 'Last run  none yet',
   );
+  // What the last run's game section did, when it had one (GAME-14).
+  if (lastRun?.game !== undefined)
+    stdout(`Game      ${gameText(lastRun.game)}`);
   // Where the last run's transcript is, never what it says (RS-10).
   if (transcript !== null) stdout(`Transcript  ${tildePath(transcript)}`);
   // The card card write last wrote, which each run refreshes (VOU-383).
