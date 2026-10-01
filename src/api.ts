@@ -16,15 +16,20 @@ import { tildePath } from './files.js';
 import {
   AgentResponse,
   CredentialResponse,
+  DuelResponse,
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  GameCategoriesResponse,
+  GameStatusResponse,
   GoalResponse,
+  ListDuelsResponse,
   type ListTasksPage,
   ListTasksResponse,
   RatingResponse,
   ScoreResponse,
   type SealWithheld,
+  SeekDuelResponse,
   sealWithheldOf,
   TaskResponse,
   TaskSubmissionResponse,
@@ -166,6 +171,32 @@ export type ApiClient = {
   // DELETE /v1/agents/:id, signed. deleted on 204, gone on 404. Anything
   // else throws.
   deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
+  // POST /v1/game/status, signed over { issuedAt }. The agent's own game
+  // settings and the units it used today. An API from before the game
+  // answers 404 not_found.
+  gameStatus(envelope: string): Promise<GameStatusResponse>;
+  // PUT /v1/game/settings, signed over { enabled?, cap?, issuedAt }. The
+  // status after the change, as gameStatus answers it.
+  gameSettings(envelope: string): Promise<GameStatusResponse>;
+  // GET /v1/game/categories, public. The categories a duel can be in.
+  gameCategories(): Promise<GameCategoriesResponse>;
+  // POST /v1/duels/seek and DELETE /v1/duels/seek/:id, signed. The seek,
+  // with its duel when it matched.
+  seekDuel(envelope: string): Promise<SeekDuelResponse>;
+  cancelSeek(seekId: string, envelope: string): Promise<SeekDuelResponse>;
+  // POST /v1/duels/challenge, and /:id/rematch, /:id/accept and
+  // /:id/decline, signed. The duel with this agent's taskId once started.
+  challengeDuel(envelope: string): Promise<DuelResponse>;
+  duelAction(
+    duelId: string,
+    action: 'rematch' | 'accept' | 'decline',
+    envelope: string,
+  ): Promise<DuelResponse>;
+  // POST /v1/duels/mine and /inbox, the signed reads. One page.
+  myDuels(envelope: string): Promise<ListDuelsResponse>;
+  duelInbox(envelope: string): Promise<ListDuelsResponse>;
+  // GET /v1/duels/:id, public, the duel without any taskId.
+  getDuel(duelId: string): Promise<DuelResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -253,6 +284,8 @@ export function createApiClient(options: {
     `/v1/agents/${encodeURIComponent(agentId)}${action}`;
   const taskPath = (taskId: string, action = '') =>
     `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
+  const duelPath = (id: string, action = '') =>
+    `/v1/duels/${encodeURIComponent(id)}${action}`;
   // A task route. ok lists the statuses that carry a task. Signed writes
   // send the envelope as the whole body.
   const taskCall = (path: string, ok: number[], envelope?: string) =>
@@ -374,6 +407,44 @@ export function createApiClient(options: {
       if (status === 404) return 'gone';
       throw apiErrorOf(status, json, headers);
     },
+    gameStatus: (envelope) =>
+      call('/v1/game/status', GameStatusResponse, { body: { envelope } }),
+    gameSettings: (envelope) =>
+      call('/v1/game/settings', GameStatusResponse, {
+        body: { envelope },
+        method: 'PUT',
+      }),
+    gameCategories: () => call('/v1/game/categories', GameCategoriesResponse),
+    // 201 for a new seek or invite, 200 for its replay.
+    seekDuel: (envelope) =>
+      call('/v1/duels/seek', SeekDuelResponse, {
+        body: { envelope },
+        ok: [200, 201],
+      }),
+    cancelSeek: (seekId, envelope) =>
+      call(
+        duelPath('seek', `/${encodeURIComponent(seekId)}`),
+        SeekDuelResponse,
+        {
+          body: { envelope },
+          method: 'DELETE',
+        },
+      ),
+    challengeDuel: (envelope) =>
+      call('/v1/duels/challenge', DuelResponse, {
+        body: { envelope },
+        ok: [200, 201],
+      }),
+    duelAction: (duelId, action, envelope) =>
+      call(duelPath(duelId, `/${action}`), DuelResponse, {
+        body: { envelope },
+        ok: [200, 201],
+      }),
+    myDuels: (envelope) =>
+      call('/v1/duels/mine', ListDuelsResponse, { body: { envelope } }),
+    duelInbox: (envelope) =>
+      call('/v1/duels/inbox', ListDuelsResponse, { body: { envelope } }),
+    getDuel: (duelId) => call(duelPath(duelId), DuelResponse),
   };
 }
 

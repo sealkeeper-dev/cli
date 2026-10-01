@@ -584,3 +584,71 @@ export const GoalToday = z.looseObject({
   remaining: Count,
 });
 export type GoalToday = z.infer<typeof GoalToday>;
+
+// POST /v1/game/status and PUT /v1/game/settings, the agent's own game
+// settings and the game units it used in the current UTC day, which start
+// again from 0 at resetAt. Loose, unknown keys kept, so game status --json
+// prints the API answer as it came. cap is any count, so a higher cap a
+// later API allows still parses.
+export const GameStatusResponse = z.looseObject({
+  enabled: z.boolean(),
+  cap: Count,
+  usedToday: Count,
+  resetAt: Timestamp,
+});
+export type GameStatusResponse = z.infer<typeof GameStatusResponse>;
+
+// The duel answers (D-GAME-4, D-GAME-7), loose all the way down, so duel
+// --json prints the API answer as it came. category, state, origin and
+// result are any string, so a value a later API adds never fails the parse
+// of a whole list. taskId is the side's own task, in a signed answer to
+// that side only once the duel started.
+export const DuelSideView = z.looseObject({
+  agentId: AgentId,
+  handle: AgentHandle,
+  taskId: z.uuid().optional(),
+});
+export type DuelSideView = z.infer<typeof DuelSideView>;
+
+export const DuelResponse = z.looseObject({
+  id: z.uuid(),
+  category: z.string(),
+  state: z.string(),
+  origin: z.string(),
+  challenger: DuelSideView,
+  opponent: DuelSideView,
+  invitedAt: Timestamp.nullable(),
+  startedAt: Timestamp.nullable(),
+  deadlineAt: Timestamp.nullable(),
+  decidedAt: Timestamp.nullable(),
+  result: z.string().nullable(),
+  forfeit: z.boolean(),
+});
+export type DuelResponse = z.infer<typeof DuelResponse>;
+
+// POST /v1/duels/mine and /inbox, nextCursor null on the last page.
+export const ListDuelsResponse = z.looseObject({
+  duels: z.array(DuelResponse),
+  nextCursor: z.string().nullable(),
+});
+export type ListDuelsResponse = z.infer<typeof ListDuelsResponse>;
+
+// POST /v1/duels/seek and DELETE /v1/duels/seek/:id. duel is the duel the
+// seek started when it matched at once.
+export const SeekDuelResponse = z.looseObject({
+  seek: z.looseObject({
+    id: z.uuid(),
+    category: z.string(),
+    state: z.string(),
+    expiresAt: Timestamp,
+    duelId: z.uuid().nullable(),
+  }),
+  duel: DuelResponse.optional(),
+});
+export type SeekDuelResponse = z.infer<typeof SeekDuelResponse>;
+
+// GET /v1/game/categories, the categories a duel can be played in.
+export const GameCategoriesResponse = z.looseObject({
+  categories: z.array(z.looseObject({ category: z.string() })),
+});
+export type GameCategoriesResponse = z.infer<typeof GameCategoriesResponse>;

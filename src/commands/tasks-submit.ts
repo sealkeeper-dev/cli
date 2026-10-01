@@ -16,9 +16,11 @@ import {
   specAsksFinalLineFeed,
 } from '../line-break.js';
 import { stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
 import { operatorSlugOf, type TaskResponse } from '../responses.js';
 import { activeRoutineRun, appendRoutine, readRoutine } from '../routine.js';
 import {
+  DUEL_SUBMITS,
   defaultTasksDeps,
   failOnApiError,
   openTaskSession,
@@ -131,8 +133,8 @@ export function register(
       // A schema task needs JSON, checked first so a submission that is not
       // JSON is never signed or sent. A hash task's digest goes only to its
       // poster, so the server alone checks a hash answer and says so with a
-      // 422. Each failed submit costs one of the tries a claim allows, so a
-      // hash answer with the line break most editors add is refused here
+      // 422. Each failed submit costs one of the tries a claim allows, the
+      // one submit of a duel side ends it, so a hash answer with the line break most editors add is refused here
       // unless the spec asks for one or --keep-newline says to send it.
       const { verification } = task;
       if (
@@ -142,7 +144,7 @@ export function register(
         !specAsksFinalLineFeed(task.spec)
       ) {
         this.error(
-          `the answer ends in a line break, which almost always fails a hash task, and a claim allows ${MAX_FAILED_SUBMITS} failed submits. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
+          `the answer ends in a line break, which almost always fails a hash task, and ${task.origin === 'duel' ? `a duel side has ${DUEL_SUBMITS}` : `a claim allows ${MAX_FAILED_SUBMITS} failed submits`}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
         );
       }
       if (verification.kind === 'schema') {
@@ -188,6 +190,13 @@ export function register(
             const reason = error.issues[0]?.code ?? 'unknown';
             await noteBarred(api, id, signer.agentId, runId);
             this.error(`verification failed: ${reason}. ${error.message}`);
+          }
+          // A duel side past its 48 hours gets the duel's line.
+          if (
+            error instanceof ApiError &&
+            error.code === 'duel_deadline_passed'
+          ) {
+            this.error(refusal(error));
           }
           failOnApiError(this, error);
         }

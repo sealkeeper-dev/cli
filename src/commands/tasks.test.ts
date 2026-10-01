@@ -43,6 +43,7 @@ import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { appendRoutine, readRoutine } from '../routine.js';
+import { GAME_SPEC_AT_CLAIM } from '../tasks.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -227,10 +228,15 @@ class FakeApi {
     const request: ApiCall = { method, path: url.pathname };
     this.requests.push(request);
 
-    // What every answer but the poster's own shows.
-    const shown = (t: TaskResponse): TaskResponse => ({
+    // What every answer but the poster's own shows. A game task's spec
+    // reaches its claimant only in the claim, submit and release answers,
+    // and reads {} everywhere else, as specShown in the API has it.
+    const shown = (t: TaskResponse, toClaimant = false): TaskResponse => ({
       ...t,
       verification: publicVerification(t.verification as VerificationSpec),
+      ...(!toClaimant && (t.origin === 'duel' || t.origin === 'challenge')
+        ? { spec: {} }
+        : {}),
     });
 
     // Like the API, the open pool leaves addressed tasks out, and assignee
@@ -258,7 +264,7 @@ class FakeApi {
       const from = offsetOf(q.cursor ?? null);
       const limit = q.limit ?? 50;
       return Response.json({
-        tasks: matching.slice(from, from + limit).map(shown),
+        tasks: matching.slice(from, from + limit).map((t) => shown(t)),
         nextCursor:
           from + limit < matching.length ? pageCursor(from + limit) : null,
       });
@@ -408,7 +414,7 @@ class FakeApi {
           claimantAgentId: this.agentId,
           claimedAt: new Date().toISOString(),
         });
-        return Response.json(shown(task));
+        return Response.json(shown(task, true));
       }
       case 'submit': {
         if (this.submitReply) return this.submitReply();
@@ -427,7 +433,7 @@ class FakeApi {
             ? { state: 'submitted' }
             : { state: 'verified', verifiedAt: now }),
         });
-        return Response.json(shown(task));
+        return Response.json(shown(task, true));
       }
       case 'release': {
         if (this.releaseReply) return this.releaseReply();
@@ -442,7 +448,7 @@ class FakeApi {
             ? { state: 'expired' }
             : { state: 'open', claimantAgentId: null, claimedAt: null },
         );
-        return Response.json({ ...shown(task), released: true });
+        return Response.json({ ...shown(task, true), released: true });
       }
       case 'outcome': {
         if (this.outcomeReply) return this.outcomeReply();
@@ -968,6 +974,36 @@ describe('tasks pull, submit and post', () => {
       expect(out).toContain(UNTRUSTED);
     });
 
+    // A duel or challenge task's spec comes in the claim answer alone. A
+    // claim this agent already holds is read back from the public route,
+    // which shows {}, so it says so in one line.
+    it.each([['duel'], ['challenge']])(
+      'prints the spec of a %s task from the claim answer',
+      async (origin) => {
+        const task = api.add({ origin, spec: { rows: 3 } });
+        const { code, out } = await run('tasks', 'claim', task.id);
+        expect(code).toBe(0);
+        expect(out).toContain('"rows": 3');
+        expect(out).not.toContain(GAME_SPEC_AT_CLAIM);
+      },
+    );
+
+    it('says the spec of a game task held already came with its claim', async () => {
+      const task = api.add({
+        origin: 'duel',
+        spec: { rows: 3 },
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+      api.claims.set(task.id, 409);
+      const { code, out } = await run('tasks', 'claim', task.id);
+      expect(code).toBe(0);
+      expect(out).toContain(`This agent already holds ${task.id}.`);
+      expect(out).toContain(`${GAME_SPEC_AT_CLAIM}\n`);
+      expect(out).not.toContain('Spec:');
+    });
+
     it.each([
       ['own_task', OWN_TASK],
       ['not_assignee', NOT_ASSIGNEE],
@@ -1189,6 +1225,54 @@ describe('tasks pull, submit and post', () => {
       expect(crlf.err).toContain('the answer ends in a line break');
       expect(api.posts()).toEqual([]);
       expect(await logged()).toEqual([]);
+    });
+
+    it('names the one submit of a duel side when it refuses a line break', async () => {
+      const task = api.add({
+        origin: 'duel',
+        verification: { kind: 'hash', sha256: sha256('Oslo') },
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+      const { code, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'Oslo\n',
+      );
+      expect(code).toBe(1);
+      expect(err).toContain(
+        'and a duel side has one submit. Nothing was sent.',
+      );
+      expect(api.posts()).toEqual([]);
+    });
+
+    it("prints the duel's line for a submit after its window", async () => {
+      const task = claimed({ kind: 'hash', sha256: sha256('Oslo') });
+      api.submitReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'duel_deadline_passed',
+              message: "The duel's 48 hour window has ended",
+            },
+          },
+          { status: 409 },
+        );
+      const { code, out, err } = await run(
+        'tasks',
+        'submit',
+        task.id,
+        '--text',
+        'Oslo',
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(
+        "the duel's 48 hour window has ended, this side can no longer submit\n",
+      );
     });
 
     it('sends a hash answer with its line break as is under --keep-newline', async () => {
@@ -3201,6 +3285,37 @@ describe('tasks pull, submit and post', () => {
       expect(out).not.toContain('Category');
       const json = await run('tasks', 'show', task.id, '--json');
       expect(JSON.parse(json.out)).not.toHaveProperty('category');
+    });
+
+    it.each([['duel'], ['challenge']])(
+      'tasks show of a %s task says its spec came with the claim',
+      async (origin) => {
+        const task = api.add({
+          origin,
+          spec: { rows: 3 },
+          state: 'claimed',
+          claimantAgentId: agentId,
+          claimedAt: new Date().toISOString(),
+        });
+        const { code, out } = await run('tasks', 'show', task.id);
+        expect(code).toBe(0);
+        expect(out).toContain(`${GAME_SPEC_AT_CLAIM}\n`);
+        expect(out).not.toContain('Spec:');
+        expect(out).not.toContain('rows');
+      },
+    );
+
+    // An open game task, as duel accept names it before the claim. The
+    // line holds before the claim as it does after it.
+    it('tasks show of an open duel task says its spec comes in the claim answer', async () => {
+      const task = api.add({ origin: 'duel', spec: { rows: 3 } });
+      const { code, out } = await run('tasks', 'show', task.id);
+      expect(code).toBe(0);
+      expect(out).toContain(
+        'The spec of a duel or challenge task is shown only in the answer to its claim.\n',
+      );
+      expect(out).not.toContain('not shown again');
+      expect(out).not.toContain('rows');
     });
 
     it('tasks show refuses a prefix that matches several held tasks, and takes a longer one', async () => {

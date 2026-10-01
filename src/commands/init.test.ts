@@ -72,6 +72,7 @@ import {
   bronzeLine,
   CONSENT,
   folderLine,
+  GAME_QUESTION,
   HOOKS_BY_CLAUDE,
   HOOKS_INTRO,
   HOOKS_MAX_ASKS,
@@ -203,6 +204,11 @@ type World = {
   // The goal GET /v1/agents/:id/goal answers with, for the agent and
   // version registered last. Unset means that route fails.
   goal?: Record<string, unknown>;
+  // The game switch POST /v1/game/status answers with. Unset means that
+  // route fails like an unreachable API.
+  game?: boolean;
+  // The signed payload of every game status read.
+  gameReads?: Record<string, unknown>[];
 };
 
 // A terminal that answers with each line in turn, then closes.
@@ -284,6 +290,22 @@ function fakeFetch(world: World): typeof fetch {
       world.registrations.push(registration);
       const reply = world.api(registration);
       return Response.json(reply.body, { status: reply.status });
+    }
+    if (url === `${API_URL}/v1/game/status` && world.game !== undefined) {
+      const { envelope } = JSON.parse(String(init.body)) as {
+        envelope: string;
+      };
+      const { kid } = decodeHeader(envelope);
+      const payload = unsigned(
+        (await verify(envelope, base64urlDecode(kid))).payload,
+      ) as Record<string, unknown>;
+      world.gameReads = [...(world.gameReads ?? []), payload];
+      return Response.json({
+        enabled: world.game,
+        cap: 5,
+        usedToday: 0,
+        resetAt: '2026-09-24T00:00:00.000Z',
+      });
     }
     if (url.startsWith(`${API_URL}/v1/agents?`)) {
       if (world.operatorAgents === undefined)
@@ -513,6 +535,7 @@ describe('sealkeeper init', () => {
         '',
         '  ✓ Registered alice/scout',
         '    Profile  https://sealkeeper.run/agents/alice/scout',
+        '    Game  on, turn it off with npx sealkeeper game off',
         '',
         '  Next',
         '  1  Earn your first verified tasks with npx sealkeeper prove',
@@ -537,6 +560,8 @@ describe('sealkeeper init', () => {
         githubToken: TOKEN,
         name: 'scout',
         version: '0.1.0',
+        // Nobody to ask, so the default.
+        gameEnabled: true,
       },
     ]);
     // The API URL came from SEALKEEPER_API_URL alone, so it is not saved.
@@ -1152,7 +1177,8 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      expect((world.stdin as Input & { reads: number }).reads).toBe(0);
+      // Only the game question.
+      expect((world.stdin as Input & { reads: number }).reads).toBe(1);
       expect(result.all).not.toContain('hook');
       expect(result.all).not.toContain('Claude Code');
       expect(result.err).not.toContain(HOOKS_QUESTION);
@@ -1246,8 +1272,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One more read for the session nudge question, once hooks are in.
-      expect(stdin.reads).toBe(1);
+      // One read for the game question, and one more for the session nudge
+      // question, once hooks are in.
+      expect(stdin.reads).toBe(2);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -1356,8 +1383,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // Only the session nudge question is read, the hooks are not asked.
-      expect(stdin.reads).toBe(1);
+      // Only the game and session nudge questions are read, the hooks are
+      // not asked.
+      expect(stdin.reads).toBe(2);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).toContain(`Moved the hooks out of ${sharedFile}`);
@@ -1444,8 +1472,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One more read for the session nudge question, once hooks are in.
-      expect(stdin.reads).toBe(2);
+      // One read for the game question, and one more for the session nudge
+      // question, once hooks are in.
+      expect(stdin.reads).toBe(3);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -1599,8 +1628,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One more read for the session nudge question, once hooks are in.
-      expect(stdin.reads).toBe(1);
+      // One read for the game question, and one more for the session nudge
+      // question, once hooks are in.
+      expect(stdin.reads).toBe(2);
       expect(result.out).not.toContain(INSTALL_COMMAND);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
     });
@@ -1652,8 +1682,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One more read for the session nudge question, once hooks are in.
-      expect(stdin.reads).toBe(2);
+      // One read for the game question, and one more for the session nudge
+      // question, once hooks are in.
+      expect(stdin.reads).toBe(3);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain('Stop');
       expect(result.all).not.toContain(HOOKS_NOT_INSTALLED);
@@ -1677,8 +1708,8 @@ describe('sealkeeper init', () => {
 
     it('asks again on an unclear answer and installs on a later y', async () => {
       await withClaudeCode();
-      // Enter at the nudge that follows.
-      const stdin = answeringEach(['maybe', 'y', '']);
+      // Enter at the game question before, and at the nudge that follows.
+      const stdin = answeringEach(['', 'maybe', 'y', '']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -1689,8 +1720,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One more read for the session nudge question, once hooks are in.
-      expect(stdin.reads).toBe(3);
+      // One read for the game question, and one more for the session nudge
+      // question, once hooks are in.
+      expect(stdin.reads).toBe(4);
       expect(result.err).toContain(
         '  Please answer y or n. Install them now? [Y/n] ',
       );
@@ -1699,7 +1731,8 @@ describe('sealkeeper init', () => {
 
     it('counts as no after three unclear answers and says so with the command', async () => {
       await withClaudeCode();
-      const stdin = answeringEach(['what', '\u001b[Bx', 'nope', 'y']);
+      // Enter at the game question first.
+      const stdin = answeringEach(['', 'what', '\u001b[Bx', 'nope', 'y']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -1710,7 +1743,7 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(HOOKS_MAX_ASKS);
+      expect(stdin.reads).toBe(1 + HOOKS_MAX_ASKS);
       expect(HOOKS_MAX_ASKS).toBe(3);
       expect(result.out).toContain(`  ${HOOKS_NOT_INSTALLED}\n`);
       expect(HOOKS_NOT_INSTALLED).toBe(
@@ -1992,7 +2025,8 @@ describe('sealkeeper init', () => {
 
       it('installs the skill with the hooks and turns the nudge on after a yes', async () => {
         await withClaudeCode();
-        const stdin = answeringEach(['y', 'y']);
+        // The game, the hooks and the nudge.
+        const stdin = answeringEach(['', 'y', 'y']);
         world.stdin = stdin;
         const result = await run(
           world,
@@ -2003,7 +2037,7 @@ describe('sealkeeper init', () => {
           'claude-code',
         );
         expect(result.code).toBe(0);
-        expect(stdin.reads).toBe(2);
+        expect(stdin.reads).toBe(3);
         expect(result.err).toContain(NUDGE_INTRO);
         expect(result.err).toContain('three line SealKeeper summary');
         expect(result.out).toContain('  ✓ Session nudge on\n');
@@ -2023,7 +2057,7 @@ describe('sealkeeper init', () => {
           pending: { addressed: 2, outcomes: 0 },
           asOf: '2026-09-25T10:15:00.000Z',
         };
-        world.stdin = answeringEach(['y', 'y']);
+        world.stdin = answeringEach(['', 'y', 'y']);
         const result = await run(
           world,
           'init',
@@ -2047,7 +2081,7 @@ describe('sealkeeper init', () => {
 
       it('says nothing more and still exits 0 when the goal cannot be read', async () => {
         await withClaudeCode();
-        world.stdin = answeringEach(['y', 'y']);
+        world.stdin = answeringEach(['', 'y', 'y']);
         const result = await run(
           world,
           'init',
@@ -2070,7 +2104,7 @@ describe('sealkeeper init', () => {
 
       it('Enter is no, which is kept and not asked again', async () => {
         await withClaudeCode();
-        world.stdin = answeringEach(['y', '']);
+        world.stdin = answeringEach(['', 'y', '']);
         const result = await run(
           world,
           'init',
@@ -2094,7 +2128,8 @@ describe('sealkeeper init', () => {
         const declined = answering('n');
         world.stdin = declined;
         await run(world, 'init', '--name', 'scout', '--runtime', 'claude-code');
-        expect(declined.reads).toBe(1);
+        // The game question, then the hooks.
+        expect(declined.reads).toBe(2);
         expect(await readNudge(paths(home))).toBeUndefined();
         await expect(stat(skillFile())).rejects.toThrow('ENOENT');
 
@@ -2111,7 +2146,7 @@ describe('sealkeeper init', () => {
 
       it('a repeat run adds a missing skill next to hooks already in', async () => {
         await withClaudeCode();
-        world.stdin = answeringEach(['y', 'n']);
+        world.stdin = answeringEach(['', 'y', 'n']);
         await run(world, 'init', '--name', 'scout', '--runtime', 'claude-code');
         await rm(skillFile());
         world = newWorld();
@@ -2151,19 +2186,19 @@ describe('sealkeeper init', () => {
 
     it('asks on a terminal, and Enter takes the suggestion', async () => {
       world.repo = 'scout-repo';
-      const stdin = answeringEach(['', '']);
+      const stdin = answeringEach(['', '', '']);
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.err).toContain(`  ${nameQuestion('scout-repo')} `);
       expect(world.registrations[0]?.name).toBe('scout-repo');
-      // The name, then the runtime, skipped.
-      expect(stdin.reads).toBe(2);
+      // The name, then the runtime, skipped, then the game.
+      expect(stdin.reads).toBe(3);
     });
 
     it('takes a typed name, and asks again after one that is not valid', async () => {
       world.repo = 'scout-repo';
-      world.stdin = answeringEach(['Bad Name', 'my-helper', '']);
+      world.stdin = answeringEach(['Bad Name', 'my-helper', '', '']);
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.err).toContain('Bad Name is not a valid name');
@@ -2183,19 +2218,20 @@ describe('sealkeeper init', () => {
 
     it('nudges once for a runtime name, and Enter keeps it', async () => {
       world.repo = 'claude-code';
-      const stdin = answeringEach(['', '', '']);
+      const stdin = answeringEach(['', '', '', '']);
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.err.split(runtimeNameNudge('claude-code'))).toHaveLength(2);
       expect(world.registrations[0]?.name).toBe('claude-code');
-      // The name, the name again after the nudge, then the runtime.
-      expect(stdin.reads).toBe(3);
+      // The name, the name again after the nudge, the runtime, then the
+      // game.
+      expect(stdin.reads).toBe(4);
     });
 
     it('takes another name typed after the nudge', async () => {
       world.repo = 'codex';
-      world.stdin = answeringEach(['', 'reviewer', '']);
+      world.stdin = answeringEach(['', 'reviewer', '', '']);
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.err).toContain(runtimeNameNudge('codex'));
@@ -2203,15 +2239,15 @@ describe('sealkeeper init', () => {
     });
 
     it('with --name says one line for a runtime name and does not ask', async () => {
-      const stdin = answeringEach(['']);
+      const stdin = answeringEach(['', '']);
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'codex');
       expect(result.code).toBe(0);
       expect(result.err).toContain(`  ${runtimeNameLine('codex')}\n`);
       expect(result.err).not.toContain(runtimeNameNudge('codex'));
       expect(result.err).not.toContain(nameQuestion(null));
-      // Only the runtime question.
-      expect(stdin.reads).toBe(1);
+      // Only the runtime and game questions.
+      expect(stdin.reads).toBe(2);
       expect(world.registrations[0]?.name).toBe('codex');
     });
 
@@ -2224,8 +2260,8 @@ describe('sealkeeper init', () => {
   });
 
   describe('the runtime', () => {
-    it('sends --runtime with the registration and asks nothing', async () => {
-      const stdin = answeringEach([]);
+    it('sends --runtime with the registration and asks only the game', async () => {
+      const stdin = answeringEach(['']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -2236,7 +2272,7 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(0);
+      expect(stdin.reads).toBe(1);
       expect(world.registrations[0]).toMatchObject({ runtime: 'codex' });
       expect(result.out).toContain('    Runtime  Codex\n');
       const agentId = (await loadKey(paths(home)))?.agentId ?? '';
@@ -2275,7 +2311,7 @@ describe('sealkeeper init', () => {
 
     it('confirms a detected runtime on Enter, sends it and counts as asked', async () => {
       world.env = { CLAUDECODE: '1' };
-      world.stdin = answeringEach(['']);
+      world.stdin = answeringEach(['', '']);
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(result.err).toContain(
@@ -2287,7 +2323,7 @@ describe('sealkeeper init', () => {
     });
 
     it('registers without a runtime on a skip, and counts as asked', async () => {
-      world.stdin = answeringEach(['']);
+      world.stdin = answeringEach(['', '']);
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(world.registrations[0]).not.toHaveProperty('runtime');
@@ -2328,6 +2364,133 @@ describe('sealkeeper init', () => {
     });
   });
 
+  describe('the game question', () => {
+    const ON = '    Game  on, turn it off with npx sealkeeper game off\n';
+    const OFF = '    Game  off, turn it on with npx sealkeeper game on\n';
+
+    it('asks in a terminal after the runtime, and y turns the game on', async () => {
+      world.game = true;
+      const stdin = answeringEach(['y']);
+      world.stdin = stdin;
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(1);
+      expect(GAME_QUESTION).toBe('Play duels and weekly challenges? [Y/n] ');
+      expect(result.err).toContain(`  ${GAME_QUESTION}`);
+      // Before the sign in.
+      expect(result.err.indexOf(GAME_QUESTION)).toBeLessThan(
+        result.err.indexOf(CONSENT),
+      );
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      expect(result.out).toContain(ON);
+      // The line reads what SealKeeper has, with a signed status read.
+      expect(world.gameReads).toHaveLength(1);
+      expect(Object.keys(world.gameReads?.[0] ?? {})).toEqual(['issuedAt']);
+    });
+
+    it('turns the game off on n', async () => {
+      world.game = false;
+      world.stdin = answeringEach(['n']);
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: false });
+      expect(result.out).toContain(OFF);
+    });
+
+    it('turns the game on with Enter, since yes is the default', async () => {
+      world.stdin = answeringEach(['']);
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      // The status read fails, so the line says what was sent.
+      expect(result.out).toContain(ON);
+    });
+
+    it('says what SealKeeper has when it differs from the answer, as for a key registered before', async () => {
+      world.game = false;
+      world.stdin = answeringEach(['']);
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      expect(result.out).toContain(OFF);
+    });
+
+    it('asks nothing without a terminal and sends the default yes', async () => {
+      const stdin = answering('n', false);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(GAME_QUESTION);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      expect(result.out).toContain(ON);
+    });
+
+    it('asks nothing when Claude Code runs init and sends the default yes', async () => {
+      world.env = { CLAUDECODE: '1' };
+      const stdin = answering('n', false);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(result.err).not.toContain(GAME_QUESTION);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      expect(result.out).toContain(ON);
+    });
+
+    it('asks nothing with --json and sends the default yes', async () => {
+      const stdin = answering('n');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(0);
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+    });
+
+    it('ends init with one line when stdin closes at the question', async () => {
+      world.stdin = answeringEach([]);
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(INPUT_CLOSED);
+      expect(world.registrations).toEqual([]);
+    });
+  });
+
   describe('the operator slug', () => {
     beforeEach(() => {
       world.serverVersion = '0.1.0';
@@ -2342,6 +2505,7 @@ describe('sealkeeper init', () => {
         [
           '  ✓ Registered alice-2/scout',
           '    Profile  https://sealkeeper.run/agents/alice-2/scout',
+          '    Game  on, turn it off with npx sealkeeper game off',
           `    Operator  alice-2, change it at ${ACCOUNT_URL}`,
         ].join('\n'),
       );
@@ -2551,10 +2715,10 @@ describe('sealkeeper init', () => {
       return script;
     }
 
-    // The runtime, the hooks and the nudge, each by Enter, then the
-    // install question and the first run question.
+    // The runtime, the game, the hooks and the nudge, each by Enter, then
+    // the install question and the first run question.
     const answersThen = (...routine: string[]) =>
-      answeringEach(['', '', '', ...routine]);
+      answeringEach(['', '', '', '', ...routine]);
 
     it('offers the routine as one block after the hooks and installs on Enter (RS-1)', async () => {
       await withClaudeCode();
@@ -2564,7 +2728,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(5);
+      expect(stdin.reads).toBe(6);
       const schedule = (await readRoutineConfig()).schedule;
       const job = schedule?.job ?? '';
       const block = [
@@ -2625,7 +2789,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       // A first run that fails does not fail init.
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(5);
+      expect(stdin.reads).toBe(6);
       expect(result.out).toContain(
         '  First run started. It stops within 15 minutes.\n',
       );
@@ -2651,7 +2815,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(4);
+      expect(stdin.reads).toBe(5);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(result.err).not.toContain(FIRST_RUN_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -2667,7 +2831,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(6);
+      expect(stdin.reads).toBe(7);
       expect(result.err).toContain(
         `  Please answer y or n. ${INSTALL_QUESTION}`,
       );
@@ -2771,7 +2935,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(3);
+      expect(stdin.reads).toBe(4);
       expect(result.all).not.toContain('Daily routine');
       expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -2925,6 +3089,7 @@ describe('sealkeeper init', () => {
         [
           '  ✓ Registered alice/app',
           '    Profile  https://sealkeeper.run/agents/alice/app',
+          '    Game  on, turn it off with npx sealkeeper game off',
           `  ✓ ${folderLine(tildePath(app), 'alice/app')}`,
           '',
         ].join('\n'),
@@ -3206,6 +3371,7 @@ describe('sealkeeper init', () => {
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
+          Play duels and weekly challenges? [Y/n] 
           This sign in sends your GitHub token to the API at https://api.test, not https://api.sealkeeper.run.
 
           Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
@@ -3216,6 +3382,7 @@ describe('sealkeeper init', () => {
 
           ✓ Registered alice/scout
             Profile  https://sealkeeper.run/agents/alice/scout
+            Game  on, turn it off with npx sealkeeper game off
 
           What leaves this machine
           Session boundaries, task outcomes, durations and token counts,

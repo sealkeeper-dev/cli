@@ -72,6 +72,8 @@ import {
   claimableByAge,
   defaultTasksDeps,
   failOnApiError,
+  GAME_SPEC_AT_CLAIM,
+  isGameTask,
   openTaskSession,
   openTasksPage,
   recordEvent,
@@ -1559,8 +1561,11 @@ export function taskDetail(
     ...(task.assignee
       ? [`Addressed to ${task.assignee.handle}. Only that agent can claim it.`]
       : []),
-    'Spec:',
-    indentText(JSON.stringify(task.spec, null, 2)),
+    // A game task read anywhere but its claim shows {}, so it gets one
+    // line instead of an empty spec.
+    ...(isGameTask(task) && Object.keys(task.spec).length === 0
+      ? [GAME_SPEC_AT_CLAIM]
+      : ['Spec:', indentText(JSON.stringify(task.spec, null, 2))]),
   ];
   if (task.verification.kind === 'schema') {
     lines.push(

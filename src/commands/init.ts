@@ -120,6 +120,7 @@ import {
 } from '../output.js';
 import { refusal } from '../refusal.js';
 import { SchedulerError } from '../routine-scheduler.js';
+import { SCORE_TIMEOUT_MS } from '../score.js';
 import {
   createStyle,
   INDENT,
@@ -141,6 +142,7 @@ import {
   INSTALL_COMMAND,
   skillLine,
 } from './adapter.js';
+import { readGameStatus } from './game.js';
 import {
   askYes,
   BLOCK_LABEL,
@@ -183,9 +185,9 @@ export function otherApiLine(apiUrl: string): string {
   return `This sign in sends your GitHub token to the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
 }
 
-// The human output. The welcome box, then the name and the runtime, the
-// terms and the sign in, the registration, what leaves this machine, the Claude Code hooks and what to
-// do next.
+// The human output. The welcome box, then the name, the runtime and the
+// game, the terms and the sign in, the registration, what leaves this
+// machine, the Claude Code hooks and what to do next.
 export const TAGLINE = [
   'Prove your agent. A signed, portable track record',
   'anyone can check offline.',
@@ -234,6 +236,16 @@ export const BRONZE = LEVEL_THRESHOLDS.bronze;
 // SealKeeper has. No is the default, since a new version starts a new record.
 export const versionQuestion = (server: string, local: string): string =>
   `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
+// The game layer, duels and weekly challenges (D-GAME-2). Asked in a
+// terminal after the runtime, before the sign in, with yes as the default.
+// Without a terminal, or when Claude Code runs init, nobody is asked and
+// the default goes. The answer goes with the registration, and the line
+// after it says what SealKeeper has and how to change it.
+export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
+export const gameLine = (on: boolean): string =>
+  on
+    ? `on, turn it off with ${cli('game off')}`
+    : `off, turn it on with ${cli('game on')}`;
 // The next steps a --json run lists in nextSteps.
 export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
@@ -704,6 +716,11 @@ async function init(
     runtime = (await askRuntime(terminal, detected, indent)) ?? undefined;
     askedRuntime = true;
   }
+  let gameEnabled = true;
+  if (terminal !== undefined && ui !== null) {
+    note();
+    gameEnabled = await askYes(terminal, question(ui, GAME_QUESTION));
+  }
 
   // The terms, right before the device code. On stderr with the device flow
   // prompts, so --json output stays one object. Before them, the API the
@@ -742,6 +759,7 @@ async function init(
     name,
     version: options.version,
     ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
+    gameEnabled,
   };
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
   const envelope = await signEnvelope(request, api.apiUrl, p);
@@ -832,6 +850,8 @@ async function init(
   if (registeredRuntime !== 'unknown') {
     say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
   }
+  const game = await registeredGame(api.apiUrl, deps, p, gameEnabled);
+  say(s.line`  ${s.dim('Game')}  ${gameLine(game)}`);
   await printOperator(s, config, live, deps);
   if (folder !== null && target.folder !== null) {
     say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
@@ -846,6 +866,30 @@ async function init(
     nextStateOf(config, live),
     await routineStepFirst(hooks, deps, p),
   );
+}
+
+// Whether SealKeeper has the game on for the agent just registered, read
+// with the signed status read. A key registered before keeps its switch,
+// as it keeps its runtime, so the answer sent may not be what the API has.
+// The answer sent when the read fails, with the short timeout of the agent
+// read, so a slow API never holds init up.
+async function registeredGame(
+  apiUrl: string,
+  deps: InitDeps,
+  p: Paths,
+  sent: boolean,
+): Promise<boolean> {
+  try {
+    const api = createApiClient({
+      apiUrl,
+      fetch: deps.fetch,
+      timeoutMs: SCORE_TIMEOUT_MS,
+    });
+    const signer = await loadSigner(api.apiUrl, p);
+    return (await readGameStatus({ signer, api })).enabled;
+  } catch {
+    return sent;
+  }
 }
 
 // A run for an agent registered already. When the choice picked it by

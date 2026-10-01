@@ -12,7 +12,9 @@ import {
   type ConfigDeps,
   register as registerConfig,
 } from './commands/config.js';
+import { register as registerDuel } from './commands/duel.js';
 import { register as registerEmit } from './commands/emit.js';
+import { register as registerGame } from './commands/game.js';
 import { register as registerGoal } from './commands/goal.js';
 import {
   type HookCommandDeps,
@@ -122,6 +124,8 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerTasks(program, deps.tasks);
   registerProve(program, deps.tasks);
   registerGoal(program, deps.tasks);
+  registerGame(program, deps.tasks);
+  registerDuel(program, deps.tasks);
   registerRoutine(program, deps.routine);
   registerRate(program, deps.rate);
   registerAgent(program, deps.agent, deps.routine);

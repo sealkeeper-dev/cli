@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
-import { OpenTasksRequest } from '@sealkeeper/schema';
+import { GAME, GAME_TASK_ORIGINS, OpenTasksRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import type { z } from 'zod';
 import {
@@ -126,9 +126,18 @@ export function sha256Hex(text: string): string {
 }
 
 // Aligned key and value lines for human output.
-export function printFields(fields: [string, string][]): void {
+export function fieldLines(fields: [string, string][]): string[] {
   const width = Math.max(...fields.map(([key]) => key.length));
-  for (const [key, value] of fields) stdout(`${key.padEnd(width)}  ${value}`);
+  return fields.map(([key, value]) => `${key.padEnd(width)}  ${value}`);
+}
+
+export function printFields(fields: [string, string][]): void {
+  for (const line of fieldLines(fields)) stdout(line);
+}
+
+// 2026-10-03 09:00 UTC, to the minute, how the game commands print a time.
+export function utc(iso: string): string {
+  return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
 // poster is the poster's handle, given for an addressed task, whose spec
@@ -220,6 +229,22 @@ export function addressedTo(
     )
     .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
 }
+
+// A duel or weekly challenge task (D-GAME-5). Its spec reaches its
+// claimant only in the claim, submit and release answers, timed from the
+// claim, and every other read, GET /v1/tasks/:id included, shows {}.
+export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
+  (GAME_TASK_ORIGINS as readonly string[]).includes(task.origin ?? '');
+
+// What tasks show and a repeated tasks claim print for the spec of a game
+// task, which the public read they make shows as {}.
+// It holds before the claim and after it.
+export const GAME_SPEC_AT_CLAIM =
+  'The spec of a duel or challenge task is shown only in the answer to its claim.';
+
+// The submits of a duel side, one today, as duel and tasks submit word it.
+export const DUEL_SUBMITS =
+  GAME.duelSubmits === 1 ? 'one submit' : `${GAME.duelSubmits} submits`;
 
 // A task lives at most seven days, so a claim older than that is expired
 // whatever happened to it. One more day covers the UTC day boundary.

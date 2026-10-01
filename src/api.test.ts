@@ -680,6 +680,16 @@ describe('the CLI version header (VOU-453)', () => {
     postRating: (api) => api.postRating('a.b.c'),
     patchAgent: (api) => api.patchAgent(AGENT_ID, 'a.b.c'),
     deleteAgent: (api) => api.deleteAgent(AGENT_ID, 'a.b.c'),
+    gameStatus: (api) => api.gameStatus('a.b.c'),
+    gameSettings: (api) => api.gameSettings('a.b.c'),
+    gameCategories: (api) => api.gameCategories(),
+    seekDuel: (api) => api.seekDuel('a.b.c'),
+    cancelSeek: (api) => api.cancelSeek('s1', 'a.b.c'),
+    challengeDuel: (api) => api.challengeDuel('a.b.c'),
+    duelAction: (api) => api.duelAction('d1', 'accept', 'a.b.c'),
+    myDuels: (api) => api.myDuels('a.b.c'),
+    duelInbox: (api) => api.duelInbox('a.b.c'),
+    getDuel: (api) => api.getDuel('d1'),
   };
 
   // Records the headers of every request and answers each with an error,
