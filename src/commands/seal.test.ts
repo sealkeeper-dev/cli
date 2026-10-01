@@ -531,7 +531,86 @@ describe('sealkeeper seal', () => {
       expect(lines).toContain('state matches');
     });
 
-    it.each([4, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    // VOU-560. A version 4 SEAL carries the Trust Score and the top
+    // categories, printed in the plain output, and --json prints them in
+    // the payload as signed.
+    it('a version 4 SEAL is valid and shows the Trust Score and the top categories', async () => {
+      const { version: _version, ...rest } = claims();
+      const v4 = {
+        ...rest,
+        ver: 4,
+        counts: {
+          ...rest.counts,
+          posted_tasks: 4,
+          posted_distinct_operators: 2,
+          posted_confirmed_tasks: 1,
+        },
+        counted: {
+          verified_tasks: 17,
+          seed_tasks: 17,
+          server_checked_tasks: 0,
+          confirmed_tasks: 0,
+          posted_tasks: 3,
+          posted_confirmed_tasks: 1,
+        },
+        fingerprint: null,
+        state: 'matches',
+        trust: 412,
+        top_categories: [
+          { category: 'code', score: 230 },
+          { category: 'data', score: 90 },
+          { category: 'math', score: 90 },
+        ],
+      };
+      const seal = await sign(v4, serverKey.privateKey, KID);
+      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+      expect(code).toBe(0);
+      const lines = out.trimEnd().split('\n');
+      expect(lines[0]).toBe('valid SEAL');
+      expect(lines).toContain('posted tasks 4, 3 counted');
+      expect(lines).toContain('fingerprint none sent');
+      expect(lines).toContain('state matches');
+      expect(lines).toContain('Trust Score 412');
+      expect(lines).toContain('top categories code 230, data 90, math 90');
+      const json = await run(fetchFn, 'seal', 'verify', seal, '--json');
+      expect(JSON.parse(json.out)).toMatchObject({
+        valid: true,
+        payload: { ver: 4, trust: 412, top_categories: v4.top_categories },
+      });
+      // No category yet reads as none, and a version 3 SEAL prints neither.
+      const empty = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign(
+          { ...v4, trust: 0, top_categories: [] },
+          serverKey.privateKey,
+          KID,
+        ),
+      );
+      expect(empty.out).toContain('Trust Score 0\ntop categories none yet\n');
+      const { trust: _t, top_categories: _c, ...v3 } = { ...v4, ver: 3 };
+      const three = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign(v3, serverKey.privateKey, KID),
+      );
+      expect(three.code).toBe(0);
+      expect(three.out).not.toContain('Trust Score');
+      expect(three.out).not.toContain('top categories');
+      // An unknown field on version 4 is broken, as on every version.
+      const extra = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign({ ...v4, extra: true }, serverKey.privateKey, KID),
+      );
+      expect(extra.code).toBe(1);
+      expect(extra.out.split('\n')[0]).toBe('broken SEAL: malformed');
+    });
+
+    it.each([5, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);

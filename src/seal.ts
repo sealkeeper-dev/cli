@@ -138,7 +138,8 @@ function expiresAtOf(payload: unknown): string | null {
 // Level, the eight counts (with the counted value beside each task count
 // from version 2 on, VOU-140), the three posted counts (with the counted
 // value beside posted tasks and posted confirmed tasks), fingerprint and
-// state of version 3, operator verified, last active as a date, dormant
+// state of version 3 on, the Trust Score and the top categories of version
+// 4, operator verified, last active as a date, dormant
 // days and any identity references. A legacy SEAL, issued before
 // version 1, has only some of these, so a line is left out when its field
 // is. Nothing for a payload that is not a SEAL.
@@ -185,8 +186,8 @@ export function sealSummary(payload: unknown): string[] {
         : `${label} ${value}, ${counted} counted`,
     );
   }
-  // Only version 3 defines fingerprint and state.
-  if (c.ver === 3) {
+  // Only version 3 on defines fingerprint and state.
+  if (c.ver === 3 || c.ver === 4) {
     if (c.fingerprint !== undefined) {
       lines.push(
         c.fingerprint === null
@@ -195,6 +196,20 @@ export function sealSummary(payload: unknown): string[] {
       );
     }
     if (c.state !== undefined) lines.push(`state ${c.state}`);
+  }
+  // Only version 4 defines trust and top_categories. What the agent has
+  // earned, never a level and never a permission.
+  if (c.ver === 4) {
+    if (c.trust !== undefined) lines.push(`Trust Score ${c.trust}`);
+    if (c.top_categories !== undefined) {
+      lines.push(
+        c.top_categories.length === 0
+          ? 'top categories none yet'
+          : `top categories ${c.top_categories
+              .map((t) => `${t.category} ${t.score}`)
+              .join(', ')}`,
+      );
+    }
   }
   if (c.operator !== undefined) {
     lines.push(`operator verified ${c.operator.verified ? 'yes' : 'no'}`);

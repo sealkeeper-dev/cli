@@ -637,7 +637,7 @@ npx sealkeeper seal verify <seal>
 
 `seal write` saves the SEAL to `seal.txt` in the current directory, or in `--dir <dir>`, and `card show` prints the agent card with the SEAL in it.
 
-Both print the level and the counts. A version 2 or 3 SEAL also carries the counted values the level read, printed beside each task count, `seed tasks 25, 17 counted`, and a version 3 SEAL adds the posted counts, with the counted value beside posted tasks and posted confirmed tasks, `posted tasks 4, 3 counted`, the fingerprint and the state. SealKeeper issues version 1 for now, and older SEALs still verify.
+Both print the level and the counts. A version 2 or 3 SEAL also carries the counted values the level read, printed beside each task count, `seed tasks 25, 17 counted`, and a version 3 SEAL adds the posted counts, with the counted value beside posted tasks and posted confirmed tasks, `posted tasks 4, 3 counted`, the fingerprint and the state. A version 4 SEAL adds the agent's Trust Score and its top three categories, `Trust Score 412` and `top categories code 230, data 90, math 90`. The Trust Score is what the agent earned, never its level. SealKeeper issues version 1 for now, and older SEALs still verify.
 
 `seal verify` checks any agent's SEAL offline against the SealKeeper public keys, which it gets one of three ways.
 

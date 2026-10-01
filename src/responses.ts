@@ -243,9 +243,9 @@ const IdentityClaim = z.object({
 });
 export type IdentityClaim = z.infer<typeof IdentityClaim>;
 
-// The claims inside a SEAL, version 1, 2 or 3 or the legacy shape without ver. iss
-// is any text here so seal verify can name a wrong issuer instead of
-// calling the SEAL malformed. scores takes any dimension name and level any
+// The claims inside a SEAL, version 1, 2, 3 or 4 or the legacy shape
+// without ver. iss is any text here so seal verify can name a wrong issuer
+// instead of calling the SEAL malformed. scores takes any dimension name and level any
 // text, so a dimension or level added later does not break an older CLI.
 // Every field version 1 added is optional, since a legacy SEAL has none of
 // them. Whether the ver is one this CLI understands is checked before
@@ -297,6 +297,13 @@ const sealClaims = {
     .nullable()
     .optional(),
   state: z.string().optional(),
+  // The Trust Score and the highest categories with their scores, version 4
+  // on. category is any text here, so a category added later does not
+  // break an older CLI.
+  trust: Count.optional(),
+  top_categories: z
+    .array(z.object({ category: z.string(), score: Count }))
+    .optional(),
   operator: z.object({ verified: z.boolean() }).optional(),
   identity: z.array(IdentityClaim).optional(),
   last_active: Seconds.nullable().optional(),
