@@ -36,9 +36,9 @@ import {
   streamInput,
 } from '../ask.js';
 import {
-  installProveCommand,
-  proveCommandPath,
-  refreshProveCommand,
+  installRunCommand,
+  refreshRunCommand,
+  runCommandPath,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
@@ -247,7 +247,7 @@ export const gameLine = (on: boolean): string =>
     ? `on, turn it off with ${cli('game off')}`
     : `off, turn it on with ${cli('game on')}`;
 // The next steps a --json run lists in nextSteps.
-export const NEXT_PROVE = `Run ${cli('prove')} to earn your first verified tasks`;
+export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
 // Every level needs tasks the agent posted that other operators' agents
@@ -1276,18 +1276,18 @@ export function bronzeLine(verifiedTasks: number, level: Level | null): string {
 function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
   const earn =
     state.verifiedTasks > 0 ? 'verified tasks' : 'your first verified tasks';
-  const prove = s.bold('/sealkeeper-prove');
+  const run = s.bold('/sealkeeper-run');
   const steps: Styled[] = [];
   if (hooks === 'not-installed') {
     steps.push(
       s.line`Install the Claude Code hooks with ${s.dim(INSTALL_COMMAND)}`,
-      s.line`Then in Claude Code, run ${prove} to earn ${earn}`,
+      s.line`Then in Claude Code, run ${run} to earn ${earn}`,
     );
   } else if (hooks === 'installed' || hooks === 'present') {
-    steps.push(s.line`In Claude Code, run ${prove} to earn ${earn}`);
+    steps.push(s.line`In Claude Code, run ${run} to earn ${earn}`);
   } else {
     steps.push(
-      s.line`Have your agent run ${s.bold(cli('prove --json'))} to earn ${earn}`,
+      s.line`Have your agent run ${s.bold(cli('run --json'))} to earn ${earn}`,
     );
   }
   if (!state.autoSync) {
@@ -1301,13 +1301,13 @@ function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
 }
 
 // With the hooks in, the first step is the slash command in Claude Code,
-// otherwise prove from the shell.
+// otherwise run from the shell.
 function genericSteps(s: Style, hooks: HooksResult): Styled[] {
   const hooksIn = hooks === 'installed' || hooks === 'present';
   const steps = [
     hooksIn
-      ? s.line`In Claude Code, run ${s.bold('/sealkeeper-prove')} to earn your first verified tasks`
-      : s.line`Earn your first verified tasks with ${s.bold(cli('prove'))}`,
+      ? s.line`In Claude Code, run ${s.bold('/sealkeeper-run')} to earn your first verified tasks`
+      : s.line`Earn your first verified tasks with ${s.bold(cli('run'))}`,
     s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
     s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
     s.line`${NEXT_POST}`,
@@ -1396,7 +1396,7 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
-// sealkeeper adapter claude-code install, the /sealkeeper-prove command
+// sealkeeper adapter claude-code install, the /sealkeeper-run command
 // included.
 // Hooks already there, in the user or the project settings, count as
 // installed and nothing is asked. Current hooks in the shared project
@@ -1469,7 +1469,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       await refuseOutsideProject(dirs.cwd, [
         file,
         shared,
-        proveCommandPath(file),
+        runCommandPath(file),
       ]);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
@@ -1507,7 +1507,7 @@ async function moveFromShared(
     await refuseOutsideProject(cwd, [
       project,
       shared,
-      proveCommandPath(project),
+      runCommandPath(project),
       skillPath(project),
     ]);
   } catch (error) {
@@ -1576,7 +1576,7 @@ async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
   return 'no';
 }
 
-// Brings /sealkeeper-prove up to date on a run that finds the hooks
+// Brings /sealkeeper-run up to date on a run that finds the hooks
 // already in, so a newer CLI's command reaches Claude Code without a
 // reinstall. Only a file of ours that differs is written. Anything that
 // goes wrong leaves the file as it was.
@@ -1587,15 +1587,15 @@ async function refreshCommand(
   hook: string,
   ui: Ui | null,
 ): Promise<void> {
-  const commandPath = proveCommandPath(file);
+  const commandPath = runCommandPath(file);
   const skillFile = skillPath(file);
   try {
     if (project) await refuseOutsideProject(cwd, [commandPath, skillFile]);
-    if (await refreshProveCommand(commandPath, invocationOf(hook))) {
+    if (await refreshRunCommand(commandPath, invocationOf(hook))) {
       if (ui !== null) {
         const s = ui.out;
         say(
-          s.line`${s.tick()} /sealkeeper-prove updated in ${tildePath(dirname(commandPath))}`,
+          s.line`${s.tick()} /sealkeeper-run updated in ${tildePath(dirname(commandPath))}`,
         );
       }
     }
@@ -1614,7 +1614,7 @@ async function refreshCommand(
 }
 
 // The same install as sealkeeper adapter claude-code install into one
-// settings file, the hooks and then the /sealkeeper-prove command. false
+// settings file, the hooks and then the /sealkeeper-run command. false
 // when the settings file could not be changed. A --json run, ui null,
 // prints the lines adapter claude-code install prints, on stderr, so the
 // --json output stays one object.
@@ -1642,9 +1642,9 @@ async function installAt(
     }
     throw error;
   }
-  const commandPath = proveCommandPath(file);
+  const commandPath = runCommandPath(file);
   try {
-    const command = await installProveCommand(commandPath, invocationOf(hook));
+    const command = await installRunCommand(commandPath, invocationOf(hook));
     if (ui === null) {
       stderr(commandLine(command, commandPath));
     } else {
@@ -1652,7 +1652,7 @@ async function installAt(
       say(
         command === 'kept'
           ? s.line`Left ${tildePath(commandPath)} alone, SealKeeper did not write it`
-          : s.line`${s.tick()} /sealkeeper-prove in ${tildePath(dirname(commandPath))}`,
+          : s.line`${s.tick()} /sealkeeper-run in ${tildePath(dirname(commandPath))}`,
       );
     }
   } catch (error) {
@@ -1698,7 +1698,7 @@ function nextSteps(
 ): string[] {
   const steps = [
     ...(routineFirst ? [NEXT_ROUTINE] : []),
-    NEXT_PROVE,
+    NEXT_RUN,
     NEXT_WHAT_IS_SHARED,
     NEXT_POST,
   ];

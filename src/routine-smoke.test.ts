@@ -227,7 +227,7 @@ describe('routine smoke, the game section against a local stack (GAME-14)', () =
           args: claudeArgs(invocation, null, true),
           input: routinePrompt(invocation, [], {
             post: null,
-            prove: false,
+            run: false,
             game: true,
           }),
           cwd,

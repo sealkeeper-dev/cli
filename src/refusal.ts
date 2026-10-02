@@ -29,7 +29,7 @@ export function refusal(error: ApiError): string {
     // so it is kept as it came.
     case 'game_cap_reached':
       return error.message;
-    // The duel commands, and tasks submit for duel_deadline_passed.
+    // The duel commands, and submit for duel_deadline_passed.
     case 'category_not_duelable':
       return `no duel can be played in this category, see ${cli('duel categories')}`;
     case 'opponent_not_playing':
@@ -54,7 +54,7 @@ export function refusal(error: ApiError): string {
       return 'only the invited agent can answer an invite';
     case 'seed_unavailable':
       return 'SealKeeper cannot start a duel right now, try again later';
-    // The challenge commands, and tasks submit of a challenge task from
+    // The challenge commands, and submit of a challenge task from
     // the week's close on.
     case 'challenge_closed':
       return "this week's challenge has closed, the next one opens on Monday at 00:00 UTC";

@@ -141,7 +141,7 @@ export const TaskResponse = z.object({
   posterLapsedAt: Timestamp.nullable().optional(),
   submission: z.string().optional(),
   // True when the seed agent posted the task (VOU-208). Absent from an API
-  // before it, and then unknown, so prove looks the poster up as before.
+  // before it, and then unknown, so a routine run looks the poster up.
   seed: z.boolean().optional(),
   // Where the post came from, manual, template or routine (RT-8). Any
   // string, so a new origin never fails the parse of a whole page. Absent
@@ -712,3 +712,53 @@ export const AgentTrustResponse = z.looseObject({
   categories: z.array(z.looseObject({ category: z.string(), tasks: Count })),
 });
 export type AgentTrustResponse = z.infer<typeof AgentTrustResponse>;
+
+// The one answer of the core routes (VOU-589), run first, CoreAnswer in
+// @sealkeeper/schema, loose all the way down, so run --json prints the API
+// answer as it came. A task kind, a waiting kind, an action, a level and a
+// limited code are any string, so a value a later API adds never fails the
+// parse. A client shows an action it does not know by its label.
+const CoreTaskResponse = z.looseObject({
+  id: z.uuid(),
+  kind: z.string(),
+  type: z.string(),
+  spec: z.record(z.string(), z.unknown()),
+  schema: z.record(z.string(), z.unknown()).nullable(),
+  submits: Count,
+  expiresAt: Timestamp,
+});
+
+const CoreWaitingResponse = z.looseObject({
+  kind: z.string(),
+  id: z.uuid(),
+  from: z.string(),
+  expiresAt: Timestamp.nullable(),
+});
+
+export const CoreActionResponse = z.looseObject({
+  action: z.string(),
+  args: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
+  label: z.string(),
+  needsYes: z.boolean(),
+});
+export type CoreActionResponse = z.infer<typeof CoreActionResponse>;
+
+export const CoreAnswerResponse = z.looseObject({
+  tasks: z.array(CoreTaskResponse),
+  waiting: z.array(CoreWaitingResponse),
+  next: z.array(CoreActionResponse),
+  standing: z.looseObject({
+    level: z.string(),
+    verified: Count,
+    nextLevel: z.string().nullable(),
+    needs: z.string().nullable(),
+  }),
+  limited: z
+    .looseObject({
+      code: z.string(),
+      message: z.string(),
+      until: Timestamp.nullable(),
+    })
+    .nullable(),
+});
+export type CoreAnswerResponse = z.infer<typeof CoreAnswerResponse>;

@@ -4,9 +4,9 @@ import { type Command, Option } from 'commander';
 import { type Input, readYesNo, streamInput } from '../ask.js';
 import {
   type CommandResult,
-  installProveCommand,
-  proveCommandPath,
-  uninstallProveCommand,
+  installRunCommand,
+  runCommandPath,
+  uninstallRunCommand,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
@@ -95,7 +95,7 @@ export function register(
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
       const shared = sharedFor(options.scope, deps);
-      const commandPath = proveCommandPath(file);
+      const commandPath = runCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
@@ -119,7 +119,7 @@ export function register(
         }
       }
       const command = await orExit(this, () =>
-        installProveCommand(commandPath, invocationOf(hook)),
+        installRunCommand(commandPath, invocationOf(hook)),
       );
       const skill = await orExit(this, () =>
         installSkill(skillFile, invocationOf(hook)),
@@ -153,7 +153,7 @@ export function register(
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
       const shared = sharedFor(options.scope, deps);
-      const commandPath = proveCommandPath(file);
+      const commandPath = runCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
@@ -172,7 +172,7 @@ export function register(
         );
       }
       const commandRemoved = await orExit(this, () =>
-        uninstallProveCommand(commandPath),
+        uninstallRunCommand(commandPath),
       );
       const skillRemoved = await orExit(this, () => uninstallSkill(skillFile));
       if (wantsJson(this)) {
@@ -201,14 +201,14 @@ export function register(
           `removed ${removedShared} sealkeeper hook${removedShared === 1 ? '' : 's'} from ${shared[0] ?? ''}`,
         );
       }
-      if (commandRemoved) stdout(`removed ${PROVE_SLASH} from ${commandPath}`);
+      if (commandRemoved) stdout(`removed ${RUN_SLASH} from ${commandPath}`);
       if (skillRemoved) stdout(`removed ${SKILL} from ${skillFile}`);
     });
 
   return adapter;
 }
 
-const PROVE_SLASH = 'the /sealkeeper-prove command';
+const RUN_SLASH = 'the /sealkeeper-run command';
 const SKILL = 'the sealkeeper skill';
 
 // What install did with the hooks, one line each for what it added, what
@@ -244,8 +244,8 @@ export function movedLine(moved: number, shared: string): string {
 
 // One line on what install did with the slash command.
 export function commandLine(result: CommandResult, path: string): string {
-  if (result === 'written') return `added ${PROVE_SLASH} at ${path}`;
-  if (result === 'unchanged') return `${PROVE_SLASH} is up to date at ${path}`;
+  if (result === 'written') return `added ${RUN_SLASH} at ${path}`;
+  if (result === 'unchanged') return `${RUN_SLASH} is up to date at ${path}`;
   return `left ${path} alone, sealkeeper did not write it`;
 }
 

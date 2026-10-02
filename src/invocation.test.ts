@@ -112,12 +112,12 @@ describe('printed invocation', () => {
     );
   });
 
-  it('keeps the quoted node and script invocation a routine run sets, so the submit lines prove prints match its rule (RS-11)', () => {
+  it('keeps the quoted node and script invocation a routine run sets, so the submit lines run prints match its rule (RS-11)', () => {
     const invocation =
       '"/usr/local/bin/node" "/Users/alice/.sealkeeper/routine/cli.js"';
     vi.stubEnv('SEALKEEPER_INVOCATION', invocation);
-    expect(cli('tasks submit 1f0c --file <answer file>')).toBe(
-      `${invocation} tasks submit 1f0c --file <answer file>`,
+    expect(cli('submit 1f0c --file <answer file>')).toBe(
+      `${invocation} submit 1f0c --file <answer file>`,
     );
   });
 

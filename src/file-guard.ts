@@ -7,10 +7,10 @@ import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 import { activeRoutineRun } from './routine.js';
 
-// Which files tasks submit --file and tasks post --input @file may read
+// Which files submit --file and tasks post --input @file may read
 // (VOU-229). What they read leaves the machine as a submission or a spec,
 // and the path may come from an agent that a task spec told what to do. A
-// routine run grants the agent tasks submit with any arguments, so the CLI
+// routine run grants the agent submit with any arguments, so the CLI
 // must not read for it a file its own Read tool may not open.
 //
 // Every path is resolved with realpath first, so a symlink is judged by
@@ -34,7 +34,7 @@ import { activeRoutineRun } from './routine.js';
 // - only a regular file, never a device, a fifo or a folder
 // - nothing larger than maxBytes, checked before a byte is read
 
-// The folder the prove instructions write answer files to.
+// The folder the run instructions write answer files to.
 export const ANSWERS_DIR = '.sealkeeper-answers';
 
 export type FileRules = {

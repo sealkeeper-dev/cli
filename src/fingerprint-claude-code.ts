@@ -1,7 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The fingerprint parts of a Claude Code agent. Read only in the SessionStart
 // and SessionEnd hooks, from the folder the hook payload names, and kept as
-// the claude-code source in fingerprint-sources.json, which sync and prove
+// the claude-code source in fingerprint-sources.json, which sync and run
 // read from any folder. Hashes come out of here, and the one model id as
 // text, the model name sync declares (VOU-566), less an ARN's account and
 // region (modelNameOf). Server and tool names and the version stay on this

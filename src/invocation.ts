@@ -4,7 +4,7 @@ import { basename, delimiter, dirname, resolve } from 'node:path';
 
 // How printed advice spells this CLI, such as the sync in "run npx
 // sealkeeper sync". After npx sealkeeper init nothing is on PATH, so a bare
-// sealkeeper would not run. The hooks and the /sealkeeper-prove command use
+// sealkeeper would not run. The hooks and the /sealkeeper-run command use
 // the absolute node and script paths instead, see cliInvocation in
 // claude-code-settings.ts. This is only for text a person or an agent reads
 // and types.

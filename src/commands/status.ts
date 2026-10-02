@@ -522,14 +522,14 @@ export function dormancyLine(dormantDays: number | null): string | null {
 function unsubmittedHint(status: Status): string | null {
   if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
   const n = status.unsubmittedClaims;
-  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Run ${cli('prove --claim')} to list ${n === 1 ? 'it' : 'them'} again.`;
+  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Your agent gets ${n === 1 ? 'it' : 'them'} again with ${cli('run --json')}.`;
 }
 
 // Only when the API said some tasks wait. Nothing when none do or when the
 // API did not answer.
 export function addressedLine(n: number | null): string | null {
   if (n === null || n === 0) return null;
-  return `${n} task${n === 1 ? '' : 's'} addressed to you, run ${cli('prove')}`;
+  return `${n} task${n === 1 ? '' : 's'} addressed to you, run ${cli('run')}`;
 }
 
 function formatScore(value: number): string {

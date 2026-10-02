@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
-// Words about levels that goal, prove, the routine and the session nudge
+// Words about levels that goal, run, the routine and the session nudge
 // share. On its own so the nudge reads them without the rest of goal.ts.
 
 // Where an operator verifies a domain (VOU-185), which gold needs.

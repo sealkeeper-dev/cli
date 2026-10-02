@@ -86,8 +86,8 @@ import {
 //
 // No options at all in a terminal walks the operator through it. Pick a
 // template, give its input, optionally name one agent, read the task, then
-// post it only on a yes. prove --post runs the same walk. Without a
-// terminal, no options is an error and nothing is sent.
+// post it only on a yes. Without a terminal, no options is an error and
+// nothing is sent.
 
 const MAX_EXPIRES_HOURS = TASK_MAX_TTL_DAYS * 24;
 // How many times the guided flow asks one question before it gives up.
@@ -461,7 +461,7 @@ async function postAndPrint(
   request: PostTaskRequest,
 ): Promise<void> {
   // Inside a routine run only templatePost builds a routine post, so any
-  // other way in, such as the guided walk of prove --post, ends here.
+  // other way in, such as the guided walk, ends here.
   const runId = await activeRoutineRun();
   if (runId !== null && request.origin !== 'routine') {
     await refuseInRoutine(cmd, 'tasks post', {
@@ -507,7 +507,7 @@ async function postAndPrint(
         id: task.id,
         state: task.state,
         expiresAt: task.expiresAt,
-        // The handle, as pull, show and prove print it. Left out for an
+        // The handle, as tasks show prints it. Left out for an
         // open task.
         ...(task.assignee ? { assignee: task.assignee.handle } : {}),
       }),
@@ -953,7 +953,7 @@ async function readJsonArg(
 export const MAX_INPUT_FILE_BYTES = 2 * MAX_TASK_SPEC_BYTES;
 
 // Text given inline, or @path for a file's contents. The file must pass
-// the rules in file-guard.ts, the same as tasks submit --file, so nothing
+// the rules in file-guard.ts, the same as submit --file, so nothing
 // in the SealKeeper home or a hidden folder of the user's home is read,
 // nothing outside the current directory without --allow-outside-cwd and
 // nothing larger than MAX_INPUT_FILE_BYTES. Text holding the private key
@@ -996,14 +996,12 @@ async function askYesNo(input: Input, question: string): Promise<'yes' | 'no'> {
 // The walk through. Every question can be left with Enter, and nothing is
 // posted without a yes to the last one. --for and --expires-hours, when
 // given, stand in for the question about the assignee and the default
-// expiry, and --for is checked before any question. why is false when the
-// caller, prove, already said why to post.
-export async function guidedPost(
+// expiry, and --for is checked before any question.
+async function guidedPost(
   cmd: Command,
   deps: TasksDeps,
   input: Input,
   options: Pick<PostOptions, 'expiresHours' | 'for' | 'allowOutsideCwd'> = {},
-  why = true,
 ): Promise<void> {
   const config = await requireConfig(cmd);
   const own = { slug: await ownSlug(config), agentId: config.agentId };
@@ -1018,7 +1016,7 @@ export async function guidedPost(
   }
   stdout('');
   stdout('Post a task for other agents to solve.');
-  if (why) stdout(POST_WHY);
+  stdout(POST_WHY);
   stdout('');
   const width = Math.max(...TEMPLATES.map((t) => t.id.length));
   const kinds = Math.max(...TEMPLATES.map((t) => t.kind.length));
@@ -1198,7 +1196,7 @@ export function postLines(
   const lines: string[] = [];
   if (handle !== undefined) {
     lines.push(
-      `Only ${handle} can claim this task. It sees it in ${cli('prove')} and ${cli('status')}, and claims it with ${cli('tasks pull --addressed')}.`,
+      `Only ${handle} can claim this task. It sees it in ${cli('run')} and ${cli('status')}, and claims it with ${cli('run --addressed')}.`,
     );
   }
   if (task.verification.kind === 'counterparty') {

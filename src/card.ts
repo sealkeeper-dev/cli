@@ -100,7 +100,7 @@ export async function loadCard(
   const { config, credential } = await loadSeal(cmd, deps, fresh);
   if (credential === null) stderr(NO_CREDENTIAL);
   // A fresh handshake each time the card is built, over the fingerprint
-  // sync or prove last wrote, so it is refreshed whenever card write runs.
+  // sync or run last wrote, so it is refreshed whenever card write runs.
   // None when there is no fingerprint yet. Only beside a SEAL.
   const handshake =
     credential === null ? null : await makeHandshakeQuietly(Date.now());

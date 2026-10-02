@@ -217,7 +217,7 @@ async function sendRounds(
   };
 
   // The fingerprint this run declares (VB-4), fingerprint.json as sync or
-  // prove last wrote it, never computed here, with the model name beside it
+  // run last wrote it, never computed here, with the model name beside it
   // as text when an adapter read one or one is set (VOU-566). Signed on its
   // own when the first batch goes and sent beside the envelopes until a
   // batch is accepted with it. When the API refuses it with a model name,

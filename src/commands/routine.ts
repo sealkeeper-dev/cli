@@ -115,6 +115,7 @@ import {
   watchRun,
 } from '../routine-watch.js';
 import { createStyle } from '../style.js';
+import { serverHeld } from '../tasks.js';
 import { dailyCeilingReached, todayOf } from '../today.js';
 import { VERSION } from '../version.js';
 import { readGameStatus } from './game.js';
@@ -124,8 +125,7 @@ import {
   type RoutineCandidates,
   routineCandidates,
   routineHeld,
-  serverHeld,
-} from './prove.js';
+} from './run-routine.js';
 import { awaitingVerdict, fetchSubmission } from './tasks-outcome.js';
 
 // sealkeeper routine (VOU-136, VOU-138). An opt-in daily run that works
@@ -135,7 +135,7 @@ import { awaitingVerdict, fetchSubmission } from './tasks-outcome.js';
 // short block and a yes, and offers the first run (RS-1, RS-3). The job runs
 // a copy of this CLI under the home (RS-2) with routine run, which checks whether there is
 // anything to do within the day's limits and, only then, starts the agent
-// headless with the prove instructions. When the game is on for the agent
+// headless with the run instructions. When the game is on for the agent
 // and it has game units left or a duel running, the agent plays the game
 // after the task work, and a run with no task work starts it for the game
 // alone (GAME-14, gameSteps in routine-agent.ts). Everything a run does is
@@ -197,9 +197,9 @@ export const AGENTS = ['claude-code'] as const;
 // Frameworks with no headless mode the routine could start.
 const NOT_HEADLESS: Record<string, string> = {
   openclaw:
-    'OpenClaw has no headless mode the routine can start. Have your own scheduler start the agent with the output of sealkeeper prove --json, see the README',
+    'OpenClaw has no headless mode the routine can start. Have your own scheduler start the agent with the output of sealkeeper run --json, see the README',
   mastra:
-    'a Mastra agent runs inside your own program, so there is nothing for the routine to start. Call sealkeeper prove --json from a scheduled job of that program, see the README',
+    'a Mastra agent runs inside your own program, so there is nothing for the routine to start. Call sealkeeper run --json from a scheduled job of that program, see the README',
 };
 
 const FAILURES_TO_PAUSE = 3;
@@ -710,7 +710,7 @@ export function preview(prepared: PreparedInstall, time: string): string[] {
   const { plan, agentCommand, current: routine } = prepared;
   const lines = [
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
-    `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper prove instructions. Otherwise it starts nothing.`,
+    `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper run instructions. Otherwise it starts nothing.`,
     '',
     'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only when the goal says posting is behind, adopting a ready made task whose answer SealKeeper knows, or a template task SealKeeper checks when none is waiting. Everything else waits for you in routine status.',
     NO_SETTINGS_NOTE,
@@ -930,7 +930,7 @@ export async function routineRun(
       return;
     }
     const work: TaskPlan =
-      tasks.kind === 'work' ? tasks : { confirm: [], post: null, prove: false };
+      tasks.kind === 'work' ? tasks : { confirm: [], post: null, run: false };
 
     const { invocation } = cliOf(deps);
     let workDir: string;
@@ -954,7 +954,7 @@ export async function routineRun(
         args: claudeArgs(invocation, post, game),
         input: routinePrompt(invocation, work.confirm, {
           post,
-          prove: work.prove,
+          run: work.run,
           game,
         }),
         cwd: workDir,
@@ -1181,7 +1181,7 @@ export async function routineRun(
         session,
       };
     }
-    return { kind: 'work', confirm, post, prove: !ceiling, session };
+    return { kind: 'work', confirm, post, run: !ceiling, session };
   }
 
   // The API client and the agent key, or why they could not be had.
@@ -1207,7 +1207,7 @@ export async function routineRun(
 // The agent's environment. SEALKEEPER_ROUTINE_RUN puts its commands under
 // the routine rules. SEALKEEPER_INVOCATION is the invocation its Bash rules
 // and prompt spell, so every command the CLI prints for it, such as each
-// task's submit line from prove --json, matches its rule exactly, whatever
+// task's submit line from run --json, matches its rule exactly, whatever
 // started the run (RS-11). SEALKEEPER_HOME names the home of this run, so a
 // first run started from init in a bound folder works for that agent, as
 // the job does. A watcher's run id stays with the run.
@@ -1230,7 +1230,7 @@ export function agentEnv(
 type TaskPlan = {
   confirm: Confirmable[];
   post: RunPost | null;
-  prove: boolean;
+  run: boolean;
 };
 
 // The API client and the agent key of a run, or why they could not be had.

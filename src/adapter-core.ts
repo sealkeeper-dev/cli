@@ -41,11 +41,11 @@ export function emitQueue(): (input: EmitInput) => Promise<void> {
 
 // The session nudge (VOU-137) for an in-process adapter, the short
 // SealKeeper summary once the operator turned it on, else ''. The agent is
-// told to run prove --json, which claims only seed tasks. It reads the
+// told to run run --json, which claims only seed tasks unasked. It reads the
 // cached goal only, so it never waits on the network, and never rejects.
 export async function adapterNudge(): Promise<string> {
   try {
-    const run = `\`${cli('prove --json')}\``;
+    const run = `\`${cli('run --json')}\``;
     return (await quietly(() => nudgeLines(run))).join('\n');
   } catch {
     return '';

@@ -24,7 +24,7 @@ import { stdout, wantsJson } from '../output.js';
 // sealkeeper goal. What this agent needs for its next level, for a person
 // in a terminal and, with --json, for an agent. It always asks the API,
 // since the pending counts are live there, and refreshes the cache status
-// and prove read.
+// and run read.
 
 type GoalCommandDeps = { fetch?: typeof fetch };
 

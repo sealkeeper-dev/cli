@@ -351,7 +351,7 @@ describe('Claude Code capture', () => {
         { fetch: (async () => Response.json({})) as typeof fetch, paths: p },
       );
 
-    // sync and prove may run from any folder. Only the hook payload's cwd
+    // sync and run may run from any folder. Only the hook payload's cwd
     // picks the project.
     const refresh = async () => {
       const fp = await refreshFingerprint({ paths: p, env: {} });

@@ -17,7 +17,7 @@ import { stderr } from './output.js';
 import { type SealWithheld, sealWithheldOf } from './responses.js';
 import { SCORE_TIMEOUT_MS } from './score.js';
 
-// Where the agent stands on SealKeeper, as status, prove and init read it.
+// Where the agent stands on SealKeeper, as status and init read it.
 // The verified count and the level come live from GET /v1/agents/<id>, the
 // same numbers the public profile shows.
 
@@ -37,25 +37,6 @@ export const LiveAgent = z.object({
       // A hold is in force on the agent or its operator, so its SEAL is
       // withheld for cause (VOU-85). Absent from an API before it.
       held: z.boolean().optional().catch(undefined),
-      // The scoring window's evidence counts, as of the last run. prove
-      // --json carries them in progress.
-      counts: z
-        .object({
-          server_checked_tasks: z.int().min(0),
-          confirmed_tasks: z.int().min(0),
-          distinct_operators: z.int().min(0),
-        })
-        .optional()
-        .catch(undefined),
-      // The counted evidence the level read (VOU-139), from an API that
-      // sends it. prove reads the task counts from it when it is there.
-      counted: z
-        .object({
-          server_checked_tasks: z.int().min(0),
-          confirmed_tasks: z.int().min(0),
-        })
-        .optional()
-        .catch(undefined),
     })
     .optional()
     .catch(undefined),
@@ -134,8 +115,8 @@ export function fingerprintText(fingerprint: LiveFingerprint): string {
 // The agent answer, with the same two second limit as the score. null when
 // the API does not answer or answers with something else. Never throws.
 // A redirect is never followed. It says on stderr where the API moved, as
-// every other request does, and then counts as no answer, so status, init
-// and prove still print what they can.
+// every other request does, and then counts as no answer, so status and
+// init still print what they can.
 export async function readLiveAgent(
   config: Pick<Config, 'agentId' | 'apiUrl'>,
   fetchFn: typeof fetch,

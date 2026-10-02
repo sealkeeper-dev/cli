@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { CLI_VERSION_HEADER, WELL_KNOWN_URL } from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import { LOCK_FILE, STAMP_FILE } from './background-sync.js';
-import { proveCommandPath } from './claude-code-command.js';
+import { runCommandPath } from './claude-code-command.js';
 import {
   HOOK_EVENTS,
   RETIRED_HOOK_EVENTS,
@@ -92,7 +92,7 @@ describe('the What init does inventory', () => {
     for (const event of RETIRED_HOOK_EVENTS) {
       expect(text).toContain(`\`${event}\``);
     }
-    expect(text).toContain(`- \`${tilde(proveCommandPath(user))}\`, `);
+    expect(text).toContain(`- \`${tilde(runCommandPath(user))}\`, `);
     expect(text).toContain(`- \`${tilde(skillPath(user))}\`, `);
     expect(text).toContain('`CLAUDE_CONFIG_DIR`');
   });
@@ -105,7 +105,7 @@ describe('the What init does inventory', () => {
       text.indexOf('`adapter claude-code install --scope project`'),
     );
     expect(scope).toContain(
-      `the hooks to \`${inProject(project)}\`, the command to \`${inProject(proveCommandPath(project))}\` and the skill to \`${inProject(skillPath(project))}\``,
+      `the hooks to \`${inProject(project)}\`, the command to \`${inProject(runCommandPath(project))}\` and the skill to \`${inProject(skillPath(project))}\``,
     );
     expect(scope).toContain(
       `rewrites the project's \`${inProject(sharedProjectSettingsPath(cwd))}\``,

@@ -9,7 +9,7 @@ import type { TaskResponse } from '../responses.js';
 import { defaultTasksDeps, openTaskSession, type TasksDeps } from '../tasks.js';
 import { NOT_FOUND } from './tasks-claim.js';
 
-// sealkeeper tasks release <id>. Gives a claim this agent cannot finish
+// sealkeeper release <id>. Gives a claim this agent cannot finish
 // back (VOU-572). An open task goes back to the pool, an addressed one
 // expires, the release costs no penalty, and it counts in reliability as a
 // claim that never verified. This agent cannot claim the task again. One

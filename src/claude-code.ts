@@ -66,8 +66,8 @@ type HookDeps = {
 };
 
 // How the summary tells Claude to act on it, the slash command and the
-// sealkeeper skill both run the prove instructions.
-export const CLAUDE_CODE_RUN = '/sealkeeper-prove';
+// sealkeeper skill both run the run instructions.
+export const CLAUDE_CODE_RUN = '/sealkeeper-run';
 
 // Picks the few fields the adapter uses out of the raw stdin text, or null
 // when it is not a hook payload. Only the event name, the session id and cwd
@@ -148,7 +148,7 @@ async function logHook(
     const append = (event: EmitInput) =>
       emit({ ...event, version: config.version }, p);
     // The fingerprint parts, read from the folder Claude Code runs in and
-    // kept for the next sync or prove, see fingerprint-claude-code.ts. Only
+    // kept for the next sync or run, see fingerprint-claude-code.ts. Only
     // at session start and end. Never throws.
     const observe = () =>
       observeClaudeCode(

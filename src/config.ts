@@ -202,6 +202,12 @@ export class ConfigError extends Error {
   override name = 'ConfigError';
 }
 
+// Where prove kept its weekly offer to post, in the SealKeeper home. CLI
+// 0.4.14 and earlier wrote it and nothing writes it now. logout and agent
+// delete still remove it, so a named home ends up empty. It can go once no
+// CLI from before run is in use.
+export const LEGACY_POST_PROMPT_FILE = 'post-prompt.json';
+
 export type Paths = {
   home: string;
   config: string;
@@ -220,8 +226,6 @@ export type Paths = {
   score: string;
   // How many tasks wait for this agent, a fifteen minute cache like score.
   inbox: string;
-  // When prove last offered to post a task, so it asks at most once a week.
-  postPrompt: string;
   // Start time markers for hook adapters, one small file per session or tool
   // call, so a later hook can compute a duration.
   sessions: string;
@@ -559,7 +563,6 @@ export function paths(home: string = sealkeeperHome()): Paths {
     wellKnown: join(home, 'well-known.json'),
     score: join(home, 'score.json'),
     inbox: join(home, 'inbox.json'),
-    postPrompt: join(home, 'post-prompt.json'),
     sessions: join(home, 'sessions'),
     goal: join(home, 'goal.json'),
     nudge: join(home, 'nudge.json'),

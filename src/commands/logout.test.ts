@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentsMapPath,
   bindFolder,
+  LEGACY_POST_PROMPT_FILE,
   namedHome,
   type Paths,
   paths,
@@ -110,7 +111,7 @@ describe('logout', () => {
     await writeFile(p.credential, '{}\n');
     await writeFile(p.score, '{}\n');
     await writeFile(p.inbox, '{}\n');
-    await writeFile(p.postPrompt, '{}\n');
+    await writeFile(join(p.home, LEGACY_POST_PROMPT_FILE), '{}\n');
     await appendEvent(
       {
         event_id: randomUUID(),
@@ -128,7 +129,7 @@ describe('logout', () => {
     p.credential,
     p.score,
     p.inbox,
-    p.postPrompt,
+    join(p.home, LEGACY_POST_PROMPT_FILE),
   ];
 
   beforeEach(async () => {

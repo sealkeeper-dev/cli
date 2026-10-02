@@ -264,7 +264,7 @@ describe('sealkeeper challenge', () => {
           `${b}  submitted wrong`,
           `${c}  claimed`,
           `${d}  unclaimed`,
-          `Submit with npx sealkeeper tasks submit ${c} --file <path you choose>. A challenge task has one submit.`,
+          `Submit with npx sealkeeper submit ${c} --file <path you choose>. A challenge task has one submit.`,
           '',
         ].join('\n'),
       );

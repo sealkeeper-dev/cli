@@ -167,7 +167,7 @@ describe('openclaw adapter', () => {
         appendSystemContext: [
           'SealKeeper. Level bronze, 0 of 25 confirmed tasks to silver.',
           '3 outcomes to report.',
-          '`npx sealkeeper prove --json` works on this. Run it only when the user asks for it or agrees.',
+          '`npx sealkeeper run --json` works on this. Run it only when the user asks for it or agrees.',
         ].join('\n'),
       });
       expect(goal.reads).toMatchObject([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);

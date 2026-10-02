@@ -882,7 +882,7 @@ describe('sealkeeper duel', () => {
           'deadline    2026-10-03 08:12 UTC, 47 hours 13 minutes left',
           `your task   ${taskId}`,
           'task state  claimed, not submitted',
-          `Submit with npx sealkeeper tasks submit ${taskId} --file <path you choose>. A duel side has one submit.`,
+          `Submit with npx sealkeeper submit ${taskId} --file <path you choose>. A duel side has one submit.`,
           '',
         ].join('\n'),
       );

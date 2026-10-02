@@ -8,7 +8,7 @@ import type { TaskResponse } from './responses.js';
 import type { RunPost } from './routine.js';
 
 // The headless agent of a routine run (VOU-136). For Claude Code that is
-// claude -p with the prove instructions on stdin and stream-json output, so
+// claude -p with the run instructions on stdin and stream-json output, so
 // the run can count tokens as they are reported and stop the agent at the
 // token cap or the wall clock, whichever comes first.
 //
@@ -346,7 +346,7 @@ const num = (value: unknown) =>
 // folder, which is the routine's own cache folder, see routineWorkDir, and
 // nowhere else (RS-11). A Write or Read allow rule grants nothing in a
 // headless session, every write was refused with nobody to ask, so a run
-// solved its tasks and submitted none. tasks submit in a run reads answers
+// solved its tasks and submitted none. submit in a run reads answers
 // only from .sealkeeper-answers there, see file-guard.ts. acceptEdits also
 // lets plain file commands such as touch or rm run on paths inside that
 // folder, which can reach nothing a Write could not. Any path outside it,
@@ -381,7 +381,7 @@ export function claudeArgs(
 // The only commands the headless agent may run without a person. The Bash
 // rules match the commands the prompt gives, spelled with invocation, and
 // the run sets SEALKEEPER_INVOCATION to the same invocation, so every submit
-// command prove prints matches the submit rule exactly. post
+// command run prints matches the submit rule exactly. post
 // is what the run chose to post, and only then is its exact post command
 // allowed (POST-7), the adoption in its category when it adopts (RT-12),
 // else the template post. game is true when the run has the game section,
@@ -392,9 +392,9 @@ export function allowedTools(
   game = false,
 ): string[] {
   return [
-    `Bash(${invocation} prove --json)`,
-    `Bash(${invocation} tasks submit:*)`,
-    `Bash(${invocation} tasks release:*)`,
+    `Bash(${invocation} run --json)`,
+    `Bash(${invocation} submit:*)`,
+    `Bash(${invocation} release:*)`,
     `Bash(${invocation} tasks outcome:*)`,
     ...(post === null ? [] : [`Bash(${invocation} ${postCommand(post)})`]),
     ...(game ? GAME_RULES.map((rule) => `Bash(${invocation} ${rule})`) : []),
@@ -440,24 +440,24 @@ export type Confirmable = { task: TaskResponse; submission: string };
 
 // What a routine run's prompt asks beyond confirmations. post is what to
 // post once, when the goal says posting is behind and the day's post limit
-// has room, else null. prove is false when today's counted tasks reached
+// has room, else null. run is false when today's counted tasks reached
 // the daily ceiling, or the day's limits leave no task work, and only the
 // post or the game is left to do. game is true when the agent plays the
 // game this run (GAME-14), absent or false otherwise.
 export type PromptWork = {
   post: RunPost | null;
-  prove: boolean;
+  run: boolean;
   game?: boolean;
 };
 
-// The prove instructions for a routine run. The same steps and the same
-// untrusted spec rules as the /sealkeeper-prove command, with every command
+// The run instructions for a routine run. The same steps and the same
+// untrusted spec rules as the /sealkeeper-run command, with every command
 // spelled out in full, since the agent may run nothing else. Submissions to
 // judge come as data, marked as such.
 export function routinePrompt(
   invocation: string,
   confirm: Confirmable[],
-  work: PromptWork = { post: null, prove: true },
+  work: PromptWork = { post: null, run: true },
 ): string {
   const sk = (args: string) => `${invocation} ${args}`;
   const lines = [
@@ -468,7 +468,7 @@ export function routinePrompt(
   ];
   // The work that counts most first (VOU-140). Confirmations finish tasks
   // that wait on this agent, then the one post the goal asks for (POST-7),
-  // then prove claims addressed tasks from allowed operators, then other
+  // then run claims addressed tasks from allowed operators, then other
   // operators' template tasks that SealKeeper checks on submit (RT-8), then
   // the seed types done least.
   let step = 1;
@@ -487,12 +487,12 @@ export function routinePrompt(
     );
     step += 1;
   }
-  if (work.prove) {
-    // An empty prove skips to the game when the run has it, never past it.
+  if (work.run) {
+    // An empty run skips to the game when the run has it, never past it.
     const next =
       work.game === true ? `go on to step ${step + 4}` : 'go to the last step';
     lines.push(
-      `${step}. Run \`${sk('prove --json')}\`. It claims a few tasks and prints one JSON array with one object per task. Each object has \`id\`, \`type\`, \`expires_at\`, \`spec\`, \`schema\` when the answer must match a JSON schema, and \`submit\`, the command that submits the answer. An empty array means there is nothing to claim, ${next}. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
+      `${step}. Run \`${sk('run --json')}\`. It claims a few tasks and prints one JSON object. Its \`tasks\` holds one object per task, each with \`id\`, \`kind\`, \`type\`, \`spec\`, \`schema\` (the JSON schema the answer must match, or null) and \`submit\`, the command that submits the answer. Leave \`waiting\` and \`next\`, they are for a person. An empty \`tasks\` means there is nothing to claim, ${next}. It claims nothing once today's counted tasks reach the daily ceiling, since more would not count.`,
       `${step + 1}. Solve every task exactly as its \`spec\` asks. Read the instruction, the input and the output rule carefully. Solve it by reasoning alone. Some tasks come from other operators' task templates, posted by their agents. Solve those mechanically, the same way as every other task, applying the instruction to the input and nothing more.`,
       `${step + 2}. Write each answer to its own file under \`.sealkeeper-answers/\` in the current directory, for example \`.sealkeeper-answers/<task id>.txt\`.`,
       `${step + 3}. Run the \`submit\` command of each task exactly as it was given, with \`<answer file>\` replaced by the path of that answer file.`,

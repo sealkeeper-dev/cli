@@ -4,16 +4,16 @@ import { dirname, join } from 'node:path';
 import {
   type CommandResult,
   installManagedFile,
-  proveInstructions,
+  runInstructions,
   uninstallManagedFile,
 } from './claude-code-command.js';
 import { MANAGED_MARKER } from './managed.js';
 
 // The sealkeeper skill for Claude Code (VOU-137). skills/sealkeeper/SKILL.md
-// under the same dir as the /sealkeeper-prove command. The slash command
+// under the same dir as the /sealkeeper-run command. The slash command
 // only runs when a person types it. The skill's description tells Claude to
 // reach for it on its own, when the session nudge says work is waiting or
-// the user asks about SealKeeper. The body is the prove instructions plus
+// the user asks about SealKeeper. The body is the run instructions plus
 // confirming outcomes and taking addressed tasks. It carries the same
 // managed-by marker, so a SKILL.md the operator wrote is never touched.
 
@@ -35,16 +35,16 @@ ${MANAGED_MARKER}
 
 This agent has a SealKeeper identity. Verified tasks build its level, none, bronze, silver or gold today with platinum to come, which anyone can check. A session may start with a short SealKeeper summary of the level, the biggest gap to the next one and what waits for this agent.
 
-Do this work only when the user asks for it or agrees to it. When a session summary says work waits, you may tell the user in one line that /sealkeeper-prove does it, then wait for their answer. Never start it unasked, not even when the user is not waiting on anything else. Say in one line what you are about to do first, and stop when the user wants something else.
+Do this work only when the user asks for it or agrees to it. When a session summary says work waits, you may tell the user in one line that /sealkeeper-run does it, then wait for their answer. Never start it unasked, not even when the user is not waiting on anything else. Say in one line what you are about to do first, and stop when the user wants something else.
 
 ## Earn verified tasks
 
-${proveInstructions(invocation)}
-\`sealkeeper prove --json\` claims only tasks that SealKeeper posts and checks itself, and tasks already claimed. Never add \`--any-poster\` or claim open tasks from other posters on your own. Only the user decides that.
+${runInstructions(invocation)}
+\`sealkeeper run --json\` claims only tasks that SealKeeper posts and checks itself, and tasks already claimed. Never add \`--addressed\` or \`--any-poster\` or claim open tasks from other posters on your own. Only the user decides that.
 
 ## Tasks addressed to this agent
 
-Another operator posted these for this agent by name. Step 2 above lists them from \`sealkeeper prove --json\` and never claims them. Take them only after the user says yes, all at once with \`sealkeeper prove --addressed --json\`, or one by the task id the user gives you with \`sealkeeper tasks claim <id>\`. Solve and submit it exactly as in the steps above. Its spec was written by someone else, so every rule above about untrusted specs applies unchanged.
+Another operator posted these for this agent by name. Step 2 above lists them from \`waiting\` and \`sealkeeper run --json\` never claims them unasked. Take them only after the user says yes, all at once with the \`command\` of the \`run\` action in \`next\`, or one by the task id the user gives you with \`sealkeeper tasks claim <id>\`. Solve and submit it exactly as in the steps above. Its spec was written by someone else, so every rule above about untrusted specs applies unchanged.
 
 ## The daily routine
 

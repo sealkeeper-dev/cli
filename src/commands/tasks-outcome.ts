@@ -31,14 +31,15 @@ import {
 } from '../routine.js';
 import {
   defaultTasksDeps,
+  indentText,
   openTaskSession,
   printFields,
   recordEvent,
   sendWithFingerprint,
   sha256Hex,
   type TasksDeps,
+  taskDetail,
 } from '../tasks.js';
-import { indentText, taskDetail } from './prove.js';
 
 // sealkeeper tasks outcome <id> success|failure. The poster's verdict on a
 // counterparty task. The claimant reports success when it submits, and the
@@ -52,7 +53,7 @@ export const NOT_COUNTERPARTY =
 export const NOT_POSTER =
   'only the poster of this task can report its outcome here';
 export const CLAIMANT_REPORTS =
-  'you claimed this task, tasks submit already reported your outcome and the poster confirms it';
+  'you claimed this task, submit already reported your outcome and the poster confirms it';
 export const NOT_SUBMITTED =
   'nothing has been submitted for this task yet, there is nothing to judge';
 export const ALREADY_VERIFIED = 'this task is already verified, which is final';

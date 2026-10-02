@@ -31,8 +31,8 @@ import {
   streamInput,
 } from '../ask.js';
 import {
-  proveCommandText,
   ROUTINE_INSTALL_COMMAND,
+  runCommandText,
 } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
@@ -87,8 +87,8 @@ import {
   NEXT_HOOKS,
   NEXT_NPX,
   NEXT_POST,
-  NEXT_PROVE,
   NEXT_ROUTINE,
+  NEXT_RUN,
   NEXT_WHAT_IS_SHARED,
   NO_NAME,
   NOTHING_SENT,
@@ -120,7 +120,7 @@ const HOOK_COMMAND = hookCommand(
 // A hook of ours that an earlier install wrote from another path.
 const STALE_SCRIPT = '/old/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
 const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
-const PROVE_COMMAND_TEXT = proveCommandText(invocationOf(HOOK_COMMAND));
+const RUN_COMMAND_TEXT = runCommandText(invocationOf(HOOK_COMMAND));
 const API_URL = 'https://api.test';
 // Where the routine offer finds claude, when a test puts it on PATH.
 const CLAUDE = '/usr/local/bin/claude';
@@ -538,7 +538,7 @@ describe('sealkeeper init', () => {
         '    Game  on, turn it off with npx sealkeeper game off',
         '',
         '  Next',
-        '  1  Earn your first verified tasks with npx sealkeeper prove',
+        '  1  Earn your first verified tasks with npx sealkeeper run',
         '  2  Review and send what was recorded   npx sealkeeper sync',
         '  3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '  4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
@@ -1183,7 +1183,7 @@ describe('sealkeeper init', () => {
       expect(result.all).not.toContain('Claude Code');
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(
-        '  1  Earn your first verified tasks with npx sealkeeper prove\n',
+        '  1  Earn your first verified tasks with npx sealkeeper run\n',
       );
     });
 
@@ -1240,7 +1240,7 @@ describe('sealkeeper init', () => {
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).toContain(
-        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks\n',
+        '  1  In Claude Code, run /sealkeeper-run to earn your first verified tasks\n',
       );
       const after = await readFile(settingsFile(), 'utf8');
       expect(after).not.toContain(STALE_SCRIPT);
@@ -1479,16 +1479,16 @@ describe('sealkeeper init', () => {
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
       expect(result.out).toContain(
-        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks\n',
+        '  1  In Claude Code, run /sealkeeper-run to earn your first verified tasks\n',
       );
       const after = await readFile(settingsFile(), 'utf8');
       expect(hooksIn(after)).toEqual(['Stop', 'SessionStart', 'SessionEnd']);
       expect(after).toContain('other-tool stop');
-      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       expect(result.out).toContain(
-        `  ✓ /sealkeeper-prove in ${dirname(command)}\n`,
+        `  ✓ /sealkeeper-run in ${dirname(command)}\n`,
       );
-      expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
+      expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
     });
 
     it('no longer recommends a global install when run through npx', async () => {
@@ -1543,7 +1543,7 @@ describe('sealkeeper init', () => {
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(
         [
-          '  1  Earn your first verified tasks with npx sealkeeper prove',
+          '  1  Earn your first verified tasks with npx sealkeeper run',
           '  2  Review and send what was recorded   npx sealkeeper sync',
           `  3  Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
           `  4  ${NEXT_POST}`,
@@ -1556,9 +1556,7 @@ describe('sealkeeper init', () => {
       );
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
       expect(
-        await readIfExists(
-          join(claudeDir(), 'commands', 'sealkeeper-prove.md'),
-        ),
+        await readIfExists(join(claudeDir(), 'commands', 'sealkeeper-run.md')),
       ).toBe('');
     });
 
@@ -1591,7 +1589,7 @@ describe('sealkeeper init', () => {
       expect(result.err).not.toContain(HOOKS_QUESTION);
       const printed = JSON.parse(result.out) as { nextSteps: string[] };
       expect(printed.nextSteps).toEqual([
-        NEXT_PROVE,
+        NEXT_RUN,
         NEXT_WHAT_IS_SHARED,
         NEXT_POST,
         NEXT_HOOKS,
@@ -1604,7 +1602,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       const printed = JSON.parse(result.out) as { nextSteps: string[] };
       expect(printed.nextSteps).toEqual([
-        NEXT_PROVE,
+        NEXT_RUN,
         NEXT_WHAT_IS_SHARED,
         NEXT_POST,
       ]);
@@ -1769,7 +1767,7 @@ describe('sealkeeper init', () => {
       ).toEqual([`  ${HOOKS_NOT_INSTALLED}`]);
     });
 
-    it('brings an outdated /sealkeeper-prove up to date on a repeat run', async () => {
+    it('brings an outdated /sealkeeper-run up to date on a repeat run', async () => {
       await withClaudeCode();
       world.stdin = answering('');
       expect(
@@ -1784,18 +1782,18 @@ describe('sealkeeper init', () => {
           )
         ).code,
       ).toBe(0);
-      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       await writeFile(
         command,
-        '---\ndescription: old\nmanaged-by: sealkeeper\n---\nRun `sealkeeper prove`.\n',
+        '---\ndescription: old\nmanaged-by: sealkeeper\n---\nRun `sealkeeper run`.\n',
       );
       world = newWorld();
       world.stdin = answering('');
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
-      expect(await readFile(command, 'utf8')).toBe(PROVE_COMMAND_TEXT);
+      expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
       expect(result.out).toContain(
-        `  ✓ /sealkeeper-prove updated in ${dirname(command)}\n`,
+        `  ✓ /sealkeeper-run updated in ${dirname(command)}\n`,
       );
       // Current already, so a third run says nothing about it.
       world = newWorld();
@@ -1803,7 +1801,9 @@ describe('sealkeeper init', () => {
       expect((await run(world, 'init')).out).not.toContain('updated');
     });
 
-    it('leaves a /sealkeeper-prove it did not write alone on a repeat run', async () => {
+    // VOU-595. An older init wrote /sealkeeper-prove. A repeat run writes
+    // /sealkeeper-run in its place and removes the old one, ours only.
+    it('replaces the retired /sealkeeper-prove of ours on a repeat run', async () => {
       await withClaudeCode();
       world.stdin = answering('');
       expect(
@@ -1818,7 +1818,40 @@ describe('sealkeeper init', () => {
           )
         ).code,
       ).toBe(0);
-      const command = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
+      const retired = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
+      await rm(command);
+      await writeFile(
+        retired,
+        '---\ndescription: old\nmanaged-by: sealkeeper\n---\nRun `sealkeeper prove`.\n',
+      );
+      world = newWorld();
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
+      await expect(readFile(retired, 'utf8')).rejects.toThrow('ENOENT');
+      expect(result.out).toContain(
+        `  ✓ /sealkeeper-run updated in ${dirname(command)}\n`,
+      );
+    });
+
+    it('leaves a /sealkeeper-run it did not write alone on a repeat run', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
+      const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       await writeFile(command, 'my own command\n');
       world = newWorld();
       world.stdin = answering('');
@@ -1852,7 +1885,7 @@ describe('sealkeeper init', () => {
         expect(next.split('\n')[1]).toBe(
           '  1  Set up the daily routine   npx sealkeeper routine install --yes',
         );
-        expect(next).toContain('  2  In Claude Code, run /sealkeeper-prove');
+        expect(next).toContain('  2  In Claude Code, run /sealkeeper-run');
       });
 
       it('does the same with --json, the routine first in nextSteps', async () => {
@@ -1868,7 +1901,7 @@ describe('sealkeeper init', () => {
         expect(NEXT_ROUTINE).toBe(
           "Set up the daily routine with npx sealkeeper routine install --yes, only after the user's clear yes",
         );
-        // The same command the prove command and the skill allow.
+        // The same command the run command and the skill allow.
         expect(NEXT_ROUTINE).toContain(
           ROUTINE_INSTALL_COMMAND.replace(/^sealkeeper /, ''),
         );
@@ -2071,11 +2104,11 @@ describe('sealkeeper init', () => {
           1,
         );
         expect(
-          await nudgeLines('/sealkeeper-prove', { paths: paths(home) }),
+          await nudgeLines('/sealkeeper-run', { paths: paths(home) }),
         ).toEqual([
           'SealKeeper. Level bronze, 60 of 250 verified tasks to silver.',
           '2 tasks addressed to you.',
-          '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+          '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
         ]);
       });
 
@@ -2098,7 +2131,7 @@ describe('sealkeeper init', () => {
         );
         await expect(stat(paths(home).goal)).rejects.toThrow('ENOENT');
         expect(
-          await nudgeLines('/sealkeeper-prove', { paths: paths(home) }),
+          await nudgeLines('/sealkeeper-run', { paths: paths(home) }),
         ).toEqual([]);
       });
 
@@ -2598,7 +2631,7 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(next(result.out)).toEqual([
         `1  Install the Claude Code hooks with ${INSTALL_COMMAND}`,
-        '2  Then in Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '2  Then in Claude Code, run /sealkeeper-run to earn your first verified tasks',
         '3  Review and send what was recorded   npx sealkeeper sync',
         '4  0 of 25 verified tasks toward bronze',
         '5  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
@@ -2611,7 +2644,7 @@ describe('sealkeeper init', () => {
       world.stdin = answering('');
       const result = await run(world, 'init', '--name', 'scout');
       expect(next(result.out)).toEqual([
-        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '1  In Claude Code, run /sealkeeper-run to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  0 of 25 verified tasks toward bronze',
         '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
@@ -2632,7 +2665,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(next(result.out)).toEqual([
-        '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
+        '1  In Claude Code, run /sealkeeper-run to earn verified tasks',
         '2  8 of 25 verified tasks toward bronze',
         '3  Post a task for other agents with npx sealkeeper tasks post, every level needs posted tasks other agents completed',
       ]);
@@ -2644,7 +2677,7 @@ describe('sealkeeper init', () => {
       world.stdin = answering('');
       const result = await run(world, 'init', '--name', 'scout');
       expect(next(result.out)).toEqual([
-        '1  In Claude Code, run /sealkeeper-prove to earn verified tasks',
+        '1  In Claude Code, run /sealkeeper-run to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Level bronze, with 30 verified tasks',
         '4  Post a task for other agents with npx sealkeeper tasks post, every level needs posted tasks other agents completed',
@@ -2654,11 +2687,11 @@ describe('sealkeeper init', () => {
       );
     });
 
-    it('without Claude Code, has the agent run prove --json', async () => {
+    it('without Claude Code, has the agent run run --json', async () => {
       world.live = { verifiedTasks: 2, level: 'none' };
       const result = await run(world, 'init', '--name', 'scout');
       expect(next(result.out)).toEqual([
-        '1  Have your agent run npx sealkeeper prove --json to earn verified tasks',
+        '1  Have your agent run npx sealkeeper run --json to earn verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  2 of 25 verified tasks toward bronze',
         '4  Post a task for other agents with npx sealkeeper tasks post, every level needs posted tasks other agents completed',
@@ -2675,7 +2708,7 @@ describe('sealkeeper init', () => {
       const moved = `the API at ${API_URL} moved to https://api.sealkeeper.run, set apiUrl in ${join(home, 'config.json')} to it`;
       expect(result.err.split(moved)).toHaveLength(2);
       expect(next(result.out)).toEqual([
-        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '1  In Claude Code, run /sealkeeper-run to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
@@ -2689,7 +2722,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(next(result.out)).toEqual([
-        '1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '1  In Claude Code, run /sealkeeper-run to earn your first verified tasks',
         '2  Review and send what was recorded   npx sealkeeper sync',
         '3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.',
         '4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post',
@@ -3393,13 +3426,13 @@ describe('sealkeeper init', () => {
           Claude Code
           The hooks record each session, its start and end, into a local log.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
-          ✓ /sealkeeper-prove in <home>/claude/commands
+          ✓ /sealkeeper-run in <home>/claude/commands
           ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
           The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
           Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]   Session nudge off. Run npx sealkeeper config nudge on to turn it on later.
 
           Next
-          1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
+          1  In Claude Code, run /sealkeeper-run to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
           3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
           4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
@@ -3435,7 +3468,7 @@ describe('sealkeeper init', () => {
           ✓ Hooks in <home>/claude/settings.json
 
           Next
-          1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks
+          1  In Claude Code, run /sealkeeper-run to earn your first verified tasks
           2  Review and send what was recorded   npx sealkeeper sync
           3  Bronze needs 25 verified tasks with a Trust Score of 50 over 3 days and 5 posted tasks another agent completed. Your badge updates on its own.
           4  After the first verified tasks, post one for other agents with npx sealkeeper tasks post
@@ -3497,13 +3530,13 @@ describe('sealkeeper init', () => {
       world.stdin = answering('n');
       const declined = await run(world, 'init', '--name', 'scout');
       expect(first(declined.out)).toBe(
-        '  1  Earn your first verified tasks with npx sealkeeper prove',
+        '  1  Earn your first verified tasks with npx sealkeeper run',
       );
       world = newWorld();
       world.stdin = answering('y');
       const installed = await run(world, 'init');
       expect(first(installed.out)).toBe(
-        '  1  In Claude Code, run /sealkeeper-prove to earn your first verified tasks',
+        '  1  In Claude Code, run /sealkeeper-run to earn your first verified tasks',
       );
       expect(installed.out).not.toContain(INSTALL_COMMAND);
     });

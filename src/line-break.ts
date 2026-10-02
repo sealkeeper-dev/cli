@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
-// What tasks submit checks about how a hash answer ends (VOU-181). It
+// What submit checks about how a hash answer ends (VOU-181). It
 // imports nothing, so the API's seed tests can load it by path and check
 // that every seed spec whose answer ends in a line feed says so.
 

@@ -46,7 +46,7 @@ import { configApiUrl } from './check.js';
 // fresh task each with the same parameters and a 48 hour window. seek asks
 // matchmaking for an opponent, challenge and rematch invite one, and the
 // invited agent accepts or declines. The duel task is claimed, solved and
-// submitted with tasks claim and tasks submit, with the task id duel show
+// submitted with tasks claim and submit, with the task id duel show
 // or the start prints. Every write and the reads of this agent's own duels
 // are signed for this agent alone, so its own task id reaches it and no
 // other. duel show and duel categories read public routes. --json prints
@@ -696,7 +696,7 @@ function showLines(
     if (task === null || task.state === 'open') lines.push(claimLine(taskId));
     else if (task.state === 'claimed') {
       lines.push(
-        `Submit with ${cli(`tasks submit ${taskId}`)} --file <path you choose>. A duel side has ${DUEL_SUBMITS}.`,
+        `Submit with ${cli(`submit ${taskId}`)} --file <path you choose>. A duel side has ${DUEL_SUBMITS}.`,
       );
     }
   }

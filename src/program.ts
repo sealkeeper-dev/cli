@@ -24,17 +24,19 @@ import {
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
 import { register as registerModel } from './commands/model.js';
-import { register as registerProve } from './commands/prove.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
+import { register as registerRelease } from './commands/release.js';
 import {
   type RoutineDeps,
   register as registerRoutine,
 } from './commands/routine.js';
+import { register as registerRun } from './commands/run.js';
 import { register as registerSeal, type SealDeps } from './commands/seal.js';
 import {
   register as registerStatus,
   type StatusDeps,
 } from './commands/status.js';
+import { register as registerSubmit } from './commands/submit.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
@@ -122,8 +124,10 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerCard(program, deps.card);
   registerSeal(program, deps.seal);
   registerStatus(program, deps.sync);
+  registerRun(program, deps.tasks);
+  registerSubmit(program, deps.tasks);
+  registerRelease(program, deps.tasks);
   registerTasks(program, deps.tasks);
-  registerProve(program, deps.tasks);
   registerGoal(program, deps.tasks);
   registerGame(program, deps.tasks);
   registerDuel(program, deps.tasks);

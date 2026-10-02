@@ -498,7 +498,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(out).toContain('verified tasks    0\n');
       expect(out).toContain(
-        '2 claimed tasks are not submitted yet. Run npx sealkeeper prove --claim to list them again.\n',
+        '2 claimed tasks are not submitted yet. Your agent gets them again with npx sealkeeper run --json.\n',
       );
       const json = JSON.parse(
         (await run(scoreFetch([], 0), 'status', '--json')).out,
@@ -550,7 +550,7 @@ describe('status', () => {
     it('uses one line for a single unsubmitted claim', async () => {
       await claimOnly();
       expect((await run(scoreFetch([], 0), 'status')).out).toContain(
-        '1 claimed task is not submitted yet. Run npx sealkeeper prove --claim to list it again.\n',
+        '1 claimed task is not submitted yet. Your agent gets it again with npx sealkeeper run --json.\n',
       );
     });
   });
@@ -857,14 +857,14 @@ describe('status', () => {
   });
 
   describe('tasks addressed to the agent', () => {
-    it('says how many wait and to run prove, when the API answers', async () => {
+    it('says how many wait and to run run, when the API answers', async () => {
       const { code, out } = await run(
         scoreFetch([], 2, { addressed: 2 }),
         'status',
       );
       expect(code).toBe(0);
       expect(out).toContain(
-        '\n2 tasks addressed to you, run npx sealkeeper prove\n',
+        '\n2 tasks addressed to you, run npx sealkeeper run\n',
       );
       const one = await run(
         scoreFetch([], 2, { addressed: 1 }),

@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { paths, writeConfig, writeNudge } from './config.js';
 import { goalSummary, type NudgeGoal, nudgeLines } from './nudge.js';
 
-const RUN = '/sealkeeper-prove';
+const RUN = '/sealkeeper-run';
 
 function goal(over: Partial<NudgeGoal> = {}): NudgeGoal {
   return {
@@ -35,7 +35,7 @@ describe('goalSummary', () => {
     ).toEqual([
       'SealKeeper. Level none, 13 of 25 verified tasks to bronze.',
       '2 tasks addressed to you, 1 outcome to report.',
-      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+      '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
     ]);
   });
 
@@ -56,7 +56,7 @@ describe('goalSummary', () => {
     // A count from yesterday says nothing about today.
     const tomorrow = new Date('2026-09-27T01:00:00.000Z');
     expect(goalSummary(spent, RUN, tomorrow).at(-1)).toBe(
-      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+      '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
     );
   });
 
@@ -75,7 +75,7 @@ describe('goalSummary', () => {
       ),
     ).toEqual([
       'SealKeeper. Level bronze, 0 of 5 distinct operators to silver.',
-      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+      '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
     ]);
     expect(
       goalSummary(
@@ -111,7 +111,7 @@ describe('goalSummary', () => {
     ).toEqual([
       'SealKeeper. Level bronze.',
       '3 outcomes to report.',
-      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+      '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
     ]);
   });
 
@@ -185,7 +185,7 @@ describe('goalSummary', () => {
       }),
       RUN,
     ).join('\n');
-    expect(text).not.toMatch(/any-poster|tasks pull|open tasks/);
+    expect(text).not.toMatch(/any-poster|open tasks/);
   });
 
   it('asks for the user to agree and never says to run it unprompted', () => {
@@ -269,7 +269,7 @@ describe('nudgeLines', () => {
       expect(await nudgeLines(RUN, { paths: paths(root) })).toEqual([
         'SealKeeper. Level none, 3 of 25 verified tasks to bronze.',
         '1 task addressed to you, as of 3 hours ago.',
-        '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+        '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });

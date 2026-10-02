@@ -4,7 +4,7 @@ import { ApiError } from './api.js';
 import type { Paths } from './config.js';
 import { currentFingerprint } from './fingerprint.js';
 
-// The fingerprint a request declares, the one sync and prove last wrote to
+// The fingerprint a request declares, the one sync and run last wrote to
 // fingerprint.json. Task claims, submits and outcome reports carry it
 // inside their signed payload (VB-3), and sync as its own signed JWS beside
 // the envelopes (VB-4).

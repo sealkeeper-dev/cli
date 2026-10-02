@@ -17,6 +17,7 @@ import {
   AgentResponse,
   AgentTrustResponse,
   ChallengeBoardResponse,
+  CoreAnswerResponse,
   CredentialResponse,
   CurrentChallengeResponse,
   DuelResponse,
@@ -215,6 +216,10 @@ export type ApiClient = {
     isoWeek: string,
     limit: number,
   ): Promise<ChallengeBoardResponse>;
+  // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
+  // tasks the agent solves now and answers the core answer. An API from
+  // before it answers 404 not_found.
+  run(agentId: string, envelope: string): Promise<CoreAnswerResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -480,6 +485,10 @@ export function createApiClient(options: {
         `/v1/challenges/${encodeURIComponent(isoWeek)}/leaderboard?limit=${limit}`,
         ChallengeBoardResponse,
       ),
+    run: (agentId, envelope) =>
+      call(agentPath(agentId, '/run'), CoreAnswerResponse, {
+        body: { envelope },
+      }),
   };
 }
 

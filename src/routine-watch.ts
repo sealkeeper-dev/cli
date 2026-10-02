@@ -60,7 +60,7 @@ export function startDetached(spec: StartSpec): StartedRun {
 const plural = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
 
-// The line for the claims of one prove. tasks counts the tasks the agent
+// The line for the claims of one run --json. tasks counts the tasks the agent
 // held already too.
 export function claimedLine(claimed: number, tasks: number): string {
   const head =
@@ -72,8 +72,8 @@ export function claimedLine(claimed: number, tasks: number): string {
 }
 
 // Turns the lines of one run into what the watcher prints, in order. A
-// claim line is counted and said once the prove line says the claims are
-// in, or before the next event when the prove line never came.
+// claim line is counted and said once the claimed line says the claims are
+// in, or before the next event when the claimed line never came.
 export class RunEvents {
   private seen = 0;
   private claims = 0;
@@ -89,7 +89,7 @@ export class RunEvents {
         this.claims += 1;
         continue;
       }
-      if (e.kind === 'prove') {
+      if (e.kind === 'claimed') {
         out.push(claimedLine(this.claims, Math.max(e.tasks, this.claims)));
         this.claims = 0;
         continue;

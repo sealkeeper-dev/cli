@@ -28,7 +28,7 @@ import { timeLeft } from './duel.js';
 // verified task in the week's category on that read. standing makes the
 // same signed read for the agent's rank, then reads the public board of
 // that week. The tasks are claimed, solved and submitted with tasks claim
-// and tasks submit, one claim at a time, and each claim uses one game
+// and submit, one claim at a time, and each claim uses one game
 // unit. --json prints the API answer as it came. Nothing here touches the
 // local log, and a challenge never moves a score, a level or the SEAL.
 
@@ -198,7 +198,7 @@ export function currentLines(
   const unclaimed = current.tasks.find((t) => t.state === 'unclaimed');
   if (claimed) {
     lines.push(
-      `Submit with ${cli(`tasks submit ${claimed.taskId}`)} --file <path you choose>. A challenge task has ${CHALLENGE_SUBMITS}.`,
+      `Submit with ${cli(`submit ${claimed.taskId}`)} --file <path you choose>. A challenge task has ${CHALLENGE_SUBMITS}.`,
     );
   } else if (unclaimed) {
     lines.push(

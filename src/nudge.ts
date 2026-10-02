@@ -14,16 +14,16 @@ import { dailyCeilingReached, todayOf } from './today.js';
 
 // The session nudge (VOU-137). A short goal summary the adapters add to the
 // agent's own context when a session starts, so the agent knows where it
-// stands and what waits for it without a person typing /sealkeeper-prove.
+// stands and what waits for it without a person typing /sealkeeper-run.
 //
 // It is read from the cached goal only, so a session start never waits on
 // the network. A cache up to a day old is used, and the SessionEnd hook
 // refreshes it (claude-code.ts). Turning the nudge on fills it once, see
 // setNudge. No cache, an older one or no config means
 // no summary. It only runs once the operator said yes, nudge.json on, and
-// it only points at the prove flow, which claims seed tasks, at tasks
+// it only points at the run flow, which claims seed tasks, at tasks
 // addressed to this agent and at outcomes this agent owes. Never at open
-// tasks from other posters. It names the prove flow and leaves running it
+// tasks from other posters. It names the run flow and leaves running it
 // to the user's say.
 
 // Only the fields the summary reads, so a goal answer with more fields, or
@@ -101,7 +101,7 @@ function plural(n: number, one: string, many: string): string {
 
 // At most three lines. The level and the biggest gap to the next one, what
 // waits for the agent, and that run exists for when the user wants it. run
-// is how this framework starts the prove flow, /sealkeeper-prove in Claude
+// is how this framework starts the run flow, /sealkeeper-run in Claude
 // Code. Once today's counted tasks reach the daily ceiling (VOU-140) the
 // last line says so instead, since more work today would not move the
 // level. fetchedAt, when the goal is older than fifteen minutes, labels

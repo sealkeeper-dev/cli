@@ -68,7 +68,7 @@ type SubmitOptions = {
 // a routine takes no template task of that operator again (RT-8). Inside a
 // routine run it is the first failure of a network claim, the claim line
 // that names the operator, since the routine gives up on a task after a
-// second failure and releases it (tasks release), so no third failure
+// second failure and releases it (release), so no third failure
 // ever comes to note it. Outside a run it is the
 // failure that ends the claim, when the task no longer names this agent as
 // claimant, or it expired when it was addressed. A read that fails notes
@@ -259,7 +259,7 @@ export function register(
         } catch (error) {
           if (error instanceof ApiError) {
             this.error(
-              `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('tasks submit')} again to retry`,
+              `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('submit')} again to retry`,
             );
           }
           throw error;

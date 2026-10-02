@@ -28,19 +28,19 @@ const claim = (taskId: string): RoutineEntry => ({
 });
 
 describe('event lines (RS-9)', () => {
-  it('says the claims of a prove once they are in', () => {
+  it('says the claims of a run once they are in', () => {
     const events = new RunEvents();
     expect(events.next([claim('a'), claim('b')])).toEqual([]);
     expect(
       events.next([
         claim('a'),
         claim('b'),
-        { kind: 'prove', at: AT, runId: RUN, claimed: 2, tasks: 3 },
+        { kind: 'claimed', at: AT, runId: RUN, claimed: 2, tasks: 3 },
       ]),
     ).toEqual(['Claimed 2 tasks, 1 more held from before']);
   });
 
-  it('says claims before the next event when no prove line came', () => {
+  it('says claims before the next event when no claimed line came', () => {
     const events = new RunEvents();
     expect(
       events.next([
@@ -205,7 +205,10 @@ describe('watchRun (RS-9)', () => {
       { kind: 'claim', runId: RUN, taskId: 'a', taskType: 'json_extract' },
       p,
     );
-    await appendRoutine({ kind: 'prove', runId: RUN, claimed: 1, tasks: 1 }, p);
+    await appendRoutine(
+      { kind: 'claimed', runId: RUN, claimed: 1, tasks: 1 },
+      p,
+    );
     await appendRoutine(
       { kind: 'submit', runId: RUN, taskId: 'a', taskType: 'json_extract' },
       p,

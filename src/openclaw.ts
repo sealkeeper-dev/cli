@@ -235,8 +235,8 @@ function register(api: OpenClawPluginApiLike): void {
 // with hooks.allowPromptInjection false. The summary comes from the cached
 // goal only, so a prompt never waits on the network, and only once the
 // operator turned the nudge on. Anything else returns nothing, which leaves
-// the prompt as it was. The agent is told to run prove --json, which
-// claims only seed tasks.
+// the prompt as it was. The agent is told to run run --json, which
+// claims only seed tasks unasked.
 
 function registerNudge(api: OpenClawPluginApiLike): void {
   try {

@@ -23,7 +23,7 @@ import { LiveAgent } from './live-agent.js';
 // How long the record lookup may take.
 const RECORD_TIMEOUT_MS = 10_000;
 
-// A signed handshake over the fingerprint sync or prove last wrote to
+// A signed handshake over the fingerprint sync or run last wrote to
 // fingerprint.json, or null when there is none or its hash is not the hash
 // of its parts. Never recomputes the fingerprint. Throws KeyError when the
 // key file is not a key, and returns null when there is no key file.

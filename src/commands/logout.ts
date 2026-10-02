@@ -1,8 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Command } from 'commander';
-import { type Paths, paths, readConfig } from '../config.js';
+import {
+  LEGACY_POST_PROMPT_FILE,
+  type Paths,
+  paths,
+  readConfig,
+} from '../config.js';
 import { exists } from '../files.js';
 import { deleteKey as removeKey } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -17,8 +22,9 @@ import {
 } from './routine.js';
 
 // Removes the local session. config.json, credential.json, score.json,
-// inbox.json, post-prompt.json, goal.json and operator-slug.json go, and the
-// daily routine job when one is installed, since it would run for nobody.
+// inbox.json, goal.json, operator-slug.json and the post-prompt.json of CLI
+// 0.4.14 and earlier go, and the daily routine job when one is installed,
+// since it would run for nobody.
 // nudge.json and the routine's limits and allowlist stay. The key, the log,
 // the cursor and the fingerprint files stay too, so a later init brings the
 // same identity back and sync goes on where it was.
@@ -186,7 +192,7 @@ async function removeSession(
     p.credential,
     p.score,
     p.inbox,
-    p.postPrompt,
+    join(p.home, LEGACY_POST_PROMPT_FILE),
     p.goal,
     p.operatorSlug,
     ...(deleteKey

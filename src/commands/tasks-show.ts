@@ -7,10 +7,12 @@ import type { TaskResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   failOnApiError,
+  serverHeld,
+  submitCommand,
   type TasksDeps,
+  taskDetail,
   unsubmittedClaims,
 } from '../tasks.js';
-import { proveEntry, serverHeld, taskDetail } from './prove.js';
 import {
   awaitingVerdict,
   posterLines,
@@ -20,7 +22,7 @@ import {
 // sealkeeper tasks show <id>. One task in full, its spec, its schema when
 // there is one and the submit lines. For a task this agent posted it says
 // whether a submission waits for its verdict instead. The id may be the
-// short id prove --claim prints, which is looked up among the tasks this
+// first characters of an id, which is looked up among the tasks this
 // agent holds.
 
 // A full task id, a UUID.
@@ -36,7 +38,10 @@ export function register(
   return parent
     .command('show')
     .description("Print one task's spec, schema and submit line")
-    .argument('<id>', 'the task id, or the short id prove --claim prints')
+    .argument(
+      '<id>',
+      'the task id, or its first characters for a task this agent holds',
+    )
     .action(async function (this: Command, id: string): Promise<void> {
       const config = await requireConfig(this);
       const api = createApiClient({
@@ -140,13 +145,26 @@ const fieldsEntry = (task: TaskResponse) => ({
 });
 
 // The JSON of tasks show. state is the task's state as the API sent it,
-// which the routine reads to tell an unclaimed duel task (GAME-14). The
-// poster gets no submit command, since only the claimant submits, and gets
-// the verdict command while a submission waits.
+// which the routine reads to tell an unclaimed duel task (GAME-14). schema
+// only when the answer must match one, and an addressed task names its
+// assignee. The poster gets no submit command, since only the claimant
+// submits, and gets the verdict command while a submission waits.
 function showEntry(task: TaskResponse, agentId: string) {
-  const { submit, ...base } = proveEntry(task);
-  const entry = { ...base, state: task.state, ...fieldsEntry(task) };
-  if (task.posterAgentId !== agentId) return { ...entry, submit };
+  const entry = {
+    id: task.id,
+    type: task.taskType,
+    expires_at: task.expiresAt,
+    ...(task.assignee ? { assignee: task.assignee.handle } : {}),
+    spec: task.spec,
+    ...(task.verification.kind === 'schema'
+      ? { schema: task.verification.jsonSchema }
+      : {}),
+    state: task.state,
+    ...fieldsEntry(task),
+  };
+  if (task.posterAgentId !== agentId) {
+    return { ...entry, submit: submitCommand(task.id) };
+  }
   return awaitingVerdict(task, agentId)
     ? { ...entry, awaiting_verdict: true, verdict: verdictCommand(task.id) }
     : entry;

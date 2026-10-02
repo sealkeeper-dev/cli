@@ -694,6 +694,7 @@ describe('the CLI version header (VOU-453)', () => {
     currentChallenge: (api) => api.currentChallenge('a.b.c'),
     enterChallenge: (api) => api.enterChallenge('a.b.c'),
     challengeBoard: (api) => api.challengeBoard('2026-W40', 10),
+    run: (api) => api.run(AGENT_ID, 'a.b.c'),
   };
 
   // Records the headers of every request and answers each with an error,

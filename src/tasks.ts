@@ -18,18 +18,15 @@ import {
 } from './declared-fingerprint.js';
 import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
+import { cli } from './invocation.js';
 import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
-import {
-  agentHandle,
-  type ListTasksPage,
-  type TaskResponse,
-} from './responses.js';
+import type { ListTasksPage, TaskResponse } from './responses.js';
 
-// What tasks pull, claim, submit, post and show and prove share. fetch is
+// What run, submit, release and the tasks commands share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
-// is a terminal, which prove reads to tell a person from an agent.
-// claudeDir and cwd say where prove looks for the Claude Code hooks.
+// is a terminal, which run reads to tell a person from an agent.
+// claudeDir and cwd say where run looks for the Claude Code hooks.
 // stdin is where tasks outcome asks the poster, which tests replace.
 export type TasksDeps = {
   fetch: typeof fetch;
@@ -155,20 +152,6 @@ export function taskSummary(task: TaskResponse, poster?: string) {
   };
 }
 
-// The handle of the agent with this id, slug/name, as the API answers it.
-// The id itself when the API does not answer, so a caller always has
-// something to name.
-export async function handleOrId(
-  api: ApiClient,
-  agentId: string,
-): Promise<string> {
-  try {
-    return agentHandle(await api.getAgent(agentId));
-  } catch {
-    return agentId;
-  }
-}
-
 // How long after its post another operator's open task is left for a
 // person, the API's TASKS_MIN_AGE_MINUTES (RT-8). The API holds the real
 // number and answers a routine claim that comes too early with 409 too_new
@@ -218,7 +201,7 @@ export async function openTasksPage(
 
 // The tasks in a GET /v1/tasks?assignee= answer that are really addressed
 // to this agent and not posted by it, oldest first, whatever the server
-// sent. prove, tasks pull --addressed and the status count share it.
+// sent. The routine's claims and the status count share it.
 export function addressedTo(
   tasks: TaskResponse[],
   agentId: string,
@@ -242,12 +225,12 @@ export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
 export const GAME_SPEC_AT_CLAIM =
   'The spec of a duel or challenge task is shown only in the answer to its claim.';
 
-// The submits of a duel side, one today, as duel and tasks submit word it.
+// The submits of a duel side, one today, as duel and submit word it.
 export const DUEL_SUBMITS =
   GAME.duelSubmits === 1 ? 'one submit' : `${GAME.duelSubmits} submits`;
 
 // The submits of each weekly challenge task, one today, as challenge and
-// tasks submit word it.
+// submit word it.
 export const CHALLENGE_SUBMITS =
   GAME.challengeSubmits === 1
     ? 'one submit'
@@ -278,4 +261,86 @@ export async function unsubmittedClaims(
     }
   }
   return [...claimed];
+}
+
+// The placeholder in the submit command of a task an agent is handed.
+export const ANSWER_FILE = '<answer file>';
+
+// The exact submit command of a task an agent is handed, with the answer
+// file to fill in, spelled with this machine's invocation.
+export const submitCommand = (taskId: string): string =>
+  `${cli(`submit ${taskId}`)} --file ${ANSWER_FILE}`;
+
+// The claimed tasks a list of the server reads at most, one page.
+const HELD_LIMIT = 100;
+
+// The claimed tasks the server says this agent holds, which include claims
+// made on another machine. The API filters on the claimant, so other
+// agents' claims never push these off the page (VOU-208), and the claim
+// cap keeps them to one page. Throws what the API client throws.
+export async function serverHeld(
+  api: ApiClient,
+  agentId: string,
+): Promise<TaskResponse[]> {
+  const claimed = await api.listTasks({
+    state: 'claimed',
+    claimant: agentId,
+    limit: HELD_LIMIT,
+  });
+  return claimed.filter((task) => task.claimantAgentId === agentId);
+}
+
+// One task in full, as tasks show prints it. The spec, the schema when
+// there is one and the two ways to submit. tail replaces the submit lines,
+// as tasks show does for the poster.
+export function taskDetail(
+  task: TaskResponse,
+  now: number,
+  tail?: string[],
+): string[] {
+  const lines = [
+    `Task ${task.id}. type ${task.taskType}. ${task.state}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
+    ...(task.assignee
+      ? [`Addressed to ${task.assignee.handle}. Only that agent can claim it.`]
+      : []),
+    // A game task read anywhere but its claim shows {}, so it gets one
+    // line instead of an empty spec.
+    ...(isGameTask(task) && Object.keys(task.spec).length === 0
+      ? [GAME_SPEC_AT_CLAIM]
+      : ['Spec:', indentText(JSON.stringify(task.spec, null, 2))]),
+  ];
+  if (task.verification.kind === 'schema') {
+    lines.push(
+      'The answer must be JSON that matches this schema:',
+      indentText(JSON.stringify(task.verification.jsonSchema, null, 2)),
+    );
+  }
+  if (tail !== undefined) return [...lines, ...tail];
+  lines.push(
+    'Submit with:',
+    `  ${cli(`submit ${task.id}`)} --file <path you choose>`,
+    `  ${cli(`submit ${task.id}`)} --text <answer>`,
+  );
+  if (task.verification.kind === 'counterparty') {
+    lines.push('The poster confirms this one, so it verifies once they agree.');
+  }
+  return lines;
+}
+
+export function indentText(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => `  ${line}`)
+    .join('\n');
+}
+
+// in 12 minutes, in 47 hours, in 3 days. A time already past reads as now.
+function relative(ms: number): string {
+  if (ms <= 0) return 'now';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'in under a minute';
+  if (minutes < 120) return `in ${minutes} minute${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 72) return `in ${hours} hours`;
+  return `in ${Math.floor(hours / 24)} days`;
 }

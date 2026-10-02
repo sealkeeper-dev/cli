@@ -44,6 +44,8 @@ import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { appendRoutine, readRoutine } from '../routine.js';
 import { GAME_SPEC_AT_CLAIM } from '../tasks.js';
+import { OLD_API } from './release.js';
+import { AWAITING_POSTER } from './submit.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -90,14 +92,6 @@ import {
   TEMPLATE_SETS_FIELDS,
   templateNeedsYes,
 } from './tasks-post.js';
-import {
-  MAX_CLAIM_ATTEMPTS,
-  MAX_PULL_PAGES,
-  NOTHING_ADDRESSED,
-  NOTHING_AVAILABLE,
-} from './tasks-pull.js';
-import { OLD_API } from './tasks-release.js';
-import { AWAITING_POSTER } from './tasks-submit.js';
 
 const API_URL = 'https://api.test';
 
@@ -199,7 +193,7 @@ class FakeApi {
       spec: { words: 100 },
       verification: { kind: 'counterparty' },
       state: 'open',
-      // Past the claim age threshold, which pull leaves to a person first
+      // Past the claim age threshold, which a routine leaves to a person first
       // (RT-8).
       postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       claimedAt: null,
@@ -521,7 +515,7 @@ function throwOnExit(cmd: Command): void {
 const sha256 = (text: string) =>
   createHash('sha256').update(text, 'utf8').digest('hex');
 
-describe('tasks pull, submit and post', () => {
+describe('submit, release and the tasks commands', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
@@ -613,9 +607,8 @@ describe('tasks pull, submit and post', () => {
 
   describe('without setup', () => {
     it.each([
-      ['tasks', 'pull'],
       ['tasks', 'claim', randomUUID()],
-      ['tasks', 'submit', randomUUID(), '--text', 'x'],
+      ['submit', randomUUID(), '--text', 'x'],
       [
         'tasks',
         'post',
@@ -634,238 +627,11 @@ describe('tasks pull, submit and post', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('pull without a key gives the init hint', async () => {
+    it('submit without a key gives the init hint', async () => {
       await rm(paths().key);
-      const { code, err } = await run('tasks', 'pull');
+      const { code, err } = await run('submit', randomUUID(), '--text', 'x');
       expect(code).toBe(1);
       expect(err).toBe('no key found, run npx sealkeeper init\n');
-    });
-  });
-
-  describe('pull', () => {
-    it('claims the oldest open task of the type, skipping its own', async () => {
-      const hour = 3_600_000;
-      const at = (ago: number) => new Date(Date.now() - ago).toISOString();
-      api.add({ postedAt: at(5 * hour), posterAgentId: agentId });
-      api.add({ postedAt: at(4 * hour), taskType: 'translate' });
-      const oldest = api.add({
-        postedAt: at(3 * hour),
-        verification: { kind: 'hash', sha256: sha256('done') },
-      });
-      api.add({ postedAt: at(2 * hour) });
-
-      const { code, out } = await run(
-        'tasks',
-        'pull',
-        '--type',
-        'summarise',
-        '--json',
-      );
-      expect(code).toBe(0);
-      const { task } = JSON.parse(out);
-      expect(task).toMatchObject({
-        id: oldest.id,
-        taskType: 'summarise',
-        state: 'claimed',
-        verification: { kind: 'hash' },
-        expiresAt: oldest.expiresAt,
-        spec: { words: 100 },
-      });
-      // A claimant never sees the digest.
-      expect(task.verification).toEqual({ kind: 'hash' });
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${oldest.id}/claim`,
-      ]);
-      expect(api.posts()[0]?.payload).toEqual({ taskId: oldest.id });
-      expect(await logged()).toMatchObject([
-        {
-          type: 'task.claimed',
-          version: '1.0.0',
-          payload: { task_id: oldest.id, task_type: 'summarise' },
-        },
-      ]);
-    });
-
-    it('reads the next page when its own tasks fill the first', async () => {
-      // VOU-208. An agent may have 200 open tasks of its own, more than one
-      // page of 100 holds.
-      const at = (ago: number) => new Date(Date.now() - ago).toISOString();
-      for (let i = 0; i < 150; i++) {
-        api.add({ postedAt: at(9e6 - i), posterAgentId: agentId });
-      }
-      const other = api.add({ postedAt: at(2e6) });
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.opened).toEqual([
-        'limit=100',
-        `limit=100&cursor=${pageCursor(100)}`,
-      ]);
-      expect(api.listed).toEqual([]);
-    });
-
-    it('stops paging after MAX_PULL_PAGES pages', async () => {
-      for (let i = 0; i < 100 * MAX_PULL_PAGES + 1; i++) {
-        api.add({ posterAgentId: agentId });
-      }
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out)).toEqual({ task: null });
-      expect(api.opened).toHaveLength(MAX_PULL_PAGES);
-    });
-
-    it('prints the task as text', async () => {
-      const task = api.add({});
-      const { code, out } = await run('tasks', 'pull');
-      expect(code).toBe(0);
-      expect(out).toContain(`id            ${task.id}`);
-      expect(out).toContain('verification  counterparty');
-      expect(out).toContain('spec          {"words":100}');
-    });
-
-    it('takes a task posted 5 minutes ago, since a person never waits (RT-8)', async () => {
-      const young = api.add({
-        postedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-      });
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(young.id);
-      expect(api.posts()[0]?.payload).toEqual({ taskId: young.id });
-    });
-
-    it('moves on after a 409 or 410', async () => {
-      const first = api.add({
-        postedAt: new Date(Date.now() - 9e6).toISOString(),
-      });
-      const second = api.add({
-        postedAt: new Date(Date.now() - 8e6).toISOString(),
-      });
-      const third = api.add({});
-      api.claims.set(first.id, 409);
-      api.claims.set(second.id, 410);
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(third.id);
-      expect(api.posts()).toHaveLength(3);
-    });
-
-    it(`gives up after ${MAX_CLAIM_ATTEMPTS} lost claims`, async () => {
-      for (let i = 0; i < 7; i++) {
-        const task = api.add({
-          postedAt: new Date(Date.now() - (60 - i) * 60_000).toISOString(),
-        });
-        api.claims.set(task.id, 409);
-      }
-      const { code, out } = await run('tasks', 'pull');
-      expect(code).toBe(0);
-      expect(out).toBe(`${NOTHING_AVAILABLE}\n`);
-      expect(api.posts()).toHaveLength(MAX_CLAIM_ATTEMPTS);
-      expect(await logged()).toEqual([]);
-    });
-
-    it('claims a task from another agent behind a full page of its own', async () => {
-      for (let i = 0; i < 50; i++) {
-        api.add({
-          posterAgentId: agentId,
-          postedAt: new Date(Date.now() - (100 - i) * 60_000).toISOString(),
-        });
-      }
-      const other = api.add({});
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.requests[0]?.path).toBe('/v1/tasks/open');
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${other.id}/claim`,
-      ]);
-    });
-
-    it('never claims a task it is barred from, which the signed list leaves out', async () => {
-      // VOU-200. After three failed submits the claim route refuses the
-      // agent with 409 claim_barred until the task expires.
-      const barred = api.add({
-        postedAt: new Date(Date.now() - 9e6).toISOString(),
-      });
-      api.barred.add(barred.id);
-      api.claims.set(barred.id, 409);
-      const other = api.add({});
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${other.id}/claim`,
-      ]);
-      expect(api.listed).toEqual([]);
-    });
-
-    it('reads the public list and moves on past a barred task on an older API', async () => {
-      // An API from before POST /v1/tasks/open answers 404, and its list
-      // still holds the barred task, so the claim gets 409 and pull moves on.
-      api.openRoute = false;
-      const barred = api.add({
-        postedAt: new Date(Date.now() - 9e6).toISOString(),
-      });
-      api.barred.add(barred.id);
-      api.claims.set(barred.id, 409);
-      const other = api.add({ taskType: 'summarise' });
-      const { code, out } = await run(
-        'tasks',
-        'pull',
-        '--type',
-        'summarise',
-        '--json',
-      );
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(other.id);
-      expect(api.requests[0]).toMatchObject({
-        method: 'POST',
-        path: '/v1/tasks/open',
-      });
-      expect(api.listed).toEqual(['state=open&limit=100&taskType=summarise']);
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${barred.id}/claim`,
-        `/v1/tasks/${other.id}/claim`,
-      ]);
-    });
-
-    it('reads the public list once when the signed read refuses the clock', async () => {
-      api.openReply = () => error(400, 'issued_at_out_of_window');
-      const task = api.add({});
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out).task.id).toBe(task.id);
-      expect(api.requests[0]).toMatchObject({
-        method: 'POST',
-        path: '/v1/tasks/open',
-      });
-      expect(api.listed).toEqual(['state=open&limit=100']);
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${task.id}/claim`,
-      ]);
-    });
-
-    it.each([
-      [401, 'unknown_agent', 'failed with unknown_agent'],
-      [500, 'internal', 'failed with internal'],
-    ])(
-      'fails on a %i %s from the signed read and never reads the public list',
-      async (status, code, message) => {
-        api.openReply = () => error(status, code);
-        api.add({});
-        const result = await run('tasks', 'pull', '--json');
-        expect(result.code).toBe(1);
-        expect(result.err).toContain(message);
-        expect(api.listed).toEqual([]);
-        expect(api.posts()).toEqual([]);
-      },
-    );
-
-    it('reports nothing available as JSON when only own tasks are open', async () => {
-      api.add({ posterAgentId: agentId });
-      const { code, out } = await run('tasks', 'pull', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out)).toEqual({ task: null });
-      expect(api.posts()).toEqual([]);
     });
   });
 
@@ -915,7 +681,7 @@ describe('tasks pull, submit and post', () => {
           same_operator: false,
         },
         untrusted: true,
-        submit: `npx sealkeeper tasks submit ${picked.id} --file <answer file>`,
+        submit: `npx sealkeeper submit ${picked.id} --file <answer file>`,
       });
       expect(await logged()).toMatchObject([
         {
@@ -934,9 +700,7 @@ describe('tasks pull, submit and post', () => {
       expect(lines[1]).toBe('Posted by bob/poster, operator bob.');
       expect(lines[2]).toBe(UNTRUSTED);
       expect(out).toContain('"words": 100');
-      expect(out).toContain(
-        `npx sealkeeper tasks submit ${task.id} --text <answer>`,
-      );
+      expect(out).toContain(`npx sealkeeper submit ${task.id} --text <answer>`);
     });
 
     it('names a seed task and leaves out the untrusted line', async () => {
@@ -1073,7 +837,7 @@ describe('tasks pull, submit and post', () => {
 
     it('releases a claim in one line, signed for the task', async () => {
       const task = held();
-      const { code, out, err } = await run('tasks', 'release', task.id);
+      const { code, out, err } = await run('release', task.id);
       expect(code).toBe(0);
       expect(err).toBe('');
       expect(out).toBe(
@@ -1090,13 +854,13 @@ describe('tasks pull, submit and post', () => {
       const task = held({
         assignee: { id: agentId, handle: 'alice/summariser' },
       });
-      const { code, out } = await run('tasks', 'release', task.id);
+      const { code, out } = await run('release', task.id);
       expect(code).toBe(0);
       expect(out).toBe(
         `Released ${task.id}. It was addressed to this agent, so it has expired. This agent cannot claim it again.\n`,
       );
       const other = held();
-      const json = await run('tasks', 'release', other.id, '--json');
+      const json = await run('release', other.id, '--json');
       expect(JSON.parse(json.out)).toEqual({
         id: other.id,
         state: 'open',
@@ -1113,13 +877,13 @@ describe('tasks pull, submit and post', () => {
           { error: { code: 'release_cap', message } },
           { status: 409, headers: { 'Retry-After': '3600' } },
         );
-      const { code, out, err } = await run('tasks', 'release', task.id);
+      const { code, out, err } = await run('release', task.id);
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${message}\n`);
       api.releaseReply = null;
       const notMine = api.add({ state: 'claimed', claimantAgentId: THIRD });
-      const refused = await run('tasks', 'release', notMine.id);
+      const refused = await run('release', notMine.id);
       expect(refused.code).toBe(1);
       expect(refused.err).toBe('failed with not_claimant\n');
     });
@@ -1127,18 +891,18 @@ describe('tasks pull, submit and post', () => {
     it('says in one line that an older API cannot release, and leaves the claim', async () => {
       api.releaseRoute = false;
       const task = held();
-      const { code, out, err } = await run('tasks', 'release', task.id);
+      const { code, out, err } = await run('release', task.id);
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${OLD_API}\n`);
       expect(api.tasks.get(task.id)?.state).toBe('claimed');
       // An unknown task reads as one, not as an older API.
-      const missing = await run('tasks', 'release', randomUUID());
+      const missing = await run('release', randomUUID());
       expect(missing.err).toBe(`${NOT_FOUND}\n`);
     });
 
     it('refuses anything but a full task id before any request', async () => {
-      const { code, err } = await run('tasks', 'release', 'abcd1234');
+      const { code, err } = await run('release', 'abcd1234');
       expect(code).toBe(1);
       expect(err).toBe('task id must be a UUID, got abcd1234\n');
       expect(api.requests).toEqual([]);
@@ -1157,13 +921,7 @@ describe('tasks pull, submit and post', () => {
 
     it('leaves a hash answer to the server, which it never sees the digest of', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'wrong',
-      );
+      const { code, err } = await run('submit', task.id, '--text', 'wrong');
       expect(code).toBe(1);
       expect(err).toContain('verification failed: hash_mismatch');
       expect(err).not.toContain(sha256('right'));
@@ -1183,7 +941,6 @@ describe('tasks pull, submit and post', () => {
       const file = `${home}-answer.txt`;
       await writeFile(file, 'the answer\n');
       const { code, out } = await run(
-        'tasks',
         'submit',
         task.id,
         '--file',
@@ -1209,18 +966,14 @@ describe('tasks pull, submit and post', () => {
       const task = claimed({ kind: 'hash', sha256: sha256('Oslo') });
       const file = `${home}-answer.txt`;
       await writeFile(file, 'Oslo\n');
-      const fromFile = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--file',
-        file,
-      ).finally(() => rm(file, { force: true }));
+      const fromFile = await run('submit', task.id, '--file', file).finally(
+        () => rm(file, { force: true }),
+      );
       expect(fromFile.code).toBe(1);
       expect(fromFile.err).toContain('the answer ends in a line break');
       expect(fromFile.err).toContain('a claim allows 3 failed submits');
       expect(fromFile.err).toContain('add --keep-newline to send it as is');
-      const crlf = await run('tasks', 'submit', task.id, '--text', 'Oslo\r\n');
+      const crlf = await run('submit', task.id, '--text', 'Oslo\r\n');
       expect(crlf.code).toBe(1);
       expect(crlf.err).toContain('the answer ends in a line break');
       expect(api.posts()).toEqual([]);
@@ -1235,13 +988,7 @@ describe('tasks pull, submit and post', () => {
         claimantAgentId: agentId,
         claimedAt: new Date().toISOString(),
       });
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'Oslo\n',
-      );
+      const { code, err } = await run('submit', task.id, '--text', 'Oslo\n');
       expect(code).toBe(1);
       expect(err).toContain(
         'and a duel side has one submit. Nothing was sent.',
@@ -1261,13 +1008,7 @@ describe('tasks pull, submit and post', () => {
           },
           { status: 409 },
         );
-      const { code, out, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'Oslo',
-      );
+      const { code, out, err } = await run('submit', task.id, '--text', 'Oslo');
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(
@@ -1283,13 +1024,7 @@ describe('tasks pull, submit and post', () => {
         claimantAgentId: agentId,
         claimedAt: new Date().toISOString(),
       });
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'Oslo\n',
-      );
+      const { code, err } = await run('submit', task.id, '--text', 'Oslo\n');
       expect(code).toBe(1);
       expect(err).toContain(
         'and a challenge task has one submit. Nothing was sent.',
@@ -1309,13 +1044,7 @@ describe('tasks pull, submit and post', () => {
           },
           { status: 409 },
         );
-      const { code, out, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'Oslo',
-      );
+      const { code, out, err } = await run('submit', task.id, '--text', 'Oslo');
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(
@@ -1326,7 +1055,6 @@ describe('tasks pull, submit and post', () => {
     it('sends a hash answer with its line break as is under --keep-newline', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('Oslo\n') });
       const { code, out } = await run(
-        'tasks',
         'submit',
         task.id,
         '--text',
@@ -1344,16 +1072,13 @@ describe('tasks pull, submit and post', () => {
     it('leaves the line break of a counterparty or schema answer alone', async () => {
       const counterparty = claimed({ kind: 'counterparty' });
       expect(
-        (await run('tasks', 'submit', counterparty.id, '--text', 'done\n'))
-          .code,
+        (await run('submit', counterparty.id, '--text', 'done\n')).code,
       ).toBe(0);
       const schema = claimed({
         kind: 'schema',
         jsonSchema: { type: 'object' },
       });
-      expect(
-        (await run('tasks', 'submit', schema.id, '--text', '{}\n')).code,
-      ).toBe(0);
+      expect((await run('submit', schema.id, '--text', '{}\n')).code).toBe(0);
       expect(api.posts().map((r) => r.path)).toContain(
         `/v1/tasks/${schema.id}/submit`,
       );
@@ -1361,13 +1086,7 @@ describe('tasks pull, submit and post', () => {
 
     it('refuses invalid JSON for a schema task locally', async () => {
       const task = claimed({ kind: 'schema', jsonSchema: { type: 'object' } });
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        '{',
-      );
+      const { code, err } = await run('submit', task.id, '--text', '{');
       expect(code).toBe(1);
       expect(err).toContain('not valid JSON');
       expect(api.posts()).toEqual([]);
@@ -1394,7 +1113,6 @@ describe('tasks pull, submit and post', () => {
       cwd = dir;
       for (const id of [task.id, seed.id]) {
         const { code } = await run(
-          'tasks',
           'submit',
           id,
           '--file',
@@ -1421,7 +1139,7 @@ describe('tasks pull, submit and post', () => {
 
     it('outside a routine run notes nothing on a failure that leaves the claim', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
-      const { code } = await run('tasks', 'submit', task.id, '--text', 'wrong');
+      const { code } = await run('submit', task.id, '--text', 'wrong');
       expect(code).toBe(1);
       expect((await readRoutine()).filter((e) => e.kind === 'barred')).toEqual(
         [],
@@ -1430,9 +1148,7 @@ describe('tasks pull, submit and post', () => {
       Object.assign(task, { state: 'open', claimantAgentId: null });
       api.submitReply = () =>
         error(422, 'verification_failed', 'hash_mismatch');
-      expect((await run('tasks', 'submit', task.id, '--text', 'x')).code).toBe(
-        1,
-      );
+      expect((await run('submit', task.id, '--text', 'x')).code).toBe(1);
       expect(
         (await readRoutine()).filter((e) => e.kind === 'barred'),
       ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
@@ -1442,13 +1158,7 @@ describe('tasks pull, submit and post', () => {
       const task = claimed({ kind: 'schema', jsonSchema: { type: 'object' } });
       api.submitReply = () =>
         error(422, 'verification_failed', 'schema_mismatch');
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        '[1]',
-      );
+      const { code, err } = await run('submit', task.id, '--text', '[1]');
       expect(code).toBe(1);
       expect(err).toContain('verification failed: schema_mismatch');
       expect(await logged()).toEqual([]);
@@ -1457,7 +1167,6 @@ describe('tasks pull, submit and post', () => {
     it('submits a counterparty task, then reports success', async () => {
       const task = claimed({ kind: 'counterparty' });
       const { code, out } = await run(
-        'tasks',
         'submit',
         task.id,
         '--text',
@@ -1491,24 +1200,18 @@ describe('tasks pull, submit and post', () => {
       });
     });
 
-    it('says to run npx sealkeeper tasks submit again when the outcome fails', async () => {
+    it('says to run npx sealkeeper submit again when the outcome fails', async () => {
       const task = claimed({ kind: 'counterparty' });
       api.outcomeReply = () => error(503, 'unavailable');
-      const { code, err } = await run(
-        'tasks',
-        'submit',
-        task.id,
-        '--text',
-        'done',
-      );
+      const { code, err } = await run('submit', task.id, '--text', 'done');
       expect(code).toBe(1);
       expect(err).toContain('submitted, but reporting the outcome failed');
-      expect(err).toContain('Run npx sealkeeper tasks submit again to retry');
+      expect(err).toContain('Run npx sealkeeper submit again to retry');
     });
 
     it('says the poster must confirm in text mode', async () => {
       const task = claimed({ kind: 'counterparty' });
-      const { out } = await run('tasks', 'submit', task.id, '--text', 'done');
+      const { out } = await run('submit', task.id, '--text', 'done');
       expect(out).toContain('state  submitted');
       expect(out).toContain(AWAITING_POSTER);
     });
@@ -1516,7 +1219,6 @@ describe('tasks pull, submit and post', () => {
     it('refuses a file inside the SealKeeper home without sending it', async () => {
       const task = claimed({ kind: 'counterparty' });
       const { code, err } = await run(
-        'tasks',
         'submit',
         task.id,
         '--file',
@@ -1534,7 +1236,6 @@ describe('tasks pull, submit and post', () => {
       const answer = `${home}-answer.txt`;
       await writeFile(answer, `here it is: ${seed}`);
       const { code, err } = await run(
-        'tasks',
         'submit',
         task.id,
         '--file',
@@ -1546,7 +1247,7 @@ describe('tasks pull, submit and post', () => {
     });
 
     it('needs exactly one of --file and --text', async () => {
-      const { code, err } = await run('tasks', 'submit', randomUUID());
+      const { code, err } = await run('submit', randomUUID());
       expect(code).toBe(1);
       expect(err).toContain('exactly one of');
       expect(api.requests).toEqual([]);
@@ -1576,19 +1277,12 @@ describe('tasks pull, submit and post', () => {
         cwd = join(dir, 'work');
         const task = claimed({ kind: 'counterparty' });
         const outside = await fileIn(cwd, 'answer.txt', 'outside');
-        const refused = await run(
-          'tasks',
-          'submit',
-          task.id,
-          '--file',
-          outside,
-        );
+        const refused = await run('submit', task.id, '--file', outside);
         expect(refused.code).toBe(1);
         expect(refused.err).toContain(`refusing to submit ${outside}`);
         expect(refused.err).toContain(join(cwd, '.sealkeeper-answers'));
         // The flag changes nothing in a routine run.
         const flagged = await run(
-          'tasks',
           'submit',
           task.id,
           '--file',
@@ -1600,7 +1294,6 @@ describe('tasks pull, submit and post', () => {
 
         await fileIn(join(cwd, '.sealkeeper-answers'), 'a.txt', 'inside');
         const read = await run(
-          'tasks',
           'submit',
           task.id,
           '--file',
@@ -1622,13 +1315,7 @@ describe('tasks pull, submit and post', () => {
         await mkdir(join(cwd, '.sealkeeper-answers'), { recursive: true });
         const link = join(cwd, '.sealkeeper-answers', 'a.txt');
         await symlink(secret, link);
-        const { code, err } = await run(
-          'tasks',
-          'submit',
-          task.id,
-          '--file',
-          link,
-        );
+        const { code, err } = await run('submit', task.id, '--file', link);
         expect(code).toBe(1);
         expect(err).toContain(`refusing to submit ${link}`);
         expect(api.posts()).toEqual([]);
@@ -1649,7 +1336,6 @@ describe('tasks pull, submit and post', () => {
         for (const file of [token, ssh, '.config/gh/hosts.yml']) {
           for (const extra of [[], ['--allow-outside-cwd']]) {
             const { code, err } = await run(
-              'tasks',
               'submit',
               task.id,
               '--file',
@@ -1668,13 +1354,12 @@ describe('tasks pull, submit and post', () => {
         await mkdir(cwd);
         const task = claimed({ kind: 'counterparty' });
         const file = await fileIn(join(dir, 'elsewhere'), 'answer.txt', 'done');
-        const refused = await run('tasks', 'submit', task.id, '--file', file);
+        const refused = await run('submit', task.id, '--file', file);
         expect(refused.code).toBe(1);
         expect(refused.err).toContain('outside the current directory');
         expect(refused.err).toContain('--allow-outside-cwd');
         expect(api.posts()).toEqual([]);
         const allowed = await run(
-          'tasks',
           'submit',
           task.id,
           '--file',
@@ -1695,17 +1380,16 @@ describe('tasks pull, submit and post', () => {
         const big = join(dir, 'big.txt');
         await writeFile(big, '');
         await truncate(big, 1024 ** 3);
-        const tooBig = await run('tasks', 'submit', task.id, '--file', big);
+        const tooBig = await run('submit', task.id, '--file', big);
         expect(tooBig.code).toBe(1);
         expect(tooBig.err).toContain(
           `it is ${1024 ** 3} bytes and the most allowed is ${MAX_SUBMISSION_BYTES}`,
         );
-        const folder = await run('tasks', 'submit', task.id, '--file', dir);
+        const folder = await run('submit', task.id, '--file', dir);
         expect(folder.code).toBe(1);
         expect(folder.err).toContain('it is not a regular file');
         if (process.platform !== 'win32') {
           const zero = await run(
-            'tasks',
             'submit',
             task.id,
             '--file',
@@ -2400,7 +2084,7 @@ describe('tasks pull, submit and post', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('reads --input @file under the same rules as tasks submit --file (VOU-229)', async () => {
+    it('reads --input @file under the same rules as submit --file (VOU-229)', async () => {
       const dir = await realpath(
         await mkdtemp(join(tmpdir(), 'sealkeeper-vou229-')),
       );
@@ -2720,7 +2404,7 @@ describe('tasks pull, submit and post', () => {
       expect(payload.assignee).toBe('bob/writer');
       expect(out).toContain('for      bob/writer\n');
       expect(out).toContain(
-        'Only bob/writer can claim this task. It sees it in npx sealkeeper prove and npx sealkeeper status, and claims it with npx sealkeeper tasks pull --addressed.\n',
+        'Only bob/writer can claim this task. It sees it in npx sealkeeper run and npx sealkeeper status, and claims it with npx sealkeeper run --addressed.\n',
       );
       expect(out).toContain(
         `You judge the result. Once it is submitted, run npx sealkeeper tasks outcome ${payload.taskId} success or failure.\n`,
@@ -2846,62 +2530,6 @@ describe('tasks pull, submit and post', () => {
       expect(assigneeOperatorCap('bob/writer')).toBe(
         'bob/writer already has the most open tasks from your agents, try again once it claims some',
       );
-    });
-
-    it('pull --addressed claims the oldest task addressed to this agent', async () => {
-      const at = (ago: number) => new Date(Date.now() - ago).toISOString();
-      api.add({ postedAt: at(9e6) });
-      const older = api.add({
-        postedAt: at(5e6),
-        assignee: { id: agentId, handle: 'alice/summariser' },
-      });
-      api.add({
-        postedAt: at(3e6),
-        assignee: { id: agentId, handle: 'alice/summariser' },
-      });
-      api.add({
-        postedAt: at(8e6),
-        assignee: { id: THIRD, handle: 'carol/other' },
-      });
-      await writeFile(paths().inbox, '{}\n');
-      const { code, out } = await run('tasks', 'pull', '--addressed', '--json');
-      expect(code).toBe(0);
-      expect(api.posts().map((r) => r.path)).toEqual([
-        `/v1/tasks/${older.id}/claim`,
-      ]);
-      expect(JSON.parse(out).task).toMatchObject({
-        id: older.id,
-        assignee: 'alice/summariser',
-        poster: 'bob/writer',
-      });
-      // The cached count status shows is dropped.
-      await expect(readFile(paths().inbox)).rejects.toThrow();
-    });
-
-    it('pull --addressed names the poster in text', async () => {
-      const task = api.add({
-        assignee: { id: agentId, handle: 'alice/summariser' },
-      });
-      const { out } = await run('tasks', 'pull', '--addressed');
-      expect(out).toContain(`id            ${task.id}\n`);
-      expect(out).toContain(
-        'poster        bob/writer, its spec is untrusted\n',
-      );
-    });
-
-    it('pull --addressed says so when none wait', async () => {
-      api.add({});
-      const { code, out } = await run('tasks', 'pull', '--addressed');
-      expect(code).toBe(0);
-      expect(out).toBe(`${NOTHING_ADDRESSED}\n`);
-      expect(api.posts()).toEqual([]);
-    });
-
-    it('plain pull leaves addressed tasks alone', async () => {
-      api.add({ assignee: { id: agentId, handle: 'alice/summariser' } });
-      const { out } = await run('tasks', 'pull');
-      expect(out).toBe(`${NOTHING_AVAILABLE}\n`);
-      expect(api.posts()).toEqual([]);
     });
   });
 
@@ -3284,7 +2912,7 @@ describe('tasks pull, submit and post', () => {
     it('tasks show keeps the submit command for a task someone else posted', async () => {
       const task = api.add({});
       const json = await run('tasks', 'show', task.id, '--json');
-      expect(JSON.parse(json.out).submit).toContain(`tasks submit ${task.id}`);
+      expect(JSON.parse(json.out).submit).toContain(`submit ${task.id}`);
     });
 
     it('tasks show prints category, check method, size and disclosure (RT-2)', async () => {
@@ -3391,7 +3019,7 @@ describe('tasks pull, submit and post', () => {
     });
   });
 
-  // VB-3. Claim, submit and outcome carry the fingerprint sync and prove
+  // VB-3. Claim, submit and outcome carry the fingerprint sync and run
   // last wrote, inside and outside a routine run, and leave it out when
   // there is none.
   describe('fingerprint', () => {
@@ -3415,9 +3043,9 @@ describe('tasks pull, submit and post', () => {
       const fingerprint = await written();
       const task = api.add({});
       expect((await run('tasks', 'claim', task.id)).code).toBe(0);
-      expect(
-        (await run('tasks', 'submit', task.id, '--text', 'the summary')).code,
-      ).toBe(0);
+      expect((await run('submit', task.id, '--text', 'the summary')).code).toBe(
+        0,
+      );
       expect(sent('/claim')[0]?.payload).toEqual({
         taskId: task.id,
         fingerprint,
@@ -3430,10 +3058,10 @@ describe('tasks pull, submit and post', () => {
       });
     });
 
-    it('sends it on a pull claim and on a routine run submit', async () => {
+    it('sends it on a claim and on a routine run submit', async () => {
       const fingerprint = await written();
       const task = api.add({});
-      expect((await run('tasks', 'pull')).code).toBe(0);
+      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
       expect(sent('/claim')[0]?.payload).toEqual({
         taskId: task.id,
         fingerprint,
@@ -3447,7 +3075,6 @@ describe('tasks pull, submit and post', () => {
       await writeFile(join(dir, '.sealkeeper-answers', 'a.txt'), 'summary');
       cwd = dir;
       const { code } = await run(
-        'tasks',
         'submit',
         task.id,
         '--file',

@@ -70,7 +70,7 @@ describe('mastra sealKeeperContext', () => {
       [
         'SealKeeper. Level none, 13 of 25 verified tasks to bronze.',
         '1 task addressed to you.',
-        '`npx sealkeeper prove --json` works on this. Run it only when the user asks for it or agrees.',
+        '`npx sealkeeper run --json` works on this. Run it only when the user asks for it or agrees.',
       ].join('\n'),
     );
     expect(goal.reads).toMatchObject([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);

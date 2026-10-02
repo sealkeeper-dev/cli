@@ -162,7 +162,7 @@ describe('config', () => {
     expect(urls).toEqual([
       `https://api.sealkeeper.run/v1/agents/${AGENT_ID}/goal`,
     ]);
-    expect(await nudgeLines('/sealkeeper-prove')).toContain(
+    expect(await nudgeLines('/sealkeeper-run')).toContain(
       '1 task addressed to you.',
     );
 

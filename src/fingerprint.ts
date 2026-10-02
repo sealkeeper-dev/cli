@@ -4,13 +4,13 @@
 // here, and only the hashes are kept, see Fingerprint in @sealkeeper/schema.
 //
 // fingerprint.json in the home holds the last FINGERPRINT_WINDOW captures and
-// the current fingerprint made from them. It is recomputed at sync and prove
+// the current fingerprint made from them. It is recomputed at sync and run
 // only (refreshFingerprint), and only once config.json exists. Anything that
 // needs the fingerprint reads the cached file with currentFingerprint.
 //
 // Where the parts come from. Each source writes the hashes of what it sees
 // to fingerprint-sources.json, and the recompute reads them from there, so
-// sync and prove give the same parts from any folder.
+// sync and run give the same parts from any folder.
 // - claude-code, written by the SessionStart and SessionEnd hooks from the
 //   folder Claude Code runs in, see fingerprint-claude-code.ts.
 // - mastra and openclaw, written by the adapters in the agent's own process
@@ -288,7 +288,7 @@ export async function captureParts(
   };
 }
 
-// Captures the parts and records them. At sync and prove only. null when
+// Captures the parts and records them. At sync and run only. null when
 // there is no config yet.
 export async function refreshFingerprint(
   options: CaptureOptions = {},
@@ -299,7 +299,7 @@ export async function refreshFingerprint(
   return recordCapture(p, parts, Math.floor(now / 1000));
 }
 
-// refreshFingerprint that never throws, for sync and prove, which must not
+// refreshFingerprint that never throws, for sync and run, which must not
 // fail over a fingerprint. null when it could not be computed.
 export async function refreshFingerprintQuietly(
   options: CaptureOptions = {},
@@ -334,7 +334,7 @@ export function describeFingerprint(): string {
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and prove. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else, and each sync sends them with the model name below.`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and run. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else, and each sync sends them with the model name below.`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),

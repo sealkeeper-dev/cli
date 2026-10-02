@@ -5,7 +5,7 @@
 // tool set or the framework version found once, never per model step that
 // shows nothing new. The model name of the first model id goes too, as
 // text, the one value here that is not a hash (VOU-566). The fingerprint
-// itself is recomputed at sync and prove from that file, see
+// itself is recomputed at sync and run from that file, see
 // fingerprint.ts.
 import { partHash } from '@sealkeeper/schema';
 import { paths as defaultPaths, type Paths, readConfig } from './config.js';

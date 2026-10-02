@@ -21,7 +21,7 @@ export const NO_FINGERPRINT = `no fingerprint yet, run ${cli('sync')} to compute
 // --handshake. Without a nonce it is good for as long as a SEAL lives,
 // HANDSHAKE_MAX_AGE_SECONDS, and with one for HANDSHAKE_SKEW_SECONDS, the
 // live challenge.
-// The fingerprint is the one sync or prove last wrote, never recomputed.
+// The fingerprint is the one sync or run last wrote, never recomputed.
 // Exits 1 with one line when there is none.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent

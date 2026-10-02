@@ -653,7 +653,7 @@ describe('hook claude-code', () => {
     const SUMMARY = [
       'SealKeeper. Level none, 13 of 25 verified tasks to bronze.',
       '2 tasks addressed to you, 1 outcome to report.',
-      '/sealkeeper-prove works on this. Run it only when the user asks for it or agrees.',
+      '/sealkeeper-run works on this. Run it only when the user asks for it or agrees.',
     ].join('\n');
 
     it('SessionStart prints the summary from the cache once the nudge is on', async () => {

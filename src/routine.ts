@@ -33,10 +33,10 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 //
 // A routine run starts a headless agent with SEALKEEPER_ROUTINE_RUN set to
 // the run id. Only that variable puts a command in routine mode, where
-// prove, tasks outcome and tasks submit apply the routine rules whatever
-// their options, tasks post takes only a template that makes its own input,
+// run, tasks outcome and submit apply the routine rules whatever their
+// options, tasks post takes only a template that makes its own input and
 // tasks claim takes only a duel or weekly challenge task addressed to this
-// agent (GAME-14) and tasks pull is refused. A command the operator runs in
+// agent (GAME-14). A command the operator runs in
 // another terminal while a run is going is a normal command. The Bash rules the agent gets allow only commands that
 // keep the variable, see routine-agent.ts.
 //
@@ -52,7 +52,7 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
 // a line. One run line per run, and a line for every claim, submit, failed
 // submit, confirmation, post, skip, limit, pause, resume and game action,
-// and one for each prove once its claims are in. The daily caps are counted
+// and one for each run --json once its claims are in. The daily caps are counted
 // from it, per UTC day. A first run's watcher reads the lines of its run as they
 // come, see routine-watch.ts (RS-9).
 
@@ -61,7 +61,7 @@ export const ROUTINE_RUN_ENV = 'SEALKEEPER_ROUTINE_RUN';
 export type RoutinePaths = {
   log: string;
   lock: string;
-  // Held while prove claims inside a run, so two claims at once cannot
+  // Held while run --json claims inside a run, so two claims at once cannot
   // pass the daily claim limit.
   claimLock: string;
   // Held while tasks outcome reports inside a run, so two reports at once
@@ -71,7 +71,7 @@ export type RoutinePaths = {
   // pass the daily post limit.
   postLock: string;
   // Where the headless agent runs and writes its answer files. Outside the
-  // CLI home, since tasks submit refuses any file inside it, see
+  // CLI home, since submit refuses any file inside it, see
   // key-guard.ts.
   work: string;
   // Where the scheduler sends the job's output.
@@ -123,7 +123,7 @@ export async function ensureWorkDir(p: Paths = paths()): Promise<string> {
   const home = resolve(p.home);
   if (resolve(work) === home || resolve(work).startsWith(`${home}${sep}`)) {
     throw new Error(
-      `the routine's working directory ${work} is inside ${p.home}, where tasks submit refuses every file`,
+      `the routine's working directory ${work} is inside ${p.home}, where submit refuses every file`,
     );
   }
   await mkdir(work, { recursive: true, mode: 0o700 });
@@ -242,7 +242,7 @@ const RoutineEntry = z.discriminatedUnion('kind', [
   }),
   // A game action in a routine run (GAME-14), written by the command that
   // did it once SealKeeper took it. accept is an invite duel accept
-  // started, duel and challenge a duel or challenge task tasks submit
+  // started, duel and challenge a duel or challenge task submit
   // answered, right or wrong, and seek a seek duel seek opened. id is the
   // duel, task or seek, so a retry that SealKeeper answers again counts
   // once. Its own kind, so no daily limit counts it.
@@ -253,18 +253,18 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     action: z.enum(['accept', 'duel', 'challenge', 'seek']),
     id: z.string(),
   }),
-  // A prove in a routine run once its claims are in (RS-9). claimed is the
-  // tasks it claimed now, tasks all it handed the agent, the tasks the
-  // agent held already included.
+  // A run --json in a routine run once its claims are in (RS-9). claimed
+  // is the tasks it claimed now, tasks all it handed the agent, the tasks
+  // the agent held already included.
   z.object({
-    kind: z.literal('prove'),
+    kind: z.literal('claimed'),
     at: At,
     runId: z.string(),
     claimed: z.number().int(),
     tasks: z.number().int(),
   }),
   // An operator whose task this agent failed, so the routine takes no
-  // template task of that operator again (RT-8). tasks submit writes it on
+  // template task of that operator again (RT-8). submit writes it on
   // the first failed submit of a network claim in a routine run, and
   // outside a run on the failed submit that ends a claim.
   z.object({
@@ -424,7 +424,7 @@ export function barredOperators(entries: RoutineEntry[]): Set<string> {
 }
 
 // The operators of today's network claims, lowercased, so each operator
-// gets at most one a day across every prove of every run (RT-8).
+// gets at most one a day across every run --json of every run (RT-8).
 export function networkOperatorsToday(
   entries: RoutineEntry[],
   now: Date = new Date(),
@@ -738,8 +738,8 @@ export class RoutineLockBusy extends Error {
 }
 
 // Runs fn while holding the claim lock, so the daily claim budget is read,
-// spent and logged by one prove at a time. Throws RoutineLockBusy when
-// another prove holds it for more than a minute.
+// spent and logged by one run --json at a time. Throws RoutineLockBusy
+// when another one holds it for more than a minute.
 export function withClaimLock<T>(
   fn: () => Promise<T>,
   p: Paths = paths(),
@@ -747,7 +747,7 @@ export function withClaimLock<T>(
 ): Promise<T> {
   return withRoutineLock(
     routinePaths(p).claimLock,
-    'another prove of this routine run is still claiming, nothing was claimed',
+    'another run --json of this routine run is still claiming, nothing was claimed',
     fn,
     p,
     sleep,
@@ -871,7 +871,7 @@ export async function refuseInRoutine(
   if ((await activeRoutineRun()) === null) return;
   const why =
     post === undefined
-      ? `${command} is not available during a routine run. A routine run claims through prove, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, claims by id only its own duel and weekly challenge tasks, and posts only by adopting a ready made task or from a template`
+      ? `${command} is not available during a routine run. A routine run claims through run, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, claims by id only its own duel and weekly challenge tasks, and posts only by adopting a ready made task or from a template`
       : routinePostRefusal(post);
   if (why !== null) cmd.error(why);
 }

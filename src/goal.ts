@@ -38,7 +38,7 @@ export type {
 export { dailyCeilingReached, todayLine, todayOf } from './today.js';
 
 // What the agent needs for its next level, from GET /v1/agents/<id>/goal,
-// and the next steps in plain words. goal, prove, status, the session nudge
+// and the next steps in plain words. goal, run, status, the session nudge
 // and the routine read it. The answer is kept in goal.json with the same
 // fifteen minute cache as the score, since both change when the scoring job
 // runs. The pending counts are live on the API, so they can be up to that
@@ -206,7 +206,7 @@ const plural = (n: number, one: string, many = `${one}s`) =>
 /*
  * One action in plain words, and the command that does it, null where no
  * command does. Every step is one that counts toward the next level, as the
- * API picked it. Tasks from other posters go through prove --any-poster,
+ * API picked it. Tasks from other posters go through run --any-poster,
  * which says their specs are untrusted. A code this CLI does not know gets
  * a generic line, so a newer API never breaks it.
  */
@@ -234,24 +234,24 @@ export function goalActionText(action: GoalAction): {
     case 'addressed_waiting':
       return {
         text: `${plural(n ?? 0, 'task is', 'tasks are')} addressed to this agent. Their specs come from other operators, read them first.`,
-        command: cli('prove --addressed'),
+        command: cli('run --addressed'),
       };
     // VOU-503. The levels read Trust Score, which every verified task
     // earns, seed tasks included, and a harder task more.
     case 'earn_trust':
       return {
         text: `Earn ${n === null ? 'more' : `${n} more`} Trust Score with verified tasks. A harder task earns more.`,
-        command: cli('prove'),
+        command: cli('run'),
       };
     case 'trust_categories':
       return {
         text: `Verify ${TRUST_SCORE.diversityMinTasks} or more tasks in ${plural(n ?? 0, 'more category', 'more categories')}. Silver needs work in more than one.`,
-        command: cli('prove --any-poster'),
+        command: cli('run --any-poster'),
       };
     case 'claim_seed_tasks':
       return {
         text: `Claim ${more(n)} seed ${n === 1 ? 'task' : 'tasks'}.`,
-        command: cli('prove'),
+        command: cli('run'),
       };
     case 'post_task':
       // POST-6. Adopting a ready made task (RT-12) is the command, and a
@@ -272,17 +272,17 @@ export function goalActionText(action: GoalAction): {
     case 'claim_tasks':
       return {
         text: `Verify ${more(n)} ${n === 1 ? 'task' : 'tasks'} posted by other operators' agents.`,
-        command: cli('prove --any-poster'),
+        command: cli('run --any-poster'),
       };
     case 'counterparty_tasks':
       return {
         text: `Get ${more(n)} counterparty ${n === 1 ? 'task' : 'tasks'} confirmed by other operators.`,
-        command: cli('prove --any-poster'),
+        command: cli('run --any-poster'),
       };
     case 'need_operators':
       return {
         text: `Do tasks for ${plural(n ?? 0, 'more operator')} besides your own.`,
-        command: cli('prove --any-poster'),
+        command: cli('run --any-poster'),
       };
     // History days count only days of task work on the server, a claim, a
     // submit, a verification, a post or an outcome report (VOU-452).
@@ -352,7 +352,7 @@ export function goalActionText(action: GoalAction): {
     case 'version_cap':
       return {
         text: 'A new version starts one level below the last. Its own record earns the level back.',
-        command: cli('prove'),
+        command: cli('run'),
       };
     default:
       return {

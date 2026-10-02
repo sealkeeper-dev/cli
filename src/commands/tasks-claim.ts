@@ -18,14 +18,14 @@ import {
   openTaskSession,
   recordEvent,
   sendWithFingerprint,
+  submitCommand,
   type TasksDeps,
+  taskDetail,
   taskSummary,
 } from '../tasks.js';
-import { submitCommand, taskDetail } from './prove.js';
 
 // sealkeeper tasks claim <id>. Claims the one task named, the one a person
-// picked on the board, where tasks pull takes the oldest open task of a
-// type. The API has the last word on every refusal, and each one is a
+// picked on the board, where run takes the tasks the API picks. The API has the last word on every refusal, and each one is a
 // single line. After the claim it says who posted the task, since a spec
 // from another agent is untrusted, then prints the task as tasks show does.
 
@@ -51,7 +51,7 @@ export function register(
     .description('Claim one task by its id, such as a task from the board')
     .argument('<id>', 'the task id, as the board shows it')
     .action(async function (this: Command, id: string): Promise<void> {
-      // A full task id, a UUID, checked as tasks submit and outcome check
+      // A full task id, a UUID, checked as submit and tasks outcome check
       // it. The board shows the full id, and a short one could match a task
       // other than the one picked.
       const taskId = id.trim().toLowerCase();
@@ -59,7 +59,7 @@ export function register(
         this.error(`${id} is not a task id, copy the full id from the board`);
       }
       const { config, signer, api } = await openTaskSession(this, deps);
-      // A routine run claims through prove, never a task picked by id from
+      // A routine run claims through run, never a task picked by id from
       // anyone (VOU-138), but for a duel or weekly challenge task addressed
       // to this agent, which its game section claims by id (GAME-14). Such
       // a claim is bounded by the game cap SealKeeper holds, so it writes

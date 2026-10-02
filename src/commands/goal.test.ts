@@ -281,7 +281,7 @@ describe('sealkeeper goal', () => {
         COUNTED_RULE,
         '',
         'Next',
-        '  Claim 12 more seed tasks. npx sealkeeper prove',
+        '  Claim 12 more seed tasks. npx sealkeeper run',
         '  Work on tasks on 1 more day. Only days with a task claimed, submitted, verified, posted or reported on count.',
         '',
         'As of the scoring run at 2026-09-25T10:15:00.000Z.',
@@ -359,7 +359,7 @@ describe('sealkeeper goal', () => {
       'Taken 8 of 25   Posted 2 of 5   Trust Score 30.50 of 50\n',
     );
     expect(out).toContain(
-      '  Earn 20 more Trust Score with verified tasks. A harder task earns more. npx sealkeeper prove',
+      '  Earn 20 more Trust Score with verified tasks. A harder task earns more. npx sealkeeper run',
     );
     const { trustScore: _, ...older } = trust as Record<string, unknown>;
     const again = await run(serve(older), 'goal');
@@ -383,9 +383,9 @@ describe('sealkeeper goal', () => {
       [
         'Next',
         '  Report the outcome of 1 counterparty task waiting on this agent. npx sealkeeper tasks outcome <id> success',
-        '  2 tasks are addressed to this agent. Their specs come from other operators, read them first. npx sealkeeper prove --addressed',
-        "  Verify 190 more tasks posted by other operators' agents. npx sealkeeper prove --any-poster",
-        '  Do tasks for 3 more operators besides your own. npx sealkeeper prove --any-poster',
+        '  2 tasks are addressed to this agent. Their specs come from other operators, read them first. npx sealkeeper run --addressed',
+        "  Verify 190 more tasks posted by other operators' agents. npx sealkeeper run --any-poster",
+        '  Do tasks for 3 more operators besides your own. npx sealkeeper run --any-poster',
         '',
         'Waiting 2 addressed tasks, 1 outcome to report.',
       ].join('\n'),
@@ -408,7 +408,7 @@ describe('sealkeeper goal', () => {
     // A today this CLI cannot read is left out.
     expect(out).not.toContain('Today');
     expect(out).toContain(
-      '  Get 300 more counterparty tasks confirmed by other operators. sealkeeper prove --any-poster\n',
+      '  Get 300 more counterparty tasks confirmed by other operators. sealkeeper run --any-poster\n',
     );
     expect(out).toContain(
       '  Needs a verified operator. Your operator verifies a domain with a DNS TXT record at https://sealkeeper.run/me/account.\n',
@@ -582,7 +582,7 @@ describe('sealkeeper goal', () => {
     expect((await run(serve(AT_NONE), 'goal')).code).not.toBe(0);
   });
 
-  it('caches the answer for status and prove', async () => {
+  it('caches the answer for status and run', async () => {
     await run(serve(AT_BRONZE), 'goal');
     const cache = JSON.parse(await readFile(join(home, 'goal.json'), 'utf8'));
     expect(cache.goal).toEqual(AT_BRONZE);
@@ -692,11 +692,11 @@ describe('goalActionText', () => {
   it('says the Trust steps in plain words with their commands', () => {
     expect(goalActionText({ code: 'earn_trust', count: 250 })).toEqual({
       text: 'Earn 250 more Trust Score with verified tasks. A harder task earns more.',
-      command: 'sealkeeper prove',
+      command: 'sealkeeper run',
     });
     expect(goalActionText({ code: 'trust_categories', count: 1 })).toEqual({
       text: 'Verify 5 or more tasks in 1 more category. Silver needs work in more than one.',
-      command: 'sealkeeper prove --any-poster',
+      command: 'sealkeeper run --any-poster',
     });
     expect(
       goalStepText({
@@ -710,7 +710,7 @@ describe('goalActionText', () => {
   it('says a step in plain words with its command', () => {
     expect(goalActionText({ code: 'claim_seed_tasks', count: 12 })).toEqual({
       text: 'Claim 12 more seed tasks.',
-      command: 'sealkeeper prove',
+      command: 'sealkeeper run',
     });
     expect(goalActionText({ code: 'claim_seed_tasks', count: 1 }).text).toBe(
       'Claim 1 more seed task.',
