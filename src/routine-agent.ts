@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
+import { GAME } from '@sealkeeper/schema';
 import { answerRules, UNTRUSTED_SPEC_RULES } from './claude-code-command.js';
 import type { TaskResponse } from './responses.js';
 import type { RunPost } from './routine.js';
@@ -428,9 +429,10 @@ export const GAME_RULES = [
   'tasks claim:*',
 ] as const;
 
-// How far back a lost duel is rematched (GAME-14). An older loss leads to
-// a seek instead.
-export const REMATCH_DAYS = 7;
+// How far back a lost duel is rematched (GAME-14), GAME.rematchDays, the
+// window the duel route offers a rematch in too. An older loss leads to a
+// seek instead.
+export const REMATCH_DAYS = GAME.rematchDays;
 
 // The one post command of a run that posts, without the invocation.
 export function postCommand(post: RunPost): string {
