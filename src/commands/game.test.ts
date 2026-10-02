@@ -92,7 +92,10 @@ describe('sealkeeper game', () => {
   let game: FakeGame;
 
   async function run(...args: string[]): Promise<RunResult> {
-    const program = createProgram({ tasks: { fetch: game.fetch } });
+    const program = createProgram({
+      tasks: { fetch: game.fetch },
+      routine: { fetch: game.fetch },
+    });
     throwOnExit(program);
     let out = '';
     let err = '';
@@ -174,9 +177,10 @@ describe('sealkeeper game', () => {
     });
   });
 
-  describe('cap', () => {
+  // game cap went to routine set --game-cap (VOU-599).
+  describe('routine set --game-cap', () => {
     it('sends the cap alone and says the cap and the units used', async () => {
-      const result = await run('game', 'cap', '3');
+      const result = await run('routine', 'set', '--game-cap', '3', '--yes');
       expect(result.code).toBe(0);
       expect(Object.keys(game.sent[0]?.payload ?? {}).sort()).toEqual([
         'cap',
@@ -187,36 +191,43 @@ describe('sealkeeper game', () => {
     });
 
     it('takes 0, a game with no units', async () => {
-      const result = await run('game', 'cap', '0');
+      const result = await run('routine', 'set', '--game-cap', '0', '--yes');
       expect(result.code).toBe(0);
       expect(game.sent[0]?.payload.cap).toBe(0);
     });
 
     it('says the game is off beside the new cap', async () => {
       game.status.enabled = false;
-      const result = await run('game', 'cap', '4');
+      const result = await run('routine', 'set', '--game-cap', '4', '--yes');
       expect(result.code).toBe(0);
       expect(result.out).toBe(
         'Game cap 4 units a UTC day, 2 used today. The game is off, npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n',
       );
     });
 
-    it('--json prints the API answer unchanged', async () => {
-      const result = await run('game', 'cap', '1', '--json');
+    it('--json prints the cap SealKeeper holds now', async () => {
+      const result = await run(
+        'routine',
+        'set',
+        '--game-cap',
+        '1',
+        '--yes',
+        '--json',
+      );
       expect(result.code).toBe(0);
-      expect(JSON.parse(result.out)).toEqual({
-        enabled: true,
-        cap: 1,
-        usedToday: 2,
-        resetAt: RESET_AT,
-        later: 'kept',
-      });
+      expect(JSON.parse(result.out).gameCap).toBe(1);
     });
 
     it.each([['6'], ['-1'], ['2.5'], ['x'], ['']])(
       'refuses %j before any request',
       async (value) => {
-        const result = await run('game', 'cap', value);
+        const result = await run(
+          'routine',
+          'set',
+          '--game-cap',
+          value,
+          '--yes',
+        );
         expect(result.code).toBe(1);
         expect(result.err).toBe(`${BAD_CAP(value)}\n`);
         expect(game.sent).toEqual([]);
@@ -228,14 +239,22 @@ describe('sealkeeper game', () => {
         'cap must be a whole number from 0 to 5, got 6',
       );
     });
+
+    it('game cap is gone', async () => {
+      expect((await run('game', 'cap', '3')).code).toBe(1);
+      expect(game.sent).toEqual([]);
+    });
   });
 
   describe('refusals', () => {
-    it.each([['off'], ['cap', '2']])(
-      'game %s against an API without the game says so in one line',
+    it.each([
+      ['game', 'off'],
+      ['routine', 'set', '--game-cap', '2', '--yes'],
+    ])(
+      '%s %s against an API without the game says so in one line',
       async (...args) => {
         game.gone = true;
-        const result = await run('game', ...args);
+        const result = await run(...args);
         expect(result.code).toBe(1);
         expect(result.out).toBe('');
         expect(result.err).toBe(`${OLD_API}\n`);

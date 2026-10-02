@@ -6,7 +6,12 @@ import { type ApiClient, ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
-import { defaultTasksDeps, openTaskSession, type TasksDeps } from '../tasks.js';
+import {
+  defaultTasksDeps,
+  openTaskSession,
+  type TaskSession,
+  type TasksDeps,
+} from '../tasks.js';
 import { NOT_FOUND } from './tasks-claim.js';
 
 // sealkeeper release <id>. Gives a claim this agent cannot finish
@@ -39,10 +44,7 @@ export function register(
 
       let task: TaskResponse;
       try {
-        task = await api.releaseTask(
-          taskId,
-          await signer.sign(ReleaseTaskRequest.parse({ taskId })),
-        );
+        task = await releaseClaim({ signer, api }, taskId);
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         this.error(await releaseRefusal(api, taskId, error));
@@ -56,6 +58,18 @@ export function register(
       }
       stdout(releasedLine(task, signer.agentId));
     });
+}
+
+// Gives the claim on taskId back, the path release and the routine's run
+// share (VOU-599). Throws what the API client throws.
+export async function releaseClaim(
+  { signer, api }: Pick<TaskSession, 'signer' | 'api'>,
+  taskId: string,
+): Promise<TaskResponse> {
+  return api.releaseTask(
+    taskId,
+    await signer.sign(ReleaseTaskRequest.parse({ taskId })),
+  );
 }
 
 // The one line after a release. The API answers a retry with the task as

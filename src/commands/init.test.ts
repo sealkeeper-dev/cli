@@ -30,10 +30,7 @@ import {
   readYesNo,
   streamInput,
 } from '../ask.js';
-import {
-  ROUTINE_INSTALL_COMMAND,
-  runCommandText,
-} from '../claude-code-command.js';
+import { ROUTINE_COMMANDS, runCommandText } from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
   DEFAULT_API_URL,
@@ -198,7 +195,7 @@ type World = {
   // Every scheduler command the routine offer ran, as file and args
   // joined. The fake scheduler is launchd and answers every call with 0.
   scheduler: string[];
-  // A real script the CLI runs from, which routine install copies. Unset
+  // A real script the CLI runs from, which routine on copies. Unset
   // means PROGRAM or NPX_PROGRAM, whose scripts do not exist.
   bundle?: string;
   // The goal GET /v1/agents/:id/goal answers with, for the agent and
@@ -1883,7 +1880,7 @@ describe('sealkeeper init', () => {
         expect((await readRoutineConfig()).schedule).toBeUndefined();
         const next = result.out.slice(result.out.indexOf('  Next\n'));
         expect(next.split('\n')[1]).toBe(
-          '  1  Set up the daily routine   npx sealkeeper routine install --yes',
+          '  1  Set up the daily routine   npx sealkeeper routine --yes',
         );
         expect(next).toContain('  2  In Claude Code, run /sealkeeper-run');
       });
@@ -1899,11 +1896,11 @@ describe('sealkeeper init', () => {
         const json = JSON.parse(result.out);
         expect(json.nextSteps[0]).toBe(NEXT_ROUTINE);
         expect(NEXT_ROUTINE).toBe(
-          "Set up the daily routine with npx sealkeeper routine install --yes, only after the user's clear yes",
+          "Set up the daily routine with npx sealkeeper routine --yes, only after the user's clear yes",
         );
-        // The same command the run command and the skill allow.
+        // A command the run command and the skill allow.
         expect(NEXT_ROUTINE).toContain(
-          ROUTINE_INSTALL_COMMAND.replace(/^sealkeeper /, ''),
+          (ROUTINE_COMMANDS[0] as string).replace(/^sealkeeper /, ''),
         );
       });
 
@@ -2772,7 +2769,7 @@ describe('sealkeeper init', () => {
         '    Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
         '    Why      Verified tasks get your agent to bronze',
         '',
-        '  Check it later with npx sealkeeper status',
+        '  Check it later with npx sealkeeper routine',
         `  ${INSTALL_QUESTION}`,
       ].join('\n');
       expect(INSTALL_QUESTION).toBe('Install? [Y/n] ');
@@ -2801,15 +2798,13 @@ describe('sealkeeper init', () => {
         `launchctl bootstrap gui/501 ${plist}`,
       ]);
       expect(result.out).toContain(
-        '  ✓ Routine installed. It runs every day at 10:00.',
+        '  ✓ Routine on. It runs every day at 10:00.',
       );
       expect(result.out).toContain(`  ${ROUTINE_TIME_LINE}\n`);
       expect(result.out).not.toContain(ROUTINE_NOT_INSTALLED);
       // The no to the first run.
       expect(result.err).toContain(`  ${FIRST_RUN_QUESTION}`);
-      expect(result.out).toMatch(
-        /\n {2}It runs (today|tomorrow) at 10:00\. Run one any time with npx sealkeeper routine run\.\n/,
-      );
+      expect(result.out).toMatch(/\n {2}It runs (today|tomorrow) at 10:00\.\n/);
       expect(await readRoutine(paths(home))).toEqual([]);
     });
 
@@ -2828,7 +2823,7 @@ describe('sealkeeper init', () => {
       );
       expect(result.out).toMatch(/\n {2}Routine run \w+/);
       expect(result.out).toContain(
-        '  See every run with npx sealkeeper status.\n',
+        '  See every run with npx sealkeeper routine.\n',
       );
       const runs = (await readRoutine(paths(home))).filter(
         (e) => e.kind === 'run',

@@ -21,19 +21,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultRoutineConfig,
   paths,
-  type RoutineLimits,
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
-import {
-  appendRoutine,
-  budgetOf,
-  type RoutineEntry,
-  readRoutine,
-} from '../routine.js';
+import { type RoutineEntry, readRoutine } from '../routine.js';
 
 // The daily routine refreshes the card card write last wrote (VOU-383).
 
@@ -150,18 +144,11 @@ describe('the routine refreshes the card', () => {
     }
   }
 
-  // Installed with every daily limit at 0 unless limits says otherwise, so
-  // a run stops before it reads any work and only the card is left to see.
-  async function installed(limits: Partial<RoutineLimits> = {}) {
+  // Installed, with a routine route that has nothing to do, so only the
+  // card is left to see.
+  async function installed() {
     await writeRoutineConfig({
       ...defaultRoutineConfig(),
-      limits: {
-        ...defaultRoutineConfig().limits,
-        claimsPerDay: 0,
-        confirmsPerDay: 0,
-        postsPerDay: 0,
-        ...limits,
-      },
       schedule: {
         time: '10:00',
         scheduler: 'cron',
@@ -174,11 +161,43 @@ describe('the routine refreshes the card', () => {
     });
   }
 
-  // The requests of the run but the game status read every run makes
-  // before it decides whether to start the agent (GAME-14), so what is
+  // The requests of the run but its call to the routine route, so what is
   // left is what the card refresh read.
   const cardRequests = () =>
-    requests.filter((url) => url !== `${API_URL}/v1/game/status`);
+    requests.filter((url) => !url.endsWith('/routine/next'));
+
+  // The routine route, done at the first step.
+  const done = (init?: RequestInit) => {
+    const { envelope } = JSON.parse(String(init?.body)) as {
+      envelope: string;
+    };
+    const payload = JSON.parse(
+      Buffer.from(envelope.split('.')[1] ?? '', 'base64url').toString(),
+    );
+    return Response.json({
+      tasks: [],
+      waiting: [],
+      next: [],
+      standing: {
+        level: 'none',
+        verified: 0,
+        nextLevel: 'bronze',
+        needs: null,
+      },
+      limited: null,
+      routine: {
+        step: payload.step,
+        action: 'done',
+        taskId: null,
+        reason: 'nothing_left',
+        judge: null,
+        used: { claims: 0, networkClaims: 0, confirms: 0, posts: 0 },
+      },
+    });
+  };
+
+  const NOTHING =
+    'Routine run found nothing to do, no agent started. Nothing to do within the limits.';
 
   async function lastRun(): Promise<Extract<RoutineEntry, { kind: 'run' }>> {
     const run = (await readRoutine())
@@ -217,9 +236,12 @@ describe('the routine refreshes the card', () => {
     serverKey = await generateKeypair();
     seal = issues(24 * HOUR);
     requests = [];
-    fetchFn = (async (input: string | URL | Request) => {
+    fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       requests.push(url);
+      if (url === `${API_URL}/v1/agents/${agentId}/routine/next`) {
+        return done(init);
+      }
       if (url === `${API_URL}/.well-known/seal.json`) {
         return Response.json({
           keys: [
@@ -281,16 +303,14 @@ describe('the routine refreshes the card', () => {
     );
     expect((await stat(cardFile)).mode & 0o777).toBe(0o644);
     expect(await lastRun()).toMatchObject({
-      outcome: 'stopped',
+      outcome: 'nothing',
       card: 'refreshed',
     });
-    expect(result.out).toBe(
-      'Routine run stopped. The daily limits are spent. Card refreshed.\n',
-    );
+    expect(result.out).toBe(`${NOTHING} Card refreshed.\n`);
 
-    const status = await run(fetchFn, 'status');
-    expect(status.out).toContain(
-      `           card ${cardFile}, last written 2026-09-29T10:01:00.000Z\n`,
+    const screen = await run(fetchFn, 'routine');
+    expect(screen.out).toContain(
+      `Card       ${cardFile}, last written 2026-09-29T10:01:00.000Z\n`,
     );
     const json = await run(fetchFn, 'status', '--json');
     expect(JSON.parse(json.out).local.routine.card).toEqual({
@@ -312,8 +332,8 @@ describe('the routine refreshes the card', () => {
     expect(await lastRun()).toMatchObject({ card: 'current' });
     expect(result.out).toContain('Card up to date.');
     // The record keeps the time card write wrote it.
-    const status = await run(fetchFn, 'status');
-    expect(status.out).toContain(`, last written ${NOW.toISOString()}\n`);
+    const screen = await run(fetchFn, 'routine');
+    expect(screen.out).toContain(`, last written ${NOW.toISOString()}\n`);
   });
 
   it('writes nothing when card write never wrote a card', async () => {
@@ -327,8 +347,8 @@ describe('the routine refreshes the card', () => {
     });
     expect(await lastRun()).not.toHaveProperty('card');
     expect(result.out).not.toContain('Card');
-    const status = await run(fetchFn, 'status');
-    expect(status.out).not.toContain('card ');
+    const screen = await run(fetchFn, 'routine');
+    expect(screen.out).not.toContain('Card ');
   });
 
   it("never writes over a card another agent's card write recorded", async () => {
@@ -381,11 +401,11 @@ describe('the routine refreshes the card', () => {
     expect(result.code).toBe(0);
     expect(await readFile(cardFile, 'utf8')).toBe(cardB);
     expect(await lastRun()).toMatchObject({
-      outcome: 'stopped',
+      outcome: 'nothing',
       card: 'changed',
     });
     expect(result.out).toBe(
-      'Routine run stopped. The daily limits are spent. Card not refreshed, the file holds another card.\n',
+      `${NOTHING} Card not refreshed, the file holds another card.\n`,
     );
   });
 
@@ -415,15 +435,16 @@ describe('the routine refreshes the card', () => {
     vi.setSystemTime(new Date(NOW.getTime() + 2 * HOUR * 1000));
 
     const result = await run(unreachable, 'routine', 'run');
-    expect(result.code).toBe(0);
+    // The run fails at its first call, after the card.
+    expect(result.code).toBe(1);
     expect(await readFile(cardFile, 'utf8')).toBe(before);
     expect(await lastRun()).toMatchObject({
-      outcome: 'stopped',
-      reason: 'the daily limits are spent',
+      outcome: 'failed',
+      failure: 'api',
       card: 'offline',
     });
-    expect(result.out).toBe(
-      'Routine run stopped. The daily limits are spent. Card kept, the API could not be reached.\n',
+    expect(result.out).toContain(
+      'Card kept, the API could not be reached.\nFix: Check the network. The next run tries again.\n',
     );
   });
 
@@ -437,7 +458,7 @@ describe('the routine refreshes the card', () => {
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
     expect(await lastRun()).toMatchObject({
-      outcome: 'stopped',
+      outcome: 'nothing',
       card: 'withheld',
     });
     expect(result.out).toContain(
@@ -453,52 +474,28 @@ describe('the routine refreshes the card', () => {
     expect(await readFile(cardFile, 'utf8')).toBe(kept);
   });
 
-  it('counts against no daily limit', async () => {
+  it('takes no step of the run', async () => {
     seal = issues(HOUR);
     await writeCard();
-    await installed({ claimsPerDay: 1 });
-    await appendRoutine({ kind: 'claim', runId: 'earlier', taskId: 't1' });
+    await installed();
     seal = issues(24 * HOUR);
     vi.setSystemTime(new Date(NOW.getTime() + 60_000));
-    const routine = {
-      ...defaultRoutineConfig(),
-      limits: {
-        ...defaultRoutineConfig().limits,
-        claimsPerDay: 1,
-        confirmsPerDay: 0,
-        postsPerDay: 0,
-      },
-    };
-    const used = async () => {
-      const entries = await readRoutine();
-      return (['claim', 'confirm', 'post'] as const).map(
-        (kind) => budgetOf(entries, kind, routine).used,
-      );
-    };
-    expect(await used()).toEqual([1, 0, 0]);
+    requests = [];
 
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
     expect(await lastRun()).toMatchObject({
-      outcome: 'stopped',
+      outcome: 'nothing',
       card: 'refreshed',
       claimed: 0,
       submitted: 0,
       confirmed: 0,
       posted: 0,
     });
-    expect(await used()).toEqual([1, 0, 0]);
-    // Only the limit lines of the spent limits, each with the use before
-    // the run.
-    const lines = (await readRoutine()).map((e) =>
-      e.kind === 'limit' ? `${e.limit} ${e.used}` : e.kind,
-    );
-    expect(lines).toEqual([
-      'claim',
-      'claimsPerDay 1',
-      'confirmsPerDay 0',
-      'postsPerDay 0',
-      'run',
-    ]);
+    // One call to the routine route, its step 0, which answered done.
+    expect(
+      requests.filter((url) => url.endsWith('/routine/next')),
+    ).toHaveLength(1);
+    expect((await readRoutine()).map((e) => e.kind)).toEqual(['step', 'run']);
   });
 });

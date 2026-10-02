@@ -42,7 +42,7 @@ import { createKey } from '../identity.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
-import { appendRoutine, readRoutine } from '../routine.js';
+import { readRoutine } from '../routine.js';
 import { GAME_SPEC_AT_CLAIM } from '../tasks.js';
 import { OLD_API } from './release.js';
 import { AWAITING_POSTER } from './submit.js';
@@ -1100,66 +1100,12 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts()).toEqual([]);
     });
 
-    it('in a routine run notes the operator as barred on the first failure of a network claim (RT-8)', async () => {
+    it('writes nothing to the routine log, also with the variable an older routine set (VOU-599)', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
-      const task = claimed({ kind: 'hash', sha256: sha256('right') });
-      const seed = claimed({ kind: 'hash', sha256: sha256('right') });
-      await appendRoutine({
-        kind: 'claim',
-        runId: 'run-1',
-        taskId: task.id,
-        network: true,
-        operator: 'bob',
-      });
-      await appendRoutine({ kind: 'claim', runId: 'run-1', taskId: seed.id });
-      const dir = await realpath(
-        await mkdtemp(join(tmpdir(), 'sealkeeper-rt8-')),
-      );
-      onCleanup.push(dir);
-      await mkdir(join(dir, '.sealkeeper-answers'), { recursive: true });
-      await writeFile(join(dir, '.sealkeeper-answers', 'a.txt'), 'wrong');
-      cwd = dir;
-      for (const id of [task.id, seed.id]) {
-        const { code } = await run(
-          'submit',
-          id,
-          '--file',
-          '.sealkeeper-answers/a.txt',
-        );
-        expect(code).toBe(1);
-      }
-      expect(
-        (await readRoutine()).filter((e) => e.kind === 'barred'),
-      ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
-      // Each refused submit is noted with why, for the watcher (RS-9), and
-      // never counts as a submit.
-      const entries = await readRoutine();
-      expect(entries.filter((e) => e.kind === 'submit_failed')).toMatchObject(
-        [task, seed].map((t) => ({
-          runId: 'run-1',
-          taskId: t.id,
-          taskType: t.taskType,
-          reason: 'hash_mismatch',
-        })),
-      );
-      expect(entries.filter((e) => e.kind === 'submit')).toEqual([]);
-    });
-
-    it('outside a routine run notes nothing on a failure that leaves the claim', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
       const { code } = await run('submit', task.id, '--text', 'wrong');
       expect(code).toBe(1);
-      expect((await readRoutine()).filter((e) => e.kind === 'barred')).toEqual(
-        [],
-      );
-      // The failure that ends the claim is noted with the poster's operator.
-      Object.assign(task, { state: 'open', claimantAgentId: null });
-      api.submitReply = () =>
-        error(422, 'verification_failed', 'hash_mismatch');
-      expect((await run('submit', task.id, '--text', 'x')).code).toBe(1);
-      expect(
-        (await readRoutine()).filter((e) => e.kind === 'barred'),
-      ).toMatchObject([{ taskId: task.id, operator: 'bob' }]);
+      expect(await readRoutine()).toEqual([]);
     });
 
     it('prints the reason code of a 422', async () => {
@@ -1280,43 +1226,7 @@ describe('submit, release and the tasks commands', () => {
         return file;
       }
 
-      it('in a routine run reads only from .sealkeeper-answers in the current directory', async () => {
-        vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
-        cwd = join(dir, 'work');
-        const task = claimed({ kind: 'counterparty' });
-        const outside = await fileIn(cwd, 'answer.txt', 'outside');
-        const refused = await run('submit', task.id, '--file', outside);
-        expect(refused.code).toBe(1);
-        expect(refused.err).toContain(`refusing to submit ${outside}`);
-        expect(refused.err).toContain(join(cwd, '.sealkeeper-answers'));
-        // The flag changes nothing in a routine run.
-        const flagged = await run(
-          'submit',
-          task.id,
-          '--file',
-          outside,
-          '--allow-outside-cwd',
-        );
-        expect(flagged.code).toBe(1);
-        expect(api.posts()).toEqual([]);
-
-        await fileIn(join(cwd, '.sealkeeper-answers'), 'a.txt', 'inside');
-        const read = await run(
-          'submit',
-          task.id,
-          '--file',
-          '.sealkeeper-answers/a.txt',
-        );
-        expect(read.err).toBe('');
-        expect(read.code).toBe(0);
-        expect(api.posts()[0]?.payload).toEqual({
-          taskId: task.id,
-          submission: 'inside',
-        });
-      });
-
       it('refuses a symlink from .sealkeeper-answers to a file outside it', async () => {
-        vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
         cwd = join(dir, 'work');
         const task = claimed({ kind: 'counterparty' });
         const secret = await fileIn(dir, 'secret.txt', 'secret');
@@ -2890,8 +2800,7 @@ describe('submit, release and the tasks commands', () => {
   });
 
   // VB-3. Claim, submit and outcome carry the fingerprint sync and run
-  // last wrote, inside and outside a routine run, and leave it out when
-  // there is none.
+  // last wrote, and leave it out when there is none.
   describe('fingerprint', () => {
     const MODEL = 'A'.repeat(42).concat('E');
 
@@ -2924,38 +2833,6 @@ describe('submit, release and the tasks commands', () => {
       expect(sent('/outcome')[0]?.payload).toEqual({
         taskId: task.id,
         outcome: 'success',
-        fingerprint,
-      });
-    });
-
-    it('sends it on a claim and on a routine run submit', async () => {
-      const fingerprint = await written();
-      const task = api.add({});
-      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
-      expect(sent('/claim')[0]?.payload).toEqual({
-        taskId: task.id,
-        fingerprint,
-      });
-      vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
-      const dir = await realpath(
-        await mkdtemp(join(tmpdir(), 'sealkeeper-vb3-')),
-      );
-      onCleanup.push(dir);
-      await mkdir(join(dir, '.sealkeeper-answers'), { recursive: true });
-      await writeFile(join(dir, '.sealkeeper-answers', 'a.txt'), 'summary');
-      cwd = dir;
-      const { code } = await run(
-        'submit',
-        task.id,
-        '--file',
-        '.sealkeeper-answers/a.txt',
-      );
-      expect(code).toBe(0);
-      expect(sent('/submit')[0]?.payload).toMatchObject({ fingerprint });
-      expect(sent('/outcome')[0]?.payload).toEqual({
-        taskId: task.id,
-        outcome: 'success',
-        origin: 'routine',
         fingerprint,
       });
     });

@@ -361,7 +361,7 @@ describe('status', () => {
         'Challenge  2026-W40 json, entered, rank 3, 2 of 3 tasks left, closes 2026-10-05 00:00 UTC\n',
       );
       expect(result.out).toContain(
-        'Routine    off, not installed. npx sealkeeper routine install sets it up\n',
+        'Routine    off. npx sealkeeper routine sets it up\n           See all of it with npx sealkeeper routine\n',
       );
       expect(result.out).toContain(
         'As of the scoring run at 2026-10-02T10:15:00.000Z.\n',
@@ -537,11 +537,15 @@ describe('status', () => {
       expect(out).toContain(
         'Routine run found nothing to do, no agent started.',
       );
+      // The status line names the routine screen for the rest (VOU-599).
+      expect(out).toContain(
+        '           See all of it with npx sealkeeper routine\n',
+      );
       const parsed = await json();
       expect(parsed.local.routine).toMatchObject({
         installed: true,
+        on: true,
         paused: null,
-        today: { claimed: 0, confirmed: 0, posted: 0 },
       });
       expect(parsed.local.routine.nextRun).toMatch(
         /^(today|tomorrow) at 23:59$/,
@@ -551,8 +555,9 @@ describe('status', () => {
         ...(await readRoutineConfig()),
         paused: { at: new Date().toISOString(), reason: 'paused by you' },
       });
+      // A pause an earlier CLI left reads as off.
       expect((await run('status')).out).toContain(
-        'Routine    paused, paused by you\n',
+        'Routine    off, paused by an earlier CLI, paused by you. npx sealkeeper routine on runs it again\n',
       );
     });
   });
@@ -682,7 +687,7 @@ describe('status', () => {
         'SealKeeper status   alice/scout, version 1.0.0\nProfile   https://sealkeeper.run/agents/alice/scout\n',
       );
       expect(result.out).toContain('0 sessions and 0 events today');
-      expect(result.out).toContain('Routine    off, not installed.');
+      expect(result.out).toContain('Routine    off.');
       expect(result.out).not.toContain('Level');
       expect(result.out).not.toContain('Waiting');
     });
@@ -973,7 +978,7 @@ describe('status', () => {
   });
 
   describe("the daily job's copy of the CLI (RS-2)", () => {
-    // A job as routine install records it, running the copy in the home.
+    // A job as routine on records it, running the copy in the home.
     async function installed(version: string): Promise<void> {
       const c = copyPaths(paths());
       await writeFile(join(home, 'bundle.js'), '// bundle\n');
@@ -1002,7 +1007,7 @@ describe('status', () => {
       await installed('0.0.1');
       const { code, out, err } = await run('status');
       expect(code).toBe(0);
-      const line = `Routine runs 0.0.1, this CLI is ${VERSION}, run npx sealkeeper routine install to update it.`;
+      const line = `Routine runs 0.0.1, this CLI is ${VERSION}, run npx sealkeeper routine on to update it.`;
       expect(err).toContain(`${line}\n`);
       expect(out).not.toContain(line);
       expect((await json()).local.routine.warnings).toEqual([line]);
@@ -1013,7 +1018,7 @@ describe('status', () => {
       await rm(copyPaths(paths()).script);
       const gone = await run('status', '--json');
       expect(gone.err).toContain(
-        'The daily routine job points at a sealkeeper that is no longer there. Run npx sealkeeper routine install again.\n',
+        'The daily routine job points at a sealkeeper that is no longer there. Run npx sealkeeper routine on again.\n',
       );
 
       await installed(VERSION);

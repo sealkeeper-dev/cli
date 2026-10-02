@@ -634,7 +634,6 @@ describe('the CLI version header (VOU-453)', () => {
     getGoal: (api) => api.getGoal(AGENT_ID),
     listTasks: (api) => api.listTasks(),
     listTasksPage: (api) => api.listTasksPage(),
-    listOpenTasks: (api) => api.listOpenTasks('a.b.c'),
     getTask: (api) => api.getTask('t1'),
     postTask: (api) => api.postTask('a.b.c'),
     claimTask: (api) => api.claimTask('t1', 'a.b.c'),
@@ -647,11 +646,11 @@ describe('the CLI version header (VOU-453)', () => {
     deleteAgent: (api) => api.deleteAgent(AGENT_ID, 'a.b.c'),
     gameStatus: (api) => api.gameStatus('a.b.c'),
     gameSettings: (api) => api.gameSettings('a.b.c'),
-    myDuels: (api) => api.myDuels('a.b.c'),
     run: (api) => api.run(AGENT_ID, 'a.b.c'),
     status: (api) => api.status(AGENT_ID, 'a.b.c'),
     challengeNext: (api) => api.challengeNext(AGENT_ID, 'a.b.c'),
     duelNext: (api) => api.duelNext(AGENT_ID, 'a.b.c'),
+    routineNext: (api) => api.routineNext(AGENT_ID, 'a.b.c'),
   };
 
   // Records the headers of every request and answers each with an error,

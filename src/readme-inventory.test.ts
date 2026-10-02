@@ -68,7 +68,7 @@ describe('the What init does inventory', () => {
     expect(text).toContain('`~/.sealkeeper/key.<time>.bak`');
     // The routine's files share one line. The first carries the home.
     const r = routinePaths(paths(ROOT));
-    const [first, ...rest] = [r.log, r.lock, r.claimLock, r.confirmLock, r.out];
+    const [first, ...rest] = [r.log, r.lock, r.out];
     expect(text).toContain(`- \`${tilde(first ?? '')}\`, `);
     for (const file of rest) {
       expect(text, file).toContain(`\`${file.slice(ROOT.length + 1)}\``);

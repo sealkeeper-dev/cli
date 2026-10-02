@@ -60,6 +60,12 @@ export function promptStyled(question: Styled): void {
 // --json is declared on the root program and on every leaf command, so it
 // works before or after the command name. Any command reads it through its
 // own options merged with those of its ancestors.
+// The --json flag, which program.ts adds to every leaf command, and a
+// command with subcommands that prints something itself adds on its own.
+export const JSON_FLAG = '--json';
+export const JSON_HELP =
+  'print machine readable JSON where a command supports it';
+
 export function wantsJson(command: Command): boolean {
   return command.optsWithGlobals().json === true;
 }

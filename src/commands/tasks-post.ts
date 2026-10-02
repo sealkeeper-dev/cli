@@ -23,8 +23,7 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { type Input, readYesNo } from '../ask.js';
-import { loadRoutineConfig, requireConfig } from '../cli-config.js';
-import type { RoutineConfig } from '../config.js';
+import { requireConfig } from '../cli-config.js';
 import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
 import {
@@ -37,17 +36,6 @@ import { readOperatorSlug } from '../operator-slug.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
-import {
-  activeRoutineRun,
-  appendRoutine,
-  budgetOf,
-  RoutineLockBusy,
-  type RunPost,
-  readRoutine,
-  refuseInRoutine,
-  runChoice,
-  withPostLock,
-} from '../routine.js';
 import { createStyle } from '../style.js';
 import {
   TEMPLATES,
@@ -78,11 +66,6 @@ import {
 // SealKeeper made and knows the answer to, and posts it as this agent's own
 // template task (RT-12). On --yes or after a yes in a terminal, as
 // --template. SealKeeper picks the task and checks the answer.
-//
-// Inside a routine run only a template that makes its own input posts, with
-// origin routine, within the routine's daily post limit (POST-7). A run
-// that chose to adopt posts with --adopt in its category instead, and posts
-// its template when no ready made task is waiting (RT-12).
 //
 // No options at all in a terminal walks the operator through it. Pick a
 // template, give its input, optionally name one agent, read the task, then
@@ -173,15 +156,6 @@ export const API_TOO_OLD_FOR_ADOPT =
   'nothing posted. This API is older than this CLI and does not take adoptions yet';
 export const ADOPTED_CHECK =
   'SealKeeper knows the answer to this task and checks it on submit, so nothing waits on you.';
-export const fellBack = (
-  why: 'candidate_none' | 'api_too_old',
-  category: string,
-  template: string,
-): string =>
-  why === 'candidate_none'
-    ? `No ready made task was waiting in ${category}, so this run posted a ${template} template task instead.`
-    : `This API does not take adoptions yet, so this run posted a ${template} template task instead.`;
-
 // The options of a post as scripts give it, each with its flag as commander
 // names a missing one.
 const EXPLICIT = [
@@ -243,15 +217,6 @@ export function register(
       this: Command,
       options: PostOptions,
     ): Promise<void> {
-      // Before anything is read, so a routine run never reads a file for a
-      // post it may not make.
-      await refuseInRoutine(this, {
-        template: options.template ?? null,
-        adopt: options.adopt ?? null,
-        input: options.input !== undefined,
-        assignee: options.for !== undefined,
-        outsideCwd: options.allowOutsideCwd === true,
-      });
       const given = EXPLICIT.filter(([key]) => options[key] !== undefined);
       if (options.adopt !== undefined) {
         if (
@@ -411,9 +376,8 @@ type Draft = {
   verification: VerificationSpec;
   expiresHours?: string;
   assignee?: string;
-  // template for a task built from a template (VOU-134), routine for one a
-  // routine run posts (POST-7). Left out for a plain post, which the API
-  // reads as manual.
+  // template for a task built from a template (VOU-134). Left out for a
+  // plain post, which the API reads as manual.
   origin?: TaskOrigin;
   // Left out when not given, and the API derives the category from the
   // task type and takes size s.
@@ -460,17 +424,6 @@ async function postAndPrint(
   deps: TasksDeps,
   request: PostTaskRequest,
 ): Promise<void> {
-  // Inside a routine run only templatePost builds a routine post, so any
-  // other way in, such as the guided walk, ends here.
-  const runId = await activeRoutineRun();
-  if (runId !== null && request.origin !== 'routine') {
-    await refuseInRoutine(cmd, {
-      template: null,
-      input: false,
-      assignee: false,
-      outsideCwd: false,
-    });
-  }
   const assignee = request.assignee;
   // Every way in ends here, so no spec, schema or input carries the key.
   await refuseKeyInTask(cmd, request);
@@ -482,21 +435,10 @@ async function postAndPrint(
   ) {
     cmd.error(sameOperator(assignee));
   }
-  const send = async () => api.postTask(await signer.sign(request));
-  const run =
-    runId === null ? null : { runId, routine: await loadRoutineConfig(cmd) };
   let task: TaskResponse;
   try {
-    task =
-      run === null
-        ? await send()
-        : await withPostLock(() =>
-            routinePost(send, run.routine, run.runId, request.taskType),
-          );
+    task = await api.postTask(await signer.sign(request));
   } catch (error) {
-    if (error instanceof PostRefused || error instanceof RoutineLockBusy) {
-      cmd.error(error.message);
-    }
     if (error instanceof ApiError) cmd.error(postRefusal(error, assignee));
     throw error;
   }
@@ -525,81 +467,8 @@ async function postAndPrint(
   for (const line of postLines(task, handle)) stdout(line);
 }
 
-// A routine post refused before it is sent. Thrown inside the post lock,
-// so the lock is released before the command ends with the message.
-class PostRefused extends Error {
-  override name = 'PostRefused';
-}
-
-const NOT_ASKED =
-  'nothing posted. This routine run was not asked to post, the goal did not say posting is behind';
-
-// A post inside a routine run, under the post lock. Sent only when the run
-// chose this template and no adoption, has not posted yet and the day's
-// post limit has room, and logged with the template's id as its task type.
-// Throws PostRefused otherwise. A post the API took whose answer was lost
-// is not logged, which the daily limit bounds.
-async function routinePost(
-  send: () => Promise<TaskResponse>,
-  routine: RoutineConfig,
-  runId: string,
-  taskType: string,
-): Promise<TaskResponse> {
-  const chosen = await runChoice(runId);
-  if (chosen === null) throw new PostRefused(NOT_ASKED);
-  if (chosen.adopt !== null) {
-    throw new PostRefused(
-      `nothing posted. This routine run adopts a ready made task with ${cli(`tasks post --adopt ${chosen.adopt}`)}`,
-    );
-  }
-  if (chosen.template !== taskType) {
-    throw new PostRefused(
-      `nothing posted. This routine run posts only ${chosen.template}`,
-    );
-  }
-  await roomToPost(routine, runId);
-  const task = await send();
-  await appendRoutine({ kind: 'post', runId, taskId: task.id, taskType });
-  return task;
-}
-
-// Throws PostRefused when runId already posted its one task or the day's
-// post limit is spent, and logs the limit line for the second.
-async function roomToPost(
-  routine: RoutineConfig,
-  runId: string,
-): Promise<void> {
-  const entries = await readRoutine();
-  if (entries.some((e) => e.kind === 'post' && e.runId === runId)) {
-    throw new PostRefused(
-      'nothing posted. This routine run already posted its one task',
-    );
-  }
-  const budget = budgetOf(entries, 'post', routine);
-  if (budget.remaining === 0) {
-    await appendRoutine({
-      kind: 'limit',
-      runId,
-      limit: 'postsPerDay',
-      used: budget.used,
-      cap: budget.cap,
-    });
-    throw new PostRefused(
-      `nothing posted. The routine's daily limit of ${budget.cap} posts is reached`,
-    );
-  }
-}
-
-// Why a routine run posted its template task in place of an adoption.
-type Fallback = 'candidate_none' | 'api_too_old';
-
-// What an adoption posted. adopted is false for the template task a
-// routine run posted in place of it, with why.
-type Adopted = { task: TaskResponse; adopted: boolean; fallback?: Fallback };
-
 // --adopt. SealKeeper picks a ready made task in the category and posts it
-// as this agent's own, on --yes or on a yes in a terminal. Inside a routine
-// run it goes through routineAdopt.
+// as this agent's own, on --yes or on a yes in a terminal.
 async function adoptPost(
   cmd: Command,
   deps: TasksDeps,
@@ -617,16 +486,12 @@ async function adoptPost(
     options.expiresHours === undefined
       ? undefined
       : expiresAtFrom(cmd, options.expiresHours);
-  const runId = await activeRoutineRun();
-  const chosen = runId === null ? null : await runChoice(runId);
-  // The id is ours, so a retried adoption returns the same task. In a run
-  // it is the one the run recorded, so a retry after a lost answer adopts
-  // nothing more. A run's adoption says routine like its other posts.
+  // The id is ours, so a retried adoption returns the same task.
   const request = AdoptTaskRequest.parse({
-    taskId: chosen?.taskId ?? randomUUID(),
+    taskId: randomUUID(),
     category,
     ...(expiresAt === undefined ? {} : { expiresAt }),
-    origin: runId === null ? 'template' : 'routine',
+    origin: 'template',
   });
   if (input !== null) {
     // Under --json, stdout holds only the posted task.
@@ -634,42 +499,13 @@ async function adoptPost(
     for (const line of adoptPreviewLines(category)) say(line);
     if ((await askYesNo(input, 'Post it?')) !== 'yes') cmd.error(NOT_POSTED);
   }
-  // In a run, the template task posted when no ready made task is waiting,
-  // built before the post lock is taken, so nothing ends the command while
-  // it is held.
-  const fallback = fallbackRequest(cmd, chosen, options);
   const { signer, api } = await openTaskSession(cmd, deps);
-  const adopt = async () => api.postTask(await signer.sign(request));
-  let result: Adopted;
+  let task: TaskResponse;
   try {
-    if (runId === null) {
-      result = { task: await adopt(), adopted: true };
-    } else {
-      const routine = await loadRoutineConfig(cmd);
-      const post =
-        fallback === null
-          ? null
-          : {
-              template: fallback.taskType,
-              send: async () => api.postTask(await signer.sign(fallback)),
-            };
-      result = await withPostLock(() =>
-        routineAdopt(adopt, post, routine, runId, category),
-      );
-    }
+    task = await api.postTask(await signer.sign(request));
   } catch (error) {
-    if (error instanceof PostRefused || error instanceof RoutineLockBusy) {
-      cmd.error(error.message);
-    }
     if (error instanceof ApiError) cmd.error(adoptRefusal(error, category));
     throw error;
-  }
-
-  const { task, adopted } = result;
-  if (result.fallback !== undefined) {
-    stderr(
-      fellBack(result.fallback, category, fallback?.taskType ?? task.taskType),
-    );
   }
   if (wantsJson(cmd)) {
     stdout(
@@ -679,7 +515,7 @@ async function adoptPost(
         expiresAt: task.expiresAt,
         taskType: task.taskType,
         category: task.category ?? category,
-        adopted,
+        adopted: true,
       }),
     );
     return;
@@ -691,7 +527,7 @@ async function adoptPost(
     ['category', task.category ?? category],
     ['expires', task.expiresAt],
   ]);
-  if (adopted) stdout(ADOPTED_CHECK);
+  stdout(ADOPTED_CHECK);
 }
 
 // What an adoption will do, for the operator to read before saying yes.
@@ -703,103 +539,6 @@ export function adoptPreviewLines(category: string): string[] {
     ADOPTED_CHECK,
     '',
   ];
-}
-
-// The template task a routine run posts in place of an adoption, from the
-// template the run chose, with origin routine. null outside a run or when
-// the run chose nothing, which routineAdopt then refuses.
-function fallbackRequest(
-  cmd: Command,
-  chosen: RunPost | null,
-  options: PostOptions,
-): PostTaskRequest | null {
-  const template = chosen === null ? undefined : templateById(chosen.template);
-  if (template === undefined) return null;
-  return requestOf(cmd, {
-    ...draftOf(template.make(undefined)),
-    expiresHours: options.expiresHours,
-    origin: 'routine',
-  });
-}
-
-// An adoption inside a routine run, under the post lock (RT-12). Sent only
-// when the run chose to adopt in this category, has not posted yet and the
-// day's post limit has room, and logged as the run's one post. When no
-// ready made task is waiting, or the API is older than adoptions, the run's
-// template task goes instead, so the ladder still moves, logged with why. A
-// network error or a 5xx falls back to nothing, since the adoption may have
-// gone in. Past SealKeeper's daily cap of adoptions nothing is posted and
-// the cap is logged. Throws PostRefused when nothing is posted.
-async function routineAdopt(
-  adopt: () => Promise<TaskResponse>,
-  fallback: { template: string; send: () => Promise<TaskResponse> } | null,
-  routine: RoutineConfig,
-  runId: string,
-  category: TaskCategory,
-): Promise<Adopted> {
-  const chosen = await runChoice(runId);
-  if (chosen === null) throw new PostRefused(NOT_ASKED);
-  if (chosen.adopt === null) {
-    throw new PostRefused(
-      `nothing posted. This routine run posts only ${chosen.template}, with ${cli(`tasks post --template ${chosen.template}`)}`,
-    );
-  }
-  if (chosen.adopt !== category) {
-    throw new PostRefused(
-      `nothing posted. This routine run adopts only in ${chosen.adopt}`,
-    );
-  }
-  await roomToPost(routine, runId);
-  let task: TaskResponse;
-  try {
-    task = await adopt();
-  } catch (error) {
-    if (!(error instanceof ApiError)) throw error;
-    const why: Fallback | null =
-      error.code === 'candidate_none'
-        ? 'candidate_none'
-        : apiTooOldForAdopt(error)
-          ? 'api_too_old'
-          : null;
-    if (
-      why !== null &&
-      fallback !== null &&
-      fallback.template === chosen.template
-    ) {
-      const posted = await fallback.send();
-      await appendRoutine({
-        kind: 'post',
-        runId,
-        taskId: posted.id,
-        taskType: fallback.template,
-        category,
-        fallback: why,
-      });
-      return { task: posted, adopted: false, fallback: why };
-    }
-    if (error.code === 'adopt_limit') {
-      const cap = capOf(error);
-      // null says the cap is unknown, never a cap of 0.
-      await appendRoutine({
-        kind: 'limit',
-        runId,
-        limit: 'adoptsPerDay',
-        used: cap,
-        cap,
-      });
-      throw new PostRefused(adoptCap(cap));
-    }
-    throw error;
-  }
-  await appendRoutine({
-    kind: 'post',
-    runId,
-    taskId: task.id,
-    taskType: task.taskType,
-    adopted: true,
-    category,
-  });
-  return { task, adopted: true };
 }
 
 // SealKeeper's daily cap of adoptions, from the message of its 429, as in
@@ -879,7 +618,7 @@ async function templatePost(
     ...draftOf(task),
     expiresHours: options.expiresHours,
     assignee: options.for,
-    origin: (await activeRoutineRun()) === null ? 'template' : 'routine',
+    origin: 'template',
   });
   if (input !== null) {
     // The input was checked for the key as it was read, and postAndPrint

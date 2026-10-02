@@ -337,6 +337,54 @@ export async function removeJob(
   return { removed, kept };
 }
 
+// The installed job in full, for routine --files. Each file it wrote as it
+// is on disk now, the crontab block between its marker lines, or the task
+// as Task Scheduler gives it back. A file that is gone, or a block or task
+// that is not there, says so in its text. Throws SchedulerError when the
+// crontab cannot be read.
+export async function jobFiles(
+  schedule: Pick<RoutineSchedule, 'scheduler' | 'job' | 'files'>,
+  run: Runner,
+): Promise<{ label: string; text: string }[]> {
+  switch (schedule.scheduler) {
+    case 'launchd':
+    case 'systemd': {
+      const out: { label: string; text: string }[] = [];
+      for (const path of schedule.files) {
+        out.push({
+          label: path,
+          text: (await readIfExists(path)) ?? '(the file is gone)\n',
+        });
+      }
+      return out;
+    }
+    case 'cron': {
+      const lines = (await readCrontab(run)).split('\n');
+      const begin = lines.indexOf(cronBegin(schedule.job));
+      const end = lines.indexOf(cronEnd(schedule.job), begin + 1);
+      return [
+        {
+          label: `crontab entry ${schedule.job}`,
+          text:
+            begin === -1 || end === -1
+              ? '(not in the crontab)\n'
+              : `${lines.slice(begin, end + 1).join('\n')}\n`,
+        },
+      ];
+    }
+    case 'schtasks': {
+      const name = schtasksName(schedule.job);
+      const result = await run('schtasks', ['/Query', '/XML', '/TN', name]);
+      return [
+        {
+          label: `task ${name}`,
+          text: result.code === 0 ? result.stdout : '(not in Task Scheduler)\n',
+        },
+      ];
+    }
+  }
+}
+
 // Removes the job named job wherever install would have put it on this
 // platform, for a home whose routine settings are gone. Only a file with
 // the marker, a cron block between our marker lines or a task in the
@@ -411,7 +459,7 @@ function launchdPlan(job: string, spec: JobSpec, env: SchedulerEnv): Plan {
     text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const text = [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<!-- ${MANAGED_MARKER}. Written by sealkeeper routine install, removed by sealkeeper routine remove. -->`,
+    `<!-- ${MANAGED_MARKER}. Written by sealkeeper routine on, removed by sealkeeper routine off. -->`,
     '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
     '<plist version="1.0">',
     '<dict>',
@@ -479,7 +527,7 @@ function systemdPlan(job: string, spec: JobSpec, env: SchedulerEnv): Plan {
   const dir = systemdDir(env);
   const { hour, minute } = splitTime(spec.time);
   const header = [
-    `# ${MANAGED_MARKER}. Written by sealkeeper routine install, removed by sealkeeper routine remove.`,
+    `# ${MANAGED_MARKER}. Written by sealkeeper routine on, removed by sealkeeper routine off.`,
   ];
   const service = [
     ...header,
@@ -528,6 +576,8 @@ function systemdPlan(job: string, spec: JobSpec, env: SchedulerEnv): Plan {
 
 // cron
 
+// The begin line is matched whole, so it keeps the words the first CLI
+// wrote, and a block an earlier CLI installed is found and removed.
 const cronBegin = (job: string) =>
   `# BEGIN ${job} (${MANAGED_MARKER}, removed by sealkeeper routine remove)`;
 const cronEnd = (job: string) => `# END ${job}`;

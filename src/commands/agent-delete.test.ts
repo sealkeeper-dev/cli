@@ -306,7 +306,13 @@ describe('sealkeeper agent delete', () => {
       },
     });
     await writeNudge(true);
-    await appendRoutine({ kind: 'resume' });
+    await appendRoutine({
+      kind: 'limit',
+      runId: 'r1',
+      limit: 'minutesPerRun',
+      used: 15,
+      cap: 15,
+    });
     // The last run's transcript goes with the copy (RS-10).
     const transcript = copyPaths(p).transcript;
     await mkdir(dirname(transcript), { recursive: true });

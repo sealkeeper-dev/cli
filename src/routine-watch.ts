@@ -6,7 +6,7 @@ import { type RoutineEntry, type RunEntry, readRoutine } from './routine.js';
 import { asciiGlyphs } from './style.js';
 
 // Watching a routine run as it works (RS-9). The first run that init and
-// routine install start runs detached, as the scheduler runs it, and the
+// the routine setup start runs detached, as the scheduler runs it, and the
 // command that started it reads routine.jsonl for that run's lines, prints
 // one line per event and a spinner with the elapsed time between them.
 // routine run by hand in a terminal prints the same lines. The lines come
@@ -57,63 +57,33 @@ export function startDetached(spec: StartSpec): StartedRun {
   }
 }
 
-const plural = (n: number, one: string, many: string) =>
-  `${n} ${n === 1 ? one : many}`;
-
-// The line for the claims of one run --json. tasks counts the tasks the agent
-// held already too.
-export function claimedLine(claimed: number, tasks: number): string {
-  const head =
-    claimed === 0
-      ? 'Claimed no tasks'
-      : `Claimed ${plural(claimed, 'task', 'tasks')}`;
-  const held = tasks - claimed;
-  return held > 0 ? `${head}, ${held} more held from before` : head;
-}
-
-// Turns the lines of one run into what the watcher prints, in order. A
-// claim line is counted and said once the claimed line says the claims are
-// in, or before the next event when the claimed line never came.
+// Turns the lines of one run into what the watcher prints, in order.
 export class RunEvents {
   private seen = 0;
-  private claims = 0;
 
   // Every line of the run so far, in order. Returns the lines to print for
   // the ones not seen before.
   next(entries: RoutineEntry[]): string[] {
     const fresh = entries.slice(this.seen);
     this.seen = entries.length;
-    const out: string[] = [];
-    for (const e of fresh) {
-      if (e.kind === 'claim') {
-        this.claims += 1;
-        continue;
-      }
-      if (e.kind === 'claimed') {
-        out.push(claimedLine(this.claims, Math.max(e.tasks, this.claims)));
-        this.claims = 0;
-        continue;
-      }
+    return fresh.flatMap((e) => {
       const line = eventLine(e);
-      if (line === null) continue;
-      out.push(...this.flush(), line);
-    }
-    return out;
-  }
-
-  // The claims not said yet.
-  flush(): string[] {
-    if (this.claims === 0) return [];
-    const line = claimedLine(this.claims, this.claims);
-    this.claims = 0;
-    return [line];
+      return line === null ? [] : [line];
+    });
   }
 }
 
 // One event of a run as a line, or null for a line the watcher does not
-// show, a skip, a limit or the run line itself.
+// show, a step with nothing to say, a limit or the run line itself. A step
+// that did something on the server says what the API said it did.
 export function eventLine(e: RoutineEntry): string | null {
   switch (e.kind) {
+    case 'step':
+      if (e.action === 'task') {
+        return e.taskKind === undefined ? null : `Solving ${e.taskType}`;
+      }
+      if (e.action === 'judge') return `Judging ${e.taskType ?? 'a task'}`;
+      return e.label ?? null;
     case 'submit': {
       const type = e.taskType ?? 'a task';
       if (e.state === undefined || e.state === 'verified') {
@@ -123,12 +93,10 @@ export function eventLine(e: RoutineEntry): string | null {
     }
     case 'submit_failed':
       return `Submit failed ${e.taskType ?? 'a task'}, ${e.reason}`;
-    case 'post':
-      return e.adopted === true
-        ? `Adopted a task in ${e.category ?? 'its category'}`
-        : `Posted ${e.taskType ?? 'a task'}`;
     case 'confirm':
       return `${e.outcome === 'failure' ? 'Reported failure for' : 'Confirmed'} ${e.taskType ?? 'a task'}`;
+    case 'unanswered':
+      return `No answer for ${e.taskType ?? 'a task'}, ${e.reason}${e.released ? ', released' : ''}`;
     default:
       return null;
   }
@@ -142,16 +110,6 @@ export async function runEntries(
   return (await readRoutine(p)).filter(
     (e) => 'runId' in e && e.runId === runId,
   );
-}
-
-// Why the routine paused itself after a run, from the pause line after its
-// run line, else null.
-async function pausedAfter(runId: string, p: Paths): Promise<string | null> {
-  const entries = await readRoutine(p);
-  const at = entries.findIndex((e) => e.kind === 'run' && e.runId === runId);
-  if (at === -1) return null;
-  const pause = entries.slice(at + 1).find((e) => e.kind === 'pause');
-  return pause?.kind === 'pause' ? pause.reason : null;
 }
 
 export type SpinnerStream = { write(text: string): unknown };
@@ -203,12 +161,11 @@ export class Spinner {
 // How often the watcher reads the log and redraws the spinner.
 const POLL_MS = 500;
 const FRAME_MS = 100;
-// After the run line, how long the watcher waits for the process to end,
-// for a pause line the run writes after it.
+// After the run line, how long the watcher waits for the process to end.
 const END_GRACE_MS = 5_000;
 
 export type WatchResult =
-  | { kind: 'done'; entry: RunEntry; paused: string | null }
+  | { kind: 'done'; entry: RunEntry }
   // Ctrl-C ended the watching. The run goes on.
   | { kind: 'detached' }
   // The process ended with no run line, error says why when it did not
@@ -289,27 +246,15 @@ export async function watchRun(o: WatchOptions): Promise<WatchResult> {
       const run = entries.find((e): e is RunEntry => e.kind === 'run');
       print(events.next(entries.filter((e) => e.kind !== 'run')));
       if (run !== undefined) {
-        print(events.flush());
         if (ended === undefined) await sleep(END_GRACE_MS);
-        return {
-          kind: 'done',
-          entry: run,
-          paused: await pausedAfter(o.runId, o.p),
-        };
+        return { kind: 'done', entry: run };
       }
       if (ended !== undefined) {
         // One last read, the run line may have come as the process ended.
         const last = await runEntries(o.runId, o.p);
         const late = last.find((e): e is RunEntry => e.kind === 'run');
         print(events.next(last.filter((e) => e.kind !== 'run')));
-        print(events.flush());
-        if (late !== undefined) {
-          return {
-            kind: 'done',
-            entry: late,
-            paused: await pausedAfter(o.runId, o.p),
-          };
-        }
+        if (late !== undefined) return { kind: 'done', entry: late };
         return { kind: 'lost', error: ended };
       }
       await sleep(o.pollMs ?? POLL_MS);

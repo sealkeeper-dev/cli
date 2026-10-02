@@ -6,7 +6,7 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
-import { type ApiClient, ApiError } from '../api.js';
+import { ApiError } from '../api.js';
 import { readGuardedFile } from '../file-guard.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey } from '../key-guard.js';
@@ -17,23 +17,17 @@ import {
 } from '../line-break.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
-import { operatorSlugOf, type TaskResponse } from '../responses.js';
-import {
-  activeRoutineRun,
-  appendRoutine,
-  logGameAction,
-  readRoutine,
-} from '../routine.js';
+import type { TaskResponse } from '../responses.js';
 import {
   CHALLENGE_SUBMITS,
   DUEL_SUBMITS,
   defaultTasksDeps,
   failOnApiError,
-  isGameTask,
   openTaskSession,
   printFields,
   recordEvent,
   sendWithFingerprint,
+  type TaskSession,
   type TasksDeps,
 } from '../tasks.js';
 
@@ -49,14 +43,6 @@ function submitsLeft(origin: string | undefined): string {
   return `a claim allows ${MAX_FAILED_SUBMITS} failed submits`;
 }
 
-// In a routine run, notes a duel or challenge task SealKeeper answered,
-// right or wrong, for status (GAME-14). Any other task notes
-// nothing here.
-async function noteGameSubmit(task: TaskResponse): Promise<void> {
-  if (!isGameTask(task)) return;
-  await logGameAction(task.origin === 'duel' ? 'duel' : 'challenge', task.id);
-}
-
 type SubmitOptions = {
   file?: string;
   text?: string;
@@ -64,46 +50,159 @@ type SubmitOptions = {
   allowOutsideCwd?: boolean;
 };
 
-// After a failed submit, notes the poster's operator in routine.jsonl, so
-// a routine takes no template task of that operator again (RT-8). Inside a
-// routine run it is the first failure of a network claim, the claim line
-// that names the operator, since the routine gives up on a task after a
-// second failure and releases it (release), so no third failure
-// ever comes to note it. Outside a run it is the
-// failure that ends the claim, when the task no longer names this agent as
-// claimant, or it expired when it was addressed. A read that fails notes
-// nothing.
-async function noteBarred(
-  api: ApiClient,
-  taskId: string,
-  agentId: string,
-  runId: string | null,
-): Promise<void> {
-  try {
-    if (runId !== null) {
-      const claim = (await readRoutine()).find(
-        (e) => e.kind === 'claim' && e.taskId === taskId && e.network === true,
-      );
-      if (claim?.kind === 'claim' && claim.operator !== undefined) {
-        await appendRoutine({
-          kind: 'barred',
-          taskId,
-          operator: claim.operator,
-        });
-      }
-      return;
-    }
-    const after = await api.getTask(taskId);
-    if (after.claimantAgentId === agentId && after.state !== 'expired') return;
-    const poster = await api.getAgent(after.posterAgentId);
-    await appendRoutine({
-      kind: 'barred',
-      taskId,
-      operator: operatorSlugOf(poster),
-    });
-  } catch {
-    // Nothing noted.
+// Why a submit sent nothing, or what SealKeeper refused. message is the
+// line to show, code the API's error code, or the check here that refused
+// it, verification the verification failure when SealKeeper checked the
+// answer and found it wrong.
+export class SubmitRefused extends Error {
+  override name = 'SubmitRefused';
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly verification?: string,
+  ) {
+    super(message);
   }
+}
+
+// What a submit did. task is the task before it, result after it.
+export type Submitted = {
+  task: TaskResponse;
+  result: TaskResponse;
+  awaitingPoster: boolean;
+};
+
+/*
+ * One answer submitted, the path submit and the routine's run share
+ * (VOU-599). Refuses an answer that holds this agent's key, a hash answer
+ * that ends in a line break the spec does not ask for unless keepNewline,
+ * and a schema answer that is not JSON, before anything is signed. Then
+ * signs and sends it with the declared fingerprint and notes it in the
+ * local log. For a counterparty task the claimant's success report
+ * follows, with origin routine when routine is true. Throws SubmitRefused
+ * with the line to show, and what the API client throws otherwise.
+ */
+export async function submitAnswer(
+  session: Pick<TaskSession, 'signer' | 'api'>,
+  id: string,
+  submission: string,
+  options: { keepNewline?: boolean; routine?: boolean } = {},
+): Promise<Submitted> {
+  if (await containsPrivateKey(submission)) {
+    throw new SubmitRefused(
+      "refusing to submit, the answer contains this agent's private key",
+      'key_material',
+    );
+  }
+  const request = SubmitTaskRequest.safeParse({ taskId: id, submission });
+  if (!request.success) {
+    throw new SubmitRefused(z.prettifyError(request.error), 'invalid');
+  }
+  const { signer, api } = session;
+  const task = await api.getTask(id);
+
+  // A schema task needs JSON, checked first so a submission that is not
+  // JSON is never signed or sent. A hash task's digest goes only to its
+  // poster, so the server alone checks a hash answer and says so with a
+  // 422. Each failed submit costs one of the tries a claim allows, the
+  // one submit of a duel side or a challenge task ends it, so a hash answer
+  // with the line break most editors add is refused here unless the spec
+  // asks for one or keepNewline says to send it.
+  const { verification } = task;
+  if (
+    verification.kind === 'hash' &&
+    options.keepNewline !== true &&
+    endsInLineBreak(submission) &&
+    !specAsksFinalLineFeed(task.spec)
+  ) {
+    throw new SubmitRefused(
+      `the answer ends in a line break, which almost always fails a hash task, and ${submitsLeft(task.origin)}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
+      'line_break',
+    );
+  }
+  if (verification.kind === 'schema') {
+    try {
+      JSON.parse(submission);
+    } catch {
+      throw new SubmitRefused(
+        'submission is not valid JSON, a schema task needs JSON, nothing was sent',
+        'not_json',
+      );
+    }
+  }
+
+  // A counterparty task we already submitted, where reporting the outcome
+  // failed last time. Skip straight to the outcome.
+  const alreadySubmitted =
+    verification.kind === 'counterparty' &&
+    task.state === 'submitted' &&
+    task.claimantAgentId === signer.agentId;
+
+  let result = task;
+  if (!alreadySubmitted) {
+    try {
+      result = await sendWithFingerprint(signer, request.data, (envelope) =>
+        api.submitTask(id, envelope),
+      );
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      if (error.code === 'verification_failed') {
+        const reason = error.issues[0]?.code ?? 'unknown';
+        throw new SubmitRefused(
+          `verification failed: ${reason}. ${error.message}`,
+          error.code,
+          reason,
+        );
+      }
+      // A duel side past its 48 hours gets the duel's line, and a
+      // challenge task from the week's close on the challenge's.
+      throw new SubmitRefused(
+        error.code === 'duel_deadline_passed' ||
+          error.code === 'challenge_closed'
+          ? refusal(error)
+          : error.message,
+        error.code,
+      );
+    }
+    await recordEvent({
+      type: 'task.submitted',
+      payload: { task_id: result.id, task_type: result.taskType },
+    });
+  }
+
+  // Counterparty tasks count only when both sides agree. The claimant
+  // reports success now, and the poster confirms on their side.
+  if (verification.kind === 'counterparty') {
+    const outcome = TaskOutcomeRequest.parse({
+      taskId: id,
+      outcome: 'success',
+      ...(options.routine === true ? { origin: 'routine' } : {}),
+    });
+    try {
+      result = await sendWithFingerprint(signer, outcome, (envelope) =>
+        api.postOutcome(id, envelope),
+      );
+    } catch (error) {
+      if (error instanceof ApiError) {
+        throw new SubmitRefused(
+          `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('submit')} again to retry`,
+          error.code,
+        );
+      }
+      throw error;
+    }
+    await recordEvent({
+      type: 'task.outcome',
+      payload: { task_id: id, outcome: 'success' },
+    });
+  }
+
+  return {
+    task,
+    result,
+    awaitingPoster:
+      result.state === 'submitted' && verification.kind === 'counterparty',
+  };
 }
 
 export function register(
@@ -124,7 +223,7 @@ export function register(
     )
     .option(
       '--allow-outside-cwd',
-      'let --file read a file outside the current directory, never in a routine run',
+      'let --file read a file outside the current directory',
     )
     .action(async function (
       this: Command,
@@ -140,145 +239,24 @@ export function register(
       const submission =
         options.text ??
         (await readSubmission(this, options.file ?? '', options));
-      await refuseKeyMaterial(this, submission);
-      const request = SubmitTaskRequest.safeParse({ taskId: id, submission });
-      if (!request.success) this.error(z.prettifyError(request.error));
-
-      const { signer, api } = await openTaskSession(this, deps);
-      // Inside a routine run the claimant's report carries origin routine.
-      const runId = await activeRoutineRun();
-
-      let task: TaskResponse;
+      const session = await openTaskSession(this, deps);
+      let done: Submitted;
       try {
-        task = await api.getTask(id);
+        done = await submitAnswer(session, id, submission, {
+          keepNewline: options.keepNewline === true,
+        });
       } catch (error) {
+        if (error instanceof SubmitRefused) this.error(error.message);
         failOnApiError(this, error);
       }
-
-      // A schema task needs JSON, checked first so a submission that is not
-      // JSON is never signed or sent. A hash task's digest goes only to its
-      // poster, so the server alone checks a hash answer and says so with a
-      // 422. Each failed submit costs one of the tries a claim allows, the
-      // one submit of a duel side or a challenge task ends it, so a hash answer with the line break most editors add is refused here
-      // unless the spec asks for one or --keep-newline says to send it.
-      const { verification } = task;
-      if (
-        verification.kind === 'hash' &&
-        options.keepNewline !== true &&
-        endsInLineBreak(submission) &&
-        !specAsksFinalLineFeed(task.spec)
-      ) {
-        this.error(
-          `the answer ends in a line break, which almost always fails a hash task, and ${submitsLeft(task.origin)}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
-        );
-      }
-      if (verification.kind === 'schema') {
-        try {
-          JSON.parse(submission);
-        } catch {
-          this.error(
-            'submission is not valid JSON, a schema task needs JSON, nothing was sent',
-          );
-        }
-      }
-
-      // A counterparty task we already submitted, where reporting the outcome
-      // failed last time. Skip straight to the outcome.
-      const alreadySubmitted =
-        verification.kind === 'counterparty' &&
-        task.state === 'submitted' &&
-        task.claimantAgentId === signer.agentId;
-
-      let result = task;
-      if (!alreadySubmitted) {
-        try {
-          result = await sendWithFingerprint(signer, request.data, (envelope) =>
-            api.submitTask(id, envelope),
-          );
-        } catch (error) {
-          const failed =
-            error instanceof ApiError && error.code === 'verification_failed';
-          // Inside a routine run a refused submit is noted with why, so the
-          // first run's watcher can say so (RS-9).
-          if (runId !== null && error instanceof ApiError) {
-            await appendRoutine({
-              kind: 'submit_failed',
-              runId,
-              taskId: id,
-              taskType: task.taskType,
-              reason: failed
-                ? (error.issues[0]?.code ?? 'verification_failed')
-                : error.code,
-            });
-          }
-          if (failed) {
-            const reason = error.issues[0]?.code ?? 'unknown';
-            await noteBarred(api, id, signer.agentId, runId);
-            await noteGameSubmit(task);
-            this.error(`verification failed: ${reason}. ${error.message}`);
-          }
-          // A duel side past its 48 hours gets the duel's line, and a
-          // challenge task from the week's close on the challenge's.
-          if (
-            error instanceof ApiError &&
-            (error.code === 'duel_deadline_passed' ||
-              error.code === 'challenge_closed')
-          ) {
-            this.error(refusal(error));
-          }
-          failOnApiError(this, error);
-        }
-        await recordEvent({
-          type: 'task.submitted',
-          payload: { task_id: result.id, task_type: result.taskType },
-        });
-        if (runId !== null) {
-          await appendRoutine({
-            kind: 'submit',
-            runId,
-            taskId: result.id,
-            taskType: result.taskType,
-            state: result.state,
-          });
-          await noteGameSubmit(task);
-        }
-      }
-
-      // Counterparty tasks count only when both sides agree. The claimant
-      // reports success now, and the poster confirms on their side.
-      if (verification.kind === 'counterparty') {
-        const outcome = TaskOutcomeRequest.parse({
-          taskId: id,
-          outcome: 'success',
-          ...(runId === null ? {} : { origin: 'routine' }),
-        });
-        try {
-          result = await sendWithFingerprint(signer, outcome, (envelope) =>
-            api.postOutcome(id, envelope),
-          );
-        } catch (error) {
-          if (error instanceof ApiError) {
-            this.error(
-              `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('submit')} again to retry`,
-            );
-          }
-          throw error;
-        }
-        await recordEvent({
-          type: 'task.outcome',
-          payload: { task_id: id, outcome: 'success' },
-        });
-      }
-
-      const awaiting =
-        result.state === 'submitted' && verification.kind === 'counterparty';
+      const { result, task } = done;
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
             id: result.id,
             state: result.state,
-            verification: verification.kind,
-            awaitingPoster: awaiting,
+            verification: task.verification.kind,
+            awaitingPoster: done.awaitingPoster,
           }),
         );
         return;
@@ -287,7 +265,7 @@ export function register(
         ['id', result.id],
         ['state', result.state],
       ]);
-      if (awaiting) stdout(AWAITING_POSTER);
+      if (done.awaitingPoster) stdout(AWAITING_POSTER);
     });
 }
 
@@ -295,9 +273,9 @@ export function register(
 // A spec that asks for the key file, a token or the key pasted into an
 // answer must never get it. The file must pass the rules in file-guard.ts,
 // which refuse the SealKeeper home, hidden folders of the user's home, a
-// file outside the current directory without --allow-outside-cwd, anything
-// outside .sealkeeper-answers in a routine run and a file too large to send.
-// refuseKeyMaterial then refuses any submission that contains the key.
+// file outside the current directory without --allow-outside-cwd and a
+// file too large to send. submitAnswer then refuses any submission that
+// contains the key.
 async function readSubmission(
   cmd: Command,
   file: string,
@@ -311,12 +289,4 @@ async function readSubmission(
   });
   if ('error' in read) cmd.error(read.error);
   return read.text;
-}
-
-async function refuseKeyMaterial(cmd: Command, submission: string) {
-  if (await containsPrivateKey(submission)) {
-    cmd.error(
-      "refusing to submit, the answer contains this agent's private key",
-    );
-  }
 }

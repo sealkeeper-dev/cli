@@ -344,7 +344,7 @@ export function register(
         if (!(error instanceof SchedulerError)) throw error;
         routineJobError = error.message;
         stderr(
-          `the daily routine job could not be removed: ${error.message}. Run ${cli('routine remove')} to try again`,
+          `the daily routine job could not be removed: ${error.message}. Run ${cli('routine off')} to try again`,
         );
       }
       const keyCopies = await removeLocal(p);
@@ -479,7 +479,6 @@ async function removeLocal(p: Paths): Promise<string[]> {
     p.fingerprintSources,
     routinePaths(p).log,
     routinePaths(p).lock,
-    routinePaths(p).claimLock,
     routinePaths(p).out,
     routinePaths(p).work,
     p.cursor,

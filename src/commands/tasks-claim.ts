@@ -61,7 +61,6 @@ export function register(
         this.error(`${id} is not a task id, copy the full id from the board`);
       }
       const { config, signer, api } = await openTaskSession(this, deps);
-
       let task: TaskResponse;
       let fresh = true;
       try {

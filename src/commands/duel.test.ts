@@ -448,42 +448,10 @@ describe('duel', () => {
       expect(result.err).toBe('too many requests, try again in 30 seconds\n');
     });
 
-    it('notes an accept that started its duel and a seek in a routine run, once each', async () => {
+    it('never says routine, which only the routine route sends (VOU-599)', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
-      const duel = duelOf(me);
-      api.answer = answerOf({
-        tasks: [duelTask()],
-        duel: { step: 'accept', seek: null, duels: [duel] },
-      });
-      await run('duel', '--accept', duel.id, '--json');
-      const seek = {
-        id: randomUUID(),
-        category: 'data',
-        state: 'open',
-        expiresAt: iso(NOW + 24 * HOUR),
-        duelId: null,
-      };
-      api.answer = answerOf({ duel: { step: 'seek', seek, duels: [] } });
       await run('duel', '--json');
-      api.answer = answerOf({
-        duel: { step: 'decline', seek: null, duels: [duelOf(me)] },
-      });
-      await run('duel', '--decline', duel.id, '--json');
-      // Each says routine, so the API never turns the game on for it and
-      // makes no post offer.
-      expect(api.payloads.map((p) => p.routine)).toEqual([true, true, true]);
-      const game = (await readRoutine()).filter((e) => e.kind === 'game');
-      expect(game).toEqual([
-        expect.objectContaining({ action: 'accept', id: duel.id }),
-        expect.objectContaining({ action: 'seek', id: seek.id }),
-      ]);
-    });
-
-    it('notes nothing outside a routine run', async () => {
-      api.answer = answerOf({
-        duel: { step: 'accept', seek: null, duels: [duelOf(me)] },
-      });
-      await run('duel', '--accept', randomUUID(), '--json');
+      expect(api.payloads.map((p) => p.routine)).toEqual([false]);
       expect(await readRoutine()).toEqual([]);
     });
   });

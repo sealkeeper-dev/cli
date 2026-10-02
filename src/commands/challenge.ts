@@ -14,7 +14,6 @@ import type {
   CoreActionResponse,
   CurrentChallengeResponse,
 } from '../responses.js';
-import { activeRoutineRun } from '../routine.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import {
   defaultTasksDeps,
@@ -50,11 +49,8 @@ import { challengeLine } from './status.js';
  * knows with the command line it built. A claim is recorded in the local
  * log, as run records its claims.
  *
- * In a routine run the step is signed with routine, so the API turns no
- * game on and enters the agent only when the lazy entry of D-GAME-11
- * would, a verified task of the week's category lately, and only shows
- * the post offer. So a routine run plays the challenge for the same
- * agents as before VOU-597 and leaves the day's post offer to a person.
+ * A routine run takes its challenge steps through the routine route
+ * (VOU-594), which turns no game on and leaves the post offer to a person.
  *
  * A person in a terminal gets where things stand and the hand-off, as a
  * terminal run does. It takes no step, so it turns nothing on, enters
@@ -130,8 +126,7 @@ export function register(
       // Recomputed before a step, which claims, see fingerprint.ts. Never
       // fails challenge.
       if (step) await refreshFingerprintQuietly();
-      const routine = step && (await activeRoutineRun()) !== null;
-      const answer = await attempt(this, () => send(session, step, routine));
+      const answer = await attempt(this, () => send(session, step));
       if (step) await recordClaims(answer);
       if (json) {
         stdout(JSON.stringify(agentAnswer(answer)));
@@ -155,15 +150,13 @@ export function register(
 }
 
 // The signed request, the step with the agent's fingerprint as on a claim,
-// routine in a routine run, or the board look, which claims nothing.
+// or the board look, which claims nothing.
 async function send(
   { signer, api }: TaskSession,
   step: boolean,
-  routine: boolean,
 ): Promise<ChallengeAnswerResponse> {
   const request = ChallengeNextRequest.parse({
     board: !step,
-    routine,
     issuedAt: new Date().toISOString(),
   });
   const call = (envelope: string) =>

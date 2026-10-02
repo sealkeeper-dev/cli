@@ -39,7 +39,7 @@ import { register as registerSubmit } from './commands/submit.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
-import { terminalSafe } from './output.js';
+import { JSON_FLAG, JSON_HELP, terminalSafe } from './output.js';
 import { VERSION } from './version.js';
 
 // Root help lists leaf commands with their full path ("card show", not "card",
@@ -64,9 +64,6 @@ function subcommandTerm(this: Help, cmd: Command): string {
   for (let c = cmd.parent; c?.parent; c = c.parent) groups.unshift(c.name());
   return [...groups, term].join(' ');
 }
-
-const JSON_FLAG = '--json';
-const JSON_HELP = 'print machine readable JSON where a command supports it';
 
 // Adds --json to every leaf command. Root options are positional (see
 // createProgram), so without this `sealkeeper status --json` would be rejected.

@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Paths, paths } from './config.js';
 import { appendRoutine, type RoutineEntry } from './routine.js';
 import {
-  claimedLine,
   elapsed,
   eventLine,
   RunEvents,
@@ -19,48 +18,36 @@ import { asciiGlyphs } from './style.js';
 const AT = '2026-09-28T10:00:00.000Z';
 const RUN = '0b6c7c3e-1b1e-4c55-8a7e-6c1f3d7a9e10';
 
-const claim = (taskId: string): RoutineEntry => ({
-  kind: 'claim',
+const step = (
+  n: number,
+  action: string,
+  over: Partial<Extract<RoutineEntry, { kind: 'step' }>> = {},
+): RoutineEntry => ({
+  kind: 'step',
   at: AT,
   runId: RUN,
-  taskId,
-  taskType: 'json_extract',
+  step: n,
+  action,
+  ...over,
 });
 
 describe('event lines (RS-9)', () => {
-  it('says the claims of a run once they are in', () => {
-    const events = new RunEvents();
-    expect(events.next([claim('a'), claim('b')])).toEqual([]);
-    expect(
-      events.next([
-        claim('a'),
-        claim('b'),
-        { kind: 'claimed', at: AT, runId: RUN, claimed: 2, tasks: 3 },
-      ]),
-    ).toEqual(['Claimed 2 tasks, 1 more held from before']);
-  });
-
-  it('says claims before the next event when no claimed line came', () => {
-    const events = new RunEvents();
-    expect(
-      events.next([
-        claim('a'),
-        {
-          kind: 'submit',
-          at: AT,
-          runId: RUN,
-          taskId: 'a',
-          taskType: 'json_extract',
-          state: 'verified',
-        },
-      ]),
-    ).toEqual(['Claimed 1 task', 'Verified json_extract']);
-    expect(events.flush()).toEqual([]);
-  });
-
-  it('has one line per submit, failed submit, post, adoption and confirmation', () => {
+  it('has one line per task, judged submission, note of the API, submit, failed submit, verdict and answer not given', () => {
     const lines = (
       [
+        step(0, 'task', {
+          taskId: 'a',
+          taskType: 'code_review',
+          taskKind: 'addressed',
+        }),
+        step(1, 'judge', { taskId: 'e', taskType: 'summarise' }),
+        step(2, 'post', {
+          taskId: 'c',
+          label: 'Posted a task for other agents, which SealKeeper checks.',
+        }),
+        // A retried task step whose task is no longer held hands nothing.
+        step(3, 'task', { taskId: 'z' }),
+        step(4, 'done'),
         {
           kind: 'submit',
           at: AT,
@@ -76,22 +63,6 @@ describe('event lines (RS-9)', () => {
           taskId: 'b',
           taskType: 'line_sort',
           reason: 'hash_mismatch',
-        },
-        {
-          kind: 'post',
-          at: AT,
-          runId: RUN,
-          taskId: 'c',
-          taskType: 'text_dedupe',
-        },
-        {
-          kind: 'post',
-          at: AT,
-          runId: RUN,
-          taskId: 'd',
-          taskType: 'json_extract',
-          adopted: true,
-          category: 'data',
         },
         {
           kind: 'confirm',
@@ -110,30 +81,48 @@ describe('event lines (RS-9)', () => {
           outcome: 'failure',
         },
         {
+          kind: 'unanswered',
+          at: AT,
+          runId: RUN,
+          taskId: 'g',
+          taskType: 'text_dedupe',
+          reason: 'the agent gave no answer',
+          released: true,
+        },
+        {
           kind: 'limit',
           at: AT,
           runId: RUN,
-          limit: 'claimsPerDay',
+          limit: 'tokensPerRun',
           used: 10,
           cap: 10,
         },
       ] satisfies RoutineEntry[]
     ).map(eventLine);
     expect(lines).toEqual([
+      'Solving code_review',
+      'Judging summarise',
+      'Posted a task for other agents, which SealKeeper checks.',
+      null,
+      null,
       'Submitted code_review, its poster confirms it',
       'Submit failed line_sort, hash_mismatch',
-      'Posted text_dedupe',
-      'Adopted a task in data',
       'Confirmed code_review',
       'Reported failure for summarise',
+      'No answer for text_dedupe, the agent gave no answer, released',
       null,
     ]);
   });
 
-  it('counts no tasks and one task in words', () => {
-    expect(claimedLine(0, 0)).toBe('Claimed no tasks');
-    expect(claimedLine(1, 1)).toBe('Claimed 1 task');
-    expect(claimedLine(0, 2)).toBe('Claimed no tasks, 2 more held from before');
+  it('says each line once', () => {
+    const events = new RunEvents();
+    const first = step(0, 'task', {
+      taskId: 'a',
+      taskType: 'json_extract',
+      taskKind: 'seed',
+    });
+    expect(events.next([first])).toEqual(['Solving json_extract']);
+    expect(events.next([first, step(1, 'done')])).toEqual([]);
   });
 });
 
@@ -186,7 +175,7 @@ describe('watchRun (RS-9)', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('prints each event and returns the run line with a pause after it', async () => {
+  it('prints each event and returns the run line', async () => {
     const lines: string[] = [];
     let end: (value: string | null) => void = () => undefined;
     const ended = new Promise<string | null>((resolve) => {
@@ -202,11 +191,15 @@ describe('watchRun (RS-9)', () => {
       pollMs: 5,
     });
     await appendRoutine(
-      { kind: 'claim', runId: RUN, taskId: 'a', taskType: 'json_extract' },
-      p,
-    );
-    await appendRoutine(
-      { kind: 'claimed', runId: RUN, claimed: 1, tasks: 1 },
+      {
+        kind: 'step',
+        runId: RUN,
+        step: 0,
+        action: 'task',
+        taskId: 'a',
+        taskType: 'json_extract',
+        taskKind: 'seed',
+      },
       p,
     );
     await appendRoutine(
@@ -235,14 +228,12 @@ describe('watchRun (RS-9)', () => {
       },
       p,
     );
-    await appendRoutine({ kind: 'pause', reason: 'three failed runs' }, p);
     end(null);
     const result = await watching;
-    expect(lines).toEqual(['Claimed 1 task', 'Verified json_extract']);
+    expect(lines).toEqual(['Solving json_extract', 'Verified json_extract']);
     expect(result).toMatchObject({
       kind: 'done',
       entry: { runId: RUN, outcome: 'failed' },
-      paused: 'three failed runs',
     });
   });
 

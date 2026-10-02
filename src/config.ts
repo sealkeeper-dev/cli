@@ -77,19 +77,32 @@ export function idProfileUrl(agentId: string): string {
   return `${PROFILE_BASE_URL}/${agentId}`;
 }
 
-// The guardrails of sealkeeper routine (VOU-138). Set at routine install
-// with the defaults and changed with config routine set. The defaults and
-// the largest values live in @sealkeeper/schema (routine.ts), which the
-// API's routine route reads them from too (VOU-594). tokensPerRun counts
-// what the headless agent reports, see routine-agent.ts. A limit of 0
-// turns that kind of work off for routine runs.
+// The guardrails of sealkeeper routine (VOU-138). Set with the defaults
+// and changed with routine set. The defaults and the largest values live in
+// @sealkeeper/schema (routine.ts), which the API's routine route reads them
+// from too (VOU-594). The four daily limits go to the API with every call
+// of a run, which counts the day from its own records. minutesPerRun and
+// tokensPerRun hold the agent on this machine, tokensPerRun counting what
+// the agent reports, see routine-agent.ts. A limit of 0 turns that kind of
+// work off for routine runs.
 export { ROUTINE_LIMIT_DEFAULTS, ROUTINE_LIMIT_MAX, type RoutineLimitName };
 
-const limit = (name: RoutineLimitName, min = 0) =>
+// The smallest value each limit takes here. A run needs a minute and a
+// thousand tokens to answer anything.
+export const ROUTINE_LIMIT_MIN: Record<RoutineLimitName, number> = {
+  claimsPerDay: 0,
+  networkClaimsPerDay: 0,
+  confirmsPerDay: 0,
+  postsPerDay: 0,
+  minutesPerRun: 1,
+  tokensPerRun: 1_000,
+};
+
+const limit = (name: RoutineLimitName) =>
   z
     .number()
     .int()
-    .min(min)
+    .min(ROUTINE_LIMIT_MIN[name])
     .max(ROUTINE_LIMIT_MAX[name])
     .default(ROUTINE_LIMIT_DEFAULTS[name]);
 
@@ -101,19 +114,23 @@ export const RoutineLimits = z.object({
   networkClaimsPerDay: limit('networkClaimsPerDay'),
   confirmsPerDay: limit('confirmsPerDay'),
   postsPerDay: limit('postsPerDay'),
-  minutesPerRun: limit('minutesPerRun', 1),
-  tokensPerRun: limit('tokensPerRun', 1_000),
+  minutesPerRun: limit('minutesPerRun'),
+  tokensPerRun: limit('tokensPerRun'),
 });
 export type RoutineLimits = z.infer<typeof RoutineLimits>;
 
 export const SCHEDULERS = ['launchd', 'systemd', 'cron', 'schtasks'] as const;
 export type SchedulerKind = (typeof SCHEDULERS)[number];
 
-// What routine install wrote, so remove takes out exactly that. job is the
+// What routine on wrote, so off takes out exactly that. job is the
 // launchd label, the systemd unit name, the cron block id or the Task
 // Scheduler task name. files are the files it wrote.
+// A local time of day on a 24 hour clock, HH:MM.
+export const ROUTINE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+export const DEFAULT_ROUTINE_TIME = '10:00';
+
 export const RoutineSchedule = z.object({
-  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  time: z.string().regex(ROUTINE_TIME),
   scheduler: z.enum(SCHEDULERS),
   agent: z.literal('claude-code'),
   agentCommand: z.string().min(1),
@@ -127,24 +144,36 @@ export const RoutineSchedule = z.object({
 });
 export type RoutineSchedule = z.infer<typeof RoutineSchedule>;
 
-// routine.json, next to config.json. Absent until routine install or
-// config routine, and then read as the defaults.
+// routine.json, next to config.json. Absent until the routine is set up or
+// set, and then read as the defaults.
 export const RoutineConfig = z.object({
   limits: RoutineLimits.default(() => ({ ...ROUTINE_LIMIT_DEFAULTS })),
   // The operators whose addressed tasks and counterparty submissions a
-  // routine run may take without a person. allow holds GitHub logins, lower
-  // case, added by CLI 0.4.8 and earlier, and still matches them by login,
-  // as those CLIs do. allowSlugs holds operator slugs, added since VOU-196,
-  // matched by slug. Two keys, so a CLI from before VOU-196 that reads this
-  // file never takes a slug for a login. A slug is chosen on the web and
-  // freed 90 days after a change, so a login entry matched by slug would
-  // let whoever takes that slug in. Those CLIs drop allowSlugs when they
-  // write the file, which leaves fewer operators allowed, never more.
+  // routine run may take without a person, sent to the API with every
+  // call, which matches them. allow holds GitHub logins, lower case, added
+  // by CLI 0.4.8 and earlier, and the API still matches them by login
+  // only. allowSlugs holds operator slugs, added since VOU-196, matched by
+  // slug. Two keys, so a CLI from before VOU-196 that reads this file never
+  // takes a slug for a login. A slug is chosen on the web and freed 90 days
+  // after a change, so a login entry matched by slug would let whoever
+  // takes that slug in. Those CLIs drop allowSlugs when they write the
+  // file, which leaves fewer operators allowed, never more.
   allow: z.array(z.string().min(1)).default(() => []),
   allowSlugs: z.array(z.string().min(1)).default(() => []),
+  // The local time the job runs at. routine set --time changes it and
+  // writes an installed job again. A file from before VOU-599 reads it
+  // from its schedule, see readRoutineConfig.
+  time: z.string().regex(ROUTINE_TIME).default(DEFAULT_ROUTINE_TIME),
+  // Whether a run plays the game after its task work (VOU-599), sent to
+  // the API as game with every call. false is tasks only. The game is
+  // played only while it is on for the agent, which a routine never turns
+  // on.
+  game: z.boolean().default(false),
+  // The job routine on wrote, absent while the routine is off.
   schedule: RoutineSchedule.optional(),
-  // Set by routine pause, or by a third failed run in a row. Runs do
-  // nothing until routine resume.
+  // Written by routine pause of CLI 0.4.14 and earlier, or by a third
+  // failed run in a row there. A routine that has it runs nothing, as it
+  // did, until routine on or off clears it.
   paused: z
     .object({
       at: z.iso.datetime({ offset: true }),
@@ -155,7 +184,7 @@ export const RoutineConfig = z.object({
 export type RoutineConfig = z.infer<typeof RoutineConfig>;
 
 export function defaultRoutineConfig(): RoutineConfig {
-  return { limits: { ...ROUTINE_LIMIT_DEFAULTS }, allow: [], allowSlugs: [] };
+  return RoutineConfig.parse({});
 }
 
 // config.json. Read loosely, so a key a newer CLI wrote is kept, and
@@ -192,13 +221,18 @@ export class ConfigError extends Error {
 // post-prompt.json was prove's weekly offer to post, CLI 0.4.14 and
 // earlier. score.json and inbox.json were the scores and the addressed
 // task count the status of CLI 0.4.14 and earlier cached, before status
-// read the status route (VOU-596). logout and agent delete still remove
-// them, so a named home ends up empty. They can go once no such CLI is in
-// use.
+// read the status route (VOU-596). routine-claim.lock, routine-confirm.lock
+// and routine-post.lock held a routine run's claims, reports and posts to
+// its daily limits on this machine, until the API took the limits over
+// (VOU-599). logout and agent delete still remove them, so a named home
+// ends up empty. They can go once no such CLI is in use.
 export const LEGACY_FILES = [
   'post-prompt.json',
   'score.json',
   'inbox.json',
+  'routine-claim.lock',
+  'routine-confirm.lock',
+  'routine-post.lock',
 ] as const;
 
 export type Paths = {
@@ -651,7 +685,7 @@ export async function readRoutineConfig(
       `Invalid routine settings at ${p.routine}: not valid JSON`,
     );
   }
-  const result = RoutineConfig.safeParse(json);
+  const result = RoutineConfig.safeParse(withTime(json));
   if (!result.success) {
     throw new ConfigError(
       `Invalid routine settings at ${p.routine}:\n${z.prettifyError(result.error)}`,
@@ -660,12 +694,25 @@ export async function readRoutineConfig(
   return result.data;
 }
 
+// A routine.json from before VOU-599 keeps the time only in its schedule,
+// which is where the time is read from then, and so does a write that
+// gives a schedule and no time.
+function withTime(json: unknown): unknown {
+  if (typeof json !== 'object' || json === null || 'time' in json) {
+    return json;
+  }
+  const schedule = (json as { schedule?: { time?: unknown } }).schedule;
+  return typeof schedule?.time === 'string'
+    ? { ...json, time: schedule.time }
+    : json;
+}
+
 // Takes the input shape, so a key left out is written as its default.
 export async function writeRoutineConfig(
   routine: z.input<typeof RoutineConfig>,
   p: Paths = paths(),
 ): Promise<RoutineConfig> {
-  const parsed = RoutineConfig.parse(routine);
+  const parsed = RoutineConfig.parse(withTime(routine));
   await ensureHome(p);
   await writeFileAtomic(p.routine, `${JSON.stringify(parsed, null, 2)}\n`);
   return parsed;

@@ -10,14 +10,14 @@ import { type Command, InvalidArgumentError } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
-import { loadRoutineConfig, requireConfig } from '../cli-config.js';
+import { requireConfig } from '../cli-config.js';
 import { handleOf } from '../config.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { HIGHEST_ISSUED, shownLevel } from '../goal.js';
 import { cli } from '../invocation.js';
 import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
-import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
+import { stdout, stdoutStyled, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type {
   CoreActionResponse,
@@ -25,7 +25,6 @@ import type {
   StatusAnswerResponse,
   TaskResponse,
 } from '../responses.js';
-import { activeRoutineRun, appendRoutine } from '../routine.js';
 import { readStatus } from '../status-answer.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import { templateById } from '../task-templates.js';
@@ -40,7 +39,6 @@ import {
   unsubmittedClaims,
 } from '../tasks.js';
 import { dailyCeilingReached, todayLine, todayOf } from '../today.js';
-import { routineClaims, tooNewNote } from './run-routine.js';
 
 /*
  * sealkeeper run (VOU-595), the run verb of the core commands. The API
@@ -65,9 +63,6 @@ import { routineClaims, tooNewNote } from './run-routine.js';
  * operator addressed to this agent, and open tasks other agents posted, are
  * claimed only with --addressed and --any-poster, which next offers and
  * only the user's yes adds. Their specs come from other operators.
- *
- * Inside a routine run the claims are the routine's own until the routine
- * route lands, see run-routine.ts, printed in the same shape.
  */
 
 // The 404 of an API from before the run route.
@@ -140,42 +135,6 @@ export function register(
       // fingerprint.ts. Never fails run.
       await refreshFingerprintQuietly();
 
-      // Inside a routine run, the routine's own claims (VOU-138), until
-      // VOU-599 moves them to the routine route.
-      const runId = await activeRoutineRun();
-      if (runId !== null) {
-        const routine = await loadRoutineConfig(this);
-        const found = await routineClaims(
-          this,
-          session,
-          options,
-          runId,
-          routine,
-          deps.fetch,
-        );
-        // One line once the claims are in, for the first run's watcher
-        // (RS-9).
-        await appendRoutine({
-          kind: 'claimed',
-          runId,
-          claimed: found.claimed,
-          tasks: found.tasks.length,
-        });
-        if (found.tooNew.length > 0) stderr(tooNewNote(found.tooNew));
-        stdout(
-          JSON.stringify(
-            agentAnswer({
-              tasks: found.tasks.map(coreTaskOf),
-              waiting: [],
-              next: [],
-              standing: null,
-              limited: found.limited,
-            }),
-          ),
-        );
-        return;
-      }
-
       const { signer, api } = session;
       let answer: CoreAnswerResponse;
       try {
@@ -211,8 +170,7 @@ function parseCount(value: string): number {
 }
 
 // What run --json prints, the answer as it came, every task with its submit
-// command and every action this CLI knows with its command. An answer
-// built here, inside a routine run, has the same keys, with standing null.
+// command and every action this CLI knows with its command.
 type PrintedAnswer = {
   tasks: ({ id: string } & Record<string, unknown>)[];
   next: CoreActionResponse[];
@@ -336,9 +294,9 @@ export function duelWords(args: CoreActionResponse['args']): string[] | null {
   return null;
 }
 
-// A task a routine run or tasks claim claimed or held, in the shape of a
-// core answer task. The submits its claim has left are not known here, so
-// they are left out.
+// A task tasks claim claimed or held, in the shape of a run --json
+// task. The submits its claim has left are not known here, so they are
+// left out.
 export function coreTaskOf(task: TaskResponse) {
   return {
     id: task.id,
@@ -359,7 +317,8 @@ export function coreTaskOf(task: TaskResponse) {
 
 // The claims in the local log, so status and the log reflect the work. The
 // answer holds the tasks claimed before as well, so only a task the log
-// does not hold yet is recorded. run, challenge and duel all use it.
+// does not hold yet is recorded. run, challenge, duel and the routine's
+// run all use it.
 export async function recordClaims(
   answer: Pick<CoreAnswerResponse, 'tasks'>,
 ): Promise<void> {

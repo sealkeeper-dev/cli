@@ -34,7 +34,6 @@ describe('readGuardedFile (VOU-229)', () => {
       what: 'the answer file',
       cwd,
       userHome,
-      routine: false,
     };
     vi.mocked(fs.open).mockClear();
   });
@@ -50,27 +49,11 @@ describe('readGuardedFile (VOU-229)', () => {
     return file;
   }
 
-  it('in a routine run reads a file in the answers folder and nothing else', async () => {
-    const inside = await write(join(cwd, ANSWERS_DIR, 'a.txt'), 'answer');
-    const beside = await write(join(cwd, 'b.txt'), 'answer');
-    const routine = { ...rules, routine: true, allowOutsideCwd: true };
-    expect(await readGuardedFile(inside, routine)).toEqual({ text: 'answer' });
-    expect(await readGuardedFile(`${ANSWERS_DIR}/a.txt`, routine)).toEqual({
-      text: 'answer',
-    });
-    const refused = await readGuardedFile(beside, routine);
-    expect(refused).toEqual({
-      error: `refusing to submit ${beside}, a routine run reads the answer file only from ${join(cwd, ANSWERS_DIR)}, write it there`,
-    });
-  });
-
   it('refuses a symlink out of the answers folder, and an answers folder that is a symlink', async () => {
     const secret = await write(join(dir, 'secret.txt'), 'secret');
     const link = join(cwd, ANSWERS_DIR, 'a.txt');
     await fs.symlink(secret, link);
-    const routine = { ...rules, routine: true };
-    expect(await readGuardedFile(link, routine)).toHaveProperty('error');
-    // Outside a routine too, since the file is outside the current directory.
+    // The file is outside the current directory.
     expect(await readGuardedFile(link, rules)).toHaveProperty('error');
 
     const other = join(dir, 'other');
@@ -78,7 +61,7 @@ describe('readGuardedFile (VOU-229)', () => {
     await fs.rm(join(cwd, ANSWERS_DIR), { recursive: true });
     await fs.symlink(other, join(cwd, ANSWERS_DIR));
     expect(
-      await readGuardedFile(join(cwd, ANSWERS_DIR, 'x.txt'), routine),
+      await readGuardedFile(join(cwd, ANSWERS_DIR, 'x.txt'), rules),
     ).toHaveProperty('error');
   });
 
@@ -108,7 +91,7 @@ describe('readGuardedFile (VOU-229)', () => {
     });
   });
 
-  it('reads a project of its own below a hidden home folder, outside a routine only (VOU-241)', async () => {
+  it('reads a project of its own below a hidden home folder (VOU-241)', async () => {
     const project = join(userHome, '.config', 'tool', 'project');
     const own = await write(join(project, 'answer.txt'), 'own');
     await fs.mkdir(join(project, '.git'), { recursive: true });
@@ -129,13 +112,6 @@ describe('readGuardedFile (VOU-229)', () => {
     expect((refused as { error: string }).error).toContain(
       `A file in ${join(project, ANSWERS_DIR)} is always read`,
     );
-    // A routine run still reads only the answers folder.
-    const routine = await readGuardedFile(own, { ...at, routine: true });
-    expect(routine).toHaveProperty('error');
-    const answer = await write(join(project, ANSWERS_DIR, 'a.txt'), 'a');
-    expect(await readGuardedFile(answer, { ...at, routine: true })).toEqual({
-      text: 'a',
-    });
   });
 
   it('reads a project below a hidden folder marked by a package.json in a parent', async () => {
@@ -201,12 +177,8 @@ describe('readGuardedFile (VOU-229)', () => {
 
   it('refuses the SealKeeper home in every mode', async () => {
     const key = await write(join(dir, 'sealkeeper-home', 'answer.txt'), 'k');
-    for (const routine of [true, false]) {
-      const read = await readGuardedFile(key, {
-        ...rules,
-        routine,
-        allowOutsideCwd: true,
-      });
+    for (const allowOutsideCwd of [true, false]) {
+      const read = await readGuardedFile(key, { ...rules, allowOutsideCwd });
       expect((read as { error: string }).error).toContain(
         "which holds this agent's private key",
       );
@@ -222,12 +194,8 @@ describe('readGuardedFile (VOU-229)', () => {
     const link = join(cwd, ANSWERS_DIR, 'a.txt');
     await fs.symlink(other, link);
     for (const file of [other, map, link]) {
-      for (const routine of [true, false]) {
-        const read = await readGuardedFile(file, {
-          ...rules,
-          routine,
-          allowOutsideCwd: true,
-        });
+      for (const allowOutsideCwd of [true, false]) {
+        const read = await readGuardedFile(file, { ...rules, allowOutsideCwd });
         expect((read as { error: string }).error).toContain(
           `it is inside ${root}, which holds the private keys of the agents on this machine`,
         );

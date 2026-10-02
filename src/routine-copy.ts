@@ -13,14 +13,14 @@ import { exists, readIfExists } from './files.js';
 import { cli } from './invocation.js';
 import { VERSION } from './version.js';
 
-// The copy of this CLI the daily job runs (RS-2). routine install copies the
+// The copy of this CLI the daily job runs (RS-2). routine on copies the
 // running bundle, one file with no runtime dependencies since VOU-227, to
 // <home>/routine/cli.js and points the job at it, so the job keeps working
 // when npm clears the npx cache or a global install moves. A package.json
 // beside it says the file is an ES module and records the version copied,
-// so status can compare without running it. A repeat init or routine
-// install refreshes the copy when that version differs from the running
-// CLI, and routine remove deletes it.
+// so status can compare without running it. A repeat init or routine on
+// refreshes the copy when that version differs from the running CLI, and
+// routine off deletes it.
 //
 // The same folder keeps last-run.jsonl, the last run's Claude Code
 // transcript, which goes with the copy (RS-10).
@@ -129,12 +129,12 @@ function real(path: string): string {
 // Said by status when the copy the job runs is not the version of the CLI
 // running.
 export const copyOutdatedLine = (copy: string, running: string): string =>
-  `Routine runs ${copy}, this CLI is ${running}, run ${cli('routine install')} to update it.`;
+  `Routine runs ${copy}, this CLI is ${running}, run ${cli('routine on')} to update it.`;
 
 // Said by status when node or the script the job runs is gone, as the
 // hooks warning says for the hooks.
 export const jobMissingLine = (): string =>
-  `The daily routine job points at a sealkeeper that is no longer there. Run ${cli('routine install')} again.`;
+  `The daily routine job points at a sealkeeper that is no longer there. Run ${cli('routine on')} again.`;
 
 // The warnings about the installed job's command, none when no job is
 // installed, an earlier CLI installed it or routine.json does not read.

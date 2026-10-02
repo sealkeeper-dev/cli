@@ -13,7 +13,6 @@ import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { DuelAnswerResponse, DuelResponse } from '../responses.js';
-import { activeRoutineRun, logGameAction } from '../routine.js';
 import { durationText } from '../sync.js';
 import {
   defaultTasksDeps,
@@ -31,7 +30,7 @@ import { actionCommand, actionLine, agentAnswer, recordClaims } from './run.js';
  * the first duel step that applies, a running duel's task, an invite
  * waiting for the user's yes, a match with another agent's open seek or a
  * new seek in the agent's best category. It turns the game on when it is
- * off, outside a routine run. A form names one thing to do instead.
+ * off. A form names one thing to do instead.
  *
  *   duel <agent>         invites one agent, in its best category or
  *                        --category
@@ -63,9 +62,8 @@ import { actionCommand, actionLine, agentAnswer, recordClaims } from './run.js';
  * the agent, since the agent solves it.
  *
  * The task a step claims is recorded in the local log as run records its
- * claims. Inside a routine run the request says routine, so a game that
- * is off is refused rather than turned on and no post offer comes, and an
- * accept and a seek are noted in routine.jsonl for status (GAME-14).
+ * claims. A routine run takes its duel steps through the routine route
+ * (VOU-594), which turns no game on and makes no post offer.
  */
 
 // The 404 of an API from before the duel route.
@@ -151,12 +149,8 @@ export function register(
       // Recomputed before every duel call that may claim, see
       // fingerprint.ts. Never fails duel.
       if (!look) await refreshFingerprintQuietly();
-      // Inside a routine run the API never turns the game on and makes no
-      // post offer, since nobody is there to agree.
-      const routine = (await activeRoutineRun()) !== null;
       const request = DuelNextRequest.parse({
         ...(look ? { list: true } : form),
-        ...(routine ? { routine: true } : {}),
         issuedAt: new Date().toISOString(),
       });
       const call = (envelope: string) => api.duelNext(signer.agentId, envelope);
@@ -176,7 +170,6 @@ export function register(
         this.error(refusal(error));
       }
       await recordClaims(answer);
-      await logGame(answer);
       if (json) {
         stdout(JSON.stringify(duelJson(answer)));
         return;
@@ -238,21 +231,6 @@ async function hasDuelRoute(api: ApiClient, agentId: string): Promise<boolean> {
     return (await api.request(path, { body: {} })).status !== 404;
   } catch {
     return true;
-  }
-}
-
-// Notes the game action of a routine run, once SealKeeper took it. An
-// accept that started its duel, and a seek the step opened, found or
-// matched at once, counted by the seek or the duel it started.
-async function logGame(answer: DuelAnswerResponse): Promise<void> {
-  const { step, seek, duels } = answer.duel;
-  const [duel] = duels;
-  if (step === 'accept' && duel?.state === 'active') {
-    await logGameAction('accept', duel.id);
-  } else if (step === 'seek' && seek?.state === 'open') {
-    await logGameAction('seek', seek.id);
-  } else if (step === 'matched' && duel !== undefined) {
-    await logGameAction('seek', duel.id);
   }
 }
 

@@ -8,27 +8,11 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from '../api.js';
 import { type Input, isYes } from '../ask.js';
-import { loadRoutineConfig } from '../cli-config.js';
-import type { RoutineConfig } from '../config.js';
 import type { Signer } from '../identity.js';
 import { cli } from '../invocation.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
-import {
-  type AgentResponse,
-  operatorSlugOf,
-  type TaskResponse,
-  type TaskSubmissionResponse,
-} from '../responses.js';
-import {
-  activeRoutineRun,
-  appendRoutine,
-  budgetOf,
-  isAllowed,
-  RoutineLockBusy,
-  readRoutine,
-  withConfirmLock,
-} from '../routine.js';
+import type { TaskResponse, TaskSubmissionResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   indentText,
@@ -93,8 +77,8 @@ export function agreementOf(
 
 type OutcomeOptions = { yes?: boolean };
 
-// A reason to report nothing, thrown inside the report so a routine run's
-// confirm lock is released before the command ends with it.
+// A reason to report nothing, thrown inside the report and said as the
+// command's error.
 class Refused extends Error {}
 
 export function register(
@@ -138,7 +122,6 @@ export function register(
       }
 
       const { signer, api } = await openTaskSession(this, deps);
-      const runId = await activeRoutineRun();
       // Typed on the name, so TypeScript knows a call never returns.
       const fail: (error: unknown) => never = (error) => {
         if (error instanceof ApiError) this.error(outcomeRefusal(error, id));
@@ -155,19 +138,10 @@ export function register(
       }
       const refused = localRefusal(publicTask, signer.agentId, Date.now());
       if (refused) this.error(refused);
-      const routine = runId === null ? null : await loadRoutineConfig(this);
 
-      // Everything from the routine's checks to the report and its routine
-      // line. Inside a routine run it runs under the confirm lock, so two
-      // reports at once cannot pass the daily limit. It never ends the
-      // process, since that would leave the lock behind. A refusal is thrown
-      // as Refused and reported once the lock is released.
+      // Everything from the read of the submission to the report. A refusal
+      // is thrown as Refused.
       const report = async (): Promise<TaskResponse> => {
-        if (runId !== null && routine !== null) {
-          const held = await routineRefusal(api, routine, publicTask, runId);
-          if (held) throw new Refused(held);
-        }
-
         const read = await fetchSubmission(api, signer, id);
         const submission = read.task.submission;
         if (submission === undefined) throw new Refused(NO_SUBMISSION);
@@ -194,7 +168,6 @@ export function register(
           taskId: id,
           outcome,
           evidenceHash,
-          ...(runId === null ? {} : { origin: 'routine' }),
         });
         const sent = await sendWithFingerprint(signer, request, (envelope) =>
           api.postOutcome(id, envelope),
@@ -203,25 +176,13 @@ export function register(
           type: 'task.outcome',
           payload: { task_id: id, outcome, evidence_hash: evidenceHash },
         });
-        if (runId !== null) {
-          await appendRoutine({
-            kind: 'confirm',
-            runId,
-            taskId: id,
-            taskType: read.task.taskType,
-            outcome,
-          });
-        }
         return sent;
       };
       let result: TaskResponse;
       try {
-        result =
-          runId === null ? await report() : await withConfirmLock(report);
+        result = await report();
       } catch (error) {
-        if (error instanceof Refused || error instanceof RoutineLockBusy) {
-          this.error(error.message);
-        }
+        if (error instanceof Refused) this.error(error.message);
         fail(error);
       }
 
@@ -282,53 +243,6 @@ function agreementLine(
     case 'agreed':
       return BOTH_FAILURE;
   }
-}
-
-// Why a routine run may not report on this task, or null when it may
-// (VOU-138). It reports only on submissions from operators on the
-// allowlist, and no more than the day's confirmation limit. Everything else
-// waits for a person and is logged as skipped for status. The
-// server checks a hash or schema task on submit, so those never reach here,
-// localRefusal turns them away first.
-async function routineRefusal(
-  api: ApiClient,
-  routine: RoutineConfig,
-  task: TaskResponse,
-  runId: string,
-): Promise<string | null> {
-  const entries = await readRoutine();
-  const budget = budgetOf(entries, 'confirm', routine);
-  if (budget.remaining === 0) {
-    await appendRoutine({
-      kind: 'limit',
-      runId,
-      limit: 'confirmsPerDay',
-      used: budget.used,
-      cap: budget.cap,
-    });
-    return `nothing reported. The routine's daily limit of ${budget.cap} confirmations is reached`;
-  }
-  let claimant: AgentResponse | null = null;
-  if (task.claimantAgentId !== null) {
-    try {
-      claimant = await api.getAgent(task.claimantAgentId);
-    } catch {
-      // Unknown, so not allowed.
-    }
-  }
-  if (isAllowed(routine, claimant)) return null;
-  // The claimant's operator slug, as its handle shows it.
-  const slug = claimant === null ? undefined : operatorSlugOf(claimant);
-  await appendRoutine({
-    kind: 'skip',
-    runId,
-    action: 'confirm',
-    taskId: task.id,
-    reason: 'claimant_not_allowed',
-    taskType: task.taskType,
-    ...(slug === undefined ? {} : { operator: slug }),
-  });
-  return `nothing reported. ${slug ?? 'The claimant'} is not on the routine allowlist, so this outcome waits for a person`;
 }
 
 // The same checks the API runs, and expiry, done first so nothing is signed

@@ -170,6 +170,8 @@ describe('config', () => {
       },
       allow: [],
       allowSlugs: [],
+      time: '10:00',
+      game: false,
     });
     await writeFile(
       p.routine,

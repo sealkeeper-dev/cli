@@ -24,10 +24,10 @@ import {
   EventsBatchResponse,
   GameStatusResponse,
   GoalResponse,
-  ListDuelsResponse,
   type ListTasksPage,
   ListTasksResponse,
   RatingResponse,
+  RoutineAnswerResponse,
   type SealWithheld,
   StatusAnswerResponse,
   sealWithheldOf,
@@ -146,9 +146,6 @@ export type ApiClient = {
       cursor?: string;
     },
   ): Promise<ListTasksPage>;
-  // POST /v1/tasks/open, signed. The open pool as this agent sees it, less
-  // the tasks it is barred from (VOU-200).
-  listOpenTasks(envelope: string): Promise<ListTasksPage>;
   getTask(taskId: string): Promise<TaskResponse>;
   postTask(envelope: string): Promise<TaskResponse>;
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
@@ -177,9 +174,6 @@ export type ApiClient = {
   // PUT /v1/game/settings, signed over { enabled?, cap?, issuedAt }. The
   // status after the change, as gameStatus answers it.
   gameSettings(envelope: string): Promise<GameStatusResponse>;
-  // POST /v1/duels/mine, the signed read of this agent's duels in one
-  // state. One page.
-  myDuels(envelope: string): Promise<ListDuelsResponse>;
   // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
   // tasks the agent solves now and answers the core answer. An API from
   // before it answers 404 not_found.
@@ -199,6 +193,13 @@ export type ApiClient = {
   // One duel step, the core answer plus duel. An API from before it
   // answers 404 not_found.
   duelNext(agentId: string, envelope: string): Promise<DuelAnswerResponse>;
+  // POST /v1/agents/:id/routine/next, signed over RoutineNextRequest
+  // (VOU-594). The next action of a routine run. An API from before it
+  // answers 404 not_found.
+  routineNext(
+    agentId: string,
+    envelope: string,
+  ): Promise<RoutineAnswerResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -294,7 +295,7 @@ export function createApiClient(options: {
       ...(envelope === undefined ? {} : { body: { envelope } }),
     });
 
-  // A page of tasks from GET /v1/tasks or POST /v1/tasks/open, nextCursor
+  // A page of tasks from GET /v1/tasks, nextCursor
   // null on the last page.
   async function taskPage(
     path: string,
@@ -371,10 +372,6 @@ export function createApiClient(options: {
       return (await listTasksPage(query)).tasks;
     },
     listTasksPage,
-    // Signed, the envelope as the whole body, the same page as GET
-    // /v1/tasks.
-    listOpenTasks: (envelope) =>
-      taskPage('/v1/tasks/open', { body: { envelope } }),
     getTask: (taskId) => taskCall(taskPath(taskId), [200]),
     // 201 for a new task, 200 when a retried post returns the existing one.
     postTask: (envelope) => taskCall('/v1/tasks', [200, 201], envelope),
@@ -413,8 +410,6 @@ export function createApiClient(options: {
         body: { envelope },
         method: 'PUT',
       }),
-    myDuels: (envelope) =>
-      call('/v1/duels/mine', ListDuelsResponse, { body: { envelope } }),
     run: (agentId, envelope) =>
       call(agentPath(agentId, '/run'), CoreAnswerResponse, {
         body: { envelope },
@@ -429,6 +424,10 @@ export function createApiClient(options: {
       }),
     duelNext: (agentId, envelope) =>
       call(agentPath(agentId, '/duel/next'), DuelAnswerResponse, {
+        body: { envelope },
+      }),
+    routineNext: (agentId, envelope) =>
+      call(agentPath(agentId, '/routine/next'), RoutineAnswerResponse, {
         body: { envelope },
       }),
   };

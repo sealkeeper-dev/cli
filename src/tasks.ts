@@ -1,8 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
-import { GAME, GAME_TASK_ORIGINS, OpenTasksRequest } from '@sealkeeper/schema';
+import { GAME, GAME_TASK_ORIGINS } from '@sealkeeper/schema';
 import type { Command } from 'commander';
-import type { z } from 'zod';
 import {
   type ApiClient,
   ApiError,
@@ -21,7 +20,7 @@ import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
-import type { ListTasksPage, TaskResponse } from './responses.js';
+import type { TaskResponse } from './responses.js';
 
 // What run, submit, release and the tasks commands share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
@@ -135,67 +134,6 @@ export function printFields(fields: [string, string][]): void {
 // 2026-10-03 09:00 UTC, to the minute, how the game commands print a time.
 export function utc(iso: string): string {
   return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
-}
-
-// How long after its post another operator's open task is left for a
-// person, the API's TASKS_MIN_AGE_MINUTES (RT-8). The API holds the real
-// number and answers a routine claim that comes too early with 409 too_new
-// and the seconds left, which wins. This is only a pre filter, so the
-// routine's network source never asks for a young task. A claim without
-// origin, a person's, never waits.
-export const CLAIM_MIN_AGE_MS = 30 * 60_000;
-
-// True when the task is old enough to claim by this machine's clock. An
-// addressed task is, since its assignee claims at once, and so is a seed
-// task, since no person waits to look at it.
-export const claimableByAge = (
-  task: TaskResponse,
-  now: number = Date.now(),
-): boolean =>
-  Boolean(task.assignee) ||
-  task.seed === true ||
-  now - Date.parse(task.postedAt) >= CLAIM_MIN_AGE_MS;
-
-// One page of the open pool as this agent sees it (VOU-200). The signed
-// POST /v1/tasks/open leaves out the tasks it is barred from, which a claim
-// would only get 409 claim_barred for. An API from before that route
-// answers 404, and one that refuses this machine's clock answers
-// issued_at_out_of_window, so either reads the public GET
-// /v1/tasks?state=open instead, which still lists them and costs a 409 per
-// barred task. The cursor goes back as the API sent it. Throws what the
-// API client throws.
-export async function openTasksPage(
-  api: ApiClient,
-  signer: Signer,
-  query: Omit<z.input<typeof OpenTasksRequest>, 'issuedAt'>,
-): Promise<ListTasksPage> {
-  const request = { ...query, issuedAt: new Date().toISOString() };
-  OpenTasksRequest.parse(request);
-  try {
-    return await api.listOpenTasks(await signer.sign(request));
-  } catch (error) {
-    if (
-      !(error instanceof ApiError) ||
-      !(error.status === 404 || error.code === 'issued_at_out_of_window')
-    ) {
-      throw error;
-    }
-  }
-  return api.listTasksPage({ ...query, state: 'open' });
-}
-
-// The tasks in a GET /v1/tasks?assignee= answer that are really addressed
-// to this agent and not posted by it, oldest first, whatever the server
-// sent. The routine's claims and the status count share it.
-export function addressedTo(
-  tasks: TaskResponse[],
-  agentId: string,
-): TaskResponse[] {
-  return tasks
-    .filter(
-      (task) => task.assignee?.id === agentId && task.posterAgentId !== agentId,
-    )
-    .sort((a, b) => Date.parse(a.postedAt) - Date.parse(b.postedAt));
 }
 
 // A duel or weekly challenge task (D-GAME-5). Its spec reaches its

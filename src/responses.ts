@@ -570,14 +570,6 @@ export const DuelResponse = z.looseObject({
 });
 export type DuelResponse = z.infer<typeof DuelResponse>;
 
-// POST /v1/duels/mine, which the routine reads, nextCursor null on the last
-// page.
-export const ListDuelsResponse = z.looseObject({
-  duels: z.array(DuelResponse),
-  nextCursor: z.string().nullable(),
-});
-export type ListDuelsResponse = z.infer<typeof ListDuelsResponse>;
-
 // A seek as its agent sees it. duelId is the duel a match started.
 const DuelSeekResponse = z.looseObject({
   id: z.uuid(),
@@ -756,3 +748,34 @@ export const DuelAnswerResponse = z.looseObject({
   }),
 });
 export type DuelAnswerResponse = z.infer<typeof DuelAnswerResponse>;
+
+// POST /v1/agents/:id/routine/next (VOU-594), RoutineAnswer in
+// @sealkeeper/schema, the core answer plus routine, the one action of the
+// step. Loose, so an action, a reason or a field a later API adds never
+// fails the parse. taskId reads as null from an API that sends none. A
+// judge the CLI cannot read is null, and then no verdict goes back.
+export const RoutineAnswerResponse = z.looseObject({
+  ...CoreAnswerResponse.shape,
+  routine: z.looseObject({
+    step: Count,
+    action: z.string(),
+    taskId: z.uuid().nullable().optional().catch(null),
+    reason: z.string().nullable(),
+    judge: z
+      .looseObject({
+        taskId: z.uuid(),
+        type: z.string(),
+        spec: z.record(z.string(), z.unknown()),
+        submission: z.string(),
+      })
+      .nullable()
+      .catch(null),
+    used: z.looseObject({
+      claims: Count,
+      networkClaims: Count,
+      confirms: Count,
+      posts: Count,
+    }),
+  }),
+});
+export type RoutineAnswerResponse = z.infer<typeof RoutineAnswerResponse>;

@@ -5,13 +5,10 @@ import { homedir } from 'node:os';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
-import { activeRoutineRun } from './routine.js';
 
 // Which files submit --file and tasks post --input @file may read
 // (VOU-229). What they read leaves the machine as a submission or a spec,
-// and the path may come from an agent that a task spec told what to do. A
-// routine run grants the agent submit with any arguments, so the CLI
-// must not read for it a file its own Read tool may not open.
+// and the path may come from an agent that a task spec told what to do.
 //
 // Every path is resolved with realpath first, so a symlink is judged by
 // where it points, and a symlink out of the answers folder is refused like
@@ -20,8 +17,7 @@ import { activeRoutineRun } from './routine.js';
 // - nothing inside the SealKeeper root, ~/.sealkeeper, which holds the
 //   homes of every other agent on this machine, so no agent's key is read
 //   through another agent's folder
-// - in a routine run, nothing outside <cwd>/.sealkeeper-answers
-// - otherwise nothing in a hidden file or folder at the top of the user's
+// - nothing in a hidden file or folder at the top of the user's
 //   home, such as .ssh, .config, .aws or .gnupg, whatever the flags,
 //   except a file inside the current directory when that directory is a
 //   project below such a folder, as a checkout under ~/.config is. It is a
@@ -48,7 +44,6 @@ export type FileRules = {
   // For tests. The defaults are the process's own.
   cwd?: string;
   userHome?: string;
-  routine?: boolean;
 };
 
 export type FileRead = { text: string } | { error: string };
@@ -128,14 +123,7 @@ export async function readGuardedFile(
   // nothing counts as inside it.
   const cwd = await real(cwdGiven);
   const answers = resolve(cwd, ANSWERS_DIR);
-  const routine = rules.routine ?? (await activeRoutineRun()) !== null;
-  if (routine) {
-    if (!within(answers, target) || target === answers) {
-      return refuse(
-        `a routine run reads ${what} only from ${answers}, write it there`,
-      );
-    }
-  } else if (!within(answers, target)) {
+  if (!within(answers, target)) {
     const userHome = await real(rules.userHome ?? homedir());
     const hidden = hiddenInHome(userHome, target);
     // A project below a hidden folder, never the folder itself, so running

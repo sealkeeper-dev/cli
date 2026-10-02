@@ -19,9 +19,9 @@ export type { GoalResponse, GoalToday } from './responses.js';
 export { dailyCeilingReached, todayLine, todayOf } from './today.js';
 
 // What the agent needs for its next level, from GET /v1/agents/<id>/goal.
-// The session nudge and the routine read it, until the routine route
-// (VOU-599) words the routine's steps. status and run read the status
-// route instead (status-answer.ts). The answer is kept in goal.json with the same
+// The session nudge reads it. status and run read the status route
+// instead (status-answer.ts), and the routine route reads the goal on the
+// server (VOU-594). The answer is kept in goal.json with the same
 // fifteen minute cache as the score, since both change when the scoring job
 // runs. The pending counts are live on the API, so they can be up to that
 // old here.
@@ -180,20 +180,4 @@ async function writeGoalCache(cache: GoalCache, p: Paths): Promise<void> {
 // not know, and the text is the API's, so only a known level is shown.
 export function shownLevel(level: string): string {
   return Level.safeParse(level).success ? level : 'unknown';
-}
-
-// The posted thresholds a routine template post can close. Never the
-// posted confirmed ones, since a routine posts no counterparty task and
-// gold counts no routine post.
-const ROUTINE_POSTED = new Set(['posted_tasks', 'posted_distinct_operators']);
-
-// True when the goal says this agent's posting is behind, so a routine run
-// posts a template task (POST-7). Either the first action is post_task or
-// one of ROUTINE_POSTED is not met. Both are read by name, since an API
-// newer than this CLI sends them.
-export function postingBehind(goal: GoalResponse): boolean {
-  return (
-    goal.actions[0]?.code === 'post_task' ||
-    goal.thresholds.some((t) => ROUTINE_POSTED.has(t.name) && !t.met)
-  );
 }

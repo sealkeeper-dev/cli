@@ -149,7 +149,6 @@ import {
   BLOCK_TITLE,
   blockHeadTail,
   checkLaterLine,
-  DEFAULT_TIME,
   defaultRoutineDeps,
   FIRST_RUN_QUESTION,
   finishInstall,
@@ -213,20 +212,20 @@ export const HOOKS_BY_CLAUDE =
   'The Claude Code hooks went in without a question, since Claude Code is running this init.';
 // The first Next step then, for Claude to run on the user's yes.
 export const ROUTINE_STEP = 'Set up the daily routine';
-export const NEXT_ROUTINE = `${ROUTINE_STEP} with ${cli('routine install --yes')}, only after the user's clear yes`;
+export const NEXT_ROUTINE = `${ROUTINE_STEP} with ${cli('routine --yes')}, only after the user's clear yes`;
 // Said when stdin closes at a question, so init ends rather than waits
 // (D6).
 export const INPUT_CLOSED = `init stopped, stdin closed before an answer. There is no terminal to ask, so run ${cli('init')} again in a terminal.`;
 // The daily routine, offered after the hooks when claude is on PATH, as
-// one block routine install shows too, with yes as the default (RS-1). The
+// one block the routine setup shows too, with yes as the default (RS-1). The
 // limits are on the screen before the question.
-export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine install')} to set it up later.`;
-export const ROUTINE_TIME_LINE = `Change the time with ${cli('routine install --time HH:MM')}.`;
+export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine')} to set it up later.`;
+export const ROUTINE_TIME_LINE = `Change the time with ${cli('routine set --time HH:MM')}.`;
 export const routinePresentLine = (time: string): string =>
   `Daily routine at ${time}`;
 // Said on a repeat init when the job was installed by a CLI from before
 // RS-2, which pointed it at the script that ran install.
-export const ROUTINE_EARLIER_LINE = `An earlier CLI installed this job. Run ${cli('routine install')} to give it a copy of the CLI that npm cannot clear.`;
+export const ROUTINE_EARLIER_LINE = `An earlier CLI installed this job. Run ${cli('routine on')} to give it a copy of the CLI that npm cannot clear.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
 // What bronze asks for, from the thresholds the scoring job applies.
 export const BRONZE = LEVEL_THRESHOLDS.bronze;
@@ -1171,14 +1170,14 @@ async function offerRoutine(
   }
   let prepared: PreparedInstall | string;
   try {
-    prepared = await prepareInstall(routineDeps, DEFAULT_TIME, current);
+    prepared = await prepareInstall(routineDeps, current.time, current);
   } catch (error) {
     if (!(error instanceof SchedulerError)) throw error;
     return;
   }
   if (typeof prepared === 'string') return;
   note();
-  note(e.line`${e.bold(BLOCK_TITLE)}   ${blockHeadTail(DEFAULT_TIME)}`);
+  note(e.line`${e.bold(BLOCK_TITLE)}   ${blockHeadTail(current.time)}`);
   note();
   for (const [label, text] of routineRows(current.limits)) {
     const pad = ' '.repeat(BLOCK_LABEL - label.length);
@@ -1191,17 +1190,17 @@ async function offerRoutine(
     return;
   }
   try {
-    await finishInstall(prepared, DEFAULT_TIME);
+    await finishInstall(prepared, current.time);
   } catch (error) {
     if (!(error instanceof SchedulerError)) throw error;
     note(e.line`${error.message}`);
     say(o.line`${ROUTINE_NOT_INSTALLED}`);
     return;
   }
-  say(o.line`${o.tick()} ${installedLine(DEFAULT_TIME)}`);
+  say(o.line`${o.tick()} ${installedLine(current.time)}`);
   say(o.line`${o.dim(ROUTINE_TIME_LINE)}`);
   if (!(await askYes(input, question(ui, FIRST_RUN_QUESTION)))) {
-    say(o.line`${laterLine(DEFAULT_TIME)}`);
+    say(o.line`${laterLine(current.time)}`);
     return;
   }
   if ((await readConfig(p)) === null) return;
@@ -1263,7 +1262,7 @@ function printNext(
 ): void {
   const steps = [
     ...(routineFirst
-      ? [s.line`${ROUTINE_STEP}   ${s.dim(cli('routine install --yes'))}`]
+      ? [s.line`${ROUTINE_STEP}   ${s.dim(cli('routine --yes'))}`]
       : []),
     ...(state === null ? genericSteps(s, hooks) : stateSteps(s, hooks, state)),
   ];

@@ -48,10 +48,10 @@ Another operator posted these for this agent by name. Step 2 above lists them fr
 
 ## The daily routine
 
-SealKeeper can run this work every day without a person, from a job in the operator's own scheduler that starts Claude Code headless within limits the operator sets. When the user asks about it, or \`sealkeeper init\` lists it first in Next, say in one line what it does and its daily limits, and ask whether to set it up. Only after a clear yes, run the one routine command the rules above allow.
+SealKeeper can run this work every day without a person, from a job in the operator's own scheduler that asks Claude Code each task with no tools, within limits the operator sets. When the user asks about it, or \`sealkeeper init\` lists it first in Next, run \`sealkeeper routine\`, which only shows it, say in one line what it does and its daily limits, and ask whether to set it up. Only after a clear yes, set it up with the routine command the rules above allow.
 
 \`\`\`sh
-${invocation} routine install --yes
+${invocation} routine --yes
 \`\`\`
 
 You may run \`sealkeeper status\` to tell the user what the routine did and what waits for them. It changes nothing.

@@ -314,12 +314,12 @@ describe('sealkeeper challenge', () => {
       });
     });
 
-    it('signs the step of a routine run with routine, a board look without', async () => {
+    it('never signs routine, which only the routine route sends (VOU-599)', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
       expect((await run('challenge', '--json')).code).toBe(0);
       expect((await run('challenge', '--board', '--json')).code).toBe(0);
       expect(api.sent.map((r) => [r.board, r.routine])).toEqual([
-        [false, true],
+        [false, false],
         [true, false],
       ]);
     });

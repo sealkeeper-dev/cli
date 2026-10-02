@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import {
   appendFile,
   chmod,
@@ -12,66 +12,37 @@ import {
 } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, resolve, sep } from 'node:path';
-import { DAY_MS, TaskCategory } from '@sealkeeper/schema';
-import type { Command } from 'commander';
+import type { RoutineAllow } from '@sealkeeper/schema';
 import { z } from 'zod';
-import {
-  ensureHome,
-  type Paths,
-  paths,
-  type RoutineConfig,
-  type RoutineLimitName,
-  writeFileAtomic,
-} from './config.js';
+import { ensureHome, type Paths, paths, type RoutineConfig } from './config.js';
 import { readEnv } from './env.js';
-import { dayOf } from './log.js';
-import { slugOfAnswer } from './operator-slug.js';
-import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 
-// The guardrails of sealkeeper routine (VOU-138), shared by the routine
-// command and by the task commands a routine run's agent calls.
+// The local state of sealkeeper routine (VOU-138, VOU-599).
 //
-// A routine run starts a headless agent with SEALKEEPER_ROUTINE_RUN set to
-// the run id. Only that variable puts a command in routine mode, where
-// run, tasks outcome and submit apply the routine rules whatever their
-// options and tasks post takes only a template that makes its own input.
-// A command the operator runs in
-// another terminal while a run is going is a normal command. The Bash rules the agent gets allow only commands that
-// keep the variable, see routine-agent.ts.
+// A routine run is a plain loop the API drives (VOU-594). The CLI asks the
+// routine route for the next action, carries it out and asks again until
+// the answer is done. The agent gets a task's spec or a submission to judge
+// as a question with no tools, answers by text, and the CLI submits that
+// text or sends it back as a verdict. No command the agent could run takes
+// part, so the CLI keeps no routine rules of its own. The API holds the run
+// to the limits and the allowlist routine.json sends with every call.
 //
 // routine-run.json holds the run id, its pid and a deadline. It is created
-// exclusively at the start of a run, so two runs never overlap, and says
-// nothing about which commands are in routine mode. Once the run has chosen
-// a template to post, it holds that too, and tasks post in the run posts
-// only that one, once (POST-7). With it, the category the run adopts a
-// ready made task in, the template's own, and then tasks post --adopt in
-// that category is the run's one post, with the template as its fallback
-// (RT-12).
+// exclusively at the start of a run, so two runs never overlap.
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
-// a line. One run line per run, and a line for every claim, submit, failed
-// submit, confirmation, post, skip, limit, pause, resume and game action,
-// and one for each run --json once its claims are in. The daily caps are counted
-// from it, per UTC day. A first run's watcher reads the lines of its run as they
-// come, see routine-watch.ts (RS-9).
-
-export const ROUTINE_RUN_ENV = 'SEALKEEPER_ROUTINE_RUN';
+// a line. One run line per run, and a line for every step the API answered,
+// every submit, failed submit, verdict, answer the agent did not give and
+// limit that stopped the agent. A first run's watcher reads the lines of
+// its run as they come, see routine-watch.ts (RS-9). The API counts the
+// day against the limits from its own records, never from this log.
 
 export type RoutinePaths = {
   log: string;
   lock: string;
-  // Held while run --json claims inside a run, so two claims at once cannot
-  // pass the daily claim limit.
-  claimLock: string;
-  // Held while tasks outcome reports inside a run, so two reports at once
-  // cannot pass the daily confirmation limit.
-  confirmLock: string;
-  // Held while tasks post posts inside a run, so two posts at once cannot
-  // pass the daily post limit.
-  postLock: string;
-  // Where the headless agent runs and writes its answer files. Outside the
-  // CLI home, since submit refuses any file inside it, see
-  // key-guard.ts.
+  // Where the agent runs. Outside the CLI home and empty, since the agent
+  // has no tools and needs no files. The answers the CLI submits are kept
+  // here for the operator, under .sealkeeper-answers.
   work: string;
   // Where the scheduler sends the job's output.
   out: string;
@@ -81,9 +52,6 @@ export function routinePaths(p: Paths = paths()): RoutinePaths {
   return {
     log: join(p.home, 'routine.jsonl'),
     lock: join(p.home, 'routine-run.json'),
-    claimLock: join(p.home, 'routine-claim.lock'),
-    confirmLock: join(p.home, 'routine-confirm.lock'),
-    postLock: join(p.home, 'routine-post.lock'),
     work: routineWorkDir(p.home),
     out: join(p.home, 'routine.out.log'),
   };
@@ -122,7 +90,7 @@ export async function ensureWorkDir(p: Paths = paths()): Promise<string> {
   const home = resolve(p.home);
   if (resolve(work) === home || resolve(work).startsWith(`${home}${sep}`)) {
     throw new Error(
-      `the routine's working directory ${work} is inside ${p.home}, where submit refuses every file`,
+      `the routine's working directory ${work} is inside ${p.home}, which holds the key`,
     );
   }
   await mkdir(work, { recursive: true, mode: 0o700 });
@@ -141,31 +109,20 @@ export async function ensureWorkDir(p: Paths = paths()): Promise<string> {
 const At = z.iso.datetime({ offset: true });
 
 export const RunOutcome = z.enum([
-  // The agent ran and exited cleanly.
+  // The API answered done after the run did its work.
   'done',
-  // Nothing to do, no agent was started.
+  // The API had nothing to do, no agent was started.
   'nothing',
-  // A daily limit or the token cap stopped it.
+  // The wall clock or the token cap stopped it.
   'stopped',
-  // The agent failed, timed out or the API could not be read.
+  // The agent, the API or the key failed.
   'failed',
-  // Paused, or another run was active. No agent was started.
+  // Off, or another run was active. Nothing was asked.
   'skipped',
 ]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
 
-export const SkipReason = z.enum([
-  // An open task posted by another agent. Never claimed unattended.
-  'open_task',
-  // A task addressed to this agent by an operator not on the allowlist.
-  'poster_not_allowed',
-  // A counterparty submission from an operator not on the allowlist.
-  'claimant_not_allowed',
-  // A claim the API refused because the task was posted too recently
-  // (RT-8). Nothing waits for a person, a later run takes it.
-  'too_new',
-]);
-export type SkipReason = z.infer<typeof SkipReason>;
+const Count = z.number().int();
 
 const RoutineEntry = z.discriminatedUnion('kind', [
   z.object({
@@ -174,63 +131,60 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     runId: z.string(),
     outcome: RunOutcome,
     reason: z.string().optional(),
+    // What failed, a key of RUN_FAILURES in commands/routine.ts, so the
+    // screen says the fix. A string, so a value a newer CLI writes still
+    // reads. Absent when nothing failed and on lines written before it.
+    failure: z.string().optional(),
     startedAt: At,
     agentStarted: z.boolean(),
-    claimed: z.number().int(),
-    submitted: z.number().int(),
-    confirmed: z.number().int(),
-    // Template tasks posted (POST-7). Absent on lines written before it.
-    posted: z.number().int().optional(),
-    tokens: z.number().int().nullable(),
+    // Tasks handed over that were not game tasks, answers submitted,
+    // verdicts sent and tasks posted. posted is absent on lines written
+    // before POST-7.
+    claimed: Count,
+    submitted: Count,
+    confirmed: Count,
+    posted: Count.optional(),
+    // Submits SealKeeper verified, and duel and challenge tasks handed
+    // over. Absent on lines written before VOU-599.
+    verified: Count.optional(),
+    duels: Count.optional(),
+    challenge: Count.optional(),
+    tokens: Count.nullable(),
     costUsd: z.number().nullable(),
     // What the run did with the agent card card write last wrote, a value
     // of CardRefresh in card.ts, a string so a value a newer CLI writes
     // still reads (VOU-383). Absent when card write wrote none, and on
     // lines written before it.
     card: z.string().optional(),
-    // What the run's game section did (GAME-14), counted from its game
-    // lines. Present only on a run whose agent had the game section, so
-    // absent with the game off and on lines written before it.
-    game: z
-      .object({
-        accepted: z.number().int(),
-        played: z.number().int(),
-        challenge: z.number().int(),
-        seeks: z.number().int(),
-      })
-      .optional(),
   }),
+  // One step the API answered. action is the API's, taskId the task the
+  // step touched, with its type and its kind for a task to solve, and
+  // label what the API said a step that hands nothing over did.
   z.object({
-    kind: z.enum(['claim', 'submit', 'confirm', 'post']),
+    kind: z.literal('step'),
+    at: At,
+    runId: z.string(),
+    step: Count,
+    action: z.string(),
+    taskId: z.string().optional(),
+    taskType: z.string().optional(),
+    taskKind: z.string().optional(),
+    label: z.string().optional(),
+  }),
+  // An answer submitted, with the task's state after it, verified for a
+  // task SealKeeper checked and submitted for one that waits for its
+  // poster (RS-9).
+  z.object({
+    kind: z.literal('submit'),
     at: At,
     runId: z.string(),
     taskId: z.string(),
-    // The task type of a claim, so a run can prefer the seed types it has
-    // done least (VOU-140), and of a post, the template's id, so a run can
-    // post the template it posted least. Absent on lines written before it.
     taskType: z.string().optional(),
-    // True on a claim of another operator's template task, which
-    // networkClaimsPerDay counts, with the poster's operator slug, so one
-    // operator gets at most one such claim a day (RT-8).
-    network: z.boolean().optional(),
-    operator: z.string().optional(),
-    // On a post, true when it adopted a ready made task, with the category
-    // it adopted in, and on a template post made in place of an adoption
-    // why, candidate_none when none was waiting in that category and
-    // api_too_old when the API does not take adoptions yet (RT-12).
-    adopted: z.boolean().optional(),
-    category: z.string().optional(),
-    fallback: z.enum(['candidate_none', 'api_too_old']).optional(),
-    // On a submit, the task's state after it, verified for a task
-    // SealKeeper checked and submitted for one that waits for its poster,
-    // and on a confirmation the outcome reported (RS-9). Absent on lines
-    // written before it.
     state: z.string().optional(),
-    outcome: z.enum(['success', 'failure']).optional(),
   }),
-  // A submit in a routine run that SealKeeper refused, with why, the
-  // verification failure or the API's error code (RS-9). Its own kind, so
-  // the submit count of a run and of an older CLI never includes it.
+  // A submit SealKeeper or the CLI refused, with why, the verification
+  // failure or the error code. Its own kind, so no submit count includes
+  // it.
   z.object({
     kind: z.literal('submit_failed'),
     at: At,
@@ -239,105 +193,43 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskType: z.string().optional(),
     reason: z.string(),
   }),
-  // A game action in a routine run (GAME-14), written by the command that
-  // did it once SealKeeper took it. accept is an invite duel --accept
-  // started, duel and challenge a duel or challenge task submit answered,
-  // right or wrong, and seek a seek the duel step opened or found, or the
-  // duel it started when it matched at once. id is the duel, task or seek,
-  // so a retry that SealKeeper answers again counts once. Its own kind, so
-  // no daily limit counts it.
+  // A verdict sent back with the next call, which the API reports.
   z.object({
-    kind: z.literal('game'),
+    kind: z.literal('confirm'),
     at: At,
     runId: z.string(),
-    action: z.enum(['accept', 'duel', 'challenge', 'seek']),
-    id: z.string(),
-  }),
-  // A run --json in a routine run once its claims are in (RS-9). claimed
-  // is the tasks it claimed now, tasks all it handed the agent, the tasks
-  // the agent held already included.
-  z.object({
-    kind: z.literal('claimed'),
-    at: At,
-    runId: z.string(),
-    claimed: z.number().int(),
-    tasks: z.number().int(),
-  }),
-  // An operator whose task this agent failed, so the routine takes no
-  // template task of that operator again (RT-8). submit writes it on
-  // the first failed submit of a network claim in a routine run, and
-  // outside a run on the failed submit that ends a claim.
-  z.object({
-    kind: z.literal('barred'),
-    at: At,
     taskId: z.string(),
-    operator: z.string(),
-  }),
-  z.object({
-    kind: z.literal('skip'),
-    at: At,
-    runId: z.string(),
-    action: z.enum(['claim', 'confirm']),
-    taskId: z.string(),
-    reason: SkipReason,
-    // The poster's or claimant's operator slug, when known. A GitHub login
-    // on lines written before VOU-196.
-    operator: z.string().optional(),
     taskType: z.string().optional(),
+    outcome: z.enum(['success', 'failure']),
+  }),
+  // A task or a submission the agent gave no answer for, with why.
+  // released is true when the claim was given back, so it costs nothing.
+  z.object({
+    kind: z.literal('unanswered'),
+    at: At,
+    runId: z.string(),
+    taskId: z.string(),
+    taskType: z.string().optional(),
+    reason: z.string(),
+    released: z.boolean(),
   }),
   z.object({
     kind: z.literal('limit'),
     at: At,
     runId: z.string(),
-    limit: z.enum([
-      'claimsPerDay',
-      'confirmsPerDay',
-      'postsPerDay',
-      'minutesPerRun',
-      'tokensPerRun',
-      // Today's counted tasks reached the daily ceiling (VOU-140). used and
-      // cap are the counted tasks and the ceiling.
-      'dailyCountCeiling',
-      // SealKeeper refused an adoption past its own daily cap (RT-12). used
-      // and cap are that cap, null when its answer did not say it.
-      'adoptsPerDay',
-    ]),
+    limit: z.enum(['minutesPerRun', 'tokensPerRun']),
     used: z.number().nullable(),
     cap: z.number().nullable(),
   }),
-  z.object({
-    kind: z.literal('pause'),
-    at: At,
-    reason: z.string(),
-  }),
-  z.object({ kind: z.literal('resume'), at: At }),
 ]);
 export type RoutineEntry = z.infer<typeof RoutineEntry>;
 export type RunEntry = Extract<RoutineEntry, { kind: 'run' }>;
-export type SkipEntry = Extract<RoutineEntry, { kind: 'skip' }>;
-export type GameEntry = Extract<RoutineEntry, { kind: 'game' }>;
 
 type NewEntry = RoutineEntry extends infer E
   ? E extends RoutineEntry
     ? Omit<E, 'at'> & { at?: string }
     : never
   : never;
-
-// Notes a game action in routine.jsonl when this process works for a
-// routine run (GAME-14), and nothing for a normal command. A line that
-// cannot be written is left out, since the action already stands.
-export async function logGameAction(
-  action: GameEntry['action'],
-  id: string,
-): Promise<void> {
-  const runId = await activeRoutineRun();
-  if (runId === null) return;
-  try {
-    await appendRoutine({ kind: 'game', runId, action, id });
-  } catch {
-    // Not counted.
-  }
-}
 
 // Appends one line. at defaults to now.
 export async function appendRoutine(
@@ -352,7 +244,8 @@ export async function appendRoutine(
   });
 }
 
-// Every line that parses, in order. Anything else is skipped.
+// Every line that parses, in order. Anything else, such as a line of a
+// kind an earlier CLI wrote, is skipped.
 export async function readRoutine(p: Paths = paths()): Promise<RoutineEntry[]> {
   let raw: string;
   try {
@@ -374,143 +267,15 @@ export async function readRoutine(p: Paths = paths()): Promise<RoutineEntry[]> {
   return entries;
 }
 
-// The daily limit each kind of work counts against.
-const LIMIT_OF = {
-  claim: 'claimsPerDay',
-  confirm: 'confirmsPerDay',
-  post: 'postsPerDay',
-} as const satisfies Record<string, RoutineLimitName>;
-
-export type Budget = { used: number; cap: number; remaining: number };
-
-// How much of one daily limit is used on the UTC day of now.
-export function budgetOf(
-  entries: RoutineEntry[],
-  kind: keyof typeof LIMIT_OF,
-  routine: RoutineConfig,
-  now: Date = new Date(),
-): Budget {
-  const day = dayOf(now);
-  const used = entries.filter(
-    (e) => e.kind === kind && dayOf(new Date(e.at)) === day,
-  ).length;
-  const cap = routine.limits[LIMIT_OF[kind]];
-  return { used, cap, remaining: Math.max(0, cap - used) };
-}
-
-// How much of networkClaimsPerDay is used on the UTC day of now, from the
-// claim lines marked network (RT-8).
-export function networkBudgetOf(
-  entries: RoutineEntry[],
-  routine: RoutineConfig,
-  now: Date = new Date(),
-): Budget {
-  const day = dayOf(now);
-  const used = entries.filter(
-    (e) =>
-      e.kind === 'claim' && e.network === true && dayOf(new Date(e.at)) === day,
-  ).length;
-  const cap = routine.limits.networkClaimsPerDay;
-  return { used, cap, remaining: Math.max(0, cap - used) };
-}
-
-// Every operator slug on a barred line, lowercased (RT-8).
-export function barredOperators(entries: RoutineEntry[]): Set<string> {
-  return new Set(
-    entries.flatMap((e) =>
-      e.kind === 'barred' ? [e.operator.toLowerCase()] : [],
-    ),
-  );
-}
-
-// The operators of today's network claims, lowercased, so each operator
-// gets at most one a day across every run --json of every run (RT-8).
-export function networkOperatorsToday(
-  entries: RoutineEntry[],
-  now: Date = new Date(),
-): Set<string> {
-  const day = dayOf(now);
-  return new Set(
-    entries.flatMap((e) =>
-      e.kind === 'claim' &&
-      e.network === true &&
-      e.operator !== undefined &&
-      dayOf(new Date(e.at)) === day
-        ? [e.operator.toLowerCase()]
-        : [],
-    ),
-  );
-}
-
-export function limitName(kind: keyof typeof LIMIT_OF): RoutineLimitName {
-  return LIMIT_OF[kind];
-}
-
-// The failed runs since the last run that did not fail, pause or resume.
-export function failureStreak(entries: RoutineEntry[]): number {
-  let streak = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const e = entries[i] as RoutineEntry;
-    if (e.kind === 'resume' || e.kind === 'pause') break;
-    if (e.kind !== 'run') continue;
-    if (e.outcome !== 'failed') break;
-    streak += 1;
-  }
-  return streak;
-}
-
-// Task ids already logged as skipped for this action in the last week, so a
-// task seen on every run is logged once.
-export function skippedIds(
-  entries: RoutineEntry[],
-  action: SkipEntry['action'],
-  now: Date = new Date(),
-): Set<string> {
-  const since = now.getTime() - SKIP_LIST_DAYS * DAY_MS;
-  return new Set(
-    entries
-      .filter(
-        (e): e is SkipEntry =>
-          e.kind === 'skip' && e.action === action && Date.parse(e.at) >= since,
-      )
-      .map((e) => e.taskId),
-  );
-}
-
-// How far back status lists work the routine left for a person.
-export const SKIP_LIST_DAYS = 7;
-
 // A GitHub login or an operator slug, trimmed and lowercased, so two
 // spellings of one compare equal.
 export const normalLogin = (login: string): string =>
   login.trim().toLowerCase();
 
-// The agent answer isAllowed reads, a poster or a claimant from
-// GET /v1/agents/:id.
-export type AllowedAgent = {
-  handle?: string | null;
-  operator: { login: string; slug?: string | null };
-};
-
-// True when the agent's operator is on the allowlist. An entry in
-// allowSlugs matches the slug the API sent, operator.slug or the first half
-// of the handle, never the login, so an answer without one matches no slug
-// entry. An entry in allow, a GitHub login from before VOU-196, matches the
-// login only, as it did when it was added, so a slug another operator
-// picks never inherits it. Case does not matter on either side. An agent
-// that could not be looked up is not allowed.
-export function isAllowed(
-  routine: RoutineConfig,
-  agent: AllowedAgent | null | undefined,
-): boolean {
-  if (agent === null || agent === undefined) return false;
-  const login = normalLogin(agent.operator.login);
-  if (routine.allow.some((entry) => normalLogin(entry) === login)) return true;
-  const slug = slugOfAnswer(agent);
-  return (
-    slug !== undefined &&
-    routine.allowSlugs.some((entry) => normalLogin(entry) === slug)
-  );
+// The allowlist as the routine route takes it. The API matches slugs by
+// slug and logins by login only, case ignored.
+export function routineAllow(routine: RoutineConfig): RoutineAllow {
+  return { slugs: routine.allowSlugs, logins: routine.allow };
 }
 
 // The allowlist as people read it, slugs first, each login marked as one.
@@ -526,14 +291,6 @@ const Lock = z.object({
   runId: z.string().min(1),
   pid: z.number().int(),
   deadline: At,
-  // The template this run posts, when it chose one.
-  post: z.string().min(1).optional(),
-  // The category this run adopts a ready made task in, when it adopts
-  // (RT-12). post is then the template it posts when none is waiting.
-  adopt: TaskCategory.optional(),
-  // The task id of that adoption, made once, so a retry after a lost answer
-  // gets the same task back rather than adopting a second one.
-  taskId: z.uuid().optional(),
 });
 export type Lock = z.infer<typeof Lock>;
 
@@ -668,259 +425,4 @@ function processAlive(pid: number): boolean {
     // EPERM means it exists under another user.
     return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
-}
-
-// What a routine run chose to post. template is the template it posts,
-// adopt the category it adopts a ready made task in first, or null when it
-// posts the template straight away (RT-12). taskId is the id of that
-// adoption, which setRunPost makes and runChoice gives back.
-export type RunPost = {
-  template: string;
-  adopt: TaskCategory | null;
-  taskId?: string;
-};
-
-// Records in the run lock what runId chose to post, a template id alone or
-// a RunPost, with a new task id for an adoption unless the RunPost has one.
-// Nothing when the lock is another run's or gone.
-export async function setRunPost(
-  runId: string,
-  post: string | RunPost,
-  p: Paths = paths(),
-): Promise<void> {
-  const lock = await readLock(p);
-  if (lock === null || lock.runId !== runId) return;
-  const chosen =
-    typeof post === 'string'
-      ? { post }
-      : {
-          post: post.template,
-          ...(post.adopt === null
-            ? {}
-            : { adopt: post.adopt, taskId: post.taskId ?? randomUUID() }),
-        };
-  await writeFileAtomic(
-    routinePaths(p).lock,
-    `${JSON.stringify({ ...lock, ...chosen })}\n`,
-  );
-}
-
-// What runId chose to post, from its live run lock, or null when it chose
-// nothing or its lock is not live.
-export async function runChoice(
-  runId: string,
-  p: Paths = paths(),
-): Promise<RunPost | null> {
-  const lock = await readLiveLock(p);
-  if (lock === null || lock.runId !== runId || lock.post === undefined) {
-    return null;
-  }
-  return {
-    template: lock.post,
-    adopt: lock.adopt ?? null,
-    ...(lock.taskId === undefined ? {} : { taskId: lock.taskId }),
-  };
-}
-
-// How long a command waits for another of the same run to let go of a
-// routine lock, and when a lock counts as left behind.
-const ROUTINE_LOCK_WAIT_MS = 60_000;
-const ROUTINE_LOCK_STALE_MS = 5 * 60_000;
-const ROUTINE_LOCK_POLL_MS = 100;
-
-type Sleep = (ms: number) => Promise<void>;
-const realSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// Thrown when another command of the same run holds a routine lock for
-// longer than a minute. The message is the line to show.
-export class RoutineLockBusy extends Error {
-  override name = 'RoutineLockBusy';
-}
-
-// Runs fn while holding the claim lock, so the daily claim budget is read,
-// spent and logged by one run --json at a time. Throws RoutineLockBusy
-// when another one holds it for more than a minute.
-export function withClaimLock<T>(
-  fn: () => Promise<T>,
-  p: Paths = paths(),
-  sleep: Sleep = realSleep,
-): Promise<T> {
-  return withRoutineLock(
-    routinePaths(p).claimLock,
-    'another run --json of this routine run is still claiming, nothing was claimed',
-    fn,
-    p,
-    sleep,
-  );
-}
-
-// Runs fn while holding the confirm lock, so the daily confirmation budget
-// is read, spent and logged by one tasks outcome at a time. Throws
-// RoutineLockBusy when another one holds it for more than a minute.
-export function withConfirmLock<T>(
-  fn: () => Promise<T>,
-  p: Paths = paths(),
-  sleep: Sleep = realSleep,
-): Promise<T> {
-  return withRoutineLock(
-    routinePaths(p).confirmLock,
-    'another tasks outcome of this routine run is still reporting, nothing was reported',
-    fn,
-    p,
-    sleep,
-  );
-}
-
-// Runs fn while holding the post lock, so the daily post budget is read,
-// spent and logged by one tasks post at a time. Throws RoutineLockBusy when
-// another one holds it for more than a minute.
-export function withPostLock<T>(
-  fn: () => Promise<T>,
-  p: Paths = paths(),
-  sleep: Sleep = realSleep,
-): Promise<T> {
-  return withRoutineLock(
-    routinePaths(p).postLock,
-    'another tasks post of this routine run is still posting, nothing was posted',
-    fn,
-    p,
-    sleep,
-  );
-}
-
-// Runs fn while holding the lock file, created exclusively. A lock whose
-// process is gone, or older than five minutes, is taken over. fn must throw
-// rather than end the process, or the lock stays behind until it is stale.
-async function withRoutineLock<T>(
-  file: string,
-  busy: string,
-  fn: () => Promise<T>,
-  p: Paths,
-  sleep: Sleep,
-): Promise<T> {
-  await ensureHome(p);
-  // The token says the lock is still this call's when it is removed.
-  const token = randomUUID();
-  const text = `${JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token })}\n`;
-  const giveUp = Date.now() + ROUTINE_LOCK_WAIT_MS;
-  while (!(await createExclusive(file, text))) {
-    const seen = await readText(file);
-    if (await lockFileStale(file)) {
-      await takeOver(file, seen);
-      continue;
-    }
-    if (Date.now() >= giveUp) throw new RoutineLockBusy(busy);
-    await sleep(ROUTINE_LOCK_POLL_MS);
-  }
-  try {
-    return await fn();
-  } finally {
-    // Only while it is still ours. A lock taken over as stale belongs to
-    // whoever holds it now.
-    if ((await readText(file))?.includes(token)) {
-      await rm(file, { force: true });
-    }
-  }
-}
-
-async function lockFileStale(file: string): Promise<boolean> {
-  try {
-    const made = (await stat(file)).mtimeMs;
-    if (Date.now() - made > ROUTINE_LOCK_STALE_MS) return true;
-    const held = z
-      .object({ pid: z.number().int() })
-      .safeParse(JSON.parse(await readFile(file, 'utf8')));
-    return held.success && !processAlive(held.data.pid);
-  } catch {
-    // Gone already, or still being written.
-    return false;
-  }
-}
-
-// The id of the routine run this process works for, or null for a normal
-// command. Only the variable the run sets for its agent says so. The run
-// lock does not, so the operator's own commands in another terminal stay
-// normal while a run is going.
-export async function activeRoutineRun(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string | null> {
-  return readEnv(ROUTINE_RUN_ENV, env) ?? null;
-}
-
-// What a tasks post asks for, as refuseInRoutine reads it. template is the
-// --template id, null for --type, --spec and --verify or the guided walk.
-// adopt is the --adopt category, null without it.
-export type PostAsk = {
-  template: string | null;
-  adopt?: string | null;
-  input: boolean;
-  assignee: boolean;
-  outsideCwd: boolean;
-};
-
-// A post a routine run's agent may not make ends here, with the reason.
-// tasks post passes when it asks for a template that makes its own input
-// and nothing else (POST-7), or for --adopt and nothing else (RT-12). The
-// run's choice and the daily post limit are checked as it posts, see
-// tasks-post.ts.
-export async function refuseInRoutine(
-  cmd: Command,
-  post: PostAsk,
-): Promise<void> {
-  if ((await activeRoutineRun()) === null) return;
-  const why = routinePostRefusal(post);
-  if (why !== null) cmd.error(why);
-}
-
-const ROUTINE_TEMPLATE_IDS = ROUTINE_TEMPLATES.map((t) => t.id).join(', ');
-
-// Why a routine run may not make this post, or null when it may.
-export function routinePostRefusal(post: PostAsk): string | null {
-  const adopt = post.adopt ?? null;
-  if (post.template === null && adopt === null) {
-    return `nothing posted. During a routine run tasks post takes only --adopt <category> or --template with one of ${ROUTINE_TEMPLATE_IDS}`;
-  }
-  const template =
-    post.template === null ? undefined : templateById(post.template);
-  if (
-    template !== undefined &&
-    !ROUTINE_TEMPLATES.some((t) => t.id === template.id)
-  ) {
-    return `nothing posted. ${template.id} needs input a person writes, so during a routine run only ${ROUTINE_TEMPLATE_IDS} post`;
-  }
-  if (post.input) {
-    return 'nothing posted. During a routine run a template makes its own input, so --input is refused';
-  }
-  if (post.assignee) {
-    return 'nothing posted. During a routine run a post goes to every agent, so --for is refused';
-  }
-  if (post.outsideCwd) {
-    return 'nothing posted. --allow-outside-cwd is refused during a routine run';
-  }
-  return null;
-}
-
-// The template a routine run posts next. The one of ROUTINE_TEMPLATES it
-// has posted least, from the post lines of routine.jsonl, the first in
-// order on a tie.
-export function nextRoutineTemplate(entries: RoutineEntry[]): string {
-  const posted = new Map<string, number>();
-  for (const e of entries) {
-    if (e.kind === 'post' && e.taskType !== undefined) {
-      posted.set(e.taskType, (posted.get(e.taskType) ?? 0) + 1);
-    }
-  }
-  let best = ROUTINE_TEMPLATES[0] as (typeof ROUTINE_TEMPLATES)[number];
-  for (const t of ROUTINE_TEMPLATES) {
-    if ((posted.get(t.id) ?? 0) < (posted.get(best.id) ?? 0)) best = t;
-  }
-  return best.id;
-}
-
-// What a routine run posts (RT-12). The template nextRoutineTemplate picks,
-// and first a ready made task adopted in that template's category, so the
-// choice of template stands and the category comes from the template.
-export function nextRoutinePost(entries: RoutineEntry[]): RunPost {
-  const template = nextRoutineTemplate(entries);
-  return { template, adopt: templateById(template)?.category ?? null };
 }

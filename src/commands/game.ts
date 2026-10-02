@@ -1,7 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   GAME_CAP_MAX,
-  GameCap,
   GameStatusRequest,
   SignedGameSettingsRequest,
 } from '@sealkeeper/schema';
@@ -18,11 +17,11 @@ import {
 } from '../tasks.js';
 
 // sealkeeper game. The agent's own switch for the game layer, duels and
-// weekly challenges on top of the task exchange, and its daily cap of game
-// units. init asks whether to play, the agent's duel --json turns it on
-// and looks for a duel (VOU-598), and off and cap change it later, until
-// VOU-599 and VOU-603 give them a home. Each one is a signed request for
-// this agent alone, and sealkeeper status shows the game (VOU-596). Every
+// weekly challenges on top of the task exchange. init asks whether to
+// play, the agent's duel --json turns it on and looks for a duel
+// (VOU-598), routine set --game-cap changes its daily cap of game units
+// (VOU-599), and off turns it off, until VOU-603 gives that a home. Each
+// one is a signed request for this agent alone, and sealkeeper status shows the game (VOU-596). Every
 // one prints the game status the API answers, and --json prints that
 // answer as it came.
 // Nothing here touches the local log, and the game never moves a score, a
@@ -62,50 +61,42 @@ export function register(
       );
     });
 
-  game
-    .command('cap')
-    .description(
-      `Set the most game units this agent uses in one UTC day, 0 to ${GAME_CAP_MAX}`,
-    )
-    .argument('<n>', `a whole number from 0 to ${GAME_CAP_MAX}`)
-    .action(async function (this: Command, n: string): Promise<void> {
-      // Refused here before the key is read or anything is sent.
-      const cap = GameCap.safeParse(/^\d+$/.test(n.trim()) ? Number(n) : NaN);
-      if (!cap.success) this.error(BAD_CAP(n));
-      const session = await openTaskSession(this, deps);
-      const status = await send(this, session, { cap: cap.data });
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(status));
-        return;
-      }
-      const off = status.enabled ? '' : ` The game is off, ${gameOnHint()}`;
-      stdout(
-        `Game cap ${status.cap} units a UTC day, ${status.usedToday} used today.${off}`,
-      );
-    });
-
   return game;
 }
 
-// The settings change. A refusal ends the command with one line, OLD_API
-// for a 404, else the refusal line of its code.
+// The settings change. A refusal ends the command with one line, see
+// gameRefusal.
 async function send(
   cmd: Command,
   session: TaskSession,
-  change: { enabled?: false; cap?: number },
+  change: { enabled?: boolean; cap?: number },
 ): Promise<GameStatusResponse> {
   try {
-    const { signer, api } = session;
-    return await api.gameSettings(
-      await signer.sign(
-        SignedGameSettingsRequest.parse({ ...change, issuedAt: now() }),
-      ),
-    );
+    return await changeGame(session, change);
   } catch (error) {
     if (!(error instanceof ApiError)) throw error;
-    cmd.error(error.status === 404 ? OLD_API : refusal(error));
+    cmd.error(gameRefusal(error));
   }
 }
+
+// The signed settings change, { enabled?, cap?, issuedAt } checked with
+// the API's own schema first, the path game off and routine set share.
+// Throws what the API client throws.
+export async function changeGame(
+  { signer, api }: Pick<TaskSession, 'signer' | 'api'>,
+  change: { enabled?: boolean; cap?: number },
+): Promise<GameStatusResponse> {
+  return api.gameSettings(
+    await signer.sign(
+      SignedGameSettingsRequest.parse({ ...change, issuedAt: now() }),
+    ),
+  );
+}
+
+// One line for a refused settings change, OLD_API for a 404, else the
+// refusal line of its code.
+export const gameRefusal = (error: ApiError): string =>
+  error.status === 404 ? OLD_API : refusal(error);
 
 // The signed game status read, { issuedAt } checked with the API's own
 // schema first. init reads it after the registration and a routine run
