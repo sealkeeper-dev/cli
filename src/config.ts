@@ -13,7 +13,14 @@ import {
 } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { AgentId, AgentName, agentHandle } from '@sealkeeper/schema';
+import {
+  AgentId,
+  AgentName,
+  agentHandle,
+  ROUTINE_LIMIT_DEFAULTS,
+  ROUTINE_LIMIT_MAX,
+  type RoutineLimitName,
+} from '@sealkeeper/schema';
 import { z } from 'zod';
 import { readEnv } from './env.js';
 import { exists, readIfExists } from './files.js';
@@ -71,33 +78,12 @@ export function idProfileUrl(agentId: string): string {
 }
 
 // The guardrails of sealkeeper routine (VOU-138). Set at routine install
-// with these defaults and changed with config routine set. Caps count per
-// UTC day from routine.jsonl. tokensPerRun counts what the headless agent
-// reports, see routine-agent.ts. postsPerDay counts the template tasks a
-// run posts when the goal says posting is behind (POST-7).
-// networkClaimsPerDay is the part of claimsPerDay other operators'
-// template tasks may take (RT-8).
-export const ROUTINE_LIMIT_DEFAULTS = {
-  claimsPerDay: 10,
-  networkClaimsPerDay: 2,
-  confirmsPerDay: 10,
-  postsPerDay: 3,
-  minutesPerRun: 15,
-  tokensPerRun: 300_000,
-} as const;
-
-// The largest value each limit takes. A limit of 0 turns that kind of work
-// off for routine runs.
-export const ROUTINE_LIMIT_MAX = {
-  claimsPerDay: 100,
-  networkClaimsPerDay: 5,
-  confirmsPerDay: 100,
-  postsPerDay: 10,
-  minutesPerRun: 120,
-  tokensPerRun: 10_000_000,
-} as const;
-
-export type RoutineLimitName = keyof typeof ROUTINE_LIMIT_DEFAULTS;
+// with the defaults and changed with config routine set. The defaults and
+// the largest values live in @sealkeeper/schema (routine.ts), which the
+// API's routine route reads them from too (VOU-594). tokensPerRun counts
+// what the headless agent reports, see routine-agent.ts. A limit of 0
+// turns that kind of work off for routine runs.
+export { ROUTINE_LIMIT_DEFAULTS, ROUTINE_LIMIT_MAX, type RoutineLimitName };
 
 const limit = (name: RoutineLimitName, min = 0) =>
   z
