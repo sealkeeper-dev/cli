@@ -533,7 +533,7 @@ export type GoalToday = z.infer<typeof GoalToday>;
 // POST /v1/game/status and PUT /v1/game/settings, the agent's own game
 // settings and the game units it used in the current UTC day, which start
 // again from 0 at resetAt, also part of the status answer. Loose, unknown
-// keys kept, so game on --json prints the API answer as it came. cap is
+// keys kept, so game off --json prints the API answer as it came. cap is
 // any count, so a higher cap a later API allows still parses.
 export const GameStatusResponse = z.looseObject({
   enabled: z.boolean(),
@@ -543,8 +543,9 @@ export const GameStatusResponse = z.looseObject({
 });
 export type GameStatusResponse = z.infer<typeof GameStatusResponse>;
 
-// The duel answers (D-GAME-4, D-GAME-7), loose all the way down, so duel
-// --json prints the API answer as it came. category, state, origin and
+// The duels of the duel and status answers (D-GAME-4, D-GAME-7), loose all
+// the way down, so duel --json prints the API answer as it came. category,
+// state, origin and
 // result are any string, so a value a later API adds never fails the parse
 // of a whole list. taskId is the side's own task, in a signed answer to
 // that side only once the duel started.
@@ -571,32 +572,22 @@ export const DuelResponse = z.looseObject({
 });
 export type DuelResponse = z.infer<typeof DuelResponse>;
 
-// POST /v1/duels/mine and /inbox, nextCursor null on the last page.
+// POST /v1/duels/mine, which the routine reads, nextCursor null on the last
+// page.
 export const ListDuelsResponse = z.looseObject({
   duels: z.array(DuelResponse),
   nextCursor: z.string().nullable(),
 });
 export type ListDuelsResponse = z.infer<typeof ListDuelsResponse>;
 
-// POST /v1/duels/seek and DELETE /v1/duels/seek/:id. duel is the duel the
-// seek started when it matched at once.
-export const SeekDuelResponse = z.looseObject({
-  seek: z.looseObject({
-    id: z.uuid(),
-    category: z.string(),
-    state: z.string(),
-    expiresAt: Timestamp,
-    duelId: z.uuid().nullable(),
-  }),
-  duel: DuelResponse.optional(),
+// A seek as its agent sees it. duelId is the duel a match started.
+const DuelSeekResponse = z.looseObject({
+  id: z.uuid(),
+  category: z.string(),
+  state: z.string(),
+  expiresAt: Timestamp,
+  duelId: z.uuid().nullable(),
 });
-export type SeekDuelResponse = z.infer<typeof SeekDuelResponse>;
-
-// GET /v1/game/categories, the categories a duel can be played in.
-export const GameCategoriesResponse = z.looseObject({
-  categories: z.array(z.looseObject({ category: z.string() })),
-});
-export type GameCategoriesResponse = z.infer<typeof GameCategoriesResponse>;
 
 // The weekly challenge answers (D-GAME-11), loose all the way down, so
 // challenge --json prints the API answer as it came. category, state and a
@@ -641,15 +632,6 @@ export const ChallengeBoardResponse = z.looseObject({
   ),
 });
 export type ChallengeBoardResponse = z.infer<typeof ChallengeBoardResponse>;
-
-// GET /v1/agents/:id/trust, public, read by duel seek --category auto for
-// the verified tasks of each category. Only categories is read, loose all
-// the way down, and a category is any string, so a category a later API
-// adds never fails the parse.
-export const AgentTrustResponse = z.looseObject({
-  categories: z.array(z.looseObject({ category: z.string(), tasks: Count })),
-});
-export type AgentTrustResponse = z.infer<typeof AgentTrustResponse>;
 
 // The one answer of the core routes (VOU-589), run first, CoreAnswer in
 // @sealkeeper/schema, loose all the way down, so run --json prints the API
@@ -762,3 +744,17 @@ export const ChallengeAnswerResponse = z.looseObject({
   board: ChallengeBoardResponse.nullable().optional().catch(undefined),
 });
 export type ChallengeAnswerResponse = z.infer<typeof ChallengeAnswerResponse>;
+// POST /v1/agents/:id/duel/next (VOU-593), DuelAnswer in @sealkeeper/schema,
+// the core answer plus duel, what the step did, this agent's open seek and
+// the duels the step is about. Loose all the way down, so duel --json
+// prints the API answer as it came, and a step a later API adds never
+// fails the parse.
+export const DuelAnswerResponse = z.looseObject({
+  ...CoreAnswerResponse.shape,
+  duel: z.looseObject({
+    step: z.string(),
+    seek: DuelSeekResponse.nullable(),
+    duels: z.array(DuelResponse),
+  }),
+});
+export type DuelAnswerResponse = z.infer<typeof DuelAnswerResponse>;

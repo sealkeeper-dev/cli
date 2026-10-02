@@ -118,7 +118,7 @@ import {
   stdoutStyled,
   wantsJson,
 } from '../output.js';
-import { refusal } from '../refusal.js';
+import { gameOnHint, refusal } from '../refusal.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
 import {
@@ -242,9 +242,7 @@ export const versionQuestion = (server: string, local: string): string =>
 // after it says what SealKeeper has and how to change it.
 export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
 export const gameLine = (on: boolean): string =>
-  on
-    ? `on, turn it off with ${cli('game off')}`
-    : `off, turn it on with ${cli('game on')}`;
+  on ? `on, turn it off with ${cli('game off')}` : `off, ${gameOnHint()}`;
 // The next steps a --json run lists in nextSteps.
 export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;

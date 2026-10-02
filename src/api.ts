@@ -15,15 +15,13 @@ import { readEnv } from './env.js';
 import { tildePath } from './files.js';
 import {
   AgentResponse,
-  AgentTrustResponse,
   ChallengeAnswerResponse,
   CoreAnswerResponse,
   CredentialResponse,
-  DuelResponse,
+  DuelAnswerResponse,
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
-  GameCategoriesResponse,
   GameStatusResponse,
   GoalResponse,
   ListDuelsResponse,
@@ -31,7 +29,6 @@ import {
   ListTasksResponse,
   RatingResponse,
   type SealWithheld,
-  SeekDuelResponse,
   StatusAnswerResponse,
   sealWithheldOf,
   TaskResponse,
@@ -138,9 +135,6 @@ export type ApiClient = {
   serverDate(): number | null;
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
-  // GET /v1/agents/:id/trust, public, its categories with their verified
-  // tasks. An API from before Trust Score answers 404 not_found.
-  getTrust(agentId: string): Promise<AgentTrustResponse>;
   // GET /v1/agents/:id/goal, parsed loosely with unknown keys kept.
   getGoal(agentId: string): Promise<GoalResponse>;
   // One page of GET /v1/tasks, the tasks alone.
@@ -183,25 +177,9 @@ export type ApiClient = {
   // PUT /v1/game/settings, signed over { enabled?, cap?, issuedAt }. The
   // status after the change, as gameStatus answers it.
   gameSettings(envelope: string): Promise<GameStatusResponse>;
-  // GET /v1/game/categories, public. The categories a duel can be in.
-  gameCategories(): Promise<GameCategoriesResponse>;
-  // POST /v1/duels/seek and DELETE /v1/duels/seek/:id, signed. The seek,
-  // with its duel when it matched.
-  seekDuel(envelope: string): Promise<SeekDuelResponse>;
-  cancelSeek(seekId: string, envelope: string): Promise<SeekDuelResponse>;
-  // POST /v1/duels/challenge, and /:id/rematch, /:id/accept and
-  // /:id/decline, signed. The duel with this agent's taskId once started.
-  challengeDuel(envelope: string): Promise<DuelResponse>;
-  duelAction(
-    duelId: string,
-    action: 'rematch' | 'accept' | 'decline',
-    envelope: string,
-  ): Promise<DuelResponse>;
-  // POST /v1/duels/mine and /inbox, the signed reads. One page.
+  // POST /v1/duels/mine, the signed read of this agent's duels in one
+  // state. One page.
   myDuels(envelope: string): Promise<ListDuelsResponse>;
-  duelInbox(envelope: string): Promise<ListDuelsResponse>;
-  // GET /v1/duels/:id, public, the duel without any taskId.
-  getDuel(duelId: string): Promise<DuelResponse>;
   // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
   // tasks the agent solves now and answers the core answer. An API from
   // before it answers 404 not_found.
@@ -217,6 +195,10 @@ export type ApiClient = {
     agentId: string,
     envelope: string,
   ): Promise<ChallengeAnswerResponse>;
+  // POST /v1/agents/:id/duel/next, signed over DuelNextRequest (VOU-593).
+  // One duel step, the core answer plus duel. An API from before it
+  // answers 404 not_found.
+  duelNext(agentId: string, envelope: string): Promise<DuelAnswerResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -304,8 +286,6 @@ export function createApiClient(options: {
     `/v1/agents/${encodeURIComponent(agentId)}${action}`;
   const taskPath = (taskId: string, action = '') =>
     `/v1/tasks/${encodeURIComponent(taskId)}${action}`;
-  const duelPath = (id: string, action = '') =>
-    `/v1/duels/${encodeURIComponent(id)}${action}`;
   // A task route. ok lists the statuses that carry a task. Signed writes
   // send the envelope as the whole body.
   const taskCall = (path: string, ok: number[], envelope?: string) =>
@@ -386,8 +366,6 @@ export function createApiClient(options: {
       return result.data;
     },
     getWellKnown: () => call(WELL_KNOWN_PATH, WellKnown),
-    getTrust: (agentId) =>
-      call(agentPath(agentId, '/trust'), AgentTrustResponse),
     getGoal: (agentId) => call(agentPath(agentId, '/goal'), GoalResponse),
     async listTasks(query = {}) {
       return (await listTasksPage(query)).tasks;
@@ -435,37 +413,8 @@ export function createApiClient(options: {
         body: { envelope },
         method: 'PUT',
       }),
-    gameCategories: () => call('/v1/game/categories', GameCategoriesResponse),
-    // 201 for a new seek or invite, 200 for its replay.
-    seekDuel: (envelope) =>
-      call('/v1/duels/seek', SeekDuelResponse, {
-        body: { envelope },
-        ok: [200, 201],
-      }),
-    cancelSeek: (seekId, envelope) =>
-      call(
-        duelPath('seek', `/${encodeURIComponent(seekId)}`),
-        SeekDuelResponse,
-        {
-          body: { envelope },
-          method: 'DELETE',
-        },
-      ),
-    challengeDuel: (envelope) =>
-      call('/v1/duels/challenge', DuelResponse, {
-        body: { envelope },
-        ok: [200, 201],
-      }),
-    duelAction: (duelId, action, envelope) =>
-      call(duelPath(duelId, `/${action}`), DuelResponse, {
-        body: { envelope },
-        ok: [200, 201],
-      }),
     myDuels: (envelope) =>
       call('/v1/duels/mine', ListDuelsResponse, { body: { envelope } }),
-    duelInbox: (envelope) =>
-      call('/v1/duels/inbox', ListDuelsResponse, { body: { envelope } }),
-    getDuel: (duelId) => call(duelPath(duelId), DuelResponse),
     run: (agentId, envelope) =>
       call(agentPath(agentId, '/run'), CoreAnswerResponse, {
         body: { envelope },
@@ -476,6 +425,10 @@ export function createApiClient(options: {
       }),
     challengeNext: (agentId, envelope) =>
       call(agentPath(agentId, '/challenge/next'), ChallengeAnswerResponse, {
+        body: { envelope },
+      }),
+    duelNext: (agentId, envelope) =>
+      call(agentPath(agentId, '/duel/next'), DuelAnswerResponse, {
         body: { envelope },
       }),
   };

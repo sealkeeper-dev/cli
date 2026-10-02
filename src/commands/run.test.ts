@@ -317,7 +317,7 @@ describe('run', () => {
             needsYes: true,
           },
           {
-            action: 'duel',
+            action: 'rally',
             args: {},
             label: 'Something a later API sends',
             needsYes: true,
@@ -403,7 +403,7 @@ describe('run', () => {
         waiting: [],
         next: [
           {
-            action: 'duel',
+            action: 'rally',
             args: {},
             label: 'Something a later API sends',
             needsYes: true,

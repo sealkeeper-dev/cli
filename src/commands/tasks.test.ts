@@ -2981,7 +2981,7 @@ describe('submit, release and the tasks commands', () => {
       },
     );
 
-    // An open game task, as duel accept names it before the claim. The
+    // An open game task, as an accept names it before the claim. The
     // line holds before the claim as it does after it.
     it('tasks show of an open duel task says its spec comes in the claim answer', async () => {
       const task = api.add({ origin: 'duel', spec: { rows: 3 } });

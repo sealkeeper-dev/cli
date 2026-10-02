@@ -16,7 +16,18 @@ describe('refusal', () => {
   it('says how to turn the game on for game_disabled', () => {
     expect(
       refusal(new ApiError(403, 'game_disabled', 'The game is off')),
-    ).toMatch(/^the game is off for this agent, turn it on with .*game on$/);
+    ).toMatch(
+      /^the game is off for this agent, .*duel --json, run by your agent, turns it on and looks for a duel$/,
+    );
+  });
+
+  it('names the duel forms, never a removed duel command', () => {
+    expect(
+      refusal(new ApiError(409, 'category_not_duelable', 'Not duelable')),
+    ).toMatch(/leave out --category and .*duel picks one$/);
+    expect(
+      refusal(new ApiError(409, 'too_many_open_duels', 'Too many')),
+    ).toMatch(/cancel a seek with .*duel --cancel or wait for an answer$/);
   });
 
   it('keeps the API message for game_cap_reached, which names whose units ran out', () => {

@@ -241,11 +241,12 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     reason: z.string(),
   }),
   // A game action in a routine run (GAME-14), written by the command that
-  // did it once SealKeeper took it. accept is an invite duel accept
-  // started, duel and challenge a duel or challenge task submit
-  // answered, right or wrong, and seek a seek duel seek opened. id is the
-  // duel, task or seek, so a retry that SealKeeper answers again counts
-  // once. Its own kind, so no daily limit counts it.
+  // did it once SealKeeper took it. accept is an invite duel --accept
+  // started, duel and challenge a duel or challenge task submit answered,
+  // right or wrong, and seek a seek the duel step opened or found, or the
+  // duel it started when it matched at once. id is the duel, task or seek,
+  // so a retry that SealKeeper answers again counts once. Its own kind, so
+  // no daily limit counts it.
   z.object({
     kind: z.literal('game'),
     at: At,

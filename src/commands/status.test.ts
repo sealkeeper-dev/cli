@@ -409,7 +409,7 @@ describe('status', () => {
         `Waiting    task ${task} addressed by bob/hawk, until 2026-10-04 08:00 UTC. Its spec comes from another operator. npx sealkeeper run --addressed\n`,
       );
       expect(out).toContain(
-        `           duel invite ${invite} from carol/owl, until 2026-10-03 08:00 UTC. npx sealkeeper duel accept ${invite} or npx sealkeeper duel decline ${invite}\n`,
+        `           duel invite ${invite} from carol/owl, until 2026-10-03 08:00 UTC. npx sealkeeper duel --accept ${invite} or npx sealkeeper duel --decline ${invite}\n`,
       );
       expect(out).toContain(
         `           outcome of task ${outcome} with dave/kite to report. npx sealkeeper tasks outcome ${outcome} success|failure for a task you posted, npx sealkeeper submit ${outcome} again for one you claimed\n`,
@@ -446,7 +446,9 @@ describe('status', () => {
       expect(out).toContain(
         'Today      20 of 20 counted. More tasks today still verify but will not move your level.\n',
       );
-      expect(out).toContain('Game off. npx sealkeeper game on turns it on.');
+      expect(out).toContain(
+        'Game off. npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel.',
+      );
       expect(out).toContain('Duels      none running\n');
       expect(out).not.toContain('Challenge');
     });

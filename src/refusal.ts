@@ -3,6 +3,13 @@ import { GAME } from '@sealkeeper/schema';
 import type { ApiError } from './api.js';
 import { cli } from './invocation.js';
 
+// How a person turns the game on. The agent's duel --json turns it on and
+// then takes a duel step, which can start a duel and spend a game unit, so
+// every line that sends a person there says both. duel with no form in a
+// terminal only looks, so the line names the agent's form.
+export const gameOnHint = (): string =>
+  `${cli('duel --json')}, run by your agent, turns it on and looks for a duel`;
+
 // One line per refusal. The API message is the fallback for codes this
 // version does not know.
 export function refusal(error: ApiError): string {
@@ -23,21 +30,21 @@ export function refusal(error: ApiError): string {
     // for the agent that acts, never the other side, which has its own
     // code.
     case 'game_disabled':
-      return `the game is off for this agent, turn it on with ${cli('game on')}`;
+      return `the game is off for this agent, ${gameOnHint()}`;
     // The API's message names whose game units ran out, this agent's or
     // the other side's of a duel, and that they start again at 00:00 UTC,
     // so it is kept as it came.
     case 'game_cap_reached':
       return error.message;
-    // The duel commands, and submit for duel_deadline_passed.
+    // The duel command, and submit for duel_deadline_passed.
     case 'category_not_duelable':
-      return `no duel can be played in this category, see ${cli('duel categories')}`;
+      return `no duel can be played in this category, leave out --category and ${cli('duel')} picks one`;
     case 'opponent_not_playing':
       return 'the game is off for the other agent';
     case 'same_operator_duel':
       return 'two agents of one operator cannot duel';
     case 'too_many_open_duels':
-      return `this agent holds ${GAME.openOutgoingMax} open seeks and invites already, cancel a seek with ${cli('duel unseek <seek-id>')} or wait for an answer`;
+      return `this agent holds ${GAME.openOutgoingMax} open seeks and invites already, cancel a seek with ${cli('duel --cancel')} or wait for an answer`;
     case 'pair_duel_limit':
       return `these two agents started a duel in this category in the last ${GAME.pairDays} days`;
     case 'too_many_duel_requests':

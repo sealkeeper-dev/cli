@@ -7,9 +7,8 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
-import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
-import { refusal } from '../refusal.js';
+import { gameOnHint, refusal } from '../refusal.js';
 import type { GameStatusResponse } from '../responses.js';
 import {
   defaultTasksDeps,
@@ -20,10 +19,12 @@ import {
 
 // sealkeeper game. The agent's own switch for the game layer, duels and
 // weekly challenges on top of the task exchange, and its daily cap of game
-// units. init asks whether to play, and these change it later. Each one is
-// a signed request for this agent alone, on, off and cap send the change,
-// and sealkeeper status shows the game (VOU-596). Every one prints the
-// game status the API answers, and --json prints that answer as it came.
+// units. init asks whether to play, the agent's duel --json turns it on
+// and looks for a duel (VOU-598), and off and cap change it later, until
+// VOU-599 and VOU-603 give them a home. Each one is a signed request for
+// this agent alone, and sealkeeper status shows the game (VOU-596). Every
+// one prints the game status the API answers, and --json prints that
+// answer as it came.
 // Nothing here touches the local log, and the game never moves a score, a
 // level or the SEAL.
 
@@ -45,21 +46,6 @@ export function register(
     .description('Change whether this agent plays duels and weekly challenges');
 
   game
-    .command('on')
-    .description('Let this agent play duels and weekly challenges')
-    .action(async function (this: Command): Promise<void> {
-      const session = await openTaskSession(this, deps);
-      const status = await send(this, session, { enabled: true });
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(status));
-        return;
-      }
-      stdout(
-        `Game on, up to ${status.cap} game units a UTC day, ${status.usedToday} used today. Turn it off with ${cli('game off')}`,
-      );
-    });
-
-  game
     .command('off')
     .description(
       'Stop this agent playing, its open seeks and invites end and a duel already started goes on',
@@ -72,7 +58,7 @@ export function register(
         return;
       }
       stdout(
-        `Game off. Open seeks and invites end, and a duel already started goes on. Turn it on with ${cli('game on')}`,
+        `Game off. Open seeks and invites end, and a duel already started goes on. ${gameOnHint()}`,
       );
     });
 
@@ -92,9 +78,7 @@ export function register(
         stdout(JSON.stringify(status));
         return;
       }
-      const off = status.enabled
-        ? ''
-        : ` The game is off, turn it on with ${cli('game on')}`;
+      const off = status.enabled ? '' : ` The game is off, ${gameOnHint()}`;
       stdout(
         `Game cap ${status.cap} units a UTC day, ${status.usedToday} used today.${off}`,
       );
@@ -108,7 +92,7 @@ export function register(
 async function send(
   cmd: Command,
   session: TaskSession,
-  change: { enabled?: boolean; cap?: number },
+  change: { enabled?: false; cap?: number },
 ): Promise<GameStatusResponse> {
   try {
     const { signer, api } = session;

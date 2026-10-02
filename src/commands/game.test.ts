@@ -138,10 +138,15 @@ describe('sealkeeper game', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  describe('on and off', () => {
-    it('on sends enabled true and says so in one line', async () => {
-      game.status.enabled = false;
+  describe('off', () => {
+    it('has no on, since duel turns the game on', async () => {
       const result = await run('game', 'on');
+      expect(result.code).toBe(1);
+      expect(game.sent).toEqual([]);
+    });
+
+    it('off sends enabled false and says what ends and what goes on', async () => {
+      const result = await run('game', 'off');
       expect(result.code).toBe(0);
       expect(game.sent).toHaveLength(1);
       expect(game.sent[0]?.method).toBe('PUT');
@@ -150,35 +155,23 @@ describe('sealkeeper game', () => {
         'enabled',
         'issuedAt',
       ]);
-      expect(game.sent[0]?.payload.enabled).toBe(true);
-      expect(result.out).toBe(
-        'Game on, up to 5 game units a UTC day, 2 used today. Turn it off with npx sealkeeper game off\n',
-      );
-    });
-
-    it('off sends enabled false and says what ends and what goes on', async () => {
-      const result = await run('game', 'off');
-      expect(result.code).toBe(0);
       expect(game.sent[0]?.payload.enabled).toBe(false);
       expect(result.out).toBe(
-        'Game off. Open seeks and invites end, and a duel already started goes on. Turn it on with npx sealkeeper game on\n',
+        'Game off. Open seeks and invites end, and a duel already started goes on. npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n',
       );
     });
 
-    it.each([['on'], ['off']])(
-      '%s --json prints the API answer unchanged',
-      async (which) => {
-        const result = await run('game', which, '--json');
-        expect(result.code).toBe(0);
-        expect(JSON.parse(result.out)).toEqual({
-          enabled: which === 'on',
-          cap: 5,
-          usedToday: 2,
-          resetAt: RESET_AT,
-          later: 'kept',
-        });
-      },
-    );
+    it('--json prints the API answer unchanged', async () => {
+      const result = await run('game', 'off', '--json');
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.out)).toEqual({
+        enabled: false,
+        cap: 5,
+        usedToday: 2,
+        resetAt: RESET_AT,
+        later: 'kept',
+      });
+    });
   });
 
   describe('cap', () => {
@@ -204,7 +197,7 @@ describe('sealkeeper game', () => {
       const result = await run('game', 'cap', '4');
       expect(result.code).toBe(0);
       expect(result.out).toBe(
-        'Game cap 4 units a UTC day, 2 used today. The game is off, turn it on with npx sealkeeper game on\n',
+        'Game cap 4 units a UTC day, 2 used today. The game is off, npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n',
       );
     });
 
@@ -238,7 +231,7 @@ describe('sealkeeper game', () => {
   });
 
   describe('refusals', () => {
-    it.each([['on'], ['off'], ['cap', '2']])(
+    it.each([['off'], ['cap', '2']])(
       'game %s against an API without the game says so in one line',
       async (...args) => {
         game.gone = true;
@@ -253,7 +246,7 @@ describe('sealkeeper game', () => {
     it.each([
       [
         { status: 403, code: 'game_disabled', message: 'The game is off' },
-        'the game is off for this agent, turn it on with npx sealkeeper game on\n',
+        'the game is off for this agent, npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n',
       ],
       [
         {
@@ -275,7 +268,7 @@ describe('sealkeeper game', () => {
       ],
     ])('prints the refusal line of %o and exits 1', async (refuse, line) => {
       game.refuse = refuse;
-      const result = await run('game', 'on');
+      const result = await run('game', 'off');
       expect(result.code).toBe(1);
       expect(result.out).toBe('');
       expect(result.err).toBe(line);
@@ -283,7 +276,7 @@ describe('sealkeeper game', () => {
 
     it('says to run init before anything is sent when not initialised', async () => {
       await rm(join(home, 'config.json'));
-      const result = await run('game', 'on');
+      const result = await run('game', 'off');
       expect(result.code).toBe(1);
       expect(result.err).toContain('not initialised, run npx sealkeeper init');
       expect(game.sent).toEqual([]);

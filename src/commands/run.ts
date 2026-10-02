@@ -1,10 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
+  AgentRef,
   RUN_COUNT_DEFAULT,
   RUN_COUNT_MAX,
   RunRequest,
+  TaskCategory,
 } from '@sealkeeper/schema';
 import { type Command, InvalidArgumentError } from 'commander';
+import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { claudeCodeHooksIn } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
@@ -238,11 +241,12 @@ export function agentAnswer(answer: PrintedAnswer) {
  * agent tells the user by its label. run takes addressed and anyPoster,
  * post one template this CLI has, posted with --yes, which stands for the
  * user's yes the action asks for. challenge and sync take no argument, and
- * sync asks before it sends while auto sync is off. An argument this CLI
- * does not know makes no command, so a line never does less than the API
- * meant. run, challenge and status use it. For a person, reader person,
- * it is the same command without --json and without the --yes that stands
- * for a yes, so run hands the work to the agent and a post asks first.
+ * sync asks before it sends while auto sync is off. duel takes one form of
+ * the duel command, see duelWords. An argument this CLI does not know makes
+ * no command, so a line never does less than the API meant. run, challenge,
+ * duel and status use it. For a person, reader person, it is the same
+ * command without --json and without the --yes that stands for a yes, so
+ * run hands the work to the agent and a post asks first.
  */
 export function actionCommand(
   action: CoreActionResponse,
@@ -266,6 +270,11 @@ export function actionCommand(
     }
     return cli(['run', ...flags, ...(agent ? ['--json'] : [])].join(' '));
   }
+  if (action.action === 'duel') {
+    const words = duelWords(action.args);
+    if (words === null) return null;
+    return cli([...words, ...(agent ? ['--json'] : [])].join(' '));
+  }
   if (action.action === 'post') {
     const template = action.args.template;
     if (args.length !== 1 || typeof template !== 'string') return null;
@@ -275,6 +284,54 @@ export function actionCommand(
     return cli(
       `tasks post --template ${template}${agent ? ' --yes --json' : ''}`,
     );
+  }
+  return null;
+}
+
+/*
+ * The words of the duel command for the args of a duel action, the request
+ * fields of the duel route, or null. No args is the step with no form.
+ * accept, decline and rematch take a duel id, cancel and list true, and
+ * invite an agent by id or handle, with a category or without. Each value
+ * is checked with the API's own schema, so a line only ever carries a
+ * UUID, an agent ref or a category. An agent id that starts with a hyphen
+ * would read as an option, so it makes no command.
+ */
+const DUEL_ID_FLAGS: Record<string, string> = {
+  accept: '--accept',
+  decline: '--decline',
+  rematch: '--rematch',
+};
+
+export function duelWords(args: CoreActionResponse['args']): string[] | null {
+  const entries = Object.entries(args);
+  if (entries.length === 0) return ['duel'];
+  const { invite, category } = args;
+  if (invite !== undefined) {
+    if (
+      entries.length > (category === undefined ? 1 : 2) ||
+      typeof invite !== 'string' ||
+      invite.startsWith('-') ||
+      !AgentRef.safeParse(invite).success ||
+      (category !== undefined && !TaskCategory.safeParse(category).success)
+    ) {
+      return null;
+    }
+    return category === undefined
+      ? ['duel', invite]
+      : ['duel', invite, '--category', String(category)];
+  }
+  const [entry, ...more] = entries;
+  if (entry === undefined || more.length > 0) return null;
+  const [key, value] = entry;
+  const flag = DUEL_ID_FLAGS[key];
+  if (flag !== undefined) {
+    return typeof value === 'string' && z.uuid().safeParse(value).success
+      ? ['duel', flag, value]
+      : null;
+  }
+  if ((key === 'cancel' || key === 'list') && value === true) {
+    return ['duel', `--${key}`];
   }
   return null;
 }
@@ -302,7 +359,7 @@ function coreTaskOf(task: TaskResponse) {
 
 // The claims in the local log, so status and the log reflect the work. The
 // answer holds the tasks claimed before as well, so only a task the log
-// does not hold yet is recorded. run and challenge both use it.
+// does not hold yet is recorded. run, challenge and duel all use it.
 export async function recordClaims(
   answer: Pick<CoreAnswerResponse, 'tasks'>,
 ): Promise<void> {

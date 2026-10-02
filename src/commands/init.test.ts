@@ -2399,7 +2399,7 @@ describe('sealkeeper init', () => {
 
   describe('the game question', () => {
     const ON = '    Game  on, turn it off with npx sealkeeper game off\n';
-    const OFF = '    Game  off, turn it on with npx sealkeeper game on\n';
+    const OFF = `    Game  off, npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n`;
 
     it('asks in a terminal after the runtime, and y turns the game on', async () => {
       world.game = true;

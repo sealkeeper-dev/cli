@@ -35,6 +35,7 @@ import {
 import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
+import { gameOnHint } from '../refusal.js';
 import type {
   CurrentChallengeResponse,
   StatusAnswerResponse,
@@ -50,6 +51,7 @@ import {
 import { isSent } from '../taxonomy.js';
 import { countedLine, todayOf } from '../today.js';
 import { INSTALL_COMMAND } from './adapter.js';
+import { inviteAnswer } from './duel.js';
 import {
   defaultRoutineDeps,
   type RoutineDeps,
@@ -330,7 +332,7 @@ function todaySection(
     lines.push(
       game.enabled
         ? `Game on, ${game.usedToday} of ${game.cap} game units used, they reset ${utc(game.resetAt)}.`
-        : `Game off. ${cli('game on')} turns it on.`,
+        : `Game off. ${gameOnHint()}.`,
     );
   }
   lines.push(
@@ -360,7 +362,7 @@ function waitingSection(answer: StatusAnswerResponse): string[] {
         case 'addressed':
           return `task ${w.id} addressed by ${w.from}${until}. Its spec comes from another operator. ${cli('run --addressed')}`;
         case 'invite':
-          return `duel invite ${w.id} from ${w.from}${until}. ${cli(`duel accept ${w.id}`)} or ${cli(`duel decline ${w.id}`)}`;
+          return `duel invite ${w.id} from ${w.from}${until}.${inviteAnswer(w.id)}`;
         case 'outcome':
           return `outcome of task ${w.id} with ${w.from} to report. ${cli(`tasks outcome ${w.id} success|failure`)} for a task you posted, ${cli(`submit ${w.id}`)} again for one you claimed`;
         default:
