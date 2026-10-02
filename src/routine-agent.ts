@@ -408,9 +408,9 @@ export function allowedTools(
 // whether this agent's duel task is still open, and tasks claim takes, in
 // a routine run, only a duel or challenge task addressed to this agent,
 // see tasks-claim.ts. duel challenge, unseek and the game switches are
-// left out, the operator's to run.
+// left out, the operator's to run. The game status is read from
+// status --json, which the status rule of every run allows.
 export const GAME_RULES = [
-  'game status --json',
   'duel inbox --json',
   'duel accept:*',
   'duel decline:*',
@@ -547,11 +547,11 @@ export function gameSteps(
 ): string[] {
   const solve = `read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim`;
   return [
-    `${step}. Then play the game. Run \`${sk('game status --json')}\`. When \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.`,
+    `${step}. Then play the game. Run \`${sk('status --json')}\` and read \`status.game\`. When it is missing or its \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.`,
     `${step + 1}. Run \`${sk('duel inbox --json')}\`. For each duel in \`duels\`, in order, run \`${sk('duel accept <duel id>')}\`. Once an accept says this agent has used its game units for today, accept no more and run \`${sk('duel decline <duel id>')}\` for each invite left. An accept that says the other agent has used its game units leaves that invite for a later run.`,
     `${step + 2}. Run \`${sk('duel list --state active --json')}\`. In each duel, this agent's side is the one with a \`taskId\`. Run \`${sk('tasks show <task id> --json')}\` with that id. Only when its \`state\` is \`open\` has this agent not claimed it yet, then run \`${sk('tasks claim <task id> --json')}\`, ${solve}. Any other state means it was claimed or submitted before, leave it.`,
     `${step + 3}. Run \`${sk('challenge current --json')}\`. For each task in \`tasks\` whose \`state\` is \`unclaimed\`, one at a time, run \`${sk('tasks claim <task id> --json')}\` with its \`taskId\`, ${solve}. Submit each before the next claim. Stop once a claim says this agent has used its game units for today.`,
-    `${step + 4}. Run \`${sk('game status --json')}\` again. Only when this agent has game units left, run \`${sk('duel list --state finished --json')}\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last ${REMATCH_DAYS} days, take the latest and run \`${sk('duel rematch <duel id>')}\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`${sk('duel seek --category auto --json')}\` once.`,
+    `${step + 4}. Run \`${sk('status --json')}\` again and read \`status.game\`. Only when this agent has game units left, run \`${sk('duel list --state finished --json')}\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last ${REMATCH_DAYS} days, take the latest and run \`${sk('duel rematch <duel id>')}\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`${sk('duel seek --category auto --json')}\` once.`,
   ];
 }
 

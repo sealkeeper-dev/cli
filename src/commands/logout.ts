@@ -2,12 +2,7 @@
 import { rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import type { Command } from 'commander';
-import {
-  LEGACY_POST_PROMPT_FILE,
-  type Paths,
-  paths,
-  readConfig,
-} from '../config.js';
+import { LEGACY_FILES, type Paths, paths, readConfig } from '../config.js';
 import { exists } from '../files.js';
 import { deleteKey as removeKey } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -190,9 +185,8 @@ async function removeSession(
 ): Promise<{ removed: string[]; keyCopies: string[] }> {
   const targets = [
     p.credential,
-    p.score,
-    p.inbox,
-    join(p.home, LEGACY_POST_PROMPT_FILE),
+    p.status,
+    ...LEGACY_FILES.map((file) => join(p.home, file)),
     p.goal,
     p.operatorSlug,
     ...(deleteKey

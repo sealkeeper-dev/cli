@@ -126,13 +126,13 @@ function real(path: string): string {
   }
 }
 
-// Said by status and routine status when the copy the job runs is not the
-// version of the CLI running.
+// Said by status when the copy the job runs is not the version of the CLI
+// running.
 export const copyOutdatedLine = (copy: string, running: string): string =>
   `Routine runs ${copy}, this CLI is ${running}, run ${cli('routine install')} to update it.`;
 
-// Said by status and routine status when node or the script the job runs
-// is gone, as the hooks warning says for the hooks.
+// Said by status when node or the script the job runs is gone, as the
+// hooks warning says for the hooks.
 export const jobMissingLine = (): string =>
   `The daily routine job points at a sealkeeper that is no longer there. Run ${cli('routine install')} again.`;
 

@@ -47,7 +47,7 @@ export const INSECURE_API_URL =
 type Named = { operatorLogin: string; name: string };
 
 // The agent's handle, slug/name. The API sends it with every answer. The
-// CLI builds its own for status, whoami and the other commands that work
+// CLI builds its own for status and the other commands that work
 // offline, from the operator slug the API last sent, see operator-slug.ts.
 // The login stands in only while no slug is known.
 export function handleOf(config: Named, slug?: string | null): string {
@@ -202,11 +202,18 @@ export class ConfigError extends Error {
   override name = 'ConfigError';
 }
 
-// Where prove kept its weekly offer to post, in the SealKeeper home. CLI
-// 0.4.14 and earlier wrote it and nothing writes it now. logout and agent
-// delete still remove it, so a named home ends up empty. It can go once no
-// CLI from before run is in use.
-export const LEGACY_POST_PROMPT_FILE = 'post-prompt.json';
+// Files older CLIs kept in the SealKeeper home and nothing writes now.
+// post-prompt.json was prove's weekly offer to post, CLI 0.4.14 and
+// earlier. score.json and inbox.json were the scores and the addressed
+// task count the status of CLI 0.4.14 and earlier cached, before status
+// read the status route (VOU-596). logout and agent delete still remove
+// them, so a named home ends up empty. They can go once no such CLI is in
+// use.
+export const LEGACY_FILES = [
+  'post-prompt.json',
+  'score.json',
+  'inbox.json',
+] as const;
 
 export type Paths = {
   home: string;
@@ -223,9 +230,9 @@ export type Paths = {
   cardWrite: string;
   // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
-  score: string;
-  // How many tasks wait for this agent, a fifteen minute cache like score.
-  inbox: string;
+  // The last status answer, which status shows offline and labels as
+  // cached, see status-answer.ts.
+  status: string;
   // Start time markers for hook adapters, one small file per session or tool
   // call, so a later hook can compute a duration.
   sessions: string;
@@ -561,8 +568,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     credential: join(home, 'credential.json'),
     cardWrite: join(home, 'card-write.json'),
     wellKnown: join(home, 'well-known.json'),
-    score: join(home, 'score.json'),
-    inbox: join(home, 'inbox.json'),
+    status: join(home, 'status.json'),
     sessions: join(home, 'sessions'),
     goal: join(home, 'goal.json'),
     nudge: join(home, 'nudge.json'),

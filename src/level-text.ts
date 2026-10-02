@@ -1,14 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
-// Words about levels that goal, run, the routine and the session nudge
+// Words about levels that run, status, the routine and the session nudge
 // share. On its own so the nudge reads them without the rest of goal.ts.
-
-// Where an operator verifies a domain (VOU-185), which gold needs.
-export const ACCOUNT_URL = 'https://sealkeeper.run/me/account';
-
-// The published SEAL standard, which has the numbers of counted evidence
-// the CLI does not carry.
-export const STANDARD_URL = 'https://sealkeeper.run/seal/standard';
 
 // Said when no issued level is above the agent's. It is never the top of
 // the ladder, since a reserved level (platinum) can sit above it.

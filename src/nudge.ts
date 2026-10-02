@@ -18,8 +18,9 @@ import { dailyCeilingReached, todayOf } from './today.js';
 //
 // It is read from the cached goal only, so a session start never waits on
 // the network. A cache up to a day old is used, and the SessionEnd hook
-// refreshes it (claude-code.ts). Turning the nudge on fills it once, see
-// setNudge. No cache, an older one or no config means
+// refreshes it (claude-code.ts), as do status and the terminal run while
+// the nudge is on (keepNudgeFresh), which read the status route themselves.
+// Turning the nudge on fills it once, see setNudge. No cache, an older one or no config means
 // no summary. It only runs once the operator said yes, nudge.json on, and
 // it only points at the run flow, which claims seed tasks, at tasks
 // addressed to this agent and at outcomes this agent owes. Never at open
@@ -229,4 +230,21 @@ export async function setNudge(
 ): Promise<void> {
   await writeNudge(on, p);
   if (on) await loadGoal({ fetch, paths: p }).catch(() => null);
+}
+
+// Refreshes the goal cache the summary reads, while the nudge is on, so
+// an agent without the SessionEnd hook, OpenClaw or Mastra, still gets a
+// summary. status and the terminal run call it beside their own read. A
+// cache under fifteen minutes old is kept. A side task, so it never
+// throws and says nothing. fetch defaults to the global one.
+export async function keepNudgeFresh(
+  fetch?: typeof globalThis.fetch,
+  p: Paths = paths(),
+): Promise<void> {
+  try {
+    if ((await readNudge(p)) !== true) return;
+    await loadGoal({ fetch, paths: p });
+  } catch {
+    // The summary keeps the cache it has.
+  }
 }

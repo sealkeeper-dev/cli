@@ -843,9 +843,12 @@ describe('routine', () => {
       readLine: async () =>
         (answers.length > 0 ? answers.shift() : answer) ?? null,
     };
+    // status prints its screen, as in a terminal. Every run here sends
+    // --json.
     const tasks: TasksDeps = {
       fetch: api.fetch,
       stdin: () => input,
+      isTTY: () => true,
     };
     const program = createProgram({
       tasks,
@@ -910,6 +913,13 @@ describe('routine', () => {
       if (e instanceof CommanderError) return e.exitCode;
       throw e;
     }
+  }
+
+  // The routine as status --json carries it.
+  async function routineJson() {
+    const result = await run('status', '--json');
+    expect(result.code).toBe(0);
+    return JSON.parse(result.out).local.routine;
   }
 
   async function setRoutine(change: Partial<RoutineConfig>): Promise<void> {
@@ -1026,7 +1036,7 @@ describe('routine', () => {
           '  Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
           '  Why      Verified tasks get your agent to bronze',
           '',
-          'Check it later with sealkeeper routine status',
+          'Check it later with sealkeeper status',
           '',
         ].join('\n'),
       );
@@ -1104,10 +1114,10 @@ describe('routine', () => {
       expect(crontab).toContain(`'${copy()}' 'routine' 'run'`);
       const lines = result.out.trimEnd().split('\n');
       expect(lines.slice(-4)).toEqual([
-        'Routine installed. It runs every day at 10:00. See it with sealkeeper routine status, stop it with sealkeeper routine pause or sealkeeper routine remove.',
+        'Routine installed. It runs every day at 10:00. See it with sealkeeper status, stop it with sealkeeper routine pause or sealkeeper routine remove.',
         'First run started. It stops within 15 minutes.',
         "Routine run found nothing to do, no agent started. No seed tasks, allowed addressed tasks, other operators' template tasks or confirmations to do.",
-        'See every run with sealkeeper routine status.',
+        'See every run with sealkeeper status.',
       ]);
       expect(await runs()).toHaveLength(1);
       expect(spawned).toEqual([]);
@@ -1121,9 +1131,7 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect(spawned).toHaveLength(1);
       expect(result.out).toContain('Routine run done.');
-      expect(result.out).toContain(
-        'See every run with sealkeeper routine status.',
-      );
+      expect(result.out).toContain('See every run with sealkeeper status.');
       expect((await runs())[0]?.outcome).toBe('done');
     });
 
@@ -1167,13 +1175,13 @@ describe('routine', () => {
         'First run started. It stops within 15 minutes.\n',
       );
       const hint = text.indexOf(
-        'Ctrl-C stops watching, the run keeps going. See it with sealkeeper routine status.\n',
+        'Ctrl-C stops watching, the run keeps going. See it with sealkeeper status.\n',
       );
       const claimed = text.indexOf('Claimed 2 tasks\n');
       const first = text.indexOf('Verified json_extract\n');
       const second = text.indexOf('Verified text_dedupe\n');
       const done = text.indexOf('Routine run done.');
-      const see = text.indexOf('See every run with sealkeeper routine status.');
+      const see = text.indexOf('See every run with sealkeeper status.');
       expect(started).toBeGreaterThan(-1);
       expect([hint, claimed, first, second, done, see]).toEqual(
         [hint, claimed, first, second, done, see].sort((a, b) => a - b),
@@ -1227,9 +1235,7 @@ describe('routine', () => {
       const result = await run('routine', 'install');
       expect(result.code).toBe(0);
       expect(result.out).toContain('Stopped watching. The run keeps going.\n');
-      expect(result.out).toContain(
-        'See every run with sealkeeper routine status.',
-      );
+      expect(result.out).toContain('See every run with sealkeeper status.');
       expect(result.out).not.toContain('Routine run done.');
       expect(await runs()).toEqual([]);
       release();
@@ -1342,10 +1348,10 @@ describe('routine', () => {
       expect(text).toContain(`<string>${jobProgram[0]}</string>`);
       expect(text).toContain(`<string>${copy()}</string>`);
       expect(text).toContain('<string>routine</string>');
-      // The block names no file, routine status does.
+      // The block names no file, status does.
       expect(result.out).not.toContain(basename(file));
-      expect((await run('routine', 'status')).out).toContain(
-        `  File       ~/Library/LaunchAgents/${basename(file)}\n`,
+      expect((await run('status')).out).toContain(
+        `           job file ~/Library/LaunchAgents/${basename(file)}\n`,
       );
       const job = (await readRoutineConfig())?.schedule?.job;
       expect(calls.map((c) => c.line)).toEqual([
@@ -1425,21 +1431,22 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('cron');
       expect(crontab).toContain(MANAGED_MARKER);
-      expect((await run('routine', 'status')).out).not.toContain(LINGER_NOTE);
+      expect((await run('status')).out).not.toContain(LINGER_NOTE);
     });
 
-    it('says in routine status that linger is needed when there is no cron to fall back on', async () => {
+    it('says in status that linger is needed when there is no cron to fall back on', async () => {
       systemdUp = true;
       linger = false;
       cronInstalled = false;
       const result = await run('routine', 'install', '--yes');
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
-      // Not in the block, in the Job section of routine status (RS-4).
+      // Not in the block, in the routine of status (RS-4).
       expect(result.out).not.toContain(LINGER_NOTE);
-      expect((await run('routine', 'status')).out).toContain(
-        `  ${LINGER_NOTE}\n`,
+      expect((await run('status')).out).toContain(
+        `           ${LINGER_NOTE}\n`,
       );
+      expect((await routineJson()).notes).toContain(LINGER_NOTE);
       expect(LINGER_NOTE).toContain('loginctl enable-linger');
     });
 
@@ -1450,7 +1457,7 @@ describe('routine', () => {
       const result = await run('routine', 'install', '--yes');
       expect(result.code).toBe(0);
       expect((await readRoutineConfig())?.schedule?.scheduler).toBe('systemd');
-      expect((await run('routine', 'status')).out).toContain(LINGER_NOTE);
+      expect((await run('status')).out).toContain(LINGER_NOTE);
       expect(crontab).toBeNull();
       // Both daemon names were looked for, by process and by unit.
       expect(calls.map((c) => c.line)).toEqual(
@@ -1493,9 +1500,9 @@ describe('routine', () => {
       expect(crontab).toContain(`5 6 * * * PATH=`);
       // The scheduled run finds the same working directory.
       expect(crontab).toContain(`XDG_CACHE_HOME='${join(home, 'cache')}'`);
-      // The settings note is in the Job section of routine status.
-      expect((await run('routine', 'status')).out).toContain(
-        'runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it',
+      // The settings note is in the routine of status --json.
+      expect((await routineJson()).notes).toContain(
+        "The routine's Claude Code runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it.",
       );
       expect(crontab).toContain(`'${copy()}' 'routine' 'run'`);
 
@@ -1707,22 +1714,21 @@ describe('routine', () => {
       );
     });
 
-    it('names the job, its command and the copy in routine status (RS-4)', async () => {
+    it('names the job, its command and the copy in status (RS-4)', async () => {
       await run('routine', 'install', '--yes');
       const job = (await readRoutineConfig()).schedule?.job ?? '';
-      const result = await run('routine', 'status');
+      const result = await run('status');
       expect(result.code).toBe(0);
-      const section = result.out.slice(result.out.indexOf('\nJob\n') + 1);
-      expect(section.split('\n').slice(0, 7)).toEqual([
-        'Job',
-        '  Scheduler  cron',
-        `  Entry      crontab, marked ${job}`,
-        `  Command    ${jobProgram[0]} ${copy()} routine run`,
-        `  Copy       ${VERSION}`,
-        `  ${NO_SETTINGS_NOTE}`,
-        '  See the job file in full with sealkeeper routine status --files.',
-      ]);
-      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      expect(result.out).toContain(
+        `           job in the crontab, marked ${job}\n`,
+      );
+      const json = await routineJson();
+      expect(json.schedule).toMatchObject({
+        scheduler: 'cron',
+        job,
+        program: [jobProgram[0], copy(), 'routine', 'run'],
+      });
+      expect(json.notes).toEqual([NO_SETTINGS_NOTE]);
       expect(json.copy).toEqual({
         path: copy(),
         version: VERSION,
@@ -1731,81 +1737,20 @@ describe('routine', () => {
       expect(json.warnings).toEqual([]);
     });
 
-    it('says in routine status when the copy is another version or gone', async () => {
+    it('says in status when the copy is another version or gone', async () => {
       await run('routine', 'install', '--yes');
       const c = copyPaths(paths());
       await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
-      const outdated = await run('routine', 'status');
-      expect(outdated.out).toContain(
+      const outdated = await run('status');
+      expect(outdated.err).toContain(
         `Routine runs 0.0.1, this CLI is ${VERSION}, run sealkeeper routine install to update it.\n`,
       );
       await rm(c.script);
-      const gone = await run('routine', 'status');
-      expect(gone.out).toContain(
+      const gone = await run('status');
+      expect(gone.err).toContain(
         'The daily routine job points at a sealkeeper that is no longer there. Run sealkeeper routine install again.\n',
       );
-      expect(gone.out).toContain('  Copy       missing\n');
-    });
-
-    it('routine status --files prints the job file in full for each scheduler', async () => {
-      // launchd, the plist.
-      platform = 'darwin';
-      await run('routine', 'install', '--yes');
-      const plist = (await readRoutineConfig()).schedule?.files[0] ?? '';
-      const launchd = await run('routine', 'status', '--files');
-      expect(launchd.code).toBe(0);
-      expect(launchd.out).toBe(`${plist}\n${await readFile(plist, 'utf8')}`);
-      await run('routine', 'remove');
-
-      // systemd, both units.
-      platform = 'linux';
-      systemdUp = true;
-      await run('routine', 'install', '--yes');
-      const [service = '', timer = ''] =
-        (await readRoutineConfig()).schedule?.files ?? [];
-      const systemd = await run('routine', 'status', '--files');
-      expect(systemd.out).toBe(
-        `${service}\n${await readFile(service, 'utf8')}\n${timer}\n${await readFile(timer, 'utf8')}`,
-      );
-      await run('routine', 'remove');
-
-      // cron, our block of the crontab and nothing else of it.
-      systemdUp = false;
-      crontab = '0 1 * * * /usr/bin/backup\n';
-      await run('routine', 'install', '--yes');
-      const cron = await run('routine', 'status', '--files');
-      expect(cron.out.startsWith('crontab\n# BEGIN ')).toBe(true);
-      expect(cron.out).toContain(`'${copy()}' 'routine' 'run'`);
-      expect(cron.out).not.toContain('/usr/bin/backup');
-      await run('routine', 'remove');
-
-      // Task Scheduler, the task's XML as schtasks prints it. Written as
-      // install would, since the temp paths here are longer than a Task
-      // Scheduler command may be.
-      platform = 'win32';
-      await installed({
-        schedule: {
-          time: '10:00',
-          scheduler: 'schtasks',
-          agent: 'claude-code',
-          agentCommand: CLAUDE,
-          job: 'run.sealkeeper.routine',
-          files: [],
-          installedAt: new Date().toISOString(),
-        },
-      });
-      calls = [];
-      const schtasks = await run('routine', 'status', '--files');
-      expect(schtasks.out).toContain('<Task>ours</Task>');
-      expect(calls.map((c) => c.line)).toEqual([
-        expect.stringMatching(/^schtasks \/Query \/TN .* \/XML$/),
-      ]);
-
-      // Nothing installed.
-      await run('routine', 'remove');
-      const none = await run('routine', 'status', '--files');
-      expect(none.code).toBe(1);
-      expect(none.err).toContain('no routine is installed');
+      expect((await routineJson()).copy.version).toBeNull();
     });
 
     it('shows the same block for every scheduler kind, naming no scheduler or file', async () => {
@@ -1818,7 +1763,7 @@ describe('routine', () => {
         '  Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
         '  Why      Verified tasks get your agent to bronze',
         '',
-        'Check it later with sealkeeper routine status',
+        'Check it later with sealkeeper status',
       ]);
       for (const kind of ['launchd', 'systemd', 'cron', 'schtasks']) {
         expect(lines.join('\n')).not.toContain(kind);
@@ -2000,13 +1945,13 @@ describe('routine', () => {
       );
       expect((await stat(file)).mode & 0o777).toBe(0o600);
 
-      const status = await run('routine', 'status');
+      const status = await run('status');
       const lines = status.out.split('\n');
-      const last = lines.findIndex((l) => l.startsWith('Last run  '));
-      expect(lines[last + 1]).toBe(`Transcript  ${tildePath(file)}`);
+      const last = lines.findIndex((l) => l.includes(' last run '));
+      expect(lines[last + 1]).toBe(`           transcript ${tildePath(file)}`);
       // Where it is, never what it says.
       expect(status.out).not.toContain('"assistant"');
-      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      const json = await routineJson();
       expect(json.transcript).toBe(file);
     });
 
@@ -2042,9 +1987,9 @@ describe('routine', () => {
 
     it('names no transcript before a run started an agent', async () => {
       await installed();
-      const status = await run('routine', 'status');
+      const status = await run('status');
       expect(status.out).not.toContain('Transcript');
-      const json = JSON.parse((await run('routine', 'status', '--json')).out);
+      const json = await routineJson();
       expect(json.transcript).toBeNull();
     });
 
@@ -2528,8 +2473,10 @@ describe('routine', () => {
       expect(spawned).toHaveLength(3);
       expect((await runs()).at(-1)).toMatchObject({ outcome: 'skipped' });
 
-      const status = await run('routine', 'status');
-      expect(status.out).toContain('Paused    3 failed runs in a row');
+      const status = await run('status');
+      expect(status.out).toContain(
+        'Routine    paused, 3 failed runs in a row, the last: the agent exited with 2',
+      );
 
       await run('routine', 'resume');
       expect((await readRoutineConfig())?.paused).toBeUndefined();
@@ -2580,8 +2527,8 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect(spawned).toEqual([]);
       expect(api.claimed).toEqual([]);
-      const status = await run('routine', 'status');
-      expect(status.out).toContain('Waiting for you');
+      const status = await run('status');
+      expect(status.out).toContain('waiting for you, from the last 7 days\n');
       expect(status.out).toContain(`open json_extract task ${open.id}`);
 
       // Seen again on the next run, it is logged once.
@@ -2670,11 +2617,10 @@ describe('routine', () => {
           taskType: 'line_sort',
         });
       }
-      const status = await run('routine', 'status', '--json');
-      const json = JSON.parse(status.out);
+      const json = await routineJson();
       expect(json.today).toEqual({ claimed: 0, confirmed: 0, posted: 2 });
       expect(json.limits.postsPerDay).toBe(3);
-      expect((await run('routine', 'status')).out).toContain(
+      expect((await run('status')).out).toContain(
         'confirmed 0 of 10, posted 2 of 3',
       );
     });
@@ -2749,8 +2695,7 @@ describe('routine', () => {
       expect(posts).toMatchObject([
         { taskType: 'line_sort', adopted: true, category: 'data' },
       ]);
-      const status = await run('routine', 'status', '--json');
-      expect(JSON.parse(status.out).today.posted).toBe(1);
+      expect((await routineJson()).today.posted).toBe(1);
       // The adopted task waits on no confirmation from this agent.
       expect(api.outcomes).toEqual([]);
     });
@@ -2932,8 +2877,7 @@ describe('routine', () => {
       expect(agents[0]?.input).toContain(`<task id="${fromBob.id}"`);
       expect(agents[0]?.input).toContain('the answer');
       expect(agents[0]?.input).not.toContain(fromMallory.id);
-      const status = await run('routine', 'status', '--json');
-      const waiting = JSON.parse(status.out).waiting as { taskId: string }[];
+      const waiting = (await routineJson()).waiting as { taskId: string }[];
       expect(waiting.map((w) => w.taskId)).toEqual([fromMallory.id]);
     });
   });
@@ -3035,7 +2979,7 @@ describe('routine', () => {
         ),
       ).toEqual([]);
       expect((await runs())[1]).not.toHaveProperty('game');
-      expect((await run('routine', 'status')).out).not.toContain('Game ');
+      expect((await run('status')).out).not.toContain('game, last run');
     });
 
     it('starts the agent for the game alone when there is no task work, with only the game commands added', async () => {
@@ -3046,7 +2990,7 @@ describe('routine', () => {
       const input = agents[0]?.input ?? '';
       expect(input).not.toContain('run --json');
       expect(input).toContain(
-        `1. Then play the game. Run \`${INVOCATION} game status --json\`.`,
+        `1. Then play the game. Run \`${INVOCATION} status --json\` and read \`status.game\`.`,
       );
       expect(input).toContain(`6. Run \`${INVOCATION} status\` and stop.`);
       // The rules of a run without the game, and the game's added.
@@ -3068,7 +3012,9 @@ describe('routine', () => {
       api.addDuel();
       await run('routine', 'run');
       expect(spawned).toHaveLength(1);
-      expect(agents[0]?.input).toContain('game status --json');
+      expect(agents[0]?.input).toContain(
+        'status --json` and read `status.game`',
+      );
     });
 
     it('accepts until the cap, plays its duel task, stops the challenge at the cap and counts it all in status', async () => {
@@ -3092,7 +3038,7 @@ describe('routine', () => {
       // The task states the duel step read from tasks show --json.
       const states: unknown[] = [];
       const codes = gameAgent(async (play, read) => {
-        await play('game', 'status', '--json');
+        await play('status', '--json');
         await play('duel', 'inbox', '--json');
         await play('duel', 'accept', first.id);
         // The cap is reached mid step, so the second invite is declined.
@@ -3113,7 +3059,7 @@ describe('routine', () => {
         }
         await play('challenge', 'current', '--json');
         await play('tasks', 'claim', api.challenge[0] ?? '', '--json');
-        await play('game', 'status', '--json');
+        await play('status', '--json');
       });
       const result = await run('routine', 'run');
       expect(result.code).toBe(0);
@@ -3134,12 +3080,9 @@ describe('routine', () => {
         game: { accepted: 1, played: 1, challenge: 0, seeks: 0 },
       });
       // The game claim spends no daily claim limit.
-      expect(
-        JSON.parse((await run('routine', 'status', '--json')).out).today
-          .claimed,
-      ).toBe(0);
-      expect((await run('routine', 'status')).out).toContain(
-        'Game      last run accepted 1 invite, played 1 duel, submitted 0 challenge tasks, opened 0 seeks\n',
+      expect((await routineJson()).today.claimed).toBe(0);
+      expect((await run('status')).out).toContain(
+        '           game, last run accepted 1 invite, played 1 duel, submitted 0 challenge tasks, opened 0 seeks\n',
       );
     });
 
@@ -3192,8 +3135,8 @@ describe('routine', () => {
         outcome: 'done',
         game: { accepted: 0, played: 0, challenge: 1, seeks: 1 },
       });
-      expect((await run('routine', 'status')).out).toContain(
-        'Game      last run accepted 0 invites, played 0 duels, submitted 1 challenge task, opened 1 seek\n',
+      expect((await run('status')).out).toContain(
+        '           game, last run accepted 0 invites, played 0 duels, submitted 1 challenge task, opened 1 seek\n',
       );
     });
   });
@@ -4651,7 +4594,7 @@ describe('routinePrompt', () => {
       'An empty `tasks` means there is nothing to claim, go to the last step.',
     );
     expect(prompt).toContain(
-      '5. Then play the game. Run `sk game status --json`.',
+      '5. Then play the game. Run `sk status --json` and read `status.game`.',
     );
     expect(prompt).toContain('10. Run `sk status` and stop.\n\nIn the game');
     expect(prompt).toContain(
@@ -4670,11 +4613,11 @@ describe('routinePrompt', () => {
     expect(
       gameSteps((args) => `sk ${args}`, 5).join('\n'),
     ).toMatchInlineSnapshot(`
-      "5. Then play the game. Run \`sk game status --json\`. When \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.
+      "5. Then play the game. Run \`sk status --json\` and read \`status.game\`. When it is missing or its \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.
       6. Run \`sk duel inbox --json\`. For each duel in \`duels\`, in order, run \`sk duel accept <duel id>\`. Once an accept says this agent has used its game units for today, accept no more and run \`sk duel decline <duel id>\` for each invite left. An accept that says the other agent has used its game units leaves that invite for a later run.
       7. Run \`sk duel list --state active --json\`. In each duel, this agent's side is the one with a \`taskId\`. Run \`sk tasks show <task id> --json\` with that id. Only when its \`state\` is \`open\` has this agent not claimed it yet, then run \`sk tasks claim <task id> --json\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Any other state means it was claimed or submitted before, leave it.
       8. Run \`sk challenge current --json\`. For each task in \`tasks\` whose \`state\` is \`unclaimed\`, one at a time, run \`sk tasks claim <task id> --json\` with its \`taskId\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Submit each before the next claim. Stop once a claim says this agent has used its game units for today.
-      9. Run \`sk game status --json\` again. Only when this agent has game units left, run \`sk duel list --state finished --json\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last 7 days, take the latest and run \`sk duel rematch <duel id>\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`sk duel seek --category auto --json\` once."
+      9. Run \`sk status --json\` again and read \`status.game\`. Only when this agent has game units left, run \`sk duel list --state finished --json\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last 7 days, take the latest and run \`sk duel rematch <duel id>\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`sk duel seek --category auto --json\` once."
     `);
   });
 
@@ -4701,7 +4644,11 @@ describe('routinePrompt', () => {
         ? command.startsWith(`${rule.slice(0, -2)} `)
         : command === rule;
     const used = new Set<string>();
+    // The game status is status --json, which the status rule of every run
+    // allows.
+    expect(allowedTools(sk)).toContain(`Bash(${sk} status:*)`);
     for (const command of commands) {
+      if (command === `${sk} status --json`) continue;
       const rule = GAME_RULES.find((r) => matches(`${sk} ${r}`, command));
       expect(rule, command).toBeDefined();
       used.add(rule ?? '');

@@ -26,10 +26,15 @@ export function todayOf(
 export const dailyCeilingReached = (today: GoalToday | null): boolean =>
   today !== null && today.remaining === 0;
 
-// "Today 14 of 20 counted." and, once the budget is spent, what that means.
-export function todayLine(today: GoalToday): string {
-  const line = `Today ${today.counted} of ${today.ceiling} counted.`;
+// "14 of 20 counted." and, once the budget is spent, what that means. The
+// Today section of status prints it under its own Today label.
+export function countedLine(today: GoalToday): string {
+  const line = `${today.counted} of ${today.ceiling} counted.`;
   return today.remaining > 0
     ? line
     : `${line} More tasks today still verify but will not move your level.`;
 }
+
+// "Today 14 of 20 counted." and, once the budget is spent, what that means.
+export const todayLine = (today: GoalToday): string =>
+  `Today ${countedLine(today)}`;

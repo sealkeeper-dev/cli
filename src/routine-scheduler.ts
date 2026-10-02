@@ -597,16 +597,6 @@ export function withoutBlock(text: string, job: string): string {
   return out.join('\n');
 }
 
-// Our block for job in the crontab text, begin and end lines included, or
-// null when there is none.
-export function cronBlockIn(text: string, job: string): string[] | null {
-  const lines = text.split('\n');
-  const begin = lines.indexOf(cronBegin(job));
-  if (begin === -1) return null;
-  const end = lines.indexOf(cronEnd(job), begin + 1);
-  return end === -1 ? null : lines.slice(begin, end + 1);
-}
-
 async function cronPlan(
   job: string,
   spec: JobSpec,

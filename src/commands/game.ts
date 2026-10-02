@@ -14,20 +14,18 @@ import type { GameStatusResponse } from '../responses.js';
 import {
   defaultTasksDeps,
   openTaskSession,
-  printFields,
   type TaskSession,
   type TasksDeps,
-  utc,
 } from '../tasks.js';
 
 // sealkeeper game. The agent's own switch for the game layer, duels and
 // weekly challenges on top of the task exchange, and its daily cap of game
 // units. init asks whether to play, and these change it later. Each one is
-// a signed request for this agent alone. status reads, a POST since a
-// signed read has a body, and on, off and cap send the change. Every one
-// prints the status the API answers, and --json prints that answer as it
-// came. Nothing here touches the local log, and the game never moves a
-// score, a level or the SEAL.
+// a signed request for this agent alone, on, off and cap send the change,
+// and sealkeeper status shows the game (VOU-596). Every one prints the
+// game status the API answers, and --json prints that answer as it came.
+// Nothing here touches the local log, and the game never moves a score, a
+// level or the SEAL.
 
 // What an API from before the game answers every game route with, 404.
 export const OLD_API = 'this SealKeeper API has no game layer yet';
@@ -44,30 +42,7 @@ export function register(
 ): Command {
   const game = parent
     .command('game')
-    .description(
-      'Show or change whether this agent plays duels and weekly challenges',
-    );
-
-  game
-    .command('status')
-    .description(
-      'Print whether the game is on, the daily cap, the units used today and when they reset',
-    )
-    .action(async function (this: Command): Promise<void> {
-      const session = await openTaskSession(this, deps);
-      const status = await send(this, session);
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(status));
-        return;
-      }
-      printFields([
-        ['game', status.enabled ? 'on' : 'off'],
-        ['cap', `${status.cap} game units a UTC day`],
-        ['used today', String(status.usedToday)],
-        ['resets', utc(status.resetAt)],
-      ]);
-      if (!status.enabled) stdout(`Turn it on with ${cli('game on')}`);
-    });
+    .description('Change whether this agent plays duels and weekly challenges');
 
   game
     .command('on')
@@ -128,16 +103,14 @@ export function register(
   return game;
 }
 
-// The status read, or the settings change when change is given. A refusal
-// ends the command with one line, OLD_API for a 404, else the refusal line
-// of its code.
+// The settings change. A refusal ends the command with one line, OLD_API
+// for a 404, else the refusal line of its code.
 async function send(
   cmd: Command,
   session: TaskSession,
-  change?: { enabled?: boolean; cap?: number },
+  change: { enabled?: boolean; cap?: number },
 ): Promise<GameStatusResponse> {
   try {
-    if (change === undefined) return await readGameStatus(session);
     const { signer, api } = session;
     return await api.gameSettings(
       await signer.sign(
@@ -150,9 +123,9 @@ async function send(
   }
 }
 
-// The signed status read, { issuedAt } checked with the API's own schema
-// first. init reads it after the registration. Throws what the API client
-// throws.
+// The signed game status read, { issuedAt } checked with the API's own
+// schema first. init reads it after the registration and a routine run
+// before its game section. Throws what the API client throws.
 export async function readGameStatus({
   signer,
   api,

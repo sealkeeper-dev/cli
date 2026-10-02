@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentsMapPath,
   bindFolder,
-  LEGACY_POST_PROMPT_FILE,
+  LEGACY_FILES,
   namedHome,
   paths,
   readRoutineConfig,
@@ -199,9 +199,8 @@ describe('sealkeeper agent delete', () => {
       p.wellKnown,
       p.cursor,
       p.cursorOffset,
-      p.score,
-      p.inbox,
-      join(p.home, LEGACY_POST_PROMPT_FILE),
+      p.status,
+      ...LEGACY_FILES.map((file) => join(p.home, file)),
       p.sessions,
     ];
   };
@@ -235,9 +234,8 @@ describe('sealkeeper agent delete', () => {
       p.wellKnown,
       p.cursor,
       p.cursorOffset,
-      p.score,
-      p.inbox,
-      join(p.home, LEGACY_POST_PROMPT_FILE),
+      p.status,
+      ...LEGACY_FILES.map((file) => join(p.home, file)),
     ]) {
       await writeFile(f, '{}');
     }

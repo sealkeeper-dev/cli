@@ -50,7 +50,7 @@ function submitsLeft(origin: string | undefined): string {
 }
 
 // In a routine run, notes a duel or challenge task SealKeeper answered,
-// right or wrong, for routine status (GAME-14). Any other task notes
+// right or wrong, for status (GAME-14). Any other task notes
 // nothing here.
 async function noteGameSubmit(task: TaskResponse): Promise<void> {
   if (!isGameTask(task)) return;

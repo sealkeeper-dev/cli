@@ -1,18 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
 import { stat } from 'node:fs/promises';
-import {
-  BaseDimension,
-  COMPETENCE_DIMENSIONS,
-  DORMANCY,
-  type Event,
-  EventType,
-  type Level,
-} from '@sealkeeper/schema';
+import { AgentHandle, type Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { offerRuntime } from '../agent-runtime.js';
-import { resolveApiUrl } from '../api.js';
-import { type Input, streamInput } from '../ask.js';
+import { streamInput } from '../ask.js';
 import {
   allSettingsPaths,
   claudeCodeHooksIn,
@@ -25,27 +17,14 @@ import { requireConfig } from '../cli-config.js';
 import {
   type Config,
   handleOf,
+  handleUrl,
   type Paths,
   paths,
   profileUrl,
 } from '../config.js';
 import { exists } from '../files.js';
-import {
-  type GoalResponse,
-  goalSummary,
-  loadGoal,
-  todayLine,
-  todayOf,
-} from '../goal.js';
-import { getInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
-import {
-  fingerprintText,
-  type LiveAgent,
-  type LiveFingerprint,
-  readLiveAgent,
-  readSealWithheld,
-} from '../live-agent.js';
+import { readLiveAgent } from '../live-agent.js';
 import {
   CursorError,
   countPending,
@@ -53,146 +32,160 @@ import {
   readCursor,
   readDaysFrom,
 } from '../log.js';
-import { refreshOperatorSlug } from '../operator-slug.js';
+import { keepNudgeFresh } from '../nudge.js';
+import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import { type SealWithheld, withheldText } from '../responses.js';
-import { routineJobWarnings } from '../routine-copy.js';
-import { getScore, type ScoreCache } from '../score.js';
-import { unsubmittedClaims } from '../tasks.js';
+import type { StatusAnswerResponse } from '../responses.js';
+import { withheldText } from '../responses.js';
+import { readStatus, type StatusRead, sourceLine } from '../status-answer.js';
+import {
+  defaultTasksDeps,
+  type TasksDeps,
+  unsubmittedClaims,
+  utc,
+} from '../tasks.js';
 import { isSent } from '../taxonomy.js';
+import { countedLine, todayOf } from '../today.js';
 import { INSTALL_COMMAND } from './adapter.js';
-import { defaultSyncDeps } from './sync.js';
+import {
+  defaultRoutineDeps,
+  type RoutineDeps,
+  type RoutineView,
+  routineView,
+} from './routine.js';
+import { actionLine, agentAnswer, levelLine } from './run.js';
 
-// A local dashboard of today's activity. Everything but the score and the
-// addressed task count comes from files under the SealKeeper home, so it
-// works offline. Those two come from fifteen minute caches, which give up on
-// the network after two seconds.
+/*
+ * sealkeeper status (VOU-596), the status verb of the core commands. One
+ * screen of where the agent stands, top to bottom. The agent and its SEAL,
+ * what the next level needs and the step that moves it most, today, what
+ * waits, duels, this week's challenge and the routine.
+ *
+ * The API decides and words it. status signs StatusRequest and calls
+ * POST /v1/agents/:id/status (status-answer.ts), which answers the core
+ * answer with tasks empty plus status. Labels and words the API sent are
+ * printed as they came, through the terminal escaping of stdout. status
+ * writes only the lines about what this machine knows, sessions and events
+ * in the local log and the routine, which the API cannot see.
+ *
+ * --json, or a stdout that is not a terminal as when an agent runs it,
+ * prints the answer as it came, each action this CLI knows with the
+ * command line it built, as run --json does (agentAnswer), plus source,
+ * where the answer came from, and local, the parts of this machine.
+ *
+ * Offline, or with an API from before the status route, the answer is the
+ * last one kept, and one line says so. A failed read never fails the local
+ * part.
+ */
 
-// claudeDir and cwd say where to look for the Claude Code settings, and
-// default to CLAUDE_CONFIG_DIR or ~/.claude and the working directory.
-// stdin answers the one time runtime question, asked only on a terminal.
-// Defaults to process.stdin. env is what runtime detection reads.
-export type StatusDeps = {
-  fetch: typeof fetch;
-  claudeDir?: () => string;
-  cwd?: () => string;
-  stdin?: () => Input;
-  env?: () => NodeJS.ProcessEnv;
-};
+// env is what runtime detection reads, for the one time runtime question.
+export type StatusDeps = TasksDeps & { env?: () => NodeJS.ProcessEnv };
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${cli('adapter claude-code install')} again, or npm i -g sealkeeper for a stable path.`;
 export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run ${cli('adapter claude-code install')} again to remove them, with --scope project for a project install.`;
+export const NOTHING_WAITS = 'Nothing waits for you.';
 const QUIET_DAYS = 7;
+const stdoutIsTTY = () => process.stdout.isTTY === true;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // The scoring job runs every 15 minutes, on the quarter hours.
 const SCORING_EVERY_MS = 15 * 60 * 1000;
 
-type Status = {
-  agentId: string;
-  // slug/name, from the operator slug the API last sent and the name in
-  // config. login/name while no slug is known.
-  handle: string;
-  profileUrl: string;
+// What this machine knows, from the files under the SealKeeper home.
+type Local = {
   // Today's UTC day, YYYY-MM-DD.
   day: string;
-  // Today's events per type, for the types this CLI sends, each event_id
-  // once.
-  counts: Partial<Record<EventType, number>>;
-  tasks: { claimed: number; submitted: number };
-  // Live from the API, the count on the public profile. null when the API
-  // did not answer.
-  verifiedTasks: number | null;
-  // The SEAL standard level of the current version, live from the API. null
-  // when the API did not answer or has not scored this version yet.
-  level: Level | null;
-  // The agent's current fingerprint from the agent answer (VB-4), its hash,
-  // when it was captured and each part's state. null when the agent has
-  // declared none, absent when the API did not answer or sent none.
-  fingerprint?: NonNullable<LiveFingerprint> | null;
-  // Whole days since the API last accepted an event from this agent. null
-  // when unknown or when it has accepted none.
-  dormantDays: number | null;
-  // Whether the SEAL is withheld, for cause while a hold is in force or at
-  // 90 dormant days, from the agent answer.
-  sealWithheld: boolean;
-  // Why, from the SEAL route, the hold's reason class or the dormant days.
-  // null when it is not withheld or the route did not say.
-  withheld: SealWithheld | null;
-  // What the next level needs, from the goal cache, fifteen minutes like
-  // the score. null when the API did not answer and there is no cache.
-  goal: GoalResponse | null;
-  // Claimed in the local log and not submitted, over the last week.
-  unsubmittedClaims: number;
-  // Open tasks addressed to this agent, from the API or a cache under
-  // fifteen minutes old. null when neither answered.
-  addressedTasks: number | null;
-  // Whole minutes until the next quarter hour, when scoring runs.
-  nextScoringRunMinutes: number;
+  // session.start events in today's log, each event_id once.
+  sessions: number;
+  // Today's events of the types this CLI sends, each event_id once.
+  events: number;
+  // Logged and not sent yet.
   pending: number;
   lastSyncAt: string | null;
   // Whether emit sends events on its own. See sealkeeper config auto-sync.
   autoSync: boolean;
-  // Score per dimension for the configured version. null when there is no
-  // score for that dimension or the score could not be fetched.
-  scores: Record<string, number | null>;
-  // The per task type breakdown under each competence category that has
-  // one, keyed by the category's dimension (RT-3). Never a dimension.
-  competenceTypes: Record<string, { taskType: string; value: number }[]>;
-  scoresFetchedAt: string | null;
-  // Today's events in full, only with --show, left out the types this CLI
-  // never sends, each event_id once.
-  events?: Event[];
+  // Claimed in the local log and not submitted, over the last week.
+  unsubmittedClaims: number;
+  // Whole minutes until the next quarter hour, when scoring runs.
+  nextScoringRunMinutes: number;
+  // Today's events in full, only with --show.
+  shown?: Event[];
 };
 
 export function register(
   parent: Command,
-  deps: StatusDeps = defaultSyncDeps,
+  deps: StatusDeps = defaultTasksDeps,
+  routineDeps: RoutineDeps = defaultRoutineDeps,
 ): Command {
   return parent
     .command('status')
-    .description("Show today's activity from the local log, works offline")
+    .description(
+      'Show where this agent stands, what waits and the routine, --json for agents',
+    )
     .option('--show', "also list today's events in full, as they are sent")
     .action(async function (
       this: Command,
       options: { show?: boolean },
     ): Promise<void> {
       const config = await requireConfig(this);
-
-      let status: Status;
-      // The agent answer readStatus got, reused for the runtime question so
-      // status sends one agent read, not two.
-      let live: LiveAgent | null = null;
+      const now = new Date();
+      const p = paths();
+      let read: StatusRead;
+      let local: Local;
+      let routine: RoutineView;
       try {
-        status = await readStatus(
-          config,
-          deps,
-          new Date(),
-          options.show,
-          (answer) => {
-            live = answer;
-          },
-        );
+        [read, local, routine] = await Promise.all([
+          readStatus({ config, fetch: deps.fetch, now, paths: p }),
+          readLocal(config, now, p, options.show === true),
+          routineView(routineDeps, p, now),
+          // The session nudge's own cache, see nudge.ts.
+          keepNudgeFresh(deps.fetch, p),
+        ]);
       } catch (error) {
         if (error instanceof CursorError) this.error(error.message);
         throw error;
       }
 
-      if (wantsJson(this)) stdout(JSON.stringify(status));
-      else printStatus(status);
+      // The agent's form whenever stdout is not a terminal, as run's.
+      const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
+      if (json) {
+        stdout(
+          JSON.stringify({
+            ...(read.answer === null ? {} : agentAnswer(read.answer)),
+            source: {
+              from: read.from,
+              fetchedAt: read.from === 'none' ? null : read.fetchedAt,
+              note: sourceLine(read),
+            },
+            local: { ...local, routine: routine.json },
+          }),
+        );
+      } else {
+        const slug = await readOperatorSlug(config.agentId, p);
+        for (const line of screenLines(read, local, routine.lines, {
+          handle: handleOf(config, slug),
+          profile: profileUrl(config, slug),
+          version: config.version,
+          now,
+        })) {
+          stdout(line);
+        }
+      }
       // On stderr, so --json output stays one object.
-      if (await noAdapterAndQuiet(deps, new Date())) stderr(NO_ADAPTER);
+      if (await noAdapterAndQuiet(deps, now, p)) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
       if (await toolHooksLeft(deps)) stderr(TOOL_HOOKS_LEFT);
       // The daily job's copy of the CLI, when it is out of date or gone
       // (RS-2).
-      for (const line of await routineJobWarnings()) stderr(line);
+      for (const line of routine.warnings) stderr(line);
       // An agent the API has as unknown is asked what it runs in, once,
-      // and only where a person can answer.
-      if (!wantsJson(this)) {
+      // and only where a person can answer. The agent is read only when
+      // the question is still open.
+      if (!json) {
         await offerRuntime({
           config,
-          readRuntime: async () => (live as LiveAgent | null)?.runtime,
+          readRuntime: async () =>
+            (await readLiveAgent(config, deps.fetch))?.runtime,
           input: (deps.stdin ?? (() => streamInput(process.stdin)))(),
           fetch: deps.fetch,
           report: { ok: stdout, info: stderr },
@@ -204,84 +197,243 @@ export function register(
     });
 }
 
-async function readStatus(
+async function readLocal(
   config: Config,
-  deps: StatusDeps,
   now: Date,
-  show = false,
-  seen: (live: LiveAgent | null) => void = () => {},
-): Promise<Status> {
-  const p = paths();
+  p: Paths,
+  show: boolean,
+): Promise<Local> {
   const day = dayOf(now);
-  // The score request runs while the log is read.
-  const scorePromise = getScore({
-    agentId: config.agentId,
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
-    fetch: deps.fetch,
-    now,
-    paths: p,
-  });
-  const inboxPromise = getInbox({
-    agentId: config.agentId,
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
-    fetch: deps.fetch,
-    now,
-    paths: p,
-  });
-  const [logged, pending, cursor, score, live, unsubmitted, inbox, goal] =
-    await Promise.all([
-      // From today through the newest day file, see readDaysFrom.
-      readDaysFrom(day, p),
-      countPending(p, { now }),
-      readCursor(p),
-      scorePromise,
-      readLiveAgent(config, deps.fetch),
-      unsubmittedClaims(now, p),
-      inboxPromise,
-      loadGoal({ config, fetch: deps.fetch, now, paths: p }),
-    ]);
-  seen(live);
+  const [logged, pending, cursor, unsubmitted] = await Promise.all([
+    // From today through the newest day file, see readDaysFrom.
+    readDaysFrom(day, p),
+    countPending(p, { now }),
+    readCursor(p),
+    unsubmittedClaims(now, p),
+  ]);
   const events = firstOfEach(logged.filter((event) => isSent(event.type)));
-  const slug = await refreshOperatorSlug(config.agentId, live, p);
-  const dormantDays = live?.standing?.dormant_days ?? null;
-  const withheldNow =
-    live?.standing?.held === true || sealWithheld(dormantDays);
-  // The agent answer says withheld and not why. The SEAL route says why.
-  const withheld = withheldNow
-    ? await readSealWithheld(config, deps.fetch)
-    : null;
-
   return {
-    agentId: config.agentId,
-    handle: handleOf(config, slug),
-    profileUrl: profileUrl(config, slug),
     day,
-    ...countEvents(events),
-    verifiedTasks: live?.counts?.verifiedTasks ?? null,
-    level: live?.level ?? null,
-    ...(live?.fingerprint === undefined
-      ? {}
-      : { fingerprint: live.fingerprint }),
-    dormantDays,
-    sealWithheld: withheldNow,
-    withheld,
-    goal,
-    unsubmittedClaims: unsubmitted.length,
-    addressedTasks: inbox?.count ?? null,
-    nextScoringRunMinutes: minutesToNextScoring(now),
+    sessions: events.filter((e) => e.type === 'session.start').length,
+    events: events.length,
     pending,
     lastSyncAt: cursor.lastSyncAt ?? null,
     autoSync: config.autoSync === true,
-    ...scoresFor(config.version, score),
-    scoresFetchedAt: score?.fetchedAt ?? null,
-    ...(show ? { events } : {}),
+    unsubmittedClaims: unsubmitted.length,
+    nextScoringRunMinutes: minutesToNextScoring(now),
+    ...(show ? { shown: events } : {}),
   };
 }
+
+type Who = { handle: string; profile: string; version: string; now: Date };
+
+/*
+ * The screen, top to bottom. The source line first when the answer is not
+ * fresh. Every section the answer carries, then the routine, and last when
+ * the numbers were scored. Without an answer, only what this machine knows.
+ */
+export function screenLines(
+  read: StatusRead,
+  local: Local,
+  routine: string[],
+  who: Who,
+): string[] {
+  const answer = read.answer;
+  const s = answer?.status;
+  // The handle the API sent, when it has the shape the API builds, else
+  // the one built here. It goes into the profile URL.
+  const sent = AgentHandle.safeParse(s?.agent.handle);
+  const handle = sent.success ? sent.data : who.handle;
+  const lines = [
+    `SealKeeper status   ${handle}, version ${s?.agent.version ?? who.version}`,
+    `Profile   ${sent.success ? handleUrl(sent.data) : who.profile}`,
+  ];
+  const source = sourceLine(read);
+  if (source !== null) lines.push(source);
+  lines.push('');
+
+  if (answer !== null) lines.push(...standingSection(answer), '');
+  lines.push(...todaySection(answer, local, who.now), '');
+  if (answer !== null) {
+    lines.push(...waitingSection(answer), '');
+    const game = gameSection(answer);
+    if (game.length > 0) lines.push(...game, '');
+  }
+  lines.push(...section('Routine', routine), '');
+  if (answer !== null) {
+    lines.push(
+      s?.asOf === null || s?.asOf === undefined
+        ? 'Not scored yet.'
+        : `As of the scoring run at ${s.asOf}.`,
+    );
+  }
+  lines.push(nextScoringLine(local.nextScoringRunMinutes));
+  if (local.shown) {
+    lines.push('', `today's events, ${local.shown.length}, as they are sent`);
+    for (const event of local.shown) lines.push(JSON.stringify(event));
+  }
+  return lines;
+}
+
+// The level and the SEAL, what the next level needs, and the steps in the
+// order the API sent them, the first the one that moves it most, each with
+// the command this CLI built for it.
+function standingSection(answer: StatusAnswerResponse): string[] {
+  const { standing, status } = answer;
+  const lines = [`${levelLine(standing)} ${sealText(status.seal)}.`];
+  if (standing.nextLevel !== null) {
+    const met = status.thresholds;
+    const parts = [
+      met === undefined ? null : `${met.met} of ${met.total} thresholds met.`,
+      standing.needs,
+    ].filter((x): x is string => x !== null);
+    if (parts.length > 0) lines.push(parts.join(' '));
+  }
+  if (answer.next.length > 0) {
+    lines.push('Next');
+    for (const action of answer.next) lines.push(`  ${actionLine(action)}`);
+  }
+  return lines;
+}
+
+// The SEAL's state as the API sent it, the reason or the dormant days in
+// the words check uses. A state this CLI does not know is said as it came.
+export function sealText(seal: StatusAnswerResponse['status']['seal']): string {
+  if (seal === undefined) return 'SEAL unknown';
+  switch (seal.state) {
+    case 'issued':
+      return 'SEAL issued';
+    case 'held':
+      return `no SEAL, ${withheldText({ kind: 'held', reason: seal.reason })}`;
+    case 'dormant':
+      return `no SEAL, ${withheldText({ kind: 'dormant', dormantDays: seal.dormantDays })}`;
+    default:
+      return `SEAL ${seal.state}`;
+  }
+}
+
+// Today's counted tasks against the ceiling and the game units, from the
+// answer when it is of today, and the sessions and events from the log.
+function todaySection(
+  answer: StatusAnswerResponse | null,
+  local: Local,
+  now: Date,
+): string[] {
+  const lines: string[] = [];
+  const today = answer === null ? null : todayOf(answer.status, now);
+  if (today !== null) lines.push(countedLine(today));
+  const game = answer?.status.game;
+  if (game !== undefined) {
+    lines.push(
+      game.enabled
+        ? `Game on, ${game.usedToday} of ${game.cap} game units used, they reset ${utc(game.resetAt)}.`
+        : `Game off. ${cli('game on')} turns it on.`,
+    );
+  }
+  lines.push(
+    `${plural(local.sessions, 'session')} and ${plural(local.events, 'event')} today in the local log, ${local.pending} not sent yet, last sync ${local.lastSyncAt ?? 'never'}.`,
+  );
+  if (!local.autoSync && local.pending > 0) {
+    lines.push(`Auto sync is off, ${cli('sync')} reviews and sends them.`);
+  }
+  if (local.unsubmittedClaims > 0) {
+    const n = local.unsubmittedClaims;
+    lines.push(
+      `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Your agent gets ${n === 1 ? 'it' : 'them'} again with ${cli('run --json')}.`,
+    );
+  }
+  return section('Today', lines);
+}
+
+// What waits for the user's yes, each with the command that takes it.
+// Every id is a UUID, as the answer schema reads it.
+function waitingSection(answer: StatusAnswerResponse): string[] {
+  if (answer.waiting.length === 0) return section('Waiting', [NOTHING_WAITS]);
+  return section(
+    'Waiting',
+    answer.waiting.map((w) => {
+      const until = w.expiresAt === null ? '' : `, until ${utc(w.expiresAt)}`;
+      switch (w.kind) {
+        case 'addressed':
+          return `task ${w.id} addressed by ${w.from}${until}. Its spec comes from another operator. ${cli('run --addressed')}`;
+        case 'invite':
+          return `duel invite ${w.id} from ${w.from}${until}. ${cli(`duel accept ${w.id}`)} or ${cli(`duel decline ${w.id}`)}`;
+        case 'outcome':
+          return `outcome of task ${w.id} with ${w.from} to report. ${cli(`tasks outcome ${w.id} success|failure`)} for a task you posted, ${cli(`submit ${w.id}`)} again for one you claimed`;
+        default:
+          return `${w.kind} ${w.id} from ${w.from}${until}`;
+      }
+    }),
+  );
+}
+
+// The duels running, the last result and this week's challenge, when the
+// answer has them.
+function gameSection(answer: StatusAnswerResponse): string[] {
+  const { status } = answer;
+  const lines: string[] = [];
+  const duels = status.duels;
+  if (duels !== undefined) {
+    const running = duels.running.map((d) => {
+      const other =
+        d.challenger.agentId === status.agent.id ? d.opponent : d.challenger;
+      const ends = d.deadlineAt === null ? '' : `, ends ${utc(d.deadlineAt)}`;
+      return `${d.category} against ${other.handle}${ends}`;
+    });
+    const last = duels.last;
+    lines.push(
+      ...section('Duels', [
+        ...(running.length === 0 ? ['none running'] : running),
+        ...(last === null
+          ? []
+          : [
+              `last ${RESULT_WORD[last.result] ?? last.result} against ${last.opponent} in ${last.category}${last.forfeit ? ' by forfeit' : ''}, ${utc(last.decidedAt)}`,
+            ]),
+      ]),
+    );
+  }
+  const c = status.challenge;
+  if (c !== undefined && c !== null) {
+    const left = c.tasks.filter(
+      (t) => t.state === 'unclaimed' || t.state === 'claimed',
+    ).length;
+    const entry = c.entered
+      ? `entered, ${c.rank === null ? 'no rank yet' : `rank ${c.rank}`}, ${left} of ${c.tasks.length} tasks left`
+      : 'not entered';
+    lines.push(
+      ...section('Challenge', [
+        `${c.isoWeek} ${c.category}, ${entry}, closes ${utc(c.closesAt)}`,
+      ]),
+    );
+  }
+  return lines;
+}
+
+const RESULT_WORD: Record<string, string> = {
+  win: 'won',
+  loss: 'lost',
+  draw: 'drawn',
+};
+
+const LABEL_WIDTH = 11;
+
+// A section, its label on the first line and the rest under it.
+function section(label: string, lines: string[]): string[] {
+  return lines.map((line, i) =>
+    `${i === 0 ? label : ''}`.padEnd(LABEL_WIDTH).concat(line).trimEnd(),
+  );
+}
+
+const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
 // Minutes until the next wall clock quarter hour, rounded up, so 1 to 15.
 export function minutesToNextScoring(now: Date): number {
   const left = SCORING_EVERY_MS - (now.getTime() % SCORING_EVERY_MS);
   return Math.ceil(left / 60_000);
+}
+
+export function nextScoringLine(minutes: number): string {
+  return `Next scoring run in about ${minutes} minute${minutes === 1 ? '' : 's'}.`;
 }
 
 function claudeDirs(deps: StatusDeps) {
@@ -326,7 +478,7 @@ async function toolHooksLeft(deps: StatusDeps): Promise<boolean> {
 async function noAdapterAndQuiet(
   deps: StatusDeps,
   now: Date,
-  p: Paths = paths(),
+  p: Paths,
 ): Promise<boolean> {
   if (await claudeCodeHooksIn(deps)) return false;
   for (let i = 0; i < QUIET_DAYS; i++) {
@@ -351,199 +503,4 @@ function firstOfEach(events: Event[]): Event[] {
     seen.add(event.event_id);
     return true;
   });
-}
-
-function countEvents(events: Event[]): Pick<Status, 'counts' | 'tasks'> {
-  const counts: Partial<Record<EventType, number>> = Object.fromEntries(
-    EventType.options.filter(isSent).map((type) => [type, 0]),
-  );
-  for (const event of events) {
-    counts[event.type] = (counts[event.type] ?? 0) + 1;
-  }
-  return {
-    counts,
-    tasks: {
-      claimed: counts['task.claimed'] ?? 0,
-      submitted: counts['task.submitted'] ?? 0,
-    },
-  };
-}
-
-// The base dimensions always, then the competence categories the API has
-// for this version, in category order, each with its per task type
-// breakdown when the API sent one. A dimension with no score is null, and
-// a category the API has no row for is left out, never shown as null.
-// Competence by task type, from an API before RT-3, is not shown.
-function scoresFor(
-  version: string,
-  cache: ScoreCache | null,
-): Pick<Status, 'scores' | 'competenceTypes'> {
-  const scores: Record<string, number | null> = Object.fromEntries(
-    BaseDimension.options.map((dimension) => [dimension, null]),
-  );
-  const competenceTypes: Status['competenceTypes'] = {};
-  const entries = (cache?.score.scores ?? []).filter(
-    (entry) => entry.version === version,
-  );
-  const byDimension = new Map(entries.map((e) => [e.dimension as string, e]));
-  for (const d of BaseDimension.options) {
-    scores[d] = byDimension.get(d)?.value ?? null;
-  }
-  for (const d of COMPETENCE_DIMENSIONS) {
-    const entry = byDimension.get(d);
-    if (!entry) continue;
-    scores[d] = entry.value;
-    if (entry.types && entry.types.length > 0) {
-      competenceTypes[d] = entry.types.map((t) => ({
-        taskType: t.taskType,
-        value: t.value,
-      }));
-    }
-  }
-  return { scores, competenceTypes };
-}
-
-function printStatus(status: Status): void {
-  const rows: [string, string][] = [
-    ['agent', status.agentId],
-    ['handle', status.handle],
-    ['profile', status.profileUrl],
-    ['today', `${status.day} UTC`],
-  ];
-  printRows(rows);
-
-  printRows(
-    Object.entries(status.counts).map(([type, n]) => [`  ${type}`, String(n)]),
-  );
-
-  printRows([
-    [
-      'tasks',
-      `${status.tasks.claimed} claimed, ${status.tasks.submitted} submitted`,
-    ],
-    [
-      'verified tasks',
-      status.verifiedTasks === null ? '-' : String(status.verifiedTasks),
-    ],
-    ['level', status.level ?? '-'],
-    ['fingerprint', fingerprintText(status.fingerprint)],
-    ['goal', status.goal ? goalLine(status.goal) : '-'],
-    ...(status.dormantDays !== null && status.dormantDays > 0
-      ? ([['dormant', days(status.dormantDays)]] as [string, string][])
-      : []),
-    ...(status.sealWithheld
-      ? ([['SEAL', sealRow(status.withheld)]] as [string, string][])
-      : []),
-    ['pending', String(status.pending)],
-    ['last sync', status.lastSyncAt ?? 'never'],
-    [
-      'auto-sync',
-      status.autoSync ? 'on' : `off, run ${cli('sync')} to review and send`,
-    ],
-    ['scores', status.scoresFetchedAt ? `as of ${status.scoresFetchedAt}` : ''],
-  ]);
-  printRows(
-    Object.entries(status.scores).flatMap(([dimension, value]) => [
-      [`  ${dimension}`, value === null ? '-' : formatScore(value)] as [
-        string,
-        string,
-      ],
-      // The task types under a competence category, one step further in.
-      ...(status.competenceTypes[dimension] ?? []).map(
-        (t): [string, string] => [`    ${t.taskType}`, formatScore(t.value)],
-      ),
-    ]),
-  );
-  stdout('');
-  stdout(nextScoringLine(status.nextScoringRunMinutes));
-  const dormancy = dormancyLine(status.dormantDays);
-  if (dormancy) stdout(dormancy);
-  const hint = unsubmittedHint(status);
-  if (hint) stdout(hint);
-  const addressed = addressedLine(status.addressedTasks);
-  if (addressed) stdout(addressed);
-  // Today's counted tasks against the daily ceiling (VOU-140), from the
-  // same goal answer, left out when it is from another UTC day.
-  const today = todayOf(status.goal);
-  if (today) stdout(todayLine(today));
-
-  if (status.events) {
-    stdout('');
-    stdout(`today's events, ${status.events.length}, as they are sent`);
-    for (const event of status.events) stdout(JSON.stringify(event));
-  }
-}
-
-// The goal row of status, one line, and where the rest is.
-export function goalLine(goal: GoalResponse): string {
-  return `${goalSummary(goal)}, see ${cli('goal')}`;
-}
-
-export function nextScoringLine(minutes: number): string {
-  return `Next scoring run in about ${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
-
-const days = (n: number) => `${n} day${n === 1 ? '' : 's'}`;
-
-// The SEAL row of a withheld SEAL, with the reason class or the dormant
-// days as check prints them, or withheld alone when the SEAL route did not
-// say why.
-export const sealRow = (withheld: SealWithheld | null): string =>
-  `no SEAL, ${withheld === null ? 'withheld' : withheldText(withheld)}`;
-
-// At the 90 day rung the API withholds the SEAL until the next scoring run
-// after a new event.
-export const sealWithheld = (dormantDays: number | null): boolean =>
-  dormantDays !== null && dormantDays >= DORMANCY.noneDays;
-
-// Where the agent is on the dormancy ladder of the SEAL standard and the
-// next rung, in plain words. Nothing when it is active today or unknown.
-export function dormancyLine(dormantDays: number | null): string | null {
-  if (dormantDays === null || dormantDays <= 0) return null;
-  const d = DORMANCY;
-  const n = days(dormantDays);
-  if (dormantDays < d.quietDays) {
-    return `No accepted event for ${n}. At ${d.quietDays} days the agent counts as quiet, with no level change.`;
-  }
-  if (dormantDays < d.dropOneDays) {
-    return `Quiet for ${n}. At ${d.dropOneDays} days the level drops one step.`;
-  }
-  if (dormantDays < d.dropTwoDays) {
-    return `Quiet for ${n}, the level is one step down. At ${d.dropTwoDays} days it drops one more.`;
-  }
-  if (dormantDays < d.noneDays) {
-    return `Quiet for ${n}, the level is two steps down. At ${d.noneDays} days the level is none and no SEAL is issued.`;
-  }
-  return `Quiet for ${n}. No SEAL is issued and the level is none until the next scoring run after a new event.`;
-}
-
-// Only while nothing is verified yet, so it points at the one thing left to
-// do. The count comes from the local log, so some may have expired.
-function unsubmittedHint(status: Status): string | null {
-  if (status.verifiedTasks !== 0 || status.unsubmittedClaims === 0) return null;
-  const n = status.unsubmittedClaims;
-  return `${n} claimed task${n === 1 ? ' is' : 's are'} not submitted yet. Your agent gets ${n === 1 ? 'it' : 'them'} again with ${cli('run --json')}.`;
-}
-
-// Only when the API said some tasks wait. Nothing when none do or when the
-// API did not answer.
-export function addressedLine(n: number | null): string | null {
-  if (n === null || n === 0) return null;
-  return `${n} task${n === 1 ? '' : 's'} addressed to you, run ${cli('run')}`;
-}
-
-function formatScore(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(2);
-}
-
-const LABEL_WIDTH = 18;
-
-// Labels padded to one column. A label too long for it, such as a long
-// competence dimension, is followed by one space instead.
-function printRows(rows: [string, string][]): void {
-  for (const [label, value] of rows) {
-    const padded =
-      label.length < LABEL_WIDTH ? label.padEnd(LABEL_WIDTH) : `${label} `;
-    stdout(`${padded}${value}`.trimEnd());
-  }
 }

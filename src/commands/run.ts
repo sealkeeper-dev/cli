@@ -10,27 +10,20 @@ import { claudeCodeHooksIn } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import { handleOf } from '../config.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
-import {
-  dailyCeilingReached,
-  type GoalResponse,
-  goalActionLine,
-  HIGHEST_ISSUED,
-  loadGoal,
-  shownLevel,
-  todayLine,
-  todayOf,
-} from '../goal.js';
-import { clearInbox } from '../inbox.js';
+import { HIGHEST_ISSUED, shownLevel } from '../goal.js';
 import { cli } from '../invocation.js';
+import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, stdoutStyled, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type {
   CoreActionResponse,
   CoreAnswerResponse,
+  StatusAnswerResponse,
   TaskResponse,
 } from '../responses.js';
 import { activeRoutineRun, appendRoutine } from '../routine.js';
+import { readStatus } from '../status-answer.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import { templateById } from '../task-templates.js';
 import {
@@ -43,6 +36,7 @@ import {
   type TasksDeps,
   unsubmittedClaims,
 } from '../tasks.js';
+import { dailyCeilingReached, todayLine, todayOf } from '../today.js';
 import { routineClaims, tooNewNote } from './run-routine.js';
 
 /*
@@ -54,8 +48,8 @@ import { routineClaims, tooNewNote } from './run-routine.js';
  * tasks are for their agent to solve, so a terminal run says how to hand
  * the job over, /sealkeeper-run in Claude Code or run --json for any other
  * agent, and where the agent stands. The run route has no read only form,
- * every call claims, so the standing comes from the goal, as status reads
- * it.
+ * every call claims, so the standing comes from the status route, which
+ * claims nothing, as status reads it (status-answer.ts).
  *
  * An agent, meaning --json or a stdout that is not a terminal, gets the
  * claims. run signs RunRequest and calls POST /v1/agents/:id/run, which
@@ -93,7 +87,7 @@ export function terminalClaimLine(flags: string[]): string {
 export const NO_STANDING =
   'SealKeeper did not say where this agent stands right now.';
 
-// How many of the goal's actions the terminal run shows.
+// How many of the status answer's actions the terminal run shows.
 const TOP_ACTIONS = 2;
 
 type RunOptions = {
@@ -243,11 +237,20 @@ export function agentAnswer(answer: PrintedAnswer) {
  * invocation, or null for an action this CLI does not know, which the
  * agent tells the user by its label. run takes addressed and anyPoster,
  * post one template this CLI has, posted with --yes, which stands for the
- * user's yes the action asks for. An argument this CLI does not know makes
- * no command, so a line never does less than the API meant.
+ * user's yes the action asks for. sync takes no argument and asks before
+ * it sends while auto sync is off. An argument this CLI does not know
+ * makes no command, so a line never does less than the API meant. run and
+ * status both use it. For a person, reader person, it is the same command
+ * without --json and without the --yes that stands for a yes, so run hands
+ * the work to the agent and a post asks first.
  */
-export function actionCommand(action: CoreActionResponse): string | null {
+export function actionCommand(
+  action: CoreActionResponse,
+  reader: 'agent' | 'person' = 'agent',
+): string | null {
   const args = Object.entries(action.args);
+  const agent = reader === 'agent';
+  if (action.action === 'sync') return args.length === 0 ? cli('sync') : null;
   if (action.action === 'run') {
     const flags: string[] = [];
     for (const [key, value] of args) {
@@ -256,7 +259,7 @@ export function actionCommand(action: CoreActionResponse): string | null {
         flags.push('--any-poster');
       } else return null;
     }
-    return cli(['run', ...flags, '--json'].join(' '));
+    return cli(['run', ...flags, ...(agent ? ['--json'] : [])].join(' '));
   }
   if (action.action === 'post') {
     const template = action.args.template;
@@ -264,7 +267,9 @@ export function actionCommand(action: CoreActionResponse): string | null {
     // Only a template this CLI can post, which also keeps the line to a
     // known id.
     if (templateById(template) === undefined) return null;
-    return cli(`tasks post --template ${template} --yes --json`);
+    return cli(
+      `tasks post --template ${template}${agent ? ' --yes --json' : ''}`,
+    );
   }
   return null;
 }
@@ -292,12 +297,10 @@ function coreTaskOf(task: TaskResponse) {
 
 // The claims in the local log, so status and the log reflect the work. The
 // answer holds the tasks claimed before as well, so only a task the log
-// does not hold yet is recorded. The inbox count status caches is too high
-// once an addressed task is claimed.
+// does not hold yet is recorded.
 async function recordClaims(answer: CoreAnswerResponse): Promise<void> {
   const known = new Set(await unsubmittedClaims());
   const fresh = answer.tasks.filter((task) => !known.has(task.id));
-  if (fresh.some((task) => task.kind === 'addressed')) await clearInbox();
   for (const task of fresh) {
     await recordEvent({
       type: 'task.claimed',
@@ -325,10 +328,12 @@ async function explain(
   const config = await requireConfig(cmd);
   // Recomputed at every run, see fingerprint.ts. Never fails run.
   await refreshFingerprintQuietly();
-  const [hooks, goal, slug] = await Promise.all([
+  const [hooks, read, slug] = await Promise.all([
     claudeCodeHooksIn(deps),
-    loadGoal({ config, fetch: deps.fetch }),
+    readStatus({ config, fetch: deps.fetch }),
     readOperatorSlug(config.agentId),
+    // The session nudge's own cache, see nudge.ts.
+    keepNudgeFresh(deps.fetch),
   ]);
   const s = createStyle(process.stdout);
   const say = (line?: Styled) => stdoutStyled(indent(line));
@@ -354,29 +359,45 @@ async function explain(
     s.line`${s.dim('Other agents')}   have the agent run ${s.bold(cli(['run', ...flags, '--json'].join(' ')))}`,
   );
   say();
-  // The level and the top goal actions, or one line when the API did not
-  // answer. The goal actions come from the API, and s.line makes every
-  // part safe for the terminal.
-  const lines = goal === null ? [NO_STANDING] : standingLines(goal);
+  // The level and the top actions of the status answer, fresh or the last
+  // one kept, or one line when there is neither. The labels come from the
+  // API, and s.line makes every part safe for the terminal.
+  const lines =
+    read.answer === null ? [NO_STANDING] : standingLines(read.answer);
   for (const line of lines) say(s.line`${line}`);
   say();
 }
 
-// Where the agent stands and the top two next steps from the goal, each
-// with its command. Once today's counted budget is spent (VOU-140) it says
-// so first, since more tasks today would not move the level.
+// The level, and the next level or that none is issued above it. status
+// prints the same line.
+export function levelLine(
+  standing: Pick<CoreAnswerResponse['standing'], 'level' | 'nextLevel'>,
+): string {
+  return standing.nextLevel === null
+    ? `Level ${shownLevel(standing.level)}, ${HIGHEST_ISSUED}.`
+    : `Level ${shownLevel(standing.level)}. Next ${shownLevel(standing.nextLevel)}.`;
+}
+
+// Where the agent stands and the top two next steps of the status answer,
+// each label with its command. Once today's counted budget is spent
+// (VOU-140) it says so first, since more tasks today would not move the
+// level.
 export function standingLines(
-  goal: GoalResponse,
+  answer: StatusAnswerResponse,
   now: Date = new Date(),
 ): string[] {
-  const head =
-    goal.nextLevel === null
-      ? `Level ${shownLevel(goal.level)}, ${HIGHEST_ISSUED}.`
-      : `Level ${shownLevel(goal.level)}. Next ${shownLevel(goal.nextLevel)}.`;
-  const today = todayOf(goal, now);
+  const today = todayOf(answer.status, now);
   return [
     ...(dailyCeilingReached(today) && today ? [todayLine(today)] : []),
-    head,
-    ...goal.actions.slice(0, TOP_ACTIONS).map((a) => goalActionLine(a)),
+    levelLine(answer.standing),
+    ...answer.next.slice(0, TOP_ACTIONS).map(actionLine),
   ];
+}
+
+// An action as one line for a person, the API's label and the command
+// this CLI built, when it knows the action. status prints its steps the
+// same way.
+export function actionLine(action: CoreActionResponse): string {
+  const command = actionCommand(action, 'person');
+  return command === null ? action.label : `${action.label} ${command}`;
 }

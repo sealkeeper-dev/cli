@@ -11,7 +11,6 @@ import {
   todayOf,
 } from '../goal.js';
 import type { Signer } from '../identity.js';
-import { clearInbox } from '../inbox.js';
 import { cli } from '../invocation.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr } from '../output.js';
@@ -208,8 +207,6 @@ export async function routineClaims(
       );
       tasks.push(claimed);
       claimedHere += 1;
-      // The count status caches is too high now.
-      if (claimed.assignee) await clearInbox();
       await recordEvent({
         type: 'task.claimed',
         payload: { task_id: claimed.id, task_type: claimed.taskType },

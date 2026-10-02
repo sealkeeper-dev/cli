@@ -121,7 +121,9 @@ describe('the What init does inventory', () => {
   it('names the signed changes init and status may send, and both kinds of content', () => {
     const sends = text.slice(text.indexOf('### What each command sends'));
     expect(sends).toMatch(/^- `init` .*move the version .*`unknown`/m);
-    expect(sends).toMatch(/`status` only reads too, except .*`unknown`/);
+    expect(sends).toMatch(
+      /^- `status` sends the time of the request alone, signed, and only reads\. It asks what the agent runs in .*`unknown`/m,
+    );
     expect(sends).toContain(
       'The answer and the task are the only content that leaves your machine',
     );

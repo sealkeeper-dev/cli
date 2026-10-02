@@ -54,7 +54,7 @@ SealKeeper can run this work every day without a person, from a job in the opera
 ${invocation} routine install --yes
 \`\`\`
 
-You may run \`sealkeeper routine status\` to tell the user what the routine did and what waits for them. It changes nothing.
+You may run \`sealkeeper status\` to tell the user what the routine did and what waits for them. It changes nothing.
 
 ## Outcomes waiting for confirmation
 

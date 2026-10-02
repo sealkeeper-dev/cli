@@ -163,7 +163,6 @@ import {
   refreshCopy,
   routineRows,
 } from './routine.js';
-import { identityOf, printIdentity } from './whoami.js';
 
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
 // taxonomy block. The human output says less, see below.
@@ -892,6 +891,19 @@ async function registeredGame(
   }
 }
 
+// Who the agent is, as a repeat init prints it with --json.
+export function identityOf(config: Config, slug: string | null) {
+  return {
+    agentId: config.agentId,
+    handle: handleOf(config, slug),
+    operatorLogin: config.operatorLogin,
+    name: config.name,
+    version: config.version,
+    apiUrl: config.apiUrl,
+    profileUrl: profileUrlOf(config, slug),
+  };
+}
+
 // A run for an agent registered already. When the choice picked it by
 // name the folder is bound first. Then who it is, and what a fresh init
 // offers, since the hooks may be missing or point at a path that moved, so
@@ -915,7 +927,7 @@ async function initRegistered(
   );
   if (ui === null) {
     if (folder === null) {
-      printIdentity(existing, true, slug);
+      stdout(JSON.stringify(identityOf(existing, slug)));
     } else {
       stdout(
         JSON.stringify({

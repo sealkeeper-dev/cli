@@ -23,7 +23,9 @@ import { build } from 'tsup';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { options } from '../tsup.config.js';
 import { paths } from './config.js';
+import { createKey } from './identity.js';
 import { copyPaths, writeCopy } from './routine-copy.js';
+import { STATUS_TIMEOUT_MS } from './status-answer.js';
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(
@@ -458,6 +460,8 @@ describe('cli bundle', () => {
           registeredAt: '2026-09-23T08:00:00Z',
         }),
       );
+      // status signs its read, so it needs the key.
+      await createKey({}, paths(home));
       await writeCopy(join(outDir, 'index.js'), paths(home), pkg.version);
       const code = await new Promise<number | null>((done) => {
         const child = spawn(
@@ -486,7 +490,7 @@ describe('cli bundle', () => {
   // A fetch that times out can leave a connect attempt open inside undici
   // for about ten seconds when the network drops packets. The bin must not
   // wait for it. 10.255.255.1 is not routed, so the connect never answers.
-  it('status exits soon after the score timeout when the network drops packets', async () => {
+  it('status exits soon after its timeout when the network drops packets', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-bin-'));
     try {
       await writeFile(
@@ -499,6 +503,7 @@ describe('cli bundle', () => {
           registeredAt: '2026-09-23T08:00:00Z',
         }),
       );
+      await createKey({}, paths(home));
       const start = performance.now();
       const { code, out } = await new Promise<{
         code: number | null;
@@ -523,8 +528,9 @@ describe('cli bundle', () => {
       });
       const ms = performance.now() - start;
       expect(code).toBe(0);
-      expect(out).toContain('A'.repeat(43));
-      expect(ms).toBeLessThan(3_500);
+      // Not a terminal, so the agent's form, with only the local part.
+      expect(JSON.parse(out).source.from).toBe('none');
+      expect(ms).toBeLessThan(STATUS_TIMEOUT_MS + 1_500);
     } finally {
       await rm(home, { recursive: true, force: true });
     }

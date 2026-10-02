@@ -287,7 +287,7 @@ function agreementLine(
 // Why a routine run may not report on this task, or null when it may
 // (VOU-138). It reports only on submissions from operators on the
 // allowlist, and no more than the day's confirmation limit. Everything else
-// waits for a person and is logged as skipped for routine status. The
+// waits for a person and is logged as skipped for status. The
 // server checks a hash or schema task on submit, so those never reach here,
 // localRefusal turns them away first.
 async function routineRefusal(

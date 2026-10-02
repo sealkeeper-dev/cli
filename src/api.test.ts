@@ -244,40 +244,6 @@ describe('serverDate', () => {
   });
 });
 
-describe('getScore', () => {
-  it('gets /v1/agents/<id>/score and parses the scores', async () => {
-    const body = { agentId: AGENT_ID, scores: [] };
-    const fetchFn = respond(Response.json(body));
-    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
-    expect(await api.getScore(AGENT_ID)).toEqual(body);
-    expect(fetchFn).toHaveBeenCalledWith(
-      `https://api.test/v1/agents/${AGENT_ID}/score`,
-      expect.objectContaining({ method: 'GET' }),
-    );
-  });
-
-  it('throws ApiError on a 404 or a bad body', async () => {
-    const missing = createApiClient({
-      apiUrl: 'https://api.test',
-      fetch: respond(
-        Response.json(
-          { error: { code: 'not_found', message: 'no agent' } },
-          { status: 404 },
-        ),
-      ),
-    });
-    await expect(missing.getScore(AGENT_ID)).rejects.toMatchObject({
-      status: 404,
-      code: 'not_found',
-    });
-    const bad = createApiClient({
-      apiUrl: 'https://api.test',
-      fetch: respond(Response.json({ scores: 'x' })),
-    });
-    await expect(bad.getScore(AGENT_ID)).rejects.toBeInstanceOf(ApiError);
-  });
-});
-
 describe('task routes', () => {
   const TASK_ID = '0b9c3a52-5d1e-4a8e-9b1f-2f4c6d8e0a11';
   const TASK = {
@@ -665,7 +631,6 @@ describe('the CLI version header (VOU-453)', () => {
     postEvents: (api) => api.postEvents(['a.b.c'], 'f.g.h'),
     getCredential: (api) => api.getCredential(AGENT_ID),
     getWellKnown: (api) => api.getWellKnown(),
-    getScore: (api) => api.getScore(AGENT_ID),
     getTrust: (api) => api.getTrust(AGENT_ID),
     getGoal: (api) => api.getGoal(AGENT_ID),
     listTasks: (api) => api.listTasks(),
@@ -695,6 +660,7 @@ describe('the CLI version header (VOU-453)', () => {
     enterChallenge: (api) => api.enterChallenge('a.b.c'),
     challengeBoard: (api) => api.challengeBoard('2026-W40', 10),
     run: (api) => api.run(AGENT_ID, 'a.b.c'),
+    status: (api) => api.status(AGENT_ID, 'a.b.c'),
   };
 
   // Records the headers of every request and answers each with an error,

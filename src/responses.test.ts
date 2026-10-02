@@ -20,8 +20,8 @@ import {
   operatorSlugOf,
   RatingResponse,
   runBySealKeeper,
-  ScoreResponse,
   SealClaims,
+  StatusAnswerResponse,
   sealWithheldOf,
   TaskResponse,
   WellKnown,
@@ -104,13 +104,37 @@ const payloadV1 = {
   dormant_days: 0,
 };
 
-const scoreEntry = {
-  version: '0.1.0',
-  dimension: 'reliability',
-  value: null,
-  windowStart: null,
-  windowEnd: null,
-  computedAt: null,
+// A status answer (VOU-596), with every part of status.
+const statusAnswer = {
+  tasks: [],
+  waiting: [
+    {
+      kind: 'invite',
+      id: '0b9c3a52-5d1e-4a8e-9b1f-2f4c6d8e0a11',
+      from: 'bob/hawk',
+      expiresAt: AT,
+    },
+  ],
+  next: [
+    {
+      action: 'run',
+      args: {},
+      label: 'Claim 3 more seed tasks.',
+      needsYes: true,
+    },
+  ],
+  standing: { level: 'bronze', verified: 30, nextLevel: 'silver', needs: null },
+  limited: null,
+  status: {
+    agent: { id: ID, handle: 'alice/scout', version: '0.1.0' },
+    seal: { state: 'issued', reason: null, dormantDays: null },
+    thresholds: { met: 3, total: 7 },
+    asOf: AT,
+    today: { day: '2026-09-24', counted: 3, ceiling: 20, remaining: 17 },
+    game: { enabled: true, cap: 10, usedToday: 0, resetAt: AT },
+    duels: { running: [], last: null },
+    challenge: null,
+  },
 };
 
 // Every schema the CLI reads an API answer with, a valid answer, and the
@@ -161,7 +185,7 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
     },
     [],
   ],
-  ['ScoreResponse', ScoreResponse, { agentId: ID, scores: [scoreEntry] }, []],
+  ['StatusAnswerResponse', StatusAnswerResponse, statusAnswer, ['status']],
   [
     'CheckResponse',
     CheckResponse,
@@ -217,6 +241,32 @@ describe('response schemas parse loosely', () => {
     const [first] = Object.keys(value);
     const { [first as string]: _dropped, ...rest } = value;
     expect(schema.safeParse(rest).success).toBe(false);
+  });
+
+  it('StatusAnswerResponse leaves out a part of status it cannot read, never the answer (VOU-596)', () => {
+    const parsed = StatusAnswerResponse.parse({
+      ...statusAnswer,
+      status: {
+        ...statusAnswer.status,
+        seal: { state: 1 },
+        game: 'on',
+        duels: { running: 'none' },
+        challenge: { isoWeek: 7 },
+        thresholds: null,
+        asOf: 'yesterday',
+      },
+    });
+    expect(parsed.status).toEqual({
+      agent: statusAnswer.status.agent,
+      today: statusAnswer.status.today,
+    });
+    // The agent is the one part status cannot do without.
+    expect(
+      StatusAnswerResponse.safeParse({
+        ...statusAnswer,
+        status: { ...statusAnswer.status, agent: null },
+      }).success,
+    ).toBe(false);
   });
 
   it('SealClaims keeps seed_tasks when present and takes a SEAL without it', () => {

@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentsMapPath,
   bindFolder,
-  LEGACY_POST_PROMPT_FILE,
+  LEGACY_FILES,
   namedHome,
   type Paths,
   paths,
@@ -109,9 +109,10 @@ describe('logout', () => {
     );
     await writeCursor({ v: 1, lastAcked: null }, p);
     await writeFile(p.credential, '{}\n');
-    await writeFile(p.score, '{}\n');
-    await writeFile(p.inbox, '{}\n');
-    await writeFile(join(p.home, LEGACY_POST_PROMPT_FILE), '{}\n');
+    await writeFile(p.status, '{}\n');
+    for (const file of LEGACY_FILES) {
+      await writeFile(join(p.home, file), '{}\n');
+    }
     await appendEvent(
       {
         event_id: randomUUID(),
@@ -127,9 +128,8 @@ describe('logout', () => {
   const SESSION = () => [
     p.config,
     p.credential,
-    p.score,
-    p.inbox,
-    join(p.home, LEGACY_POST_PROMPT_FILE),
+    p.status,
+    ...LEGACY_FILES.map((file) => join(p.home, file)),
   ];
 
   beforeEach(async () => {
@@ -153,7 +153,7 @@ describe('logout', () => {
     expect(await exists(p.cursor)).toBe(true);
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(
-      'logged out, removed credential.json, score.json, inbox.json, post-prompt.json, config.json',
+      'logged out, removed credential.json, status.json, post-prompt.json, score.json, inbox.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
     expect(out).toContain('run npx sealkeeper init to sign in again');
@@ -264,7 +264,13 @@ describe('logout', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       loggedOut: true,
-      removed: ['score.json', 'inbox.json', 'post-prompt.json', 'config.json'],
+      removed: [
+        'status.json',
+        'post-prompt.json',
+        'score.json',
+        'inbox.json',
+        'config.json',
+      ],
       keyDeleted: false,
       routineJob: null,
       folders: [],

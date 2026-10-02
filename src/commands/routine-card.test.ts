@@ -119,6 +119,8 @@ describe('the routine refreshes the card', () => {
     const program = createProgram({
       card: { fetch: fetcher },
       routine: { fetch: fetcher, stdoutTTY: () => false },
+      // status prints its screen, as in a terminal.
+      tasks: { fetch: fetcher, isTTY: () => true },
     });
     throwOnExit(program);
     let out = '';
@@ -260,7 +262,7 @@ describe('the routine refreshes the card', () => {
     return readFile(cardFile, 'utf8');
   }
 
-  it('rewrites a card whose SEAL is inside the margin with a fresh SEAL, and routine status says when', async () => {
+  it('rewrites a card whose SEAL is inside the margin with a fresh SEAL, and status says when', async () => {
     seal = issues(HOUR);
     const before = await writeCard();
     await installed();
@@ -286,12 +288,12 @@ describe('the routine refreshes the card', () => {
       'Routine run stopped. The daily limits are spent. Card refreshed.\n',
     );
 
-    const status = await run(fetchFn, 'routine', 'status');
+    const status = await run(fetchFn, 'status');
     expect(status.out).toContain(
-      `Card      ${cardFile}, last written 2026-09-29T10:01:00.000Z\n`,
+      `           card ${cardFile}, last written 2026-09-29T10:01:00.000Z\n`,
     );
-    const json = await run(fetchFn, 'routine', 'status', '--json');
-    expect(JSON.parse(json.out).card).toEqual({
+    const json = await run(fetchFn, 'status', '--json');
+    expect(JSON.parse(json.out).local.routine.card).toEqual({
       path: cardFile,
       writtenAt: '2026-09-29T10:01:00.000Z',
     });
@@ -310,7 +312,7 @@ describe('the routine refreshes the card', () => {
     expect(await lastRun()).toMatchObject({ card: 'current' });
     expect(result.out).toContain('Card up to date.');
     // The record keeps the time card write wrote it.
-    const status = await run(fetchFn, 'routine', 'status');
+    const status = await run(fetchFn, 'status');
     expect(status.out).toContain(`, last written ${NOW.toISOString()}\n`);
   });
 
@@ -325,8 +327,8 @@ describe('the routine refreshes the card', () => {
     });
     expect(await lastRun()).not.toHaveProperty('card');
     expect(result.out).not.toContain('Card');
-    const status = await run(fetchFn, 'routine', 'status');
-    expect(status.out).not.toContain('Card');
+    const status = await run(fetchFn, 'status');
+    expect(status.out).not.toContain('card ');
   });
 
   it("never writes over a card another agent's card write recorded", async () => {

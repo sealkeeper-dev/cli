@@ -477,7 +477,7 @@ export function skippedIds(
   );
 }
 
-// How far back routine status lists work left for a person.
+// How far back status lists work the routine left for a person.
 export const SKIP_LIST_DAYS = 7;
 
 // A GitHub login or an operator slug, trimmed and lowercased, so two

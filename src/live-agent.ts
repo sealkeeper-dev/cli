@@ -1,8 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   AgentName,
-  FINGERPRINT_PARTS,
-  type FingerprintPartName,
   FingerprintPartState,
   LEVEL_RANK,
   Level,
@@ -14,16 +12,15 @@ import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import type { Config } from './config.js';
 import { stderr } from './output.js';
-import { type SealWithheld, sealWithheldOf } from './responses.js';
 import { SCORE_TIMEOUT_MS } from './score.js';
 
-// Where the agent stands on SealKeeper, as status and init read it.
+// Where the agent stands on SealKeeper, as init reads it.
 // The verified count and the level come live from GET /v1/agents/<id>, the
 // same numbers the public profile shows.
 
-// The part of GET /v1/agents/<id> the CLI reads here. level and standing
-// are optional on the answer, since a version the scoring job has not
-// reached has neither. Read loosely, so a field that fails to parse costs
+// The part of GET /v1/agents/<id> the CLI reads here. level is optional
+// on the answer, since a version the scoring job has not reached has
+// none. Read loosely, so a field that fails to parse costs
 // only that field.
 export const LiveAgent = z.object({
   counts: z
@@ -31,15 +28,6 @@ export const LiveAgent = z.object({
     .optional()
     .catch(undefined),
   level: Level.optional().catch(undefined),
-  standing: z
-    .object({
-      dormant_days: z.int().min(0).nullable(),
-      // A hold is in force on the agent or its operator, so its SEAL is
-      // withheld for cause (VOU-85). Absent from an API before it.
-      held: z.boolean().optional().catch(undefined),
-    })
-    .optional()
-    .catch(undefined),
   // The handle and the operator slug the API builds it from (VOU-174), for
   // the first sign up, and the runtime, for the one time runtime question
   // (VOU-176). A runtime this version does not know reads as absent.
@@ -66,7 +54,7 @@ export const LiveAgent = z.object({
   // when it was captured and each part's state, never a part hash. null
   // when the agent has declared none. Absent from an API before it, and
   // when it does not parse, a state this version does not know included.
-  // status and whoami print the states.
+  // A handshake check reads its hash (handshake.ts).
   fingerprint: z
     .object({
       hash: Sha256Base64url,
@@ -83,40 +71,12 @@ export const LiveAgent = z.object({
     .catch(undefined),
 });
 export type LiveAgent = z.infer<typeof LiveAgent>;
-export type LiveFingerprint = LiveAgent['fingerprint'];
-
-// The fingerprint parts as status and whoami name them, the words the
-// profile uses.
-const PART_LABELS: Record<FingerprintPartName, string> = {
-  model_set: 'model',
-  prompt: 'prompt',
-  tools: 'tools',
-  framework: 'framework',
-};
-
-const STATE_WORDS: Record<FingerprintPartState, string> = {
-  declared: 'declared',
-  not_declared: 'not declared',
-  unstable: 'unstable',
-};
-
-// The fingerprint row of status and whoami, each part and its state, as in
-// model declared, prompt not declared, tools declared, framework unstable.
-// none declared when the agent has declared none, and - when the API did
-// not answer or sent no fingerprint.
-export function fingerprintText(fingerprint: LiveFingerprint): string {
-  if (fingerprint === undefined) return '-';
-  if (fingerprint === null) return 'none declared';
-  return FINGERPRINT_PARTS.map(
-    (name) => `${PART_LABELS[name]} ${STATE_WORDS[fingerprint.parts[name]]}`,
-  ).join(', ');
-}
 
 // The agent answer, with the same two second limit as the score. null when
 // the API does not answer or answers with something else. Never throws.
 // A redirect is never followed. It says on stderr where the API moved, as
-// every other request does, and then counts as no answer, so status and
-// init still print what they can.
+// every other request does, and then counts as no answer, so init and
+// the runtime question of status still print what they can.
 export async function readLiveAgent(
   config: Pick<Config, 'agentId' | 'apiUrl'>,
   fetchFn: typeof fetch,
@@ -131,24 +91,6 @@ export async function readLiveAgent(
     if (error instanceof ApiError && error.code === 'redirect') {
       stderr(error.message);
     }
-    return null;
-  }
-}
-
-// Why the agent's SEAL is withheld, from its SEAL route, the hold's reason
-// class or the dormant days (VOU-85). null when the route answers anything
-// else or cannot be reached. Never throws. status asks only once the agent
-// answer says the SEAL is withheld.
-export async function readSealWithheld(
-  config: Pick<Config, 'agentId' | 'apiUrl'>,
-  fetchFn: typeof fetch,
-): Promise<SealWithheld | null> {
-  try {
-    const { status, json } = await shortClient(config, fetchFn).request(
-      `/v1/agents/${encodeURIComponent(config.agentId)}/seal`,
-    );
-    return status === 404 ? sealWithheldOf(json) : null;
-  } catch {
     return null;
   }
 }

@@ -138,46 +138,6 @@ describe('sealkeeper game', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  describe('status', () => {
-    it('prints the switch, the cap, the units used today and the reset in UTC', async () => {
-      const result = await run('game', 'status');
-      expect(result.code).toBe(0);
-      expect(result.out).toBe(
-        [
-          'game        on',
-          'cap         5 game units a UTC day',
-          'used today  2',
-          'resets      2026-10-02 00:00 UTC',
-          '',
-        ].join('\n'),
-      );
-      expect(game.sent).toHaveLength(1);
-      expect(game.sent[0]?.method).toBe('POST');
-      expect(game.sent[0]?.path).toBe('/v1/game/status');
-      expect(Object.keys(game.sent[0]?.payload ?? {})).toEqual(['issuedAt']);
-    });
-
-    it('says how to turn it on when it is off', async () => {
-      game.status.enabled = false;
-      const result = await run('game', 'status');
-      expect(result.code).toBe(0);
-      expect(result.out).toContain('game        off\n');
-      expect(result.out).toContain('Turn it on with npx sealkeeper game on\n');
-    });
-
-    it('--json prints the API answer unchanged', async () => {
-      const result = await run('game', 'status', '--json');
-      expect(result.code).toBe(0);
-      expect(JSON.parse(result.out)).toEqual({
-        enabled: true,
-        cap: 5,
-        usedToday: 2,
-        resetAt: RESET_AT,
-        later: 'kept',
-      });
-    });
-  });
-
   describe('on and off', () => {
     it('on sends enabled true and says so in one line', async () => {
       game.status.enabled = false;
@@ -278,7 +238,7 @@ describe('sealkeeper game', () => {
   });
 
   describe('refusals', () => {
-    it.each([['status'], ['on'], ['off'], ['cap', '2']])(
+    it.each([['on'], ['off'], ['cap', '2']])(
       'game %s against an API without the game says so in one line',
       async (...args) => {
         game.gone = true;
@@ -323,7 +283,7 @@ describe('sealkeeper game', () => {
 
     it('says to run init before anything is sent when not initialised', async () => {
       await rm(join(home, 'config.json'));
-      const result = await run('game', 'status');
+      const result = await run('game', 'on');
       expect(result.code).toBe(1);
       expect(result.err).toContain('not initialised, run npx sealkeeper init');
       expect(game.sent).toEqual([]);

@@ -31,9 +31,9 @@ import {
   type ListTasksPage,
   ListTasksResponse,
   RatingResponse,
-  ScoreResponse,
   type SealWithheld,
   SeekDuelResponse,
+  StatusAnswerResponse,
   sealWithheldOf,
   TaskResponse,
   TaskSubmissionResponse,
@@ -139,7 +139,6 @@ export type ApiClient = {
   serverDate(): number | null;
   getCredential(agentId: string): Promise<CredentialResponse>;
   getWellKnown(): Promise<WellKnown>;
-  getScore(agentId: string): Promise<ScoreResponse>;
   // GET /v1/agents/:id/trust, public, its categories with their verified
   // tasks. An API from before Trust Score answers 404 not_found.
   getTrust(agentId: string): Promise<AgentTrustResponse>;
@@ -220,6 +219,10 @@ export type ApiClient = {
   // tasks the agent solves now and answers the core answer. An API from
   // before it answers 404 not_found.
   run(agentId: string, envelope: string): Promise<CoreAnswerResponse>;
+  // POST /v1/agents/:id/status, signed over StatusRequest (VOU-591). The
+  // whole status screen as data, claiming nothing. An API from before it
+  // answers 404 not_found.
+  status(agentId: string, envelope: string): Promise<StatusAnswerResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -389,7 +392,6 @@ export function createApiClient(options: {
       return result.data;
     },
     getWellKnown: () => call(WELL_KNOWN_PATH, WellKnown),
-    getScore: (agentId) => call(agentPath(agentId, '/score'), ScoreResponse),
     getTrust: (agentId) =>
       call(agentPath(agentId, '/trust'), AgentTrustResponse),
     getGoal: (agentId) => call(agentPath(agentId, '/goal'), GoalResponse),
@@ -487,6 +489,10 @@ export function createApiClient(options: {
       ),
     run: (agentId, envelope) =>
       call(agentPath(agentId, '/run'), CoreAnswerResponse, {
+        body: { envelope },
+      }),
+    status: (agentId, envelope) =>
+      call(agentPath(agentId, '/status'), StatusAnswerResponse, {
         body: { envelope },
       }),
   };

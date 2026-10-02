@@ -2772,11 +2772,11 @@ describe('sealkeeper init', () => {
         '    Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
         '    Why      Verified tasks get your agent to bronze',
         '',
-        '  Check it later with npx sealkeeper routine status',
+        '  Check it later with npx sealkeeper status',
         `  ${INSTALL_QUESTION}`,
       ].join('\n');
       expect(INSTALL_QUESTION).toBe('Install? [Y/n] ');
-      // The scheduler and the file are in routine status only.
+      // The scheduler and the file are in status only.
       expect(result.err).not.toContain('LaunchAgents');
       expect(result.err).toContain(block);
       expect(result.err.indexOf(block)).toBeGreaterThan(
@@ -2828,7 +2828,7 @@ describe('sealkeeper init', () => {
       );
       expect(result.out).toMatch(/\n {2}Routine run \w+/);
       expect(result.out).toContain(
-        '  See every run with npx sealkeeper routine status.\n',
+        '  See every run with npx sealkeeper status.\n',
       );
       const runs = (await readRoutine(paths(home))).filter(
         (e) => e.kind === 'run',

@@ -52,8 +52,7 @@ import { configApiUrl } from './check.js';
 // other. duel show and duel categories read public routes. --json prints
 // the API answer as it came. Nothing here touches the local log, and a
 // duel never moves a score, a level or the SEAL. In a routine run, accept
-// and seek note what they did in routine.jsonl for routine status
-// (GAME-14).
+// and seek note what they did in routine.jsonl for status (GAME-14).
 
 // What an API from before duels answers every duel route with, 404.
 export const OLD_API = 'this SealKeeper API has no duels yet';

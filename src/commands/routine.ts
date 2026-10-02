@@ -28,7 +28,7 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
-import { readIfExists, tildePath } from '../files.js';
+import { tildePath } from '../files.js';
 import {
   HIGHEST_ISSUED,
   loadGoal,
@@ -90,7 +90,6 @@ import {
 import {
   applyPlan,
   commandLine,
-  cronBlockIn,
   detectScheduler,
   execRunner,
   jobName,
@@ -99,7 +98,6 @@ import {
   type Plan,
   planInstall,
   type Runner,
-  readCrontab,
   removeJob,
   removeJobByName,
   type SchedulerEnv,
@@ -139,9 +137,9 @@ import { awaitingVerdict, fetchSubmission } from './tasks-outcome.js';
 // and it has game units left or a duel running, the agent plays the game
 // after the task work, and a run with no task work starts it for the game
 // alone (GAME-14, gameSteps in routine-agent.ts). Everything a run does is
-// held to the routine rules in routine.ts and logged in routine.jsonl. status shows
-// the schedule, the last run and what waits for a person. pause, resume and
-// remove are the kill switch.
+// held to the routine rules in routine.ts and logged in routine.jsonl.
+// sealkeeper status shows the schedule, the last run and what waits for a
+// person (routineView). pause, resume and remove are the kill switch.
 
 export type RoutineDeps = {
   fetch: typeof fetch;
@@ -234,17 +232,6 @@ export function register(
     .description('One routine run now. The installed job calls this')
     .action(async function (this: Command): Promise<void> {
       await runOnce(this, deps);
-    });
-
-  routine
-    .command('status')
-    .description('Schedule, limits, the last run and what waits for you')
-    .option('--files', 'print the job files in full')
-    .action(async function (
-      this: Command,
-      options: { files?: boolean },
-    ): Promise<void> {
-      await status(this, deps, options);
     });
 
   routine
@@ -416,7 +403,7 @@ export async function refreshCopy(
 }
 
 export const installedLine = (time: string): string =>
-  `Routine installed. It runs every day at ${time}. See it with ${cli('routine status')}, stop it with ${cli('routine pause')} or ${cli('routine remove')}.`;
+  `Routine installed. It runs every day at ${time}. See it with ${cli('status')}, stop it with ${cli('routine pause')} or ${cli('routine remove')}.`;
 
 async function install(
   cmd: Command,
@@ -527,14 +514,11 @@ export async function askYes(
 // Said after a no to the first run. The job runs later today when its time
 // has not come yet.
 export function laterLine(time: string, now: Date = new Date()): string {
-  const [hour = 0, minute = 0] = time.split(':').map(Number);
-  const today = now.getHours() * 60 + now.getMinutes() < hour * 60 + minute;
-  return `It runs ${today ? 'today' : 'tomorrow'} at ${time}. Run one any time with ${cli('routine run')}.`;
+  return `It runs ${nextRunText(time, now)}. Run one any time with ${cli('routine run')}.`;
 }
 
 // Said after the first run's line.
-export const seeRunsLine = (): string =>
-  `See every run with ${cli('routine status')}.`;
+export const seeRunsLine = (): string => `See every run with ${cli('status')}.`;
 
 // Said as the first run starts, since the agent may take minutes.
 export const firstRunLine = (minutes: number): string =>
@@ -542,7 +526,7 @@ export const firstRunLine = (minutes: number): string =>
 
 // Said once under the started line, on a terminal (RS-9).
 export const watchHintLine = (): string =>
-  `Ctrl-C stops watching, the run keeps going. See it with ${cli('routine status')}.`;
+  `Ctrl-C stops watching, the run keeps going. See it with ${cli('status')}.`;
 
 // Said after a Ctrl-C.
 export const STOPPED_WATCHING = 'Stopped watching. The run keeps going.';
@@ -649,7 +633,7 @@ function jobEnv(p: Paths): Record<string, string> {
 const homeEnv = (p: Paths): string | undefined =>
   resolve(p.home) === resolve(sealkeeperRoot()) ? undefined : p.home;
 
-// Said in routine status and after a failed agent. The routine's Claude
+// Said in status and after a failed agent. The routine's Claude
 // Code loads none of the operator's settings files, see claudeArgs.
 export const NO_SETTINGS_NOTE =
   "The routine's Claude Code runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it.";
@@ -657,7 +641,7 @@ export const NO_SETTINGS_NOTE =
 // The one block init and routine install show before they ask (RS-1). A
 // header with the time, four short rows with the limits from routine.json,
 // then where to check it later. The scheduler and the job file are in
-// routine status only.
+// status only.
 export const BLOCK_TITLE = 'Daily routine';
 
 export const blockHeadTail = (time: string): string =>
@@ -673,7 +657,7 @@ export function routineRows(limits: RoutineLimits): [string, string][] {
 }
 
 export const checkLaterLine = (): string =>
-  `Check it later with ${cli('routine status')}`;
+  `Check it later with ${cli('status')}`;
 
 // The width of the label column of the rows.
 export const BLOCK_LABEL = 9;
@@ -712,7 +696,7 @@ export function preview(prepared: PreparedInstall, time: string): string[] {
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
     `When there is work within the daily limits it starts ${agentCommand} -p with the sealkeeper run instructions. Otherwise it starts nothing.`,
     '',
-    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only when the goal says posting is behind, adopting a ready made task whose answer SealKeeper knows, or a template task SealKeeper checks when none is waiting. Everything else waits for you in routine status.',
+    'Unattended runs claim only seed tasks and tasks addressed to this agent by operators on the allowlist, and confirm only submissions from those operators. They post only when the goal says posting is behind, adopting a ready made task whose answer SealKeeper knows, or a template task SealKeeper checks when none is waiting. Everything else waits for you in status.',
     NO_SETTINGS_NOTE,
     ...(plan.note === undefined ? [] : [plan.note]),
     `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('config routine allow <operator>')}.`,
@@ -1404,7 +1388,8 @@ export function runLine(entry: Omit<RunEntry, 'at'>): string {
   return parts.join(' ');
 }
 
-// The game line of routine status, the last run's counts (GAME-14).
+// The game line of the routine in status, the last run's counts
+// (GAME-14).
 export function gameText(game: NonNullable<RunEntry['game']>): string {
   return `last run accepted ${plural(game.accepted, 'invite', 'invites')}, played ${plural(game.played, 'duel', 'duels')}, submitted ${plural(game.challenge, 'challenge task', 'challenge tasks')}, opened ${plural(game.seeks, 'seek', 'seeks')}`;
 }
@@ -1435,219 +1420,155 @@ function spent(entry: Pick<RunEntry, 'tokens' | 'costUsd'>): string {
     : `${tokens}, $${entry.costUsd.toFixed(2)}`;
 }
 
-// status
+// The routine part of status (VOU-596). Everything here is local, read
+// from routine.json, routine.jsonl and the scheduler, so it shows offline.
 
-async function status(
-  cmd: Command,
+export type RoutineView = {
+  // What status --json carries under local.routine.
+  json: Record<string, unknown>;
+  // The lines of the Routine section of status, without the label.
+  lines: string[];
+  // The job's copy is out of date or gone (RS-2), said on stderr.
+  warnings: string[];
+};
+
+/*
+ * The routine as status shows it, on or off, the next run, what the last
+ * run did and what waits for a person, with the linger note where it
+ * applies. json keeps every detail, the limits, the allowlist, the job,
+ * the copy, the transcript, the card and the warnings about the job's copy
+ * of the CLI, which status says on stderr. A routine.json that cannot be read is said in one line, never
+ * thrown, so it never fails status.
+ */
+export async function routineView(
   deps: RoutineDeps,
-  options: { files?: boolean } = {},
-): Promise<void> {
-  const config = await requireConfig(cmd);
-  const routine = await loadRoutineConfig(cmd);
-  const p = paths();
-  if (options.files === true) {
-    await printJobFiles(cmd, routine.schedule, deps);
-    return;
+  p: Paths = paths(),
+  now: Date = new Date(),
+): Promise<RoutineView> {
+  let routine: RoutineConfig;
+  try {
+    routine = await readRoutineConfig(p);
+  } catch (error) {
+    const why = (error as Error).message;
+    return { json: { error: why }, lines: [why], warnings: [] };
   }
-  const entries = await readRoutine();
-  const now = new Date();
+  const config = await readConfig(p).catch(() => null);
+  const entries = await readRoutine(p);
   const today = {
     claims: budgetOf(entries, 'claim', routine, now),
     confirms: budgetOf(entries, 'confirm', routine, now),
     posts: budgetOf(entries, 'post', routine, now),
   };
-  const runs = entries.filter((e): e is RunEntry => e.kind === 'run');
-  const lastRun = runs.at(-1) ?? null;
+  const lastRun =
+    entries.filter((e): e is RunEntry => e.kind === 'run').at(-1) ?? null;
   const waiting = waitingForPerson(entries, now);
-  const active = await readLiveLock();
+  const active = await readLiveLock(p);
   const warnings = await routineJobWarnings(p);
   const transcript = existsSync(copyPaths(p).transcript)
     ? copyPaths(p).transcript
     : null;
-  const cardRecord = await readCardRecord(config.agentId, p);
-
-  if (wantsJson(cmd)) {
-    const copied = await copyVersion(p);
-    stdout(
-      JSON.stringify({
-        installed: routine.schedule !== undefined,
-        schedule: routine.schedule ?? null,
-        paused: routine.paused ?? null,
-        running: active !== null,
-        limits: routine.limits,
-        today: {
-          claimed: today.claims.used,
-          confirmed: today.confirms.used,
-          posted: today.posts.used,
-        },
-        allow: routine.allow,
-        allowSlugs: routine.allowSlugs,
-        lastRun,
-        transcript,
-        card:
-          cardRecord === null
-            ? null
-            : { path: cardRecord.path, writtenAt: cardRecord.writtenAt },
-        waiting,
-        copy: {
-          path: copyPaths(p).script,
-          version: copied,
-          cliVersion: VERSION,
-        },
-        warnings,
-      }),
-    );
-    return;
-  }
-
+  const cardRecord =
+    config === null ? null : await readCardRecord(config.agentId, p);
   const s = routine.schedule;
-  stdout(
-    s
-      ? `Routine   every day at ${s.time} with ${s.scheduler}, starts ${s.agentCommand}`
-      : `Routine   not installed. ${cli('routine install')} sets it up`,
-  );
-  if (routine.paused) {
-    stdout(`Paused    ${routine.paused.reason}`);
+  const nextRun =
+    s === undefined || routine.paused ? null : nextRunText(s.time, now);
+  // Without lingering systemd stops the timer at logout (RS-4).
+  const linger =
+    s?.scheduler === 'systemd' &&
+    !(await lingers(schedulerEnv(deps), deps.run ?? execRunner));
+
+  const json = {
+    installed: s !== undefined,
+    schedule: s ?? null,
+    paused: routine.paused ?? null,
+    running: active !== null,
+    nextRun,
+    limits: routine.limits,
+    today: {
+      claimed: today.claims.used,
+      confirmed: today.confirms.used,
+      posted: today.posts.used,
+    },
+    allow: routine.allow,
+    allowSlugs: routine.allowSlugs,
+    lastRun,
+    transcript,
+    card:
+      cardRecord === null
+        ? null
+        : { path: cardRecord.path, writtenAt: cardRecord.writtenAt },
+    waiting,
+    copy: {
+      path: copyPaths(p).script,
+      version: await copyVersion(p),
+      cliVersion: VERSION,
+    },
+    notes: [NO_SETTINGS_NOTE, ...(linger ? [LINGER_NOTE] : [])],
+    warnings,
+  };
+
+  const lines: string[] = [];
+  if (s === undefined) {
+    lines.push(`off, not installed. ${cli('routine install')} sets it up`);
+  } else if (routine.paused) {
+    lines.push(`paused, ${routine.paused.reason}`);
+  } else {
+    lines.push(
+      `on, every day at ${s.time} with ${s.scheduler}, next run ${nextRun}`,
+    );
   }
-  if (active !== null) stdout('Running   a run is going now');
-  stdout(
-    `Today     claimed ${today.claims.used} of ${today.claims.cap}, confirmed ${today.confirms.used} of ${today.confirms.cap}, posted ${today.posts.used} of ${today.posts.cap}`,
-  );
-  stdout(
-    `Per run   ${routine.limits.minutesPerRun} minutes, ${routine.limits.tokensPerRun.toLocaleString('en-US')} tokens`,
-  );
-  stdout(`Allowed   ${allowedNames(routine)}`);
-  stdout(
-    lastRun
-      ? `Last run  ${lastRun.at}. ${runLine(lastRun)}`
-      : 'Last run  none yet',
-  );
-  // What the last run's game section did, when it had one (GAME-14).
-  if (lastRun?.game !== undefined)
-    stdout(`Game      ${gameText(lastRun.game)}`);
+  if (active !== null) lines.push('a run is going now');
+  if (s !== undefined) {
+    lines.push(
+      `today claimed ${today.claims.used} of ${today.claims.cap}, confirmed ${today.confirms.used} of ${today.confirms.cap}, posted ${today.posts.used} of ${today.posts.cap}`,
+    );
+  }
+  if (s !== undefined) lines.push(...jobWhere(s, schedulerEnv(deps)));
+  if (lastRun !== null) {
+    lines.push(`last run ${lastRun.at}. ${runLine(lastRun)}`);
+    // What the last run's game section did, when it had one (GAME-14).
+    if (lastRun.game !== undefined) {
+      lines.push(`game, ${gameText(lastRun.game)}`);
+    }
+  } else if (s !== undefined) {
+    lines.push('last run none yet');
+  }
   // Where the last run's transcript is, never what it says (RS-10).
-  if (transcript !== null) stdout(`Transcript  ${tildePath(transcript)}`);
+  if (transcript !== null) lines.push(`transcript ${tildePath(transcript)}`);
   // The card card write last wrote, which each run refreshes (VOU-383).
   if (cardRecord !== null) {
-    stdout(
-      `Card      ${tildePath(cardRecord.path)}, last written ${cardRecord.writtenAt}`,
+    lines.push(
+      `card ${tildePath(cardRecord.path)}, last written ${cardRecord.writtenAt}`,
     );
   }
-  if (s !== undefined) {
-    stdout('');
-    for (const line of await jobSection(s, deps, p)) stdout(line);
+  if (linger) lines.push(LINGER_NOTE);
+  if (waiting.length > 0) {
+    lines.push(`waiting for you, from the last ${SKIP_LIST_DAYS} days`);
+    for (const item of waiting) lines.push(`  ${waitingLine(item)}`);
   }
-  for (const line of warnings) stdout(line);
-  if (waiting.length === 0) return;
-  stdout('');
-  stdout(`Waiting for you, from the last ${SKIP_LIST_DAYS} days`);
-  for (const item of waiting) stdout(`  ${waitingLine(item)}`);
+  return { json, lines, warnings };
 }
 
-// The Job section of routine status (RS-4). The scheduler, where the job
-// is, what it runs, the copy's version, and the notes the install used to
-// show, the settings note and the linger note when it applies.
-async function jobSection(
-  s: RoutineSchedule,
-  deps: RoutineDeps,
-  p: Paths,
-): Promise<string[]> {
-  const env = schedulerEnv(deps);
-  const row = (label: string, text: string) =>
-    `  ${label.padEnd(JOB_LABEL)}${text}`;
-  const lines = ['Job', row('Scheduler', s.scheduler)];
-  for (const where of jobWhere(s, env)) lines.push(row(where[0], where[1]));
-  if (s.program !== undefined) {
-    const [file = '', ...args] = s.program;
-    lines.push(row('Command', commandLine({ file, args })));
-    if (runsCopy(s.program, p)) {
-      const copied = await copyVersion(p);
-      lines.push(row('Copy', copied === null ? 'missing' : copied));
-    }
-  }
-  lines.push(`  ${NO_SETTINGS_NOTE}`);
-  if (
-    s.scheduler === 'systemd' &&
-    !(await lingers(env, deps.run ?? execRunner))
-  ) {
-    lines.push(`  ${LINGER_NOTE}`);
-  }
-  lines.push(
-    `  See the job ${s.files.length > 1 ? 'files' : 'file'} in full with ${cli('routine status --files')}.`,
-  );
-  return lines;
-}
-
-const JOB_LABEL = 11;
-
-// Where the job is, as label and text.
-function jobWhere(s: RoutineSchedule, env: SchedulerEnv): [string, string][] {
+// Where the job is (RS-4), one line for each file, the crontab entry or
+// the task.
+function jobWhere(s: RoutineSchedule, env: SchedulerEnv): string[] {
   switch (s.scheduler) {
     case 'launchd':
     case 'systemd':
-      return s.files.map((f): [string, string] => [
-        'File',
-        tildePath(f, env.homedir),
-      ]);
+      return s.files.map((f) => `job file ${tildePath(f, env.homedir)}`);
     case 'cron':
-      return [['Entry', `crontab, marked ${s.job}`]];
+      return [`job in the crontab, marked ${s.job}`];
     case 'schtasks':
-      return [['Task', schtasksName(s.job)]];
+      return [`job in Task Scheduler, ${schtasksName(s.job)}`];
   }
 }
 
-// routine status --files. Each job file in full, the crontab block for
-// cron and the task's XML for Task Scheduler, read through the scheduler.
-async function printJobFiles(
-  cmd: Command,
-  s: RoutineSchedule | undefined,
-  deps: RoutineDeps,
-): Promise<void> {
-  if (s === undefined) {
-    cmd.error(`no routine is installed, run ${cli('routine install')} first`);
-  }
-  const run = deps.run ?? execRunner;
-  const files: { path: string; text: string | null }[] = [];
-  switch (s.scheduler) {
-    case 'launchd':
-    case 'systemd':
-      for (const path of s.files) {
-        files.push({ path, text: await readIfExists(path) });
-      }
-      break;
-    case 'cron': {
-      let block: string[] | null = null;
-      try {
-        block = cronBlockIn(await readCrontab(run), s.job);
-      } catch (error) {
-        if (!(error instanceof SchedulerError)) throw error;
-        cmd.error(error.message);
-      }
-      files.push({
-        path: 'crontab',
-        text: block === null ? null : `${block.join('\n')}\n`,
-      });
-      break;
-    }
-    case 'schtasks': {
-      const name = schtasksName(s.job);
-      const result = await run('schtasks', ['/Query', '/TN', name, '/XML']);
-      files.push({
-        path: name,
-        text: result.code === 0 ? result.stdout : null,
-      });
-      break;
-    }
-  }
-  if (wantsJson(cmd)) {
-    stdout(JSON.stringify({ files }));
-    return;
-  }
-  files.forEach((file, i) => {
-    if (i > 0) stdout('');
-    stdout(file.text === null ? `${file.path}, not found` : file.path);
-    if (file.text !== null) stdout(file.text.replace(/\n$/, ''));
-  });
+// When the job runs next, "today at 10:00" while its time has not come
+// yet, else "tomorrow at 10:00", in local time.
+export function nextRunText(time: string, now: Date = new Date()): string {
+  const [hour = 0, minute = 0] = time.split(':').map(Number);
+  const today = now.getHours() * 60 + now.getMinutes() < hour * 60 + minute;
+  return `${today ? 'today' : 'tomorrow'} at ${time}`;
 }
 
 // A skip that waits for a person, every reason but too_new.

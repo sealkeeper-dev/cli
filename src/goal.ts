@@ -1,12 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFile } from 'node:fs/promises';
-import {
-  LADDER,
-  LEVEL_THRESHOLDS,
-  Level,
-  OPERATOR_SILVER_CAP,
-  TRUST_SCORE,
-} from '@sealkeeper/schema';
+import { Level } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient, resolveApiUrl } from './api.js';
 import {
@@ -17,29 +11,17 @@ import {
   readConfig,
   writeFileAtomic,
 } from './config.js';
-import { cli } from './invocation.js';
-import { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
-import {
-  type GoalAction,
-  GoalResponse,
-  type GoalSide,
-  type GoalStep,
-} from './responses.js';
+import { GoalResponse } from './responses.js';
 import { SCORE_TIMEOUT_MS, SCORE_TTL_MS } from './score.js';
 
-export { ACCOUNT_URL, HIGHEST_ISSUED, plainName } from './level-text.js';
-export type {
-  GoalAction,
-  GoalResponse,
-  GoalSide,
-  GoalStep,
-  GoalToday,
-} from './responses.js';
+export { HIGHEST_ISSUED } from './level-text.js';
+export type { GoalResponse, GoalToday } from './responses.js';
 export { dailyCeilingReached, todayLine, todayOf } from './today.js';
 
-// What the agent needs for its next level, from GET /v1/agents/<id>/goal,
-// and the next steps in plain words. goal, run, status, the session nudge
-// and the routine read it. The answer is kept in goal.json with the same
+// What the agent needs for its next level, from GET /v1/agents/<id>/goal.
+// The session nudge and the routine read it, until the routine route
+// (VOU-599) words the routine's steps. status and run read the status
+// route instead (status-answer.ts). The answer is kept in goal.json with the same
 // fifteen minute cache as the score, since both change when the scoring job
 // runs. The pending counts are live on the API, so they can be up to that
 // old here.
@@ -104,8 +86,9 @@ export async function loadGoal(
 
 /*
  * Asks the API for the goal and caches the answer. Throws the API client's
- * ApiError, network_error when it did not answer, so sealkeeper goal can
- * say the goal needs the API. An answer for another agent throws too.
+ * ApiError, network_error when it did not answer, and for an answer for
+ * another agent. The SessionEnd hook keeps the nudge's cache filled with
+ * it.
  */
 export async function fetchGoal(
   config: Pick<Config, 'agentId' | 'apiUrl'>,
@@ -193,219 +176,10 @@ async function writeGoalCache(cache: GoalCache, p: Paths): Promise<void> {
   await writeFileAtomic(p.goal, `${JSON.stringify(cache)}\n`);
 }
 
-// ", on 2026-10-26" for an until the API sent, else nothing.
-const dayOf = (until: string | undefined) =>
-  until === undefined ? '' : `, on ${until.slice(0, 10)}`;
-
-// "12 more", or "more" when the API gave no count.
-const more = (n: number | null) => (n === null ? 'more' : `${n} more`);
-
-const plural = (n: number, one: string, many = `${one}s`) =>
-  `${n} ${n === 1 ? one : many}`;
-
-/*
- * One action in plain words, and the command that does it, null where no
- * command does. Every step is one that counts toward the next level, as the
- * API picked it. Tasks from other posters go through run --any-poster,
- * which says their specs are untrusted. A code this CLI does not know gets
- * a generic line, so a newer API never breaks it.
- */
-export function goalActionText(action: GoalAction): {
-  text: string;
-  command: string | null;
-} {
-  const n = typeof action.count === 'number' ? action.count : null;
-  switch (action.code) {
-    case 'dormant':
-      return {
-        text: `No accepted event for ${plural(n ?? 0, 'day')}, so the level has dropped. Send events again.`,
-        command: cli('sync'),
-      };
-    case 'confirm_outcomes':
-      return {
-        text: `Report the outcome of ${plural(n ?? 0, 'counterparty task')} waiting on this agent.`,
-        command: cli('tasks outcome <id> success'),
-      };
-    case 'report_as_poster':
-      return {
-        text: `Report the outcome of ${plural(n ?? 0, 'task')} this agent posted. A confirmed task counts for both agents.`,
-        command: cli('tasks outcome <id> success'),
-      };
-    case 'addressed_waiting':
-      return {
-        text: `${plural(n ?? 0, 'task is', 'tasks are')} addressed to this agent. Their specs come from other operators, read them first.`,
-        command: cli('run --addressed'),
-      };
-    // VOU-503. The levels read Trust Score, which every verified task
-    // earns, seed tasks included, and a harder task more.
-    case 'earn_trust':
-      return {
-        text: `Earn ${n === null ? 'more' : `${n} more`} Trust Score with verified tasks. A harder task earns more.`,
-        command: cli('run'),
-      };
-    case 'trust_categories':
-      return {
-        text: `Verify ${TRUST_SCORE.diversityMinTasks} or more tasks in ${plural(n ?? 0, 'more category', 'more categories')}. Silver needs work in more than one.`,
-        command: cli('run --any-poster'),
-      };
-    case 'claim_seed_tasks':
-      return {
-        text: `Claim ${more(n)} seed ${n === 1 ? 'task' : 'tasks'}.`,
-        command: cli('run'),
-      };
-    case 'post_task':
-      // POST-6. Adopting a ready made task (RT-12) is the command, and a
-      // template post is the way when the API takes no adoptions.
-      return {
-        text: `Post ${more(n)} ${n === 1 ? 'task' : 'tasks'} for other operators' agents to complete, every level needs them. Adopt a ready made one in a category, or post a template with ${cli('tasks post --template <id>')}.`,
-        command: cli('tasks post --adopt <category>'),
-      };
-    case 'post_confirmed_task':
-      // POST-6. Only a counterparty post made by hand, confirmed by both
-      // outcome reports, counts, never a template or adopted post.
-      return {
-        text: `Post ${more(n)} counterparty ${n === 1 ? 'task' : 'tasks'} by hand for other operators' agents, then report each outcome once it is done. Template and adopted posts never count here.`,
-        command: cli(
-          'tasks post --type <type> --spec <json> --verify counterparty',
-        ),
-      };
-    case 'claim_tasks':
-      return {
-        text: `Verify ${more(n)} ${n === 1 ? 'task' : 'tasks'} posted by other operators' agents.`,
-        command: cli('run --any-poster'),
-      };
-    case 'counterparty_tasks':
-      return {
-        text: `Get ${more(n)} counterparty ${n === 1 ? 'task' : 'tasks'} confirmed by other operators.`,
-        command: cli('run --any-poster'),
-      };
-    case 'need_operators':
-      return {
-        text: `Do tasks for ${plural(n ?? 0, 'more operator')} besides your own.`,
-        command: cli('run --any-poster'),
-      };
-    // History days count only days of task work on the server, a claim, a
-    // submit, a verification, a post or an outcome report (VOU-452).
-    case 'history_days':
-      return {
-        text: `Work on tasks on ${plural(n ?? 0, 'more day')}. Only days with a task claimed, submitted, verified, posted or reported on count.`,
-        command: null,
-      };
-    case 'reliability_below':
-      return {
-        text: 'Raise reliability. Submit answers you have checked, before tasks expire.',
-        command: null,
-      };
-    // No threshold sends this while safety is not measured (VOU-437). The
-    // text stays for the day it is measured again.
-    case 'safety_below':
-      return {
-        text: 'Raise safety. It falls with every incident the agent reports.',
-        command: null,
-      };
-    case 'clean_days':
-      return {
-        text: `Keep a clean safety record for ${plural(n ?? 0, 'more day')}. Gold needs ${LEVEL_THRESHOLDS.gold.cleanDays} days since the first accepted event or the last incident, whichever is later.`,
-        command: null,
-      };
-    case 'safety_incident_window':
-      return {
-        text: `${plural(n ?? 0, 'incident')} in the window. The level waits until ${n === 1 ? 'it leaves' : 'they leave'} it.`,
-        command: null,
-      };
-    case 'provenance_below':
-      return {
-        text: 'Most events since this version started carry another version. Send events from this version only.',
-        command: cli('status'),
-      };
-    // Silver reads the model part of the fingerprint this CLI captures, or a
-    // usage event with a model, never the card (VOU-386). Claude Code's
-    // hooks read the model at session start and end, and the Mastra and
-    // OpenClaw adapters as the agent runs (fingerprint-claude-code.ts,
-    // mastra.ts, openclaw.ts). Any other agent can send a usage event with
-    // a model through emit. sync sends both.
-    case 'declare_model':
-      return {
-        text: 'Declare the model. Set ANTHROPIC_MODEL or model in the Claude Code settings, which the hooks read at the next session, use the Mastra or OpenClaw adapter, or send a usage event that names the model with emit, then sync.',
-        command: cli('sync'),
-      };
-    case 'operator_unverified':
-      return {
-        text: `Needs a verified operator. Your operator verifies a domain with a DNS TXT record at ${ACCOUNT_URL}.`,
-        command: null,
-      };
-    case 'operator_verification_lapsing':
-      return {
-        text: `The operator's domain record was missing at its last check. Verification lapses in ${plural(n ?? 0, 'day')}${dayOf(action.until)}, unless the TXT record is back. Gold needs it.`,
-        command: null,
-      };
-    case 'operator_silver_cap':
-      return {
-        text: `Every silver threshold holds, and this operator's agents took all ${OPERATOR_SILVER_CAP.agents} silver slots of the last ${OPERATOR_SILVER_CAP.days} days. The agent stays at bronze until one frees in ${plural(n ?? 0, 'day')}${dayOf(action.until)}.`,
-        command: null,
-      };
-    case 'need_ratings':
-      return {
-        text: `Needs ${plural(n ?? 0, 'more rating')} from agents at silver or above, which are not open yet.`,
-        command: null,
-      };
-    case 'version_cap':
-      return {
-        text: 'A new version starts one level below the last. Its own record earns the level back.',
-        command: cli('run'),
-      };
-    default:
-      return {
-        text: `Next step ${action.code}${n === null ? '' : `, ${n}`}.`,
-        command: null,
-      };
-  }
-}
-
-// An action as one line, the words and then the command.
-export function goalActionLine(action: GoalAction): string {
-  const { text, command } = goalActionText(action);
-  return command === null ? text : `${text} ${command}`;
-}
-
 // A level as the terminal shows it. The API may send a level this CLI does
 // not know, and the text is the API's, so only a known level is shown.
 export function shownLevel(level: string): string {
   return Level.safeParse(level).success ? level : 'unknown';
-}
-
-// The goal in one short line, as status shows it.
-export function goalSummary(goal: GoalResponse): string {
-  if (goal.nextLevel === null)
-    return `${shownLevel(goal.level)}, ${HIGHEST_ISSUED}`;
-  const met = goal.thresholds.filter((t) => t.met).length;
-  return `${shownLevel(goal.nextLevel)} next, ${met} of ${goal.thresholds.length} thresholds met`;
-}
-
-/*
- * Taken and posted toward the next level (POST-6), each current against
- * required, and the Trust Score every level reads beside them (VOU-503).
- * The API's when it sends them, else the verified_tasks, posted_tasks and
- * trust_score thresholds by name, so an API from before the pair still
- * shows what it has. null for a side neither gives, and all null when
- * there is no next level.
- */
-export function sidesOf(goal: GoalResponse): {
-  taken: GoalSide | null;
-  posted: GoalSide | null;
-  trust: GoalSide | null;
-} {
-  if (goal.nextLevel === null)
-    return { taken: null, posted: null, trust: null };
-  const byName = (name: string): GoalSide | null => {
-    const t = goal.thresholds.find((x) => x.name === name);
-    return t ? { current: t.current, required: t.required } : null;
-  };
-  return {
-    taken: goal.taken ?? byName('verified_tasks'),
-    posted: goal.posted ?? byName('posted_tasks'),
-    trust: goal.trustScore ?? byName('trust_score'),
-  };
 }
 
 // The posted thresholds a routine template post can close. Never the
@@ -422,98 +196,4 @@ export function postingBehind(goal: GoalResponse): boolean {
     goal.actions[0]?.code === 'post_task' ||
     goal.thresholds.some((t) => ROUTINE_POSTED.has(t.name) && !t.met)
   );
-}
-
-// The ladder states this CLI shows. reached, next and locked are issued
-// levels, reserved a level the standard names and does not issue yet.
-export type LadderRow = {
-  level: string;
-  state: 'reached' | 'next' | 'locked' | 'reserved';
-};
-
-const LADDER_LEVELS: ReadonlySet<string> = new Set(LADDER.map((s) => s.level));
-const LADDER_STATES: ReadonlySet<string> = new Set([
-  'reached',
-  'next',
-  'locked',
-  'reserved',
-]);
-
-/*
- * The ladder of the goal, lowest first. The API's when it sends one (VOU-184),
- * keeping only the levels and states this CLI knows, since the text lands
- * in a terminal. From an API before it, the ladder in @sealkeeper/schema
- * with the level and nextLevel of the answer, so an older API still shows
- * platinum as coming later.
- */
-export function ladderOf(goal: GoalResponse): LadderRow[] {
-  if (goal.ladder !== undefined) {
-    return goal.ladder.flatMap((s) =>
-      LADDER_LEVELS.has(s.level) && LADDER_STATES.has(s.state)
-        ? [{ level: s.level, state: s.state as LadderRow['state'] }]
-        : [],
-    );
-  }
-  const at = LADDER.findIndex((s) => s.level === goal.level);
-  return LADDER.map((s, i) => {
-    if (s.state === 'reserved') return { level: s.level, state: 'reserved' };
-    if (at !== -1 && i <= at) return { level: s.level, state: 'reached' };
-    return {
-      level: s.level,
-      state: s.level === goal.nextLevel ? 'next' : 'locked',
-    };
-  });
-}
-
-// The reserved levels of a ladder, platinum today.
-export const reservedOf = (ladder: LadderRow[]): string[] =>
-  ladder.filter((s) => s.state === 'reserved').map((s) => s.level);
-
-// 0.9 as 0.90, counts as they are.
-const shownNumber = (n: number) =>
-  Number.isInteger(n) ? String(n) : n.toFixed(2);
-
-/*
- * One step of gold's checklist in plain words, with its progress where it
- * has a number, as in "Safety record, 72 of 180 days". A code this CLI does
- * not know reads as its plain name.
- */
-export function goalStepText(step: GoalStep): string {
-  const p = step.progress;
-  const of =
-    p === null ? '' : `${shownNumber(p.current)} of ${shownNumber(p.required)}`;
-  const withOf = (label: string, unit = '') =>
-    p === null ? label : `${label}, ${of}${unit}`;
-  switch (step.code) {
-    case 'operator_verified':
-      return 'Verified operator, a domain checked by DNS TXT';
-    case 'confirmed_operators':
-      return withOf('Other operators behind confirmed tasks');
-    case 'confirmed_tasks':
-      return withOf('Confirmed tasks, no template or routine');
-    case 'clean_days':
-      return withOf('Safety record', ' days');
-    case 'history_days':
-      return p === null ? 'Active days' : `Active on ${of} days`;
-    case 'history_span_days':
-      return withOf('Record spans', ' days');
-    case 'trust_score':
-      return withOf('Trust Score');
-    case 'verified_tasks':
-      return withOf('Counted verified tasks');
-    // VOU-516. The operators whose completions of this agent's posts still
-    // count, not every operator that completed one.
-    case 'posted_distinct_operators':
-      return withOf('Other operators whose completed posts count');
-    case 'reliability':
-      return withOf('Reliability');
-    case 'safety':
-      return withOf('Safety');
-    case 'model_declared':
-      return 'Declared model';
-    default: {
-      const name = plainName(step.code);
-      return withOf(name.charAt(0).toUpperCase() + name.slice(1));
-    }
-  }
 }

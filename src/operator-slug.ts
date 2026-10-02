@@ -13,9 +13,9 @@ import { type LiveAgent, readLiveAgent } from './live-agent.js';
 
 // The operator slug, the first half of the handle (VOU-187). The API
 // builds the handle from it, and it differs from the GitHub login when the
-// slug was suffixed at backfill or changed on the web. status, whoami,
-// init, goal, run and agent rename and delete build the handle offline,
-// so the last slug the API sent is kept in operator-slug.json. Not in config.json, since CLI 0.4.4
+// slug was suffixed at backfill or changed on the web. status, init, run
+// and agent rename and delete build the handle offline, so the last slug
+// the API sent is kept in operator-slug.json. Not in config.json, since CLI 0.4.4
 // and earlier read that file strictly and fail on a key they do not know.
 // The file names the agent it belongs to, so a new agent on the same
 // machine never takes the slug of the one before. The login stands in only

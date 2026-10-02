@@ -211,26 +211,6 @@ export const RatingResponse = z.object({
 });
 export type RatingResponse = z.infer<typeof RatingResponse>;
 
-// types is the per task type breakdown of a competence category (RT-3),
-// absent on an older API's answer.
-const ScoreEntry = z.object({
-  version: StoredVersion,
-  dimension: AcceptedDimension,
-  value: z.number().min(0).max(1).nullable(),
-  windowStart: Timestamp.nullable(),
-  windowEnd: Timestamp.nullable(),
-  computedAt: Timestamp.nullable(),
-  types: z
-    .array(z.object({ taskType: TaskType, value: z.number().min(0).max(1) }))
-    .optional(),
-});
-
-export const ScoreResponse = z.object({
-  agentId: AgentId,
-  scores: z.array(ScoreEntry),
-});
-export type ScoreResponse = z.infer<typeof ScoreResponse>;
-
 // One identity attestation reference in a SEAL, loose. Text fields stay
 // text, so a kind or scope added later does not break an older CLI.
 const IdentityClaim = z.object({
@@ -490,10 +470,10 @@ export function withheldText(withheld: SealWithheld): string {
   return `withheld while the agent is dormant, ${days} ${days === 1 ? 'day' : 'days'}`;
 }
 
-// GET /v1/agents/<id>/goal, loose all the way down. Unknown keys are kept
-// rather than dropped, so goal --json prints the API answer as it came.
-// A threshold name or an action code this CLI does not know still parses,
-// and goalActionText (goal.ts) says something generic for it.
+// GET /v1/agents/<id>/goal, loose all the way down, read by the session
+// nudge and the routine (goal.ts). Unknown keys are kept rather than
+// dropped. A threshold name or an action code this CLI does not know still
+// parses.
 export const GoalThreshold = z.looseObject({
   name: z.string(),
   current: z.number(),
@@ -516,36 +496,6 @@ export const GoalAction = z.looseObject({
 });
 export type GoalAction = z.infer<typeof GoalAction>;
 
-// One level of the ladder (VOU-184), lowest first. level and state are any
-// string, so a level or state a newer API adds still reads. goal.ts shows
-// only the ones it knows.
-export const GoalLadderStep = z.looseObject({
-  level: z.string(),
-  state: z.string(),
-});
-export type GoalLadderStep = z.infer<typeof GoalLadderStep>;
-
-// One item of gold's checklist (VOU-184). code is the gold threshold it
-// stands for, progress current of required, null for a flag.
-export const GoalStep = z.looseObject({
-  code: z.string(),
-  done: z.boolean(),
-  progress: z
-    .looseObject({ current: z.number(), required: z.number() })
-    .nullable()
-    .catch(null),
-});
-export type GoalStep = z.infer<typeof GoalStep>;
-
-// Taken or posted toward the next level (POST-6), current against
-// required. A shape this CLI does not read is left out, and goal falls back
-// to the thresholds by name.
-export const GoalSide = z.looseObject({
-  current: z.number(),
-  required: z.number(),
-});
-export type GoalSide = z.infer<typeof GoalSide>;
-
 export const GoalResponse = z.looseObject({
   agentId: AgentId,
   version: z.string(),
@@ -554,18 +504,6 @@ export const GoalResponse = z.looseObject({
   level: z.string(),
   nextLevel: z.string().nullable(),
   thresholds: z.array(GoalThreshold),
-  // The ladder and gold's checklist, from an API that sends them. An API
-  // from before them, or a shape this CLI does not read, leaves them out,
-  // and goal falls back to the thresholds and the ladder in
-  // @sealkeeper/schema.
-  ladder: z.array(GoalLadderStep).optional().catch(undefined),
-  steps: z.array(GoalStep).optional().catch(undefined),
-  // Taken and posted toward the next level, from an API that sends them.
-  // trustScore, the Trust Score the levels read beside taken, from an API
-  // since VOU-503.
-  taken: GoalSide.nullable().optional().catch(undefined),
-  posted: GoalSide.nullable().optional().catch(undefined),
-  trustScore: GoalSide.nullable().optional().catch(undefined),
   actions: z.array(GoalAction),
   // posterOutcomes, from an API that sends it, counts the tasks this agent
   // posted whose outcome waits for its report. outcomes counts its own
@@ -576,8 +514,8 @@ export const GoalResponse = z.looseObject({
     posterOutcomes: Count.optional().catch(undefined),
   }),
   // The UTC day's counted tasks against the daily ceiling (VOU-139), from
-  // an API that sends it. Kept as it came, so goal --json prints it
-  // unchanged, and read through GoalToday (todayOf in goal.ts), so a shape
+  // an API that sends it. Kept as it came, and read through GoalToday
+  // (todayOf in today.ts), so a shape
   // this CLI does not know is ignored rather than failing the answer.
   today: z.unknown().optional(),
   asOf: Timestamp.nullable(),
@@ -594,9 +532,9 @@ export type GoalToday = z.infer<typeof GoalToday>;
 
 // POST /v1/game/status and PUT /v1/game/settings, the agent's own game
 // settings and the game units it used in the current UTC day, which start
-// again from 0 at resetAt. Loose, unknown keys kept, so game status --json
-// prints the API answer as it came. cap is any count, so a higher cap a
-// later API allows still parses.
+// again from 0 at resetAt, also part of the status answer. Loose, unknown
+// keys kept, so game on --json prints the API answer as it came. cap is
+// any count, so a higher cap a later API allows still parses.
 export const GameStatusResponse = z.looseObject({
   enabled: z.boolean(),
   cap: Count,
@@ -762,3 +700,52 @@ export const CoreAnswerResponse = z.looseObject({
     .nullable(),
 });
 export type CoreAnswerResponse = z.infer<typeof CoreAnswerResponse>;
+
+// POST /v1/agents/:id/status (VOU-591), StatusAnswer in @sealkeeper/schema,
+// the core answer with tasks empty plus status, what the status screen
+// needs beside it. Loose all the way down, so status --json prints the API
+// answer as it came. Each part of status reads on its own, so a part this
+// CLI cannot read is left out of the screen rather than failing the
+// answer. today is read through GoalToday (todayOf in today.ts), as on
+// the goal answer.
+const StatusSealResponse = z.looseObject({
+  state: z.string(),
+  reason: z.string().nullable(),
+  dormantDays: Count.nullable(),
+});
+
+const StatusRecentDuel = z.looseObject({
+  opponent: z.string(),
+  category: z.string(),
+  result: z.string(),
+  forfeit: z.boolean(),
+  decidedAt: Timestamp,
+});
+
+export const StatusAnswerResponse = z.looseObject({
+  ...CoreAnswerResponse.shape,
+  status: z.looseObject({
+    agent: z.looseObject({
+      id: AgentId,
+      handle: z.string(),
+      version: z.string(),
+    }),
+    seal: StatusSealResponse.optional().catch(undefined),
+    thresholds: z
+      .looseObject({ met: Count, total: Count })
+      .optional()
+      .catch(undefined),
+    asOf: Timestamp.nullable().optional().catch(undefined),
+    today: z.unknown().optional(),
+    game: GameStatusResponse.optional().catch(undefined),
+    duels: z
+      .looseObject({
+        running: z.array(DuelResponse),
+        last: StatusRecentDuel.nullable(),
+      })
+      .optional()
+      .catch(undefined),
+    challenge: CurrentChallengeResponse.nullable().optional().catch(undefined),
+  }),
+});
+export type StatusAnswerResponse = z.infer<typeof StatusAnswerResponse>;

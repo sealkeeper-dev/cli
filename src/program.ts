@@ -16,7 +16,6 @@ import {
 import { register as registerDuel } from './commands/duel.js';
 import { register as registerEmit } from './commands/emit.js';
 import { register as registerGame } from './commands/game.js';
-import { register as registerGoal } from './commands/goal.js';
 import {
   type HookCommandDeps,
   register as registerHook,
@@ -40,12 +39,7 @@ import { register as registerSubmit } from './commands/submit.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
 import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
-import {
-  register as registerWhoami,
-  type WhoamiDeps,
-} from './commands/whoami.js';
 import { terminalSafe } from './output.js';
-import type { TasksDeps } from './tasks.js';
 import { VERSION } from './version.js';
 
 // Root help lists leaf commands with their full path ("card show", not "card",
@@ -75,7 +69,7 @@ const JSON_FLAG = '--json';
 const JSON_HELP = 'print machine readable JSON where a command supports it';
 
 // Adds --json to every leaf command. Root options are positional (see
-// createProgram), so without this `sealkeeper whoami --json` would be rejected.
+// createProgram), so without this `sealkeeper status --json` would be rejected.
 function addJsonFlag(cmd: Command): void {
   if (cmd.commands.length === 0) {
     cmd.option(JSON_FLAG, JSON_HELP);
@@ -86,17 +80,17 @@ function addJsonFlag(cmd: Command): void {
 
 type ProgramDeps = {
   init?: InitDeps;
-  // Used by emit, sync and status. claudeDir and cwd only matter to status.
-  sync?: SyncDeps & Omit<StatusDeps, 'fetch'>;
+  sync?: SyncDeps;
   card?: CardDeps;
   adapter?: AdapterDeps;
   hook?: HookCommandDeps;
-  tasks?: TasksDeps;
+  // run, submit, release, the task and game commands, and status, which
+  // also reads env for the one time runtime question.
+  tasks?: StatusDeps;
   rate?: RateDeps;
   agent?: AgentDeps;
   seal?: Partial<SealDeps>;
   routine?: RoutineDeps;
-  whoami?: WhoamiDeps;
   config?: ConfigDeps;
 };
 
@@ -123,19 +117,17 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerSync(program, deps.sync);
   registerCard(program, deps.card);
   registerSeal(program, deps.seal);
-  registerStatus(program, deps.sync);
+  registerStatus(program, deps.tasks, deps.routine);
   registerRun(program, deps.tasks);
   registerSubmit(program, deps.tasks);
   registerRelease(program, deps.tasks);
   registerTasks(program, deps.tasks);
-  registerGoal(program, deps.tasks);
   registerGame(program, deps.tasks);
   registerDuel(program, deps.tasks);
   registerChallenge(program, deps.tasks);
   registerRoutine(program, deps.routine);
   registerRate(program, deps.rate);
   registerAgent(program, deps.agent, deps.routine);
-  registerWhoami(program, deps.whoami);
   registerConfig(program, deps.config);
   registerModel(program);
   registerLogout(program, deps.routine);
