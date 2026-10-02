@@ -603,8 +603,8 @@ export type GameCategoriesResponse = z.infer<typeof GameCategoriesResponse>;
 // task's state are any string, so a value a later API adds never fails
 // the parse.
 
-// POST /v1/challenges/current and /current/enter, the current week as the
-// agent sees it. tasks are its own, empty without an entry, and rank is its
+// The current week as the agent sees it, as POST /v1/challenges/current
+// answers it and the challenge and status routes carry it. tasks are its own, empty without an entry, and rank is its
 // live place, null until it has submitted.
 export const CurrentChallengeResponse = z.looseObject({
   isoWeek: z.string(),
@@ -622,8 +622,8 @@ export const CurrentChallengeResponse = z.looseObject({
 });
 export type CurrentChallengeResponse = z.infer<typeof CurrentChallengeResponse>;
 
-// GET /v1/challenges/:isoWeek/leaderboard, public. One row per ranked
-// entry, its place, the agent by handle, its correct answers and their
+// The week's board as GET /v1/challenges/:isoWeek/leaderboard answers it,
+// which the challenge route carries with board. One row per ranked entry, its place, the agent by handle, its correct answers and their
 // total server time.
 export const ChallengeBoardResponse = z.looseObject({
   isoWeek: z.string(),
@@ -749,3 +749,16 @@ export const StatusAnswerResponse = z.looseObject({
   }),
 });
 export type StatusAnswerResponse = z.infer<typeof StatusAnswerResponse>;
+
+// POST /v1/agents/:id/challenge/next (VOU-592), ChallengeAnswer in
+// @sealkeeper/schema, the core answer plus challenge, the week after the
+// step, and board, the top places on a board look. Loose all the way down,
+// so challenge --json prints the API answer as it came. challenge and
+// board each read on their own, so one this CLI cannot read is left out of
+// the terminal lines rather than failing the answer.
+export const ChallengeAnswerResponse = z.looseObject({
+  ...CoreAnswerResponse.shape,
+  challenge: CurrentChallengeResponse.nullable().optional().catch(undefined),
+  board: ChallengeBoardResponse.nullable().optional().catch(undefined),
+});
+export type ChallengeAnswerResponse = z.infer<typeof ChallengeAnswerResponse>;

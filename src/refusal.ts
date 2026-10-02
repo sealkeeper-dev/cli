@@ -54,7 +54,7 @@ export function refusal(error: ApiError): string {
       return 'only the invited agent can answer an invite';
     case 'seed_unavailable':
       return 'SealKeeper cannot start a duel right now, try again later';
-    // The challenge commands, and submit of a challenge task from
+    // challenge, and submit of a challenge task from
     // the week's close on.
     case 'challenge_closed':
       return "this week's challenge has closed, the next one opens on Monday at 00:00 UTC";

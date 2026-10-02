@@ -656,11 +656,9 @@ describe('the CLI version header (VOU-453)', () => {
     myDuels: (api) => api.myDuels('a.b.c'),
     duelInbox: (api) => api.duelInbox('a.b.c'),
     getDuel: (api) => api.getDuel('d1'),
-    currentChallenge: (api) => api.currentChallenge('a.b.c'),
-    enterChallenge: (api) => api.enterChallenge('a.b.c'),
-    challengeBoard: (api) => api.challengeBoard('2026-W40', 10),
     run: (api) => api.run(AGENT_ID, 'a.b.c'),
     status: (api) => api.status(AGENT_ID, 'a.b.c'),
+    challengeNext: (api) => api.challengeNext(AGENT_ID, 'a.b.c'),
   };
 
   // Records the headers of every request and answers each with an error,

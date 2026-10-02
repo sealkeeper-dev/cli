@@ -16,10 +16,9 @@ import { tildePath } from './files.js';
 import {
   AgentResponse,
   AgentTrustResponse,
-  ChallengeBoardResponse,
+  ChallengeAnswerResponse,
   CoreAnswerResponse,
   CredentialResponse,
-  CurrentChallengeResponse,
   DuelResponse,
   type ErrorIssue,
   ErrorResponse,
@@ -203,18 +202,6 @@ export type ApiClient = {
   duelInbox(envelope: string): Promise<ListDuelsResponse>;
   // GET /v1/duels/:id, public, the duel without any taskId.
   getDuel(duelId: string): Promise<DuelResponse>;
-  // POST /v1/challenges/current, the signed read of the current week's
-  // challenge, and POST /v1/challenges/current/enter, the entry, each
-  // signed over { issuedAt }. The agent's own tasks and rank. An API from
-  // before challenges answers 404 not_found.
-  currentChallenge(envelope: string): Promise<CurrentChallengeResponse>;
-  enterChallenge(envelope: string): Promise<CurrentChallengeResponse>;
-  // GET /v1/challenges/:isoWeek/leaderboard, public, the first limit rows
-  // of the week's board. 404 for a week with no challenge.
-  challengeBoard(
-    isoWeek: string,
-    limit: number,
-  ): Promise<ChallengeBoardResponse>;
   // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
   // tasks the agent solves now and answers the core answer. An API from
   // before it answers 404 not_found.
@@ -223,6 +210,13 @@ export type ApiClient = {
   // whole status screen as data, claiming nothing. An API from before it
   // answers 404 not_found.
   status(agentId: string, envelope: string): Promise<StatusAnswerResponse>;
+  // POST /v1/agents/:id/challenge/next, signed over ChallengeNextRequest
+  // (VOU-592). One step through the weekly challenge, or with board a look
+  // at its top places. An API from before it answers 404 not_found.
+  challengeNext(
+    agentId: string,
+    envelope: string,
+  ): Promise<ChallengeAnswerResponse>;
 };
 
 // timeoutMs bounds each request. emit passes a short one so a slow network
@@ -472,27 +466,16 @@ export function createApiClient(options: {
     duelInbox: (envelope) =>
       call('/v1/duels/inbox', ListDuelsResponse, { body: { envelope } }),
     getDuel: (duelId) => call(duelPath(duelId), DuelResponse),
-    currentChallenge: (envelope) =>
-      call('/v1/challenges/current', CurrentChallengeResponse, {
-        body: { envelope },
-      }),
-    // 201 for a new entry, 200 for the one the agent had.
-    enterChallenge: (envelope) =>
-      call('/v1/challenges/current/enter', CurrentChallengeResponse, {
-        body: { envelope },
-        ok: [200, 201],
-      }),
-    challengeBoard: (isoWeek, limit) =>
-      call(
-        `/v1/challenges/${encodeURIComponent(isoWeek)}/leaderboard?limit=${limit}`,
-        ChallengeBoardResponse,
-      ),
     run: (agentId, envelope) =>
       call(agentPath(agentId, '/run'), CoreAnswerResponse, {
         body: { envelope },
       }),
     status: (agentId, envelope) =>
       call(agentPath(agentId, '/status'), StatusAnswerResponse, {
+        body: { envelope },
+      }),
+    challengeNext: (agentId, envelope) =>
+      call(agentPath(agentId, '/challenge/next'), ChallengeAnswerResponse, {
         body: { envelope },
       }),
   };

@@ -297,10 +297,11 @@ class FakeApi {
     path: string,
     init?: RequestInit,
   ): Promise<Response | null> {
+    const challengeNext = `/v1/agents/${this.agentId}/challenge/next`;
     if (
       !path.startsWith('/v1/game') &&
       !path.startsWith('/v1/duels') &&
-      !path.startsWith('/v1/challenges')
+      path !== challengeNext
     ) {
       return null;
     }
@@ -339,21 +340,59 @@ class FakeApi {
       };
       return Response.json({ seek }, { status: 201 });
     }
-    if (path === '/v1/challenges/current') {
-      return Response.json({
-        isoWeek: '2026-W40',
-        category: 'data',
-        closesAt: new Date(Date.now() + 72 * HOUR).toISOString(),
-        entered: true,
-        rank: null,
-        tasks: this.challenge.map((taskId) => {
-          const task = this.tasks.get(taskId);
-          return {
-            taskId,
-            state: task?.state === 'open' ? 'unclaimed' : task?.state,
-            correct: null,
+    // One step through the challenge, as the challenge route takes it.
+    // The task this agent holds and has not submitted comes back, else the
+    // next open one is claimed with one game unit, and past the cap the
+    // answer says so in limited.
+    if (path === challengeNext) {
+      const entry = this.challenge.flatMap((id) => this.tasks.get(id) ?? []);
+      const held = entry.find((t) => t.state === 'claimed');
+      const open = entry.find((t) => t.state === 'open');
+      let task = held ?? null;
+      let limited = null;
+      if (task === null && open !== undefined) {
+        const refused = this.unit();
+        if (refused === null) {
+          Object.assign(open, {
+            state: 'claimed',
+            claimantAgentId: this.agentId,
+            claimedAt: new Date().toISOString(),
+          });
+          this.claimed.push(open.id);
+          task = open;
+        } else {
+          limited = {
+            code: 'game_cap_reached',
+            message: `This agent has used its ${game.cap} game units for today.`,
+            until: new Date(Date.now() + HOUR).toISOString(),
           };
-        }),
+        }
+      }
+      return Response.json({
+        tasks: task
+          ? [
+              {
+                id: task.id,
+                kind: 'challenge',
+                type: task.taskType,
+                spec: task.spec,
+                schema: null,
+                submits: 1,
+                expiresAt: task.expiresAt,
+              },
+            ]
+          : [],
+        waiting: [],
+        next: [],
+        standing: {
+          level: 'none',
+          verified: 0,
+          nextLevel: 'bronze',
+          needs: null,
+        },
+        limited,
+        challenge: null,
+        board: null,
       });
     }
     const action = path.match(
@@ -3037,6 +3076,8 @@ describe('routine', () => {
       ];
       // The task states the duel step read from tasks show --json.
       const states: unknown[] = [];
+      // The tasks and the limited code of the challenge step.
+      const challengeStep: unknown[] = [];
       const codes = gameAgent(async (play, read) => {
         await play('status', '--json');
         await play('duel', 'inbox', '--json');
@@ -3057,13 +3098,15 @@ describe('routine', () => {
           await play('tasks', 'claim', taskId, '--json');
           await solve(play, taskId);
         }
-        await play('challenge', 'current', '--json');
-        await play('tasks', 'claim', api.challenge[0] ?? '', '--json');
+        // The challenge step at the cap claims nothing and says why.
+        const step = JSON.parse(await read('challenge', '--json'));
+        challengeStep.push(step.tasks, step.limited?.code);
         await play('status', '--json');
       });
       const result = await run('routine', 'run');
       expect(result.code).toBe(0);
-      expect(codes).toEqual([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0]);
+      expect(codes).toEqual([0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+      expect(challengeStep).toEqual([[], 'game_cap_reached']);
       expect(states).toEqual(['open', 'verified']);
       expect(result.err).toContain(
         'This agent has used its 1 game units for today. They start again at 00:00 UTC',
@@ -3118,9 +3161,15 @@ describe('routine', () => {
         decidedAt: new Date(Date.now() - 24 * HOUR).toISOString(),
       });
       api.challenge = [api.addGameTask('challenge').id];
-      const codes = gameAgent(async (play) => {
-        const taskId = api.challenge[0] ?? '';
-        await play('tasks', 'claim', taskId, '--json');
+      const codes = gameAgent(async (play, read) => {
+        // The challenge step hands over the task, with its spec.
+        const step = JSON.parse(await read('challenge', '--json'));
+        const taskId = step.tasks[0]?.id ?? '';
+        expect(taskId).toBe(api.challenge[0]);
+        expect(step.tasks[0]?.spec).toEqual({
+          instruction: 'Sort the lines.',
+          input: 'b\na',
+        });
         await solve(play, taskId);
         await play('duel', 'rematch', lost.id);
         await play('duel', 'seek', '--category', 'auto', '--json');
@@ -4616,7 +4665,7 @@ describe('routinePrompt', () => {
       "5. Then play the game. Run \`sk status --json\` and read \`status.game\`. When it is missing or its \`enabled\` is false, skip every game step and go to the last step. This agent has game units left while \`usedToday\` is below \`cap\`.
       6. Run \`sk duel inbox --json\`. For each duel in \`duels\`, in order, run \`sk duel accept <duel id>\`. Once an accept says this agent has used its game units for today, accept no more and run \`sk duel decline <duel id>\` for each invite left. An accept that says the other agent has used its game units leaves that invite for a later run.
       7. Run \`sk duel list --state active --json\`. In each duel, this agent's side is the one with a \`taskId\`. Run \`sk tasks show <task id> --json\` with that id. Only when its \`state\` is \`open\` has this agent not claimed it yet, then run \`sk tasks claim <task id> --json\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Any other state means it was claimed or submitted before, leave it.
-      8. Run \`sk challenge current --json\`. For each task in \`tasks\` whose \`state\` is \`unclaimed\`, one at a time, run \`sk tasks claim <task id> --json\` with its \`taskId\`, read the spec from \`task.spec\` in its answer, the only place it is shown, solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run the answer's \`submit\` command with \`<answer file>\` replaced by that path. A duel or challenge task has one submit, and a wrong answer ends its claim. Submit each before the next claim. Stop once a claim says this agent has used its game units for today.
+      8. Run \`sk challenge --json\`. When this agent is in this week's challenge, which SealKeeper enters it in once it has a verified task of the week's category lately, it hands over one challenge task in \`tasks\`, with its \`spec\`, its \`schema\` and its \`submit\` command. Solve it carefully, write the answer to \`.sealkeeper-answers/<task id>.txt\` in the current directory and run its \`submit\` command with \`<answer file>\` replaced by that path. A challenge task has one submit, and a wrong answer ends its claim. Then run \`sk challenge --json\` again for the next task, one at a time. Stop once \`tasks\` is empty, when its \`limited\` says why, such as this agent having used its game units for today, or \`challenge.entered\` is false, since this agent is not in this week's challenge, or once it hands back a task you could not submit. Leave \`next\`, it is for a person.
       9. Run \`sk status --json\` again and read \`status.game\`. Only when this agent has game units left, run \`sk duel list --state finished --json\`. A duel there is lost when \`result\` is \`challenger_win\` and this agent's side, the one with a \`taskId\`, is \`opponent\`, or \`opponent_win\` and its side is \`challenger\`. Of the duels lost with a \`decidedAt\` in the last 7 days, take the latest and run \`sk duel rematch <duel id>\` once. When there is none, or the rematch says these two agents started a duel in this category lately or this agent holds its open seeks and invites already, run \`sk duel seek --category auto --json\` once."
     `);
   });
@@ -4665,7 +4714,8 @@ describe('routinePrompt', () => {
       'duel challenge bob/rival --category data',
       'duel seek --category code --json',
       'duel unseek x',
-      'challenge enter',
+      'challenge',
+      'challenge --board --json',
       'tasks post --type x',
     ]) {
       expect(

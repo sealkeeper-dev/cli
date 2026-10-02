@@ -1,143 +1,181 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { ChallengeRequest, GAME } from '@sealkeeper/schema';
+import { ChallengeNextRequest, GAME } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
+import { handleOf } from '../config.js';
+import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { cli } from '../invocation.js';
-import { stdout, wantsJson } from '../output.js';
+import { readOperatorSlug } from '../operator-slug.js';
+import { stdout, stdoutStyled, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type {
+  ChallengeAnswerResponse,
   ChallengeBoardResponse,
+  CoreActionResponse,
   CurrentChallengeResponse,
 } from '../responses.js';
+import { activeRoutineRun } from '../routine.js';
+import { createStyle, indent, type Styled } from '../style.js';
 import {
-  CHALLENGE_SUBMITS,
   defaultTasksDeps,
   fieldLines,
   openTaskSession,
+  sendWithFingerprint,
   type TaskSession,
   type TasksDeps,
   utc,
 } from '../tasks.js';
 import { timeLeft } from './duel.js';
+import { actionLine, agentAnswer, recordClaims } from './run.js';
+import { challengeLine } from './status.js';
 
-// sealkeeper challenge. The weekly challenge, one a week in one category,
-// ten fresh tasks for each entrant, ranked by correct answers and then by
-// server time. current and enter are signed for this agent alone, so its
-// own task ids reach it and no other. current is a POST, since a signed
-// read has a body, and the API enters an agent with the game on and a
-// verified task in the week's category on that read. standing makes the
-// same signed read for the agent's rank, then reads the public board of
-// that week. The tasks are claimed, solved and submitted with tasks claim
-// and submit, one claim at a time, and each claim uses one game
-// unit. --json prints the API answer as it came. Nothing here touches the
-// local log, and a challenge never moves a score, a level or the SEAL.
+/*
+ * sealkeeper challenge (VOU-597), the challenge verb of the core commands.
+ * One week, one category, ten fresh tasks for each entrant, ranked by
+ * correct answers and then by server time. The API decides and the CLI
+ * signs, calls and prints.
+ *
+ * challenge signs ChallengeNextRequest and calls
+ * POST /v1/agents/:id/challenge/next, which takes the first step that
+ * applies. It turns the game on when it is off, enters this week's
+ * challenge when the agent has not entered, and hands over the challenge
+ * task the agent holds, else claims the next one, which uses one game
+ * unit. When no task is left, or today's game units are spent, limited
+ * says so and when it lifts. Run it again for the next task. A retry
+ * answers the held task, so it never claims a second one.
+ *
+ * Only an agent takes the step, meaning --json or a stdout that is not a
+ * terminal. It gets the answer as it came, as run --json prints it
+ * (agentAnswer), each task with its submit line and each action this CLI
+ * knows with the command line it built. A claim is recorded in the local
+ * log, as run records its claims.
+ *
+ * In a routine run the step is signed with routine, so the API turns no
+ * game on and enters the agent only when the lazy entry of D-GAME-11
+ * would, a verified task of the week's category lately, and only shows
+ * the post offer. So a routine run plays the challenge for the same
+ * agents as before VOU-597 and leaves the day's post offer to a person.
+ *
+ * A person in a terminal gets where things stand and the hand-off, as a
+ * terminal run does. It takes no step, so it turns nothing on, enters
+ * nothing and claims nothing. It signs the request with board, the look
+ * that writes nothing, and prints the week, the task the agent holds and
+ * that the agent plays it with challenge --json, plus the post offer for
+ * a person.
+ *
+ * --board signs the same look, for a person and an agent alike, and the
+ * answer carries the top places and the agent's rank. A challenge never
+ * moves a score, a level or the SEAL.
+ */
 
-// What an API from before challenges answers every challenge route with,
-// 404.
-export const OLD_API = 'this SealKeeper API has no weekly challenges yet';
-// The board of a week the sweep has not opened yet answers 404.
-export const NO_BOARD = 'no challenge is open yet';
+// The 404 of an API from before the challenge route.
+export const OLD_API =
+  'this SealKeeper API has no challenge route yet, nothing was claimed';
+
 // seed_unavailable from an entry, whose tasks the seed agent posts. The
 // line in refusal.ts names a duel.
 export const NO_TASKS =
   'SealKeeper cannot make challenge tasks right now, try again later';
 
-// The rows standing prints, the top places of the week.
+// The places a board look shows, the top places of the week.
 export const BOARD_LIMIT = GAME.challengeTopPlaces;
 
-const now = () => new Date().toISOString();
+// Said by a look before this week's challenge is open, which the first
+// step of the week opens.
+export const NO_WEEK = 'No challenge is open yet this week.';
+export const NO_BOARD = `${NO_WEEK} Your agent opens it and enters with ${cli('challenge --json')}.`;
+
+// What a terminal challenge says before the hand-off, as a terminal run
+// says EXPLAIN.
+export const EXPLAIN = [
+  "Your agent plays this week's challenge, one task at a time.",
+  "You don't solve them yourself, and a challenge in a terminal takes no step.",
+];
+
+// The hand-off to the agent, which takes the step with the agent's form of
+// the command, the held task with its spec or the next one.
+export const handOff = (): string =>
+  `Have your agent run ${cli('challenge --json')}. It turns the game on and enters this week's challenge when needed, then hands over the next task.`;
+
+// Said when every task of the agent's entry is submitted, so there is
+// nothing to hand over.
+export const PLAYED =
+  "Every task of this agent's entry is submitted. The next challenge opens on Monday at 00:00 UTC.";
+
+const stdoutIsTTY = () => process.stdout.isTTY === true;
 
 export function register(
   parent: Command,
   deps: TasksDeps = defaultTasksDeps,
 ): Command {
-  const challenge = parent
+  return parent
     .command('challenge')
     .description(
-      'Play the weekly challenge, ten tasks in one category ranked by correct answers and time',
-    );
-
-  challenge
-    .command('current')
-    .description(
-      "Print this week's challenge, whether this agent entered, its rank and its tasks",
+      "Show this week's challenge for your agent, or take its next step with --json",
     )
-    .action(async function (this: Command): Promise<void> {
+    .option(
+      '--board',
+      `print the top ${BOARD_LIMIT} places and this agent's rank, taking no step`,
+    )
+    .action(async function (
+      this: Command,
+      options: { board?: boolean },
+    ): Promise<void> {
+      const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
+      const board = options.board === true;
+      // Only an agent takes a step. A person in a terminal, and --board,
+      // get the look, which writes nothing.
+      const step = json && !board;
       const session = await openTaskSession(this, deps);
-      const answer = await attempt(this, () => send(session, 'current'));
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(answer));
+      // Recomputed before a step, which claims, see fingerprint.ts. Never
+      // fails challenge.
+      if (step) await refreshFingerprintQuietly();
+      const routine = step && (await activeRoutineRun()) !== null;
+      const answer = await attempt(this, () => send(session, step, routine));
+      if (step) await recordClaims(answer);
+      if (json) {
+        stdout(JSON.stringify(agentAnswer(answer)));
         return;
       }
-      for (const line of currentLines(answer, Date.now())) stdout(line);
+      const slug = await readOperatorSlug(session.config.agentId);
+      const s = createStyle(process.stdout);
+      const say = (line?: Styled) => stdoutStyled(indent(line));
+      say();
+      say(
+        s.line`${s.mark()} ${s.bold(board ? 'SealKeeper challenge board' : 'SealKeeper challenge')}   ${handleOf(session.config, slug)}`,
+      );
+      say();
+      const lines = board
+        ? boardLines(answer, session.signer.agentId, Date.now())
+        : lookLines(answer);
+      // The API's words, which s.line makes safe for the terminal.
+      for (const line of lines) say(line === '' ? undefined : s.line`${line}`);
+      say();
     });
-
-  challenge
-    .command('enter')
-    .description(
-      "Enter this week's challenge, which gives this agent its tasks",
-    )
-    .action(async function (this: Command): Promise<void> {
-      const session = await openTaskSession(this, deps);
-      const answer = await attempt(this, () => send(session, 'enter'));
-      if (wantsJson(this)) {
-        stdout(JSON.stringify(answer));
-        return;
-      }
-      stdout(`Entered the weekly challenge ${answer.isoWeek}.`);
-      for (const line of currentLines(answer, Date.now())) stdout(line);
-    });
-
-  challenge
-    .command('standing')
-    .description(
-      `Print this agent's rank and the top ${BOARD_LIMIT} of this week's challenge`,
-    )
-    .action(async function (this: Command): Promise<void> {
-      const session = await openTaskSession(this, deps);
-      const current = await attempt(this, () => send(session, 'current'));
-      // The board of the week the signed read answered, so the rank and
-      // the top places are of one week even across Monday 00:00 UTC.
-      let leaderboard: ChallengeBoardResponse;
-      try {
-        leaderboard = await session.api.challengeBoard(
-          current.isoWeek,
-          BOARD_LIMIT,
-        );
-      } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-        this.error(error.status === 404 ? NO_BOARD : refusal(error));
-      }
-      if (wantsJson(this)) {
-        stdout(JSON.stringify({ current, leaderboard }));
-        return;
-      }
-      const me = session.signer.agentId;
-      for (const line of standingLines(current, leaderboard, me, Date.now())) {
-        stdout(line);
-      }
-    });
-
-  return challenge;
 }
 
-// The signed read of the current week's challenge or the entry, each over
-// { issuedAt } checked with the API's own schema first.
+// The signed request, the step with the agent's fingerprint as on a claim,
+// routine in a routine run, or the board look, which claims nothing.
 async function send(
   { signer, api }: TaskSession,
-  route: 'current' | 'enter',
-): Promise<CurrentChallengeResponse> {
-  const envelope = await signer.sign(
-    ChallengeRequest.parse({ issuedAt: now() }),
-  );
-  return route === 'enter'
-    ? api.enterChallenge(envelope)
-    : api.currentChallenge(envelope);
+  step: boolean,
+  routine: boolean,
+): Promise<ChallengeAnswerResponse> {
+  const request = ChallengeNextRequest.parse({
+    board: !step,
+    routine,
+    issuedAt: new Date().toISOString(),
+  });
+  const call = (envelope: string) =>
+    api.challengeNext(signer.agentId, envelope);
+  return step
+    ? sendWithFingerprint(signer, request, call)
+    : call(await signer.sign(request));
 }
 
-// The request, or the command ended with one line. The signed routes
-// answer 404 only from an API before challenges. Every other refusal is
-// its line in refusal.ts.
+// The answer, or the command ended with one line. 404 is an API from
+// before the challenge route. Every other refusal is its line in
+// refusal.ts.
 async function attempt<T>(cmd: Command, request: () => Promise<T>): Promise<T> {
   try {
     return await request();
@@ -148,64 +186,33 @@ async function attempt<T>(cmd: Command, request: () => Promise<T>): Promise<T> {
   }
 }
 
-const closesText = (closesAt: string, at: number): string =>
-  `${utc(closesAt)}, ${timeLeft(Date.parse(closesAt) - at)}`;
-
-// The agent's place, or why it has none. An entry ranks from its first
-// submit.
-function rankText(current: CurrentChallengeResponse, of?: number): string {
-  if (current.rank !== null) {
-    return of === undefined ? String(current.rank) : `${current.rank} of ${of}`;
-  }
-  return current.entered
-    ? 'none yet, an entry ranks from its first submit'
-    : 'none, not entered';
+// The steps after the look, each label with the command this CLI built for
+// a person. A challenge step is left out, since only the agent takes it.
+function laterLines(next: CoreActionResponse[]): string[] {
+  const later = next.filter(
+    (a) => a.action !== 'note' && a.action !== 'challenge',
+  );
+  return later.length === 0 ? [] : ['', ...later.map(actionLine)];
 }
 
-// Where one task stands, unclaimed, claimed, submitted correct or
-// submitted wrong. A state this CLI does not know is shown as it came.
-export function taskStateText(task: {
-  state: string;
-  correct: boolean | null;
-}): string {
-  if (task.state !== 'submitted' || task.correct === null) return task.state;
-  return task.correct ? 'submitted correct' : 'submitted wrong';
-}
-
-// The lines of challenge current and enter. The fields, one line per task
-// with its id and state, then what to do next.
-export function currentLines(
-  current: CurrentChallengeResponse,
-  at: number,
-): string[] {
-  const lines = fieldLines([
-    ['week', current.isoWeek],
-    ['category', current.category],
-    ['closes', closesText(current.closesAt, at)],
-    ['entered', current.entered ? 'yes' : 'no'],
-    ['rank', rankText(current)],
-  ]);
-  for (const task of current.tasks) {
-    lines.push(`${task.taskId}  ${taskStateText(task)}`);
+/*
+ * The lines of a terminal challenge, a look that took no step. The week,
+ * the task the agent holds, then the hand-off to the agent, or that every
+ * task of the entry is claimed, then the steps after it.
+ */
+export function lookLines(answer: ChallengeAnswerResponse): string[] {
+  const week = answer.challenge;
+  const lines = [week ? challengeLine(week) : NO_WEEK];
+  const held = week?.tasks.find((t) => t.state === 'claimed');
+  if (held) {
+    lines.push(`This agent holds task ${held.taskId}, not submitted yet.`);
   }
-  if (!current.entered) {
-    lines.push(
-      `Enter with ${cli('challenge enter')}. Each claim of a challenge task uses one game unit.`,
-    );
-    return lines;
-  }
-  const claimed = current.tasks.find((t) => t.state === 'claimed');
-  const unclaimed = current.tasks.find((t) => t.state === 'unclaimed');
-  if (claimed) {
-    lines.push(
-      `Submit with ${cli(`submit ${claimed.taskId}`)} --file <path you choose>. A challenge task has ${CHALLENGE_SUBMITS}.`,
-    );
-  } else if (unclaimed) {
-    lines.push(
-      `Claim the next with ${cli(`tasks claim ${unclaimed.taskId}`)}. Each claim uses one game unit, its spec comes with the claim, and a challenge task has ${CHALLENGE_SUBMITS}.`,
-    );
-  }
-  return lines;
+  const left = week?.tasks.some(
+    (t) => t.state === 'unclaimed' || t.state === 'claimed',
+  );
+  if (week?.entered && !left) lines.push('', PLAYED);
+  else lines.push('', ...EXPLAIN, handOff());
+  return [...lines, ...laterLines(answer.next)];
 }
 
 // The total server time of a board row, to a tenth of a second under a
@@ -224,15 +231,31 @@ export function serverTimeText(ms: number): string {
   return parts.join(' ');
 }
 
-// The lines of challenge standing. The week and the agent's rank among the
-// ranked entries, then one line per row of the board, rank, handle,
-// correct answers and server time.
-export function standingLines(
-  current: CurrentChallengeResponse,
-  board: ChallengeBoardResponse,
+// The agent's place, or why it has none. An entry ranks from its first
+// submit.
+function rankText(
+  current: CurrentChallengeResponse | null | undefined,
+  of: number,
+): string {
+  if (!current) return 'none, not entered';
+  if (current.rank !== null) return `${current.rank} of ${of}`;
+  return current.entered
+    ? 'none yet, an entry ranks from its first submit'
+    : 'none, not entered';
+}
+
+/*
+ * The lines of a board look. The week and the agent's rank among the
+ * ranked entries, then one line per place, rank, handle, correct answers
+ * and server time, then the steps after it.
+ */
+export function boardLines(
+  answer: ChallengeAnswerResponse,
   me: string,
   at: number,
 ): string[] {
+  const board: ChallengeBoardResponse | null | undefined = answer.board;
+  if (!board) return [NO_BOARD, ...laterLines(answer.next)];
   const lines = fieldLines([
     ['week', board.isoWeek],
     ['category', board.category],
@@ -240,11 +263,12 @@ export function standingLines(
     [
       'closes',
       board.state === 'open'
-        ? closesText(board.closesAt, at)
+        ? `${utc(board.closesAt)}, ${timeLeft(Date.parse(board.closesAt) - at)}`
         : utc(board.closesAt),
     ],
-    ['your rank', rankText(current, board.entrants)],
+    ['your rank', rankText(answer.challenge, board.entrants)],
   ]);
+  lines.push('');
   if (board.rows.length === 0) {
     lines.push('No entry has submitted an answer yet.');
   }
@@ -254,8 +278,11 @@ export function standingLines(
       `${row.rank}  ${row.agent.handle}${you}  ${row.correct} correct  ${serverTimeText(row.serverMs)}`,
     );
   }
-  if (!current.entered) {
-    lines.push(`Enter with ${cli('challenge enter')}.`);
+  if (!answer.challenge?.entered) {
+    lines.push(
+      '',
+      `Your agent enters and takes the first task with ${cli('challenge --json')}.`,
+    );
   }
-  return lines;
+  return [...lines, ...laterLines(answer.next)];
 }

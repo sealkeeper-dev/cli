@@ -35,7 +35,10 @@ import {
 import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import type { StatusAnswerResponse } from '../responses.js';
+import type {
+  CurrentChallengeResponse,
+  StatusAnswerResponse,
+} from '../responses.js';
 import { withheldText } from '../responses.js';
 import { readStatus, type StatusRead, sourceLine } from '../status-answer.js';
 import {
@@ -394,19 +397,22 @@ function gameSection(answer: StatusAnswerResponse): string[] {
   }
   const c = status.challenge;
   if (c !== undefined && c !== null) {
-    const left = c.tasks.filter(
-      (t) => t.state === 'unclaimed' || t.state === 'claimed',
-    ).length;
-    const entry = c.entered
-      ? `entered, ${c.rank === null ? 'no rank yet' : `rank ${c.rank}`}, ${left} of ${c.tasks.length} tasks left`
-      : 'not entered';
-    lines.push(
-      ...section('Challenge', [
-        `${c.isoWeek} ${c.category}, ${entry}, closes ${utc(c.closesAt)}`,
-      ]),
-    );
+    lines.push(...section('Challenge', [challengeLine(c)]));
   }
   return lines;
+}
+
+// This week's challenge in one line, the week, the category, the entry
+// with its rank and the tasks left, and the close. status and challenge
+// print it.
+export function challengeLine(c: CurrentChallengeResponse): string {
+  const left = c.tasks.filter(
+    (t) => t.state === 'unclaimed' || t.state === 'claimed',
+  ).length;
+  const entry = c.entered
+    ? `entered, ${c.rank === null ? 'no rank yet' : `rank ${c.rank}`}, ${left} of ${c.tasks.length} tasks left`
+    : 'not entered';
+  return `${c.isoWeek} ${c.category}, ${entry}, closes ${utc(c.closesAt)}`;
 }
 
 const RESULT_WORD: Record<string, string> = {

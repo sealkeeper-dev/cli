@@ -237,12 +237,12 @@ export function agentAnswer(answer: PrintedAnswer) {
  * invocation, or null for an action this CLI does not know, which the
  * agent tells the user by its label. run takes addressed and anyPoster,
  * post one template this CLI has, posted with --yes, which stands for the
- * user's yes the action asks for. sync takes no argument and asks before
- * it sends while auto sync is off. An argument this CLI does not know
- * makes no command, so a line never does less than the API meant. run and
- * status both use it. For a person, reader person, it is the same command
- * without --json and without the --yes that stands for a yes, so run hands
- * the work to the agent and a post asks first.
+ * user's yes the action asks for. challenge and sync take no argument, and
+ * sync asks before it sends while auto sync is off. An argument this CLI
+ * does not know makes no command, so a line never does less than the API
+ * meant. run, challenge and status use it. For a person, reader person,
+ * it is the same command without --json and without the --yes that stands
+ * for a yes, so run hands the work to the agent and a post asks first.
  */
 export function actionCommand(
   action: CoreActionResponse,
@@ -251,6 +251,11 @@ export function actionCommand(
   const args = Object.entries(action.args);
   const agent = reader === 'agent';
   if (action.action === 'sync') return args.length === 0 ? cli('sync') : null;
+  if (action.action === 'challenge') {
+    return args.length === 0
+      ? cli(['challenge', ...(agent ? ['--json'] : [])].join(' '))
+      : null;
+  }
   if (action.action === 'run') {
     const flags: string[] = [];
     for (const [key, value] of args) {
@@ -297,8 +302,10 @@ function coreTaskOf(task: TaskResponse) {
 
 // The claims in the local log, so status and the log reflect the work. The
 // answer holds the tasks claimed before as well, so only a task the log
-// does not hold yet is recorded.
-async function recordClaims(answer: CoreAnswerResponse): Promise<void> {
+// does not hold yet is recorded. run and challenge both use it.
+export async function recordClaims(
+  answer: Pick<CoreAnswerResponse, 'tasks'>,
+): Promise<void> {
   const known = new Set(await unsubmittedClaims());
   const fresh = answer.tasks.filter((task) => !known.has(task.id));
   for (const task of fresh) {
