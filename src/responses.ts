@@ -147,13 +147,11 @@ export const TaskResponse = z.object({
   // string, so a new origin never fails the parse of a whole page. Absent
   // from an API before it, and then the routine takes no such task.
   origin: z.string().optional(),
-  // The real task fields (RT-1), for tasks show. Any string, so a value
-  // added later never fails the parse of a whole page, and absent from an
-  // API before them.
+  // The real task fields (RT-1) tasks post reads back. Any string, so a
+  // value added later never fails the parse of a whole page, and absent
+  // from an API before them.
   category: z.string().optional(),
-  checkMethod: z.string().optional(),
   size: z.string().optional(),
-  disclosure: z.string().optional(),
   // How hard the task is, 1 to 5 (D-TS-3). Any number, for the same
   // reason, and absent from an API before it.
   difficulty: z.number().optional(),

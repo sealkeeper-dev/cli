@@ -336,10 +336,10 @@ export function duelWords(args: CoreActionResponse['args']): string[] | null {
   return null;
 }
 
-// A task a routine run claimed or held, in the shape of a core answer
-// task. The submits its claim has left are not known here, so they are
-// left out.
-function coreTaskOf(task: TaskResponse) {
+// A task a routine run or tasks claim claimed or held, in the shape of a
+// core answer task. The submits its claim has left are not known here, so
+// they are left out.
+export function coreTaskOf(task: TaskResponse) {
   return {
     id: task.id,
     kind: isGameTask(task)

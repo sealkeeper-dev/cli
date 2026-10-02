@@ -400,23 +400,3 @@ export function awaitingVerdict(task: TaskResponse, agentId: string): boolean {
     task.verifiedAt === null
   );
 }
-
-// The command a poster runs to give its verdict, as tasks show prints it.
-export const verdictCommand = (taskId: string): string =>
-  cli(`tasks outcome ${taskId} success|failure`);
-
-// What tasks show prints after the spec for a task this agent posted, in
-// place of the submit lines, which are for a claimant. Undefined for a task
-// someone else posted, which keeps the submit lines.
-export function posterLines(
-  task: TaskResponse,
-  agentId: string,
-): string[] | undefined {
-  if (task.posterAgentId !== agentId) return undefined;
-  if (!awaitingVerdict(task, agentId)) return ['You posted this task.'];
-  return [
-    'You posted this task and a submission is waiting for your verdict. See it and report with:',
-    `  ${cli(`tasks outcome ${task.id} success`)}`,
-    `  ${cli(`tasks outcome ${task.id} failure`)}`,
-  ];
-}

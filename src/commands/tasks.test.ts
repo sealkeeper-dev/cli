@@ -671,8 +671,17 @@ describe('submit, release and the tasks commands', () => {
         `/v1/tasks/${picked.id}/claim`,
       ]);
       expect(api.posts()[0]?.payload).toEqual({ taskId: picked.id });
+      // The task as run --json prints one, the submit command built here.
       expect(JSON.parse(out)).toEqual({
-        task: expect.objectContaining({ id: picked.id, state: 'claimed' }),
+        task: {
+          id: picked.id,
+          kind: 'exchange',
+          type: 'summarise',
+          spec: { words: 100 },
+          schema: null,
+          expiresAt: picked.expiresAt,
+          submit: `npx sealkeeper submit ${picked.id} --file <answer file>`,
+        },
         already_held: false,
         poster: {
           agent_id: OTHER_AGENT,
@@ -681,7 +690,6 @@ describe('submit, release and the tasks commands', () => {
           same_operator: false,
         },
         untrusted: true,
-        submit: `npx sealkeeper submit ${picked.id} --file <answer file>`,
       });
       expect(await logged()).toMatchObject([
         {
@@ -2878,144 +2886,6 @@ describe('submit, release and the tasks commands', () => {
       expect(code).toBe(1);
       expect(err).toContain('outcome must be success or failure, got maybe');
       expect(api.requests).toEqual([]);
-    });
-
-    it('tasks show tells the poster a submission waits for its verdict', async () => {
-      const task = submitted();
-      const { code, out } = await run('tasks', 'show', task.id);
-      expect(code).toBe(0);
-      expect(out).toContain('a submission is waiting for your verdict');
-      expect(out).toContain(`npx sealkeeper tasks outcome ${task.id} success`);
-      expect(out).not.toContain('Submit with');
-
-      const json = await run('tasks', 'show', task.id, '--json');
-      const entry = JSON.parse(json.out);
-      expect(entry).toMatchObject({
-        id: task.id,
-        awaiting_verdict: true,
-        verdict: `npx sealkeeper tasks outcome ${task.id} success|failure`,
-      });
-      expect(entry).not.toHaveProperty('submit');
-    });
-
-    it('tasks show says nothing waits on an open task the agent posted', async () => {
-      const task = api.add({ posterAgentId: agentId });
-      const { out } = await run('tasks', 'show', task.id);
-      expect(out).toContain('You posted this task.');
-      expect(out).not.toContain('verdict');
-      const json = await run('tasks', 'show', task.id, '--json');
-      const entry = JSON.parse(json.out);
-      expect(entry.awaiting_verdict).toBeUndefined();
-      expect(entry).not.toHaveProperty('submit');
-    });
-
-    it('tasks show keeps the submit command for a task someone else posted', async () => {
-      const task = api.add({});
-      const json = await run('tasks', 'show', task.id, '--json');
-      expect(JSON.parse(json.out).submit).toContain(`submit ${task.id}`);
-    });
-
-    it('tasks show prints category, check method, size and disclosure (RT-2)', async () => {
-      const task = api.add({
-        category: 'data',
-        checkMethod: 'hash',
-        size: 's',
-        disclosure: 'public',
-      });
-      const { code, out } = await run('tasks', 'show', task.id);
-      expect(code).toBe(0);
-      const lines = out.split('\n');
-      expect(lines[0]).toContain(`Task ${task.id}.`);
-      expect(lines[1]).toBe(
-        'Category data. check hash. size s. disclosure public.',
-      );
-      const json = await run('tasks', 'show', task.id, '--json');
-      expect(JSON.parse(json.out)).toMatchObject({
-        category: 'data',
-        check_method: 'hash',
-        size: 's',
-        disclosure: 'public',
-      });
-    });
-
-    it('tasks show prints the difficulty with the other fields (D-TS-3)', async () => {
-      const task = api.add({
-        category: 'data',
-        checkMethod: 'confirm',
-        size: 's',
-        difficulty: 4,
-        disclosure: 'public',
-      });
-      const { code, out } = await run('tasks', 'show', task.id);
-      expect(code).toBe(0);
-      expect(out.split('\n')[1]).toBe(
-        'Category data. check confirm. size s. difficulty 4. disclosure public.',
-      );
-      const json = await run('tasks', 'show', task.id, '--json');
-      expect(JSON.parse(json.out)).toMatchObject({ size: 's', difficulty: 4 });
-    });
-
-    it('tasks show leaves the fields line out for an API that sends none', async () => {
-      const task = api.add({});
-      const { out } = await run('tasks', 'show', task.id);
-      expect(out).not.toContain('Category');
-      const json = await run('tasks', 'show', task.id, '--json');
-      expect(JSON.parse(json.out)).not.toHaveProperty('category');
-    });
-
-    it.each([['duel'], ['challenge']])(
-      'tasks show of a %s task says its spec came with the claim',
-      async (origin) => {
-        const task = api.add({
-          origin,
-          spec: { rows: 3 },
-          state: 'claimed',
-          claimantAgentId: agentId,
-          claimedAt: new Date().toISOString(),
-        });
-        const { code, out } = await run('tasks', 'show', task.id);
-        expect(code).toBe(0);
-        expect(out).toContain(`${GAME_SPEC_AT_CLAIM}\n`);
-        expect(out).not.toContain('Spec:');
-        expect(out).not.toContain('rows');
-      },
-    );
-
-    // An open game task, as an accept names it before the claim. The
-    // line holds before the claim as it does after it.
-    it('tasks show of an open duel task says its spec comes in the claim answer', async () => {
-      const task = api.add({ origin: 'duel', spec: { rows: 3 } });
-      const { code, out } = await run('tasks', 'show', task.id);
-      expect(code).toBe(0);
-      expect(out).toContain(
-        'The spec of a duel or challenge task is shown only in the answer to its claim.\n',
-      );
-      expect(out).not.toContain('not shown again');
-      expect(out).not.toContain('rows');
-    });
-
-    it('tasks show refuses a prefix that matches several held tasks, and takes a longer one', async () => {
-      const held = (id: string) =>
-        api.add({
-          id,
-          state: 'claimed',
-          claimantAgentId: agentId,
-          claimedAt: new Date().toISOString(),
-        });
-      held('abcd1234-0000-4000-8000-000000000001');
-      const second = held('abcd5678-0000-4000-8000-000000000002');
-
-      const { code, out, err } = await run('tasks', 'show', 'abcd');
-      expect(code).toBe(1);
-      expect(out).toBe('');
-      expect(err).toBe('abcd matches 2 tasks, give more of the id\n');
-      expect(
-        api.requests.filter((r) => r.path.startsWith('/v1/tasks/')),
-      ).toEqual([]);
-
-      const json = await run('tasks', 'show', 'ABCD5', '--json');
-      expect(json.code).toBe(0);
-      expect(JSON.parse(json.out).id).toBe(second.id);
     });
   });
 

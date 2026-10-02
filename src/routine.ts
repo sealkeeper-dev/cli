@@ -34,9 +34,8 @@ import { ROUTINE_TEMPLATES, templateById } from './task-templates.js';
 // A routine run starts a headless agent with SEALKEEPER_ROUTINE_RUN set to
 // the run id. Only that variable puts a command in routine mode, where
 // run, tasks outcome and submit apply the routine rules whatever their
-// options, tasks post takes only a template that makes its own input and
-// tasks claim takes only a duel or weekly challenge task addressed to this
-// agent (GAME-14). A command the operator runs in
+// options and tasks post takes only a template that makes its own input.
+// A command the operator runs in
 // another terminal while a run is going is a normal command. The Bash rules the agent gets allow only commands that
 // keep the variable, see routine-agent.ts.
 //
@@ -859,21 +858,17 @@ export type PostAsk = {
   outsideCwd: boolean;
 };
 
-// A command a routine run's agent may not use ends here, with the reason.
-// With post, tasks post passes when it asks for a template that makes its
-// own input and nothing else (POST-7), or for --adopt and nothing else
-// (RT-12). The run's choice and the daily post limit are checked as it
-// posts, see tasks-post.ts.
+// A post a routine run's agent may not make ends here, with the reason.
+// tasks post passes when it asks for a template that makes its own input
+// and nothing else (POST-7), or for --adopt and nothing else (RT-12). The
+// run's choice and the daily post limit are checked as it posts, see
+// tasks-post.ts.
 export async function refuseInRoutine(
   cmd: Command,
-  command: string,
-  post?: PostAsk,
+  post: PostAsk,
 ): Promise<void> {
   if ((await activeRoutineRun()) === null) return;
-  const why =
-    post === undefined
-      ? `${command} is not available during a routine run. A routine run claims through run, which takes tasks addressed to this agent by allowed operators, other operators' template tasks and seed tasks, claims by id only its own duel and weekly challenge tasks, and posts only by adopting a ready made task or from a template`
-      : routinePostRefusal(post);
+  const why = routinePostRefusal(post);
   if (why !== null) cmd.error(why);
 }
 

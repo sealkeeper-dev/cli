@@ -245,7 +245,7 @@ export function register(
     ): Promise<void> {
       // Before anything is read, so a routine run never reads a file for a
       // post it may not make.
-      await refuseInRoutine(this, 'tasks post', {
+      await refuseInRoutine(this, {
         template: options.template ?? null,
         adopt: options.adopt ?? null,
         input: options.input !== undefined,
@@ -464,7 +464,7 @@ async function postAndPrint(
   // other way in, such as the guided walk, ends here.
   const runId = await activeRoutineRun();
   if (runId !== null && request.origin !== 'routine') {
-    await refuseInRoutine(cmd, 'tasks post', {
+    await refuseInRoutine(cmd, {
       template: null,
       input: false,
       assignee: false,
@@ -507,8 +507,7 @@ async function postAndPrint(
         id: task.id,
         state: task.state,
         expiresAt: task.expiresAt,
-        // The handle, as tasks show prints it. Left out for an
-        // open task.
+        // The assignee's handle. Left out for an open task.
         ...(task.assignee ? { assignee: task.assignee.handle } : {}),
       }),
     );

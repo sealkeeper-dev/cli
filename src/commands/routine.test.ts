@@ -3120,7 +3120,7 @@ describe('routine', () => {
       expect(input).not.toContain('game status');
       expect(
         allowedOf(spawned[0]?.args ?? []).filter((rule) =>
-          / (game|duel|challenge|tasks show|tasks claim)\b/.test(rule),
+          / (game|duel|challenge|tasks claim)\b/.test(rule),
         ),
       ).toEqual([]);
       expect((await runs())[1]).not.toHaveProperty('game');
@@ -3971,35 +3971,6 @@ describe('routine', () => {
       expect(capped.err).toContain('daily limit of 1 confirmations');
     });
 
-    it('tasks claim takes a duel or challenge task of this agent, and no game task of another (GAME-14)', async () => {
-      const own = api.addGameTask('challenge');
-      api.game = { enabled: true, cap: 5, usedToday: 0 };
-      let result = await run('tasks', 'claim', own.id, '--json');
-      expect(result.code).toBe(0);
-      // The spec arrives with the claim, the only answer that has it.
-      expect(JSON.parse(result.out).task.spec).toEqual(own.spec);
-      const other = api.add({
-        origin: 'duel',
-        assignee: { id: BOB_AGENT, handle: 'bob/rival' },
-      });
-      result = await run('tasks', 'claim', other.id);
-      expect(result.code).toBe(1);
-      expect(result.err).toContain('not available during a routine run');
-      expect(api.claimed).toEqual([own.id]);
-      // A game claim writes no claim line, so no daily claim limit counts it.
-      expect((await readRoutine()).filter((e) => e.kind === 'claim')).toEqual(
-        [],
-      );
-    });
-
-    it('tasks claim is refused, whoever posted the task', async () => {
-      const task = api.add({ posterAgentId: MALLORY_AGENT });
-      const result = await run('tasks', 'claim', task.id);
-      expect(result.code).toBe(1);
-      expect(result.err).toContain('not available during a routine run');
-      expect(api.claimed).toEqual([]);
-    });
-
     it('submit takes an answer file from the working directory, never one in the home', async () => {
       const work = await ensureWorkDir();
       expect(work).toBe(routinePaths().work);
@@ -4820,7 +4791,6 @@ describe('routinePrompt', () => {
       'duel --cancel --json',
       'duel --list --json',
       'duel --json --cancel',
-      'tasks show x --json',
       'tasks claim x --json',
       'challenge',
       'challenge --board --json',

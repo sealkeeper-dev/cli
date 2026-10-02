@@ -4,7 +4,6 @@ import { defaultTasksDeps, type TasksDeps } from '../tasks.js';
 import { register as registerClaim } from './tasks-claim.js';
 import { register as registerOutcome } from './tasks-outcome.js';
 import { register as registerPost } from './tasks-post.js';
-import { register as registerShow } from './tasks-show.js';
 
 export function register(
   parent: Command,
@@ -12,7 +11,6 @@ export function register(
 ): Command {
   const tasks = parent.command('tasks').description('Task exchange');
   registerClaim(tasks, deps);
-  registerShow(tasks, deps);
   registerPost(tasks, deps);
   registerOutcome(tasks, deps);
   return tasks;

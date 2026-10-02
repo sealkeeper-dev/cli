@@ -1602,9 +1602,9 @@ function waitingLine(skip: PersonSkip): string {
   const type = skip.taskType ? ` ${skip.taskType}` : '';
   switch (skip.reason) {
     case 'open_task':
-      return `open${type} task ${skip.taskId}${by}. Look first with ${cli(`tasks show ${skip.taskId}`)}`;
+      return `open${type} task ${skip.taskId}${by}. Take it with ${cli(`tasks claim ${skip.taskId}`)}`;
     case 'poster_not_allowed':
-      return `addressed${type} task ${skip.taskId}${by}, not on the allowlist. Look first with ${cli(`tasks show ${skip.taskId}`)}`;
+      return `addressed${type} task ${skip.taskId}${by}, not on the allowlist. Take it with ${cli(`tasks claim ${skip.taskId}`)}`;
     case 'claimant_not_allowed':
       return `submission to${type} task ${skip.taskId}${by}, not on the allowlist. Judge it with ${cli(`tasks outcome ${skip.taskId} success|failure`)}`;
   }

@@ -11,23 +11,25 @@ import {
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
-import { activeRoutineRun, refuseInRoutine } from '../routine.js';
 import {
   defaultTasksDeps,
-  isGameTask,
   openTaskSession,
   recordEvent,
   sendWithFingerprint,
   submitCommand,
   type TasksDeps,
   taskDetail,
-  taskSummary,
 } from '../tasks.js';
+import { coreTaskOf } from './run.js';
 
 // sealkeeper tasks claim <id>. Claims the one task named, the one a person
-// picked on the board, where run takes the tasks the API picks. The API has the last word on every refusal, and each one is a
-// single line. After the claim it says who posted the task, since a spec
-// from another agent is untrusted, then prints the task as tasks show does.
+// picked on the board, where run takes the tasks the API picks. The API has
+// the last word on every refusal, and each one is a single line. After the
+// claim it says who posted the task, since a spec from another agent is
+// untrusted, then prints the task with its spec, schema and submit lines.
+// --json prints the task as run --json prints one, with the submit command
+// this CLI builds. A routine run never claims by id, its rules leave this
+// command out (routine-agent.ts).
 
 export const OWN_TASK =
   'this agent posted this task, and an agent cannot claim its own task';
@@ -59,17 +61,6 @@ export function register(
         this.error(`${id} is not a task id, copy the full id from the board`);
       }
       const { config, signer, api } = await openTaskSession(this, deps);
-      // A routine run claims through run, never a task picked by id from
-      // anyone (VOU-138), but for a duel or weekly challenge task addressed
-      // to this agent, which its game section claims by id (GAME-14). Such
-      // a claim is bounded by the game cap SealKeeper holds, so it writes
-      // no claim line and spends no daily claim limit.
-      if (
-        (await activeRoutineRun()) !== null &&
-        !(await ownGameTask(api, taskId, signer.agentId))
-      ) {
-        await refuseInRoutine(this, 'tasks claim');
-      }
 
       let task: TaskResponse;
       let fresh = true;
@@ -110,7 +101,7 @@ export function register(
       if (wantsJson(this)) {
         stdout(
           JSON.stringify({
-            task: taskSummary(task),
+            task: { ...coreTaskOf(task), submit: submitCommand(task.id) },
             already_held: !fresh,
             poster: {
               agent_id: task.posterAgentId,
@@ -119,7 +110,6 @@ export function register(
               same_operator: sameOperator,
             },
             untrusted: !seed,
-            submit: submitCommand(task.id),
           }),
         );
         return;
@@ -152,22 +142,6 @@ export function claimRefusal(error: ApiError): string {
       return NOT_FOUND;
     default:
       return refusal(error);
-  }
-}
-
-// True when the task is a duel or weekly challenge task addressed to this
-// agent, from the public task read. A read that fails is false, so a
-// routine run claims nothing it could not check.
-async function ownGameTask(
-  api: ApiClient,
-  taskId: string,
-  agentId: string,
-): Promise<boolean> {
-  try {
-    const task = await api.getTask(taskId);
-    return isGameTask(task) && task.assignee?.id === agentId;
-  } catch {
-    return false;
   }
 }
 

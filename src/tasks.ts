@@ -137,21 +137,6 @@ export function utc(iso: string): string {
   return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-// poster is the poster's handle, given for an addressed task, whose spec
-// comes from another operator.
-export function taskSummary(task: TaskResponse, poster?: string) {
-  return {
-    id: task.id,
-    taskType: task.taskType,
-    state: task.state,
-    verification: task.verification,
-    expiresAt: task.expiresAt,
-    spec: task.spec,
-    ...(task.assignee ? { assignee: task.assignee.handle } : {}),
-    ...(poster === undefined ? {} : { poster }),
-  };
-}
-
 // How long after its post another operator's open task is left for a
 // person, the API's TASKS_MIN_AGE_MINUTES (RT-8). The API holds the real
 // number and answers a routine claim that comes too early with 409 too_new
@@ -219,9 +204,8 @@ export function addressedTo(
 export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
   (GAME_TASK_ORIGINS as readonly string[]).includes(task.origin ?? '');
 
-// What tasks show and a repeated tasks claim print for the spec of a game
-// task, which the public read they make shows as {}.
-// It holds before the claim and after it.
+// What a repeated tasks claim prints for the spec of a game task, which
+// every read but its first claim shows as {}.
 export const GAME_SPEC_AT_CLAIM =
   'The spec of a duel or challenge task is shown only in the answer to its claim.';
 
@@ -290,9 +274,9 @@ export async function serverHeld(
   return claimed.filter((task) => task.claimantAgentId === agentId);
 }
 
-// One task in full, as tasks show prints it. The spec, the schema when
+// One task in full, as tasks claim prints it. The spec, the schema when
 // there is one and the two ways to submit. tail replaces the submit lines,
-// as tasks show does for the poster.
+// as tasks outcome does for the poster.
 export function taskDetail(
   task: TaskResponse,
   now: number,
