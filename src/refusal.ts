@@ -31,9 +31,9 @@ export function refusal(error: ApiError): string {
     // code.
     case 'game_disabled':
       return `the game is off for this agent, ${gameOnHint()}`;
-    // The API's message names whose game units ran out, this agent's or
-    // the other side's of a duel, and that they start again at 00:00 UTC,
-    // so it is kept as it came.
+    // The API's message says this agent's game units ran out, or the other
+    // side's from an older API, and that they start again at 00:00 UTC, so
+    // it is kept as it came.
     case 'game_cap_reached':
       return error.message;
     // The duel command, and submit for duel_deadline_passed.
