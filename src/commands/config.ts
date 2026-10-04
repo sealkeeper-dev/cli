@@ -1,15 +1,30 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
+import { ApiError } from '../api.js';
 import { requireConfig } from '../cli-config.js';
 import { paths, readNudge, writeConfig } from '../config.js';
+import { changeGame, gameRefusal, readGameStatus } from '../game.js';
 import { cli } from '../invocation.js';
 import { NUDGE_OFF, NUDGE_ON, setNudge } from '../nudge.js';
 import { stdout, wantsJson } from '../output.js';
+import type { GameStatusResponse } from '../responses.js';
+import { openTaskSession, utc } from '../tasks.js';
 import { AUTO_SYNC_ON } from './sync.js';
 
 const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
-// fetch fills the goal cache when the nudge is turned on.
+// The game switch, as config game shows it and as on and off leave it. The
+// cap and the units come from the API's answer.
+export const gameSwitchLine = (game: GameStatusResponse): string =>
+  game.enabled
+    ? `Game on, ${game.usedToday} of ${game.cap} game units used today, they reset ${utc(game.resetAt)}. ${cli('config game off')} stops it.`
+    : `Game off, cap ${game.cap} game units a UTC day. ${cli('config game on')} turns it on.`;
+
+// What turning the game off closed, the API's rule in changeGameSettings.
+export const GAME_OFF = `Game off. The agent's open seeks end and its invites, sent and received, are declined. A duel already started goes on. ${cli('config game on')} turns it on again.`;
+
+// fetch fills the goal cache when the nudge is turned on, and sends the
+// game switch.
 export type ConfigDeps = { fetch: typeof fetch };
 
 export const defaultConfigDeps: ConfigDeps = {
@@ -18,14 +33,17 @@ export const defaultConfigDeps: ConfigDeps = {
 
 // Local settings. auto-sync in config.json and the nudge in nudge.json can
 // be changed here, the identity fields come from init, and the routine's
-// settings from routine set (VOU-599).
+// settings from routine set (VOU-599). game is the one setting SealKeeper
+// holds, the agent's game switch, read and changed with a signed request
+// (VOU-611). Off is the one way to stop invites, since the cap counts only
+// the duels the agent creates.
 export function register(
   parent: Command,
   deps: ConfigDeps = defaultConfigDeps,
 ): Command {
   const config = parent
     .command('config')
-    .description('Show or change local settings');
+    .description('Show or change settings, the local ones and the game switch');
 
   config
     .command('show')
@@ -99,6 +117,37 @@ export function register(
         return;
       }
       stdout(nudge ? NUDGE_ON : NUDGE_OFF);
+    });
+
+  config
+    .command('game')
+    .description(
+      'Show the game switch and cap, or turn duels and weekly challenges on or off. Off is the one way to stop invites, since accepting one spends no game unit',
+    )
+    .argument('[state]', 'on or off, leave it out to show the switch')
+    .action(async function (
+      this: Command,
+      state: string | undefined,
+    ): Promise<void> {
+      if (state !== undefined && state !== 'on' && state !== 'off') {
+        this.error('game takes on or off, or nothing to show it');
+      }
+      const session = await openTaskSession(this, deps);
+      let game: GameStatusResponse;
+      try {
+        game =
+          state === undefined
+            ? await readGameStatus(session)
+            : await changeGame(session, { enabled: state === 'on' });
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        this.error(gameRefusal(error));
+      }
+      if (wantsJson(this)) {
+        stdout(JSON.stringify(game));
+        return;
+      }
+      stdout(state === 'off' ? GAME_OFF : gameSwitchLine(game));
     });
 
   return config;

@@ -124,7 +124,7 @@ import {
   stdoutStyled,
   wantsJson,
 } from '../output.js';
-import { gameOnHint, refusal } from '../refusal.js';
+import { refusal } from '../refusal.js';
 import type { GameStatusResponse } from '../responses.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
@@ -237,10 +237,13 @@ export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
 export const gameCapQuestion = (again: string): string =>
   `${again}Game units a UTC day, 0 to ${GAME_CAP_MAX}? [${GAME_CAP_MAX}] `;
 export const GAME_CAP_AGAIN = `Please answer a whole number from 0 to ${GAME_CAP_MAX}. `;
+// The cap counts the duels the agent creates, so only the switch stops
+// invites, and the line names config game off for that (VOU-611).
 export function gameLine(game: { enabled: boolean; cap: number | null }) {
-  if (!game.enabled) return `off, ${gameOnHint()}`;
-  if (game.cap === null) return 'on';
-  return `on, ${game.cap} game units a UTC day, change it with ${cli('routine set --game-cap <n>')}`;
+  const stop = `stop playing with ${cli('config game off')}`;
+  if (!game.enabled) return `off, ${cli('config game on')} turns it on`;
+  if (game.cap === null) return `on, ${stop}`;
+  return `on, ${game.cap} game units a UTC day, spent on the duels it creates, change it with ${cli('routine set --game-cap <n>')}, ${stop}`;
 }
 // The next steps a --json run lists in nextSteps.
 export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;

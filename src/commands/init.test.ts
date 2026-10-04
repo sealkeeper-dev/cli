@@ -561,7 +561,7 @@ describe('sealkeeper init', () => {
         '',
         '  ✓ Registered alice/scout',
         '    Profile  https://sealkeeper.run/agents/alice/scout',
-        '    Game  on',
+        '    Game  on, stop playing with npx sealkeeper config game off',
         `    Card  ${paths(home).card}`,
         '',
         '  Next',
@@ -2463,9 +2463,10 @@ describe('sealkeeper init', () => {
     // What SealKeeper has, from the status read, and what was sent when the
     // read fails.
     const CAPPED = (cap: number) =>
-      `    Game  on, ${cap} game units a UTC day, change it with npx sealkeeper routine set --game-cap <n>\n`;
-    const ON = '    Game  on\n';
-    const OFF = `    Game  off, npx sealkeeper duel --json, run by your agent, turns it on and looks for a duel\n`;
+      `    Game  on, ${cap} game units a UTC day, spent on the duels it creates, change it with npx sealkeeper routine set --game-cap <n>, stop playing with npx sealkeeper config game off\n`;
+    const ON =
+      '    Game  on, stop playing with npx sealkeeper config game off\n';
+    const OFF = `    Game  off, npx sealkeeper config game on turns it on\n`;
 
     it('asks in a terminal after the runtime, and y turns the game on with the cap asked next', async () => {
       world.game = true;
@@ -2652,7 +2653,7 @@ describe('sealkeeper init', () => {
         [
           '  ✓ Registered alice-2/scout',
           '    Profile  https://sealkeeper.run/agents/alice-2/scout',
-          '    Game  on',
+          '    Game  on, stop playing with npx sealkeeper config game off',
           `    Card  ${paths(home).card}`,
           `    Operator  alice-2, change it at ${ACCOUNT_URL}`,
         ].join('\n'),
@@ -3261,7 +3262,7 @@ describe('sealkeeper init', () => {
         [
           '  ✓ Registered alice/app',
           '    Profile  https://sealkeeper.run/agents/alice/app',
-          '    Game  on',
+          '    Game  on, stop playing with npx sealkeeper config game off',
           `    Card  ${tildePath(paths(root).card)}`,
           `  ✓ ${folderLine(tildePath(app), 'alice/app')}`,
           '',
@@ -3555,7 +3556,7 @@ describe('sealkeeper init', () => {
 
           ✓ Registered alice/scout
             Profile  https://sealkeeper.run/agents/alice/scout
-            Game  on
+            Game  on, stop playing with npx sealkeeper config game off
             Card  <home>/agent-card.json
 
           What leaves this machine

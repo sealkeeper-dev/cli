@@ -11,6 +11,7 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GAME_OFF } from './commands/config.js';
 import { writeConfig } from './config.js';
 import { BAD_CAP, OLD_API } from './game.js';
 import { createKey } from './identity.js';
@@ -95,6 +96,7 @@ describe('the game settings', () => {
     const program = createProgram({
       tasks: { fetch: game.fetch },
       routine: { fetch: game.fetch },
+      config: { fetch: game.fetch },
     });
     throwOnExit(program);
     let out = '';
@@ -205,7 +207,8 @@ describe('the game settings', () => {
     });
 
     // VOU-603. The game command is gone. init sets the switch and the
-    // cap, challenge and duel turn the game on, routine set changes the cap.
+    // cap, challenge and duel turn the game on, routine set changes the cap
+    // and config game the switch (VOU-611).
     it.each([['on'], ['off'], ['cap', '3'], ['status']])(
       'game %s is gone',
       async (...args) => {
@@ -213,6 +216,111 @@ describe('the game settings', () => {
         expect(game.sent).toEqual([]);
       },
     );
+  });
+
+  // VOU-611. The switch is a config setting, read and changed with a
+  // signed request, and every line prints what the API answered.
+  describe('config game', () => {
+    it('with no word reads the switch and sends only the time', async () => {
+      const result = await run('config', 'game');
+      expect(result.code).toBe(0);
+      expect(game.sent.map((s) => `${s.method} ${s.path}`)).toEqual([
+        'POST /v1/game/status',
+      ]);
+      expect(Object.keys(game.sent[0]?.payload ?? {})).toEqual(['issuedAt']);
+      expect(result.out).toBe(
+        'Game on, 2 of 5 game units used today, they reset 2026-10-02 00:00 UTC. npx sealkeeper config game off stops it.\n',
+      );
+    });
+
+    it('with no word says the cap and how to turn it on while it is off', async () => {
+      game.status.enabled = false;
+      game.status.cap = 3;
+      const result = await run('config', 'game');
+      expect(result.out).toBe(
+        'Game off, cap 3 game units a UTC day. npx sealkeeper config game on turns it on.\n',
+      );
+    });
+
+    it('off sends the switch alone and says what the API closed', async () => {
+      const result = await run('config', 'game', 'off');
+      expect(result.code).toBe(0);
+      expect(game.sent[0]?.method).toBe('PUT');
+      expect(Object.keys(game.sent[0]?.payload ?? {}).sort()).toEqual([
+        'enabled',
+        'issuedAt',
+      ]);
+      expect(game.sent[0]?.payload.enabled).toBe(false);
+      expect(game.status.enabled).toBe(false);
+      expect(result.out).toBe(`${GAME_OFF}\n`);
+      expect(GAME_OFF).toBe(
+        "Game off. The agent's open seeks end and its invites, sent and received, are declined. A duel already started goes on. npx sealkeeper config game on turns it on again.",
+      );
+    });
+
+    it('on sends the switch alone and says the units', async () => {
+      game.status.enabled = false;
+      const result = await run('config', 'game', 'on');
+      expect(result.code).toBe(0);
+      expect(game.sent[0]?.payload.enabled).toBe(true);
+      expect(Object.keys(game.sent[0]?.payload ?? {}).sort()).toEqual([
+        'enabled',
+        'issuedAt',
+      ]);
+      expect(result.out).toContain('Game on, 2 of 5 game units used today');
+    });
+
+    it.each([[[]], [['on']], [['off']]])(
+      '%j --json prints the answer as it came',
+      async (words) => {
+        const result = await run('config', 'game', ...words, '--json');
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.out)).toEqual({
+          ...game.status,
+          later: 'kept',
+        });
+      },
+    );
+
+    it('refuses any other word before any request', async () => {
+      const result = await run('config', 'game', 'maybe');
+      expect(result.code).toBe(1);
+      expect(result.err).toBe('game takes on or off, or nothing to show it\n');
+      expect(game.sent).toEqual([]);
+    });
+
+    it.each([[[]], [['off']]])(
+      '%j against an API without the game says so in one line',
+      async (words) => {
+        game.gone = true;
+        const result = await run('config', 'game', ...words);
+        expect(result.code).toBe(1);
+        expect(result.out).toBe('');
+        expect(result.err).toBe(`${OLD_API}\n`);
+      },
+    );
+
+    it('prints the refusal line of a refused change', async () => {
+      game.refuse = {
+        status: 409,
+        code: 'stale_game_settings',
+        message:
+          'A game settings change issued at the same time or later is already stored',
+      };
+      const result = await run('config', 'game', 'on');
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(
+        'a newer game settings change of this agent is already stored\n',
+      );
+    });
+
+    it('says to run init before anything is sent when not initialised', async () => {
+      await rm(join(home, 'config.json'));
+      const result = await run('config', 'game', 'off');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('not initialised, run npx sealkeeper init');
+      expect(game.sent).toEqual([]);
+    });
   });
 
   describe('refusals', () => {

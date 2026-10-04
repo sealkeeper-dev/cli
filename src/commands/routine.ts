@@ -257,7 +257,10 @@ export function register(
     );
   }
   set
-    .option('--game-cap <n>', 'the most game units this agent uses a UTC day')
+    .option(
+      '--game-cap <n>',
+      'the most game units this agent spends a UTC day, on the duels it creates',
+    )
     .option(
       '--allow <operator>',
       'let the routine take addressed tasks and submissions from an operator, by slug',

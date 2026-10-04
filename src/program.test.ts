@@ -146,6 +146,15 @@ describe('sealkeeper cli', () => {
     }
   });
 
+  // VOU-611. The game switch is a config setting, game stays removed.
+  it('config --help lists the config commands, game among them', async () => {
+    const { code, out } = await run('config', '--help');
+    expect(code).toBe(0);
+    for (const name of ['show', 'auto-sync', 'nudge', 'game']) {
+      expect(out).toMatch(new RegExp(`^  ${name}\\b`, 'm'));
+    }
+  });
+
   it('an agent command without config exits 1', async () => {
     const { code, out, err } = await run('status');
     expect(code).toBe(1);

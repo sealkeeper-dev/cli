@@ -12,9 +12,10 @@ import type { TaskSession } from './tasks.js';
 // The agent's switch for the game layer, duels and weekly challenges on top
 // of the task exchange, and its daily cap of game units. init sends the
 // switch with the registration and the cap after it, challenge and duel
-// turn the game on through their routes, routine set --game-cap changes
-// the cap and status shows the game. Each one is a signed request for this
-// agent alone. The game never moves a score, a level or the SEAL.
+// turn the game on through their routes, config game shows the switch and
+// turns it on or off (VOU-611), routine set --game-cap changes the cap and
+// status shows the game. Each one is a signed request for this agent alone.
+// The game never moves a score, a level or the SEAL.
 
 // What an API from before the game answers every game route with, 404.
 export const OLD_API = 'this SealKeeper API has no game layer yet';
@@ -26,8 +27,8 @@ export const BAD_CAP = (value: string) =>
   `cap must be a whole number from 0 to ${GAME_CAP_MAX}, got ${value}`;
 
 // The signed settings change, { enabled?, cap?, issuedAt } checked with
-// the API's own schema first, the path init and routine set share. Throws
-// what the API client throws.
+// the API's own schema first, the path init, config game and routine set
+// share. Throws what the API client throws.
 export async function changeGame(
   { signer, api }: Pick<TaskSession, 'signer' | 'api'>,
   change: { enabled?: boolean; cap?: number },
@@ -46,7 +47,8 @@ export const gameRefusal = (error: ApiError): string =>
 
 // The signed game status read, { issuedAt } checked with the API's own
 // schema first. init reads it after the registration and the routine setup
-// before it turns the game on. Throws what the API client throws.
+// before it turns the game on, and config game reads it to show the
+// switch. Throws what the API client throws.
 export async function readGameStatus({
   signer,
   api,
