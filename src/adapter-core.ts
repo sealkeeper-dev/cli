@@ -2,8 +2,9 @@
 // What the in-process adapters (Mastra, OpenClaw) share.
 import { EventPayload } from '@sealkeeper/schema';
 import { kickBackgroundSync } from './background-sync.js';
+import { skillBody } from './claude-code-skill.js';
 import { type EmitInput, emit } from './emit.js';
-import { cli } from './invocation.js';
+import { cli, printedInvocation } from './invocation.js';
 import { nudgeLines } from './nudge.js';
 import { quietly } from './output.js';
 
@@ -41,12 +42,17 @@ export function emitQueue(): (input: EmitInput) => Promise<void> {
 
 // The session nudge (VOU-137) for an in-process adapter, the short
 // SealKeeper summary once the operator turned it on, else ''. The agent is
-// told to run run --json, which claims only seed tasks unasked. It reads the
-// cached goal only, so it never waits on the network, and never rejects.
+// told to run run --json, which claims only seed tasks unasked. OpenClaw
+// and Mastra have no slash commands and no skills, so the summary is
+// followed by the sealkeeper skill's body, the loop every core command runs
+// and the rules for untrusted specs (VOU-602). It reads the cached goal
+// only, so it never waits on the network, and never rejects.
 export async function adapterNudge(): Promise<string> {
   try {
     const run = `\`${cli('run --json')}\``;
-    return (await quietly(() => nudgeLines(run))).join('\n');
+    const summary = await quietly(() => nudgeLines(run));
+    if (summary.length === 0) return '';
+    return [...summary, '', skillBody(printedInvocation(), false)].join('\n');
   } catch {
     return '';
   }

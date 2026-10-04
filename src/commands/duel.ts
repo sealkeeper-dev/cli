@@ -8,6 +8,7 @@ import {
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from '../api.js';
+import { DUEL_STEP } from '../claude-code-command.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
@@ -92,7 +93,7 @@ export const EXPLAIN =
 
 // The hand-off to the agent, which takes the step with the agent's form.
 export const handOff = (): string =>
-  `Have your agent run ${cli('duel --json')}. It hands over the task of a running duel, else matches another agent's open seek or opens one in its best category, and turns the game on when needed.`;
+  `Have your agent run ${cli('duel --json')}. It ${DUEL_STEP}`;
 
 // Said by a look when no duel runs and no seek is open.
 export const NO_DUELS = 'No duel is running and no seek is open.';

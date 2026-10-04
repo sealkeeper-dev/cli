@@ -36,9 +36,9 @@ import {
   streamInput,
 } from '../ask.js';
 import {
-  installRunCommand,
-  refreshRunCommand,
-  runCommandPath,
+  commandPaths,
+  installCommands,
+  refreshCommands,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
@@ -1405,7 +1405,7 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
 // here and a person can answer. Yes, or just Enter, runs the same install as
-// sealkeeper adapter claude-code install, the /sealkeeper-run command
+// sealkeeper adapter claude-code install, the slash commands and the skill
 // included.
 // Hooks already there, in the user or the project settings, count as
 // installed and nothing is asked. Current hooks in the shared project
@@ -1478,7 +1478,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       await refuseOutsideProject(dirs.cwd, [
         file,
         shared,
-        runCommandPath(file),
+        ...commandPaths(file),
       ]);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
@@ -1516,7 +1516,7 @@ async function moveFromShared(
     await refuseOutsideProject(cwd, [
       project,
       shared,
-      runCommandPath(project),
+      ...commandPaths(project),
       skillPath(project),
     ]);
   } catch (error) {
@@ -1585,10 +1585,10 @@ async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
   return 'no';
 }
 
-// Brings /sealkeeper-run up to date on a run that finds the hooks
-// already in, so a newer CLI's command reaches Claude Code without a
-// reinstall. Only a file of ours that differs is written. Anything that
-// goes wrong leaves the file as it was.
+// Brings the slash commands up to date on a run that finds the hooks
+// already in, so a newer CLI's commands reach Claude Code without a
+// reinstall, see refreshCommands. Only a file of ours that differs is
+// written. Anything that goes wrong leaves the files as they were.
 async function refreshCommand(
   file: string,
   project: boolean,
@@ -1596,15 +1596,15 @@ async function refreshCommand(
   hook: string,
   ui: Ui | null,
 ): Promise<void> {
-  const commandPath = runCommandPath(file);
+  const commandFiles = commandPaths(file);
   const skillFile = skillPath(file);
   try {
-    if (project) await refuseOutsideProject(cwd, [commandPath, skillFile]);
-    if (await refreshRunCommand(commandPath, invocationOf(hook))) {
+    if (project) await refuseOutsideProject(cwd, [...commandFiles, skillFile]);
+    if (await refreshCommands(file, invocationOf(hook))) {
       if (ui !== null) {
         const s = ui.out;
         say(
-          s.line`${s.tick()} /sealkeeper-run updated in ${tildePath(dirname(commandPath))}`,
+          s.line`${s.tick()} Slash commands updated in ${tildePath(dirname(commandFiles[0] ?? file))}`,
         );
       }
     }
@@ -1623,7 +1623,7 @@ async function refreshCommand(
 }
 
 // The same install as sealkeeper adapter claude-code install into one
-// settings file, the hooks and then the /sealkeeper-run command. false
+// settings file, the hooks, the slash commands and the skill. false
 // when the settings file could not be changed. A --json run, ui null,
 // prints the lines adapter claude-code install prints, on stderr, so the
 // --json output stays one object.
@@ -1651,18 +1651,24 @@ async function installAt(
     }
     throw error;
   }
-  const commandPath = runCommandPath(file);
   try {
-    const command = await installRunCommand(commandPath, invocationOf(hook));
+    const commands = await installCommands(file, invocationOf(hook));
     if (ui === null) {
-      stderr(commandLine(command, commandPath));
+      for (const c of commands) stderr(commandLine(c.result, c.path));
     } else {
       const s = ui.out;
-      say(
-        command === 'kept'
-          ? s.line`Left ${tildePath(commandPath)} alone, SealKeeper did not write it`
-          : s.line`${s.tick()} /sealkeeper-run in ${tildePath(dirname(commandPath))}`,
-      );
+      for (const c of commands) {
+        if (c.result !== 'kept') continue;
+        say(
+          s.line`Left ${tildePath(c.path)} alone, SealKeeper did not write it`,
+        );
+      }
+      const ours = commands.find((c) => c.result !== 'kept');
+      if (ours !== undefined) {
+        say(
+          s.line`${s.tick()} Slash commands in ${tildePath(dirname(ours.path))}`,
+        );
+      }
     }
   } catch (error) {
     // The hooks are in, so this is only a warning.

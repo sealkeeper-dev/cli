@@ -236,7 +236,8 @@ function register(api: OpenClawPluginApiLike): void {
 // goal only, so a prompt never waits on the network, and only once the
 // operator turned the nudge on. Anything else returns nothing, which leaves
 // the prompt as it was. The agent is told to run run --json, which
-// claims only seed tasks unasked.
+// claims only seed tasks unasked, and gets the sealkeeper skill's body,
+// since OpenClaw has no slash commands (adapterNudge).
 
 function registerNudge(api: OpenClawPluginApiLike): void {
   try {

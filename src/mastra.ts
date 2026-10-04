@@ -214,8 +214,9 @@ export function sealKeeperSession(
 // session starts, but an agent's instructions may be a function that
 // Mastra calls for each generate or stream. Call this from it.
 //   instructions: async () => `${base}\n${await sealKeeperContext()}`
-// Resolves with the short SealKeeper summary once the operator turned the
-// nudge on with sealkeeper config nudge on, else with ''. It reads the
+// Resolves with the short SealKeeper summary and the sealkeeper skill's
+// body once the operator turned the nudge on with sealkeeper config nudge
+// on, else with ''. It reads the
 // cached goal only, so it never waits on the network, and never rejects.
 export function sealKeeperContext(): Promise<string> {
   return adapterNudge();

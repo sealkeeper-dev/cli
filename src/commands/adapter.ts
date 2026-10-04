@@ -1,12 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { homedir } from 'node:os';
+import { basename } from 'node:path';
 import { type Command, Option } from 'commander';
 import { type Input, readYesNo, streamInput } from '../ask.js';
 import {
   type CommandResult,
-  installRunCommand,
-  runCommandPath,
-  uninstallRunCommand,
+  commandPaths,
+  installCommands,
+  uninstallCommands,
 } from '../claude-code-command.js';
 import {
   claudeConfigDir,
@@ -95,12 +96,11 @@ export function register(
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
       const shared = sharedFor(options.scope, deps);
-      const commandPath = runCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
         ...shared,
-        commandPath,
+        ...commandPaths(file),
         skillFile,
       ]);
       const hook = deps.hookCommand();
@@ -118,8 +118,8 @@ export function register(
           stderr(error.message);
         }
       }
-      const command = await orExit(this, () =>
-        installRunCommand(commandPath, invocationOf(hook)),
+      const commands = await orExit(this, () =>
+        installCommands(file, invocationOf(hook)),
       );
       const skill = await orExit(this, () =>
         installSkill(skillFile, invocationOf(hook)),
@@ -133,7 +133,7 @@ export function register(
             updated: result.updated,
             removed: result.removed,
             ...(options.scope === 'project' ? { movedFromShared: moved } : {}),
-            command: { path: commandPath, result: command },
+            commands: commands.map(({ path, result }) => ({ path, result })),
             skill: { path: skillFile, result: skill },
           }),
         );
@@ -141,7 +141,7 @@ export function register(
       }
       for (const line of hooksLines(result, file)) stdout(line);
       if (moved > 0) stdout(movedLine(moved, shared[0] ?? ''));
-      stdout(commandLine(command, commandPath));
+      for (const c of commands) stdout(commandLine(c.result, c.path));
       stdout(skillLine(skill, skillFile));
       await offerNudge(deps);
     });
@@ -153,12 +153,11 @@ export function register(
     .action(async function (this: Command, options: ScopeOptions) {
       const file = pathFor(options.scope, deps);
       const shared = sharedFor(options.scope, deps);
-      const commandPath = runCommandPath(file);
       const skillFile = skillPath(file);
       await guardProject(this, options.scope, deps, [
         file,
         ...shared,
-        commandPath,
+        ...commandPaths(file),
         skillFile,
       ]);
       const removed = await orExit(this, () =>
@@ -171,9 +170,7 @@ export function register(
           uninstallHooks(old, deps.hookCommand()),
         );
       }
-      const commandRemoved = await orExit(this, () =>
-        uninstallRunCommand(commandPath),
-      );
+      const commandsRemoved = await orExit(this, () => uninstallCommands(file));
       const skillRemoved = await orExit(this, () => uninstallSkill(skillFile));
       if (wantsJson(this)) {
         stdout(
@@ -183,7 +180,10 @@ export function register(
             ...(options.scope === 'project'
               ? { removedFromShared: removedShared }
               : {}),
-            command: { path: commandPath, removed: commandRemoved },
+            commands: commandPaths(file).map((path) => ({
+              path,
+              removed: commandsRemoved.includes(path),
+            })),
             skill: { path: skillFile, removed: skillRemoved },
           }),
         );
@@ -201,14 +201,15 @@ export function register(
           `removed ${removedShared} sealkeeper hook${removedShared === 1 ? '' : 's'} from ${shared[0] ?? ''}`,
         );
       }
-      if (commandRemoved) stdout(`removed ${RUN_SLASH} from ${commandPath}`);
+      for (const path of commandsRemoved) {
+        stdout(`removed ${slashOf(path)} from ${path}`);
+      }
       if (skillRemoved) stdout(`removed ${SKILL} from ${skillFile}`);
     });
 
   return adapter;
 }
 
-const RUN_SLASH = 'the /sealkeeper-run command';
 const SKILL = 'the sealkeeper skill';
 
 // What install did with the hooks, one line each for what it added, what
@@ -242,10 +243,17 @@ export function movedLine(moved: number, shared: string): string {
   return `moved ${moved} sealkeeper hook${moved === 1 ? '' : 's'} out of ${shared}, which a repo shares`;
 }
 
-// One line on what install did with the slash command.
+// A slash command by its file, the /sealkeeper-run command for
+// sealkeeper-run.md.
+const slashOf = (path: string): string =>
+  `the /${basename(path, '.md')} command`;
+
+// One line on what install did with one slash command.
 export function commandLine(result: CommandResult, path: string): string {
-  if (result === 'written') return `added ${RUN_SLASH} at ${path}`;
-  if (result === 'unchanged') return `${RUN_SLASH} is up to date at ${path}`;
+  if (result === 'written') return `added ${slashOf(path)} at ${path}`;
+  if (result === 'unchanged') {
+    return `${slashOf(path)} is up to date at ${path}`;
+  }
   return `left ${path} alone, sealkeeper did not write it`;
 }
 

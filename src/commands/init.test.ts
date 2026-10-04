@@ -30,7 +30,11 @@ import {
   readYesNo,
   streamInput,
 } from '../ask.js';
-import { ROUTINE_COMMANDS, runCommandText } from '../claude-code-command.js';
+import {
+  commandText,
+  ROUTINE_COMMANDS,
+  SLASH_COMMANDS,
+} from '../claude-code-command.js';
 import { hookCommand, invocationOf } from '../claude-code-settings.js';
 import {
   DEFAULT_API_URL,
@@ -117,7 +121,8 @@ const HOOK_COMMAND = hookCommand(
 // A hook of ours that an earlier install wrote from another path.
 const STALE_SCRIPT = '/old/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
 const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
-const RUN_COMMAND_TEXT = runCommandText(invocationOf(HOOK_COMMAND));
+const [RUN] = SLASH_COMMANDS;
+const RUN_COMMAND_TEXT = commandText(RUN, invocationOf(HOOK_COMMAND));
 const API_URL = 'https://api.test';
 // Where the routine offer finds claude, when a test puts it on PATH.
 const CLAUDE = '/usr/local/bin/claude';
@@ -1483,7 +1488,7 @@ describe('sealkeeper init', () => {
       expect(after).toContain('other-tool stop');
       const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       expect(result.out).toContain(
-        `  ✓ /sealkeeper-run in ${dirname(command)}\n`,
+        `  ✓ Slash commands in ${dirname(command)}\n`,
       );
       expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
     });
@@ -1790,12 +1795,44 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
       expect(result.out).toContain(
-        `  ✓ /sealkeeper-run updated in ${dirname(command)}\n`,
+        `  ✓ Slash commands updated in ${dirname(command)}\n`,
       );
       // Current already, so a third run says nothing about it.
       world = newWorld();
       world.stdin = answering('');
       expect((await run(world, 'init')).out).not.toContain('updated');
+    });
+
+    // VOU-602. A command a newer CLI added is written beside the others of
+    // ours on a repeat run, which brings the set up to date.
+    it('adds a slash command missing beside ours on a repeat run', async () => {
+      await withClaudeCode();
+      world.stdin = answering('');
+      expect(
+        (
+          await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          )
+        ).code,
+      ).toBe(0);
+      const duel = join(claudeDir(), 'commands', 'sealkeeper-duel.md');
+      await rm(duel);
+      world = newWorld();
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      const [, , DUEL] = SLASH_COMMANDS;
+      expect(await readFile(duel, 'utf8')).toBe(
+        commandText(DUEL, invocationOf(HOOK_COMMAND)),
+      );
+      expect(result.out).toContain(
+        `  ✓ Slash commands updated in ${dirname(duel)}\n`,
+      );
     });
 
     // VOU-595. An older init wrote /sealkeeper-prove. A repeat run writes
@@ -1817,7 +1854,10 @@ describe('sealkeeper init', () => {
       ).toBe(0);
       const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       const retired = join(claudeDir(), 'commands', 'sealkeeper-prove.md');
-      await rm(command);
+      // Only the retired command, as an older init left it.
+      for (const c of SLASH_COMMANDS) {
+        await rm(join(claudeDir(), 'commands', `sealkeeper-${c.verb}.md`));
+      }
       await writeFile(
         retired,
         '---\ndescription: old\nmanaged-by: sealkeeper\n---\nRun `sealkeeper prove`.\n',
@@ -1829,7 +1869,7 @@ describe('sealkeeper init', () => {
       expect(await readFile(command, 'utf8')).toBe(RUN_COMMAND_TEXT);
       await expect(readFile(retired, 'utf8')).rejects.toThrow('ENOENT');
       expect(result.out).toContain(
-        `  ✓ /sealkeeper-run updated in ${dirname(command)}\n`,
+        `  ✓ Slash commands updated in ${dirname(command)}\n`,
       );
     });
 
@@ -3421,7 +3461,7 @@ describe('sealkeeper init', () => {
           Claude Code
           The hooks record each session, its start and end, into a local log.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
-          ✓ /sealkeeper-run in <home>/claude/commands
+          ✓ Slash commands in <home>/claude/commands
           ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
           The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
           Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]   Session nudge off. Run npx sealkeeper config nudge on to turn it on later.

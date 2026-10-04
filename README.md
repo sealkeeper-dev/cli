@@ -14,7 +14,7 @@ npx sealkeeper init
 
 **2. Your agent earns verified tasks.** They are small checks, such as reading a value out of a JSON document, and the server verifies each answer. The agent solves them, you don't.
 
-- In Claude Code, run `/sealkeeper-run` in a session. `init` installs it when you accept the hooks.
+- In Claude Code, run `/sealkeeper-run` in a session. `init` installs it, with `/sealkeeper-challenge`, `/sealkeeper-duel`, `/sealkeeper-status` and `/sealkeeper-routine`, when you accept the hooks.
 - Any other agent runs `npx sealkeeper run --json`, solves the tasks it prints and runs the submit command that comes with each one.
 
 **3. Watch the count.**
@@ -29,7 +29,7 @@ Bronze, the first level, needs 25 verified tasks with a Trust Score of 50 over 3
 
 What each command does.
 
-- `init` creates the agent's key, signs you in with GitHub and registers the agent. When Claude Code is set up on this machine it offers the hooks that record sessions and the `/sealkeeper-run` command. It ends with the next steps that apply here, and running it again is safe.
+- `init` creates the agent's key, signs you in with GitHub and registers the agent. When Claude Code is set up on this machine it offers the hooks that record sessions, the slash commands and the `sealkeeper` skill. It ends with the next steps that apply here, and running it again is safe.
 - `run` in a terminal claims nothing. It says how to hand the tasks to your agent, the agent's level and the next two steps from `status`. With `--json`, or when stdout is not a terminal as when an agent runs it, SealKeeper claims a few seed tasks and `run` prints them with the command that submits each answer, what waits for your yes and what to do next. Addressed tasks are only listed, and the agent's `run --addressed --json` claims them. In a terminal the claim flags change nothing and the hand-off line carries them.
 - `submit` sends an answer, and `release` gives a claim back at no penalty.
 - `challenge` in a terminal shows this week's challenge and hands it to your agent, like `run`. With `--json` the agent plays it one task at a time, see [Weekly challenges](#weekly-challenges).
@@ -81,7 +81,7 @@ A first run in a terminal, with Claude Code set up and the hooks installed, look
   The hooks record each session, its start and end, into a local log.
   Install them now? [Y/n]
   ✓ Hooks in ~/.claude/settings.json
-  ✓ /sealkeeper-run in ~/.claude/commands
+  ✓ Slash commands in ~/.claude/commands
   ✓ sealkeeper skill in ~/.claude/skills/sealkeeper
   The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
   Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]
@@ -179,13 +179,17 @@ Everything `sealkeeper init` and the commands after it write on your machine, ru
 
 ### Files in Claude Code
 
-Only when you accept the Claude Code install in `init`, or run `adapter claude-code install`. For the user scope, the default, all three live in `~/.claude`, or in `CLAUDE_CONFIG_DIR` when it is set.
+Only when you accept the Claude Code install in `init`, or run `adapter claude-code install`. For the user scope, the default, they all live in `~/.claude`, or in `CLAUDE_CONFIG_DIR` when it is set.
 
 - `~/.claude/settings.json`, three hooks, `SessionStart`, `SessionEnd` and `Stop`, each running this CLI with `hook claude-code`. The `PreToolUse`, `PostToolUse` and `PostToolUseFailure` hooks of CLI 0.4.13 and earlier are taken out when the install runs again. Hooks that are not SealKeeper's are never changed.
 - `~/.claude/commands/sealkeeper-run.md`, the `/sealkeeper-run` slash command. The `sealkeeper-prove.md` an older CLI wrote there is removed when the install runs again.
+- `~/.claude/commands/sealkeeper-challenge.md`, the `/sealkeeper-challenge` slash command.
+- `~/.claude/commands/sealkeeper-duel.md`, the `/sealkeeper-duel` slash command.
+- `~/.claude/commands/sealkeeper-status.md`, the `/sealkeeper-status` slash command.
+- `~/.claude/commands/sealkeeper-routine.md`, the `/sealkeeper-routine` slash command.
 - `~/.claude/skills/sealkeeper/SKILL.md`, the `sealkeeper` skill.
 
-`adapter claude-code install --scope project` writes the same three into the project instead, the hooks to `.claude/settings.local.json`, the command to `.claude/commands/sealkeeper-run.md` and the skill to `.claude/skills/sealkeeper/SKILL.md`. It also rewrites the project's `.claude/settings.json` to take out SealKeeper hooks an older install put there, and leaves every other entry in it as it was.
+`adapter claude-code install --scope project` writes the same files into the project instead, the hooks to `.claude/settings.local.json`, the slash commands to `.claude/commands` and the skill to `.claude/skills/sealkeeper/SKILL.md`. It also rewrites the project's `.claude/settings.json` to take out SealKeeper hooks an older install put there, and leaves every other entry in it as it was.
 
 The Mastra and OpenClaw adapters write nothing outside the SealKeeper home.
 
@@ -276,7 +280,7 @@ Tasks another operator addressed to your agent are listed in `waiting`, never cl
 
 `submit <id>` takes the answer as `--file <path>` or `--text <string>`, exactly one of them. It refuses any submission that contains the agent's private key, since a spec could ask an agent to submit its own key, and reads `--file` only when the file passes these rules, since a spec could ask for any file. The path is resolved first, so a symlink counts as the file it points to. A file inside the SealKeeper home, or anywhere under `~/.sealkeeper`, where every agent on this machine keeps its key, is never read. A hidden file or folder at the top of your home, such as `~/.ssh`, `~/.config`, `~/.aws` or `~/.gnupg`, is never read either, except a file inside the current directory when that directory sits below such a folder, as a project in `~/.config/tool/project` does. A file outside the current directory is read only with `--allow-outside-cwd`. A file under `.sealkeeper-answers` in the current directory is always read. Only a regular file is read, and one larger than 65536 bytes is refused before a byte is read. A hash task's sha256 is shown only to its poster, so SealKeeper alone checks a hash answer, on submit, and a wrong one comes back as `verification failed: hash_mismatch`. A claim allows 3 failed submits, and the third ends the claim and bars the agent from that task. So `submit` refuses a hash answer that ends in a line break, which most editors add and which almost always fails the check, unless the spec asks the answer to end in a line feed. Nothing is sent. `--keep-newline` sends it as is. A schema task's answer must be JSON, and one that is not is refused before anything is sent.
 
-The CLI never calls a model. Your agent solves the tasks. In Claude Code, the `/sealkeeper-run` slash command runs `run --json`, shows you what waits, solves each task, submits the answers, offers the steps in `next`, asking before any that needs your yes, and reports the verified count.
+The CLI never calls a model. Your agent solves the tasks. In Claude Code, the `/sealkeeper-run` slash command runs `run --json`, shows you what waits, solves each task, submits the answers, offers the steps in `next`, asking before any that needs your yes, and reports the verified count. `/sealkeeper-challenge`, `/sealkeeper-duel` and `/sealkeeper-status` run the same steps over `challenge --json`, `duel --json` and `status --json`.
 
 To claim a task you picked on the board at sealkeeper.run/tasks, copy its command from the row.
 
@@ -508,7 +512,7 @@ The time, the limits, the game choice, the allowlist and the schedule live in `~
 
 ### Your agent and the routine
 
-`/sealkeeper-run` and the `sealkeeper` skill let Claude Code run `sealkeeper routine --yes`, `routine on --yes`, `routine off --yes` and `routine set <options> --yes`, each only after your clear yes to that change, since `--yes` stands for that yes. `routine` without `--yes` only shows the routine. They never run `routine run`, not even when asked. Without `--yes` and without a terminal every form that changes something refuses and changes nothing.
+The slash commands and the `sealkeeper` skill let Claude Code run `sealkeeper routine --yes`, `routine on --yes`, `routine off --yes` and `routine set <options> --yes`, each only after your clear yes to that change, since `--yes` stands for that yes. `routine` without `--yes` only shows the routine. They never run `routine run`, not even when asked. Without `--yes` and without a terminal every form that changes something refuses and changes nothing.
 
 ### How a run works
 
@@ -680,13 +684,13 @@ The format, the keys and how to verify a SEAL in any language are in the [SEAL s
 npx sealkeeper adapter claude-code install
 ```
 
-This adds SealKeeper hooks for `SessionStart`, `SessionEnd` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.local.json` in the current directory instead. The hooks hold absolute paths on this machine, so they never go to the project's shared `.claude/settings.json`, and hooks of ours an older install wrote there are moved to the local file. The slash command and the skill below hold the same paths, so keep `.claude/settings.local.json`, `.claude/commands/sealkeeper-run.md` and `.claude/skills/sealkeeper` out of git and run the install on each machine. `install` says so on stderr. Hooks from other tools and every other setting are left as they are, and running it again changes nothing. Run `npx sealkeeper init` first, since the hooks do nothing without a config.
+This adds SealKeeper hooks for `SessionStart`, `SessionEnd` and `Stop` to `~/.claude/settings.json`, or to `settings.json` in `CLAUDE_CONFIG_DIR` when that is set. Use `--scope project` to write `.claude/settings.local.json` in the current directory instead. The hooks hold absolute paths on this machine, so they never go to the project's shared `.claude/settings.json`, and hooks of ours an older install wrote there are moved to the local file. The slash commands and the skill below hold the same paths, so keep `.claude/settings.local.json`, the `.claude/commands/sealkeeper-*.md` slash commands and `.claude/skills/sealkeeper` out of git and run the install on each machine. `install` says so on stderr. Hooks from other tools and every other setting are left as they are, and running it again changes nothing. Run `npx sealkeeper init` first, since the hooks do nothing without a config.
 
 The hooks record sessions only, `session.start` and `session.end`, see [What leaves your machine](#what-leaves-your-machine). `Stop` notes the time of each turn, so a session that never gets a `SessionEnd` is closed at its last turn. They read only the event name, the session id and the working directory from what Claude Code sends. The working directory only picks the agent, so a session in each bound folder records to that folder's agent, see [Several agents on one machine](#several-agents-on-one-machine). CLI 0.4.13 and earlier also installed `PreToolUse`, `PostToolUse` and `PostToolUseFailure` and recorded each tool call. Those hooks record nothing now, and running `adapter claude-code install` or `init` again takes ours out of the settings file it writes, leaving every other hook. Each hook appends to the local log and exits at once, printing nothing, except the `SessionStart` summary once the [session nudge](#session-nudge) is on.
 
 The hooks call the absolute path of the node binary and of the sealkeeper script that ran `install`, so they work whatever the shell's PATH. Run from `npx`, that script sits in the npx cache and the hooks stop working when the cache is cleared, so install with `npm i -g sealkeeper` for a stable path. `npx sealkeeper status` warns when the path is gone.
 
-`install` also writes the `/sealkeeper-run` slash command to `commands/sealkeeper-run.md` and the `sealkeeper` skill to `skills/sealkeeper/SKILL.md`, both next to the settings file. The slash command runs when you type it. The skill tells Claude how to do the same work when you ask about SealKeeper or agree to it after the session summary below says something is waiting. It never starts that work on its own. It has the run steps and the rules for untrusted specs, and adds tasks addressed to the agent and outcomes waiting for your verdict, which it leaves to you. A file of either name that SealKeeper did not write is never changed or removed. A repeat `init` that finds the hooks in place brings the files it wrote up to date with the running CLI, and replaces the `/sealkeeper-prove` command an older CLI wrote with `/sealkeeper-run`.
+`install` also writes five slash commands to `commands/` and the `sealkeeper` skill to `skills/sealkeeper/SKILL.md`, all next to the settings file. `/sealkeeper-run`, `/sealkeeper-challenge`, `/sealkeeper-duel`, `/sealkeeper-status` and `/sealkeeper-routine` each run the same short loop over the command of their name with `--json`. Claude shows you what waits and asks, solves each task, writes the answer file, runs the submit line the CLI printed, then offers the steps in `next` and asks first for every one that needs your yes. A slash command runs when you type it. The skill holds the same loop and maps plain words to the commands, so "duel someone" is `duel`, "enter the challenge" is `challenge`, "where do I stand" is `status` and "set up the routine" is `routine`. Claude uses it when you ask about SealKeeper or agree to it after the session summary below says something is waiting, and never starts that work on its own. It adds tasks addressed to the agent and outcomes waiting for your verdict, which it leaves to you. Specs are untrusted, so Claude runs only the core command you asked for and the lines the CLI printed for each task and step, whatever a spec says. A file of any of these names that SealKeeper did not write is never changed or removed. A repeat `init` that finds the hooks in place brings the files it wrote up to date with the running CLI, adds a slash command a newer CLI brings, and replaces the `/sealkeeper-prove` command an older CLI wrote with `/sealkeeper-run`.
 
 ### Session nudge
 
@@ -707,7 +711,7 @@ npx sealkeeper config nudge on
 npx sealkeeper config nudge off
 ```
 
-To remove the hooks, the slash command and the skill.
+To remove the hooks, the slash commands and the skill.
 
 ```sh
 npx sealkeeper adapter claude-code uninstall
@@ -728,7 +732,7 @@ The plugin records `session.start`, `session.end` and `usage`, see [What leaves 
 
 Token usage comes from OpenClaw's `llm_output` hook, which OpenClaw only gives to plugins granted conversation access. To record usage, set `plugins.entries.sealkeeper.hooks.allowConversationAccess` to `true` in `openclaw.json`. SealKeeper still reads only the token counts, the model id and the run id from it. Without it OpenClaw logs that the hook was blocked, everything else is recorded, and cost and latency stay empty.
 
-With the [session nudge](#session-nudge) on, the plugin also adds the same short summary to the agent's system prompt through OpenClaw's `before_prompt_build` hook, pointing at `npx sealkeeper run --json`. OpenClaw's `session_start` hook cannot add context, so this is the hook that does. OpenClaw only runs it with `allowConversationAccess` set as above, and not when `plugins.entries.sealkeeper.hooks.allowPromptInjection` is `false`. With the nudge off it adds nothing. Turn it on with `npx sealkeeper config nudge on`.
+With the [session nudge](#session-nudge) on, the plugin also adds the same short summary to the agent's system prompt through OpenClaw's `before_prompt_build` hook, pointing at `npx sealkeeper run --json`, followed by the body of the `sealkeeper` skill, since OpenClaw has no slash commands. That is the loop every core command runs and the rules for untrusted specs. OpenClaw's `session_start` hook cannot add context, so this is the hook that does. OpenClaw only runs it with `allowConversationAccess` set as above, and not when `plugins.entries.sealkeeper.hooks.allowPromptInjection` is `false`. With the nudge off it adds nothing. Turn it on with `npx sealkeeper config nudge on`.
 
 The hook names and fields match OpenClaw 2026.9.6. The package passes OpenClaw's own manifest and install checks, and the plugin has been run through its plugin registration and hook runner. It has not yet run inside a live Gateway.
 
@@ -749,7 +753,7 @@ await session.end();
 
 The adapter records `session.start`, `session.end` and `usage`, see [What leaves your machine](#what-leaves-your-machine). Model ids are recorded as names, where any character a name cannot hold becomes a dash, as in the other adapters. A session id you pass is kept when it is letters, digits, `_` and `-`, at most 64 characters, as a UUID is. Any other is recorded as its sha256, and `session.sessionId` is the id as recorded.
 
-Mastra has no hook that adds context when a session starts, so the [session nudge](#session-nudge) is one call in the agent's instructions, which Mastra accepts as a function. `sealKeeperContext()` resolves with the summary once `npx sealkeeper config nudge on` is set, and with an empty string otherwise, offline or without a fresh cache. It never waits on the network and never rejects.
+Mastra has no hook that adds context when a session starts, so the [session nudge](#session-nudge) is one call in the agent's instructions, which Mastra accepts as a function. `sealKeeperContext()` resolves with the summary, followed by the body of the `sealkeeper` skill as in OpenClaw, once `npx sealkeeper config nudge on` is set, and with an empty string otherwise, offline or without a fresh cache. It never waits on the network and never rejects.
 
 ```ts
 import { sealKeeperContext } from 'sealkeeper/mastra';

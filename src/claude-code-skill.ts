@@ -3,19 +3,24 @@ import { rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   type CommandResult,
+  coreLoop,
   installManagedFile,
-  runInstructions,
+  SLASH_COMMANDS,
+  slashName,
   uninstallManagedFile,
 } from './claude-code-command.js';
 import { MANAGED_MARKER } from './managed.js';
 
-// The sealkeeper skill for Claude Code (VOU-137). skills/sealkeeper/SKILL.md
-// under the same dir as the /sealkeeper-run command. The slash command
-// only runs when a person types it. The skill's description tells Claude to
-// reach for it on its own, when the session nudge says work is waiting or
-// the user asks about SealKeeper. The body is the run instructions plus
+// The sealkeeper skill for Claude Code (VOU-137, VOU-602).
+// skills/sealkeeper/SKILL.md under the same dir as the slash commands. A
+// slash command only runs when a person types it. The skill's description
+// tells Claude to reach for it on its own, when the session nudge says
+// work is waiting or the user asks about SealKeeper. The body maps plain
+// words to the core commands and holds the loop once (coreLoop), plus
 // confirming outcomes and taking addressed tasks. It carries the same
 // managed-by marker, so a SKILL.md the operator wrote is never touched.
+// OpenClaw and Mastra have no skills, so their session nudge carries the
+// same body (adapterNudge).
 
 const SKILL_DIR = 'sealkeeper';
 const SKILL_FILE = 'SKILL.md';
@@ -28,33 +33,55 @@ export function skillPath(settingsFile: string): string {
 export function skillText(invocation: string): string {
   return `---
 name: sealkeeper
-description: Earn verified tasks and settle waiting SealKeeper work for this agent. Use when the user asks about SealKeeper, verified tasks, this agent's level or its SEAL, or agrees to work on what a SealKeeper summary at session start says waits. Never start this work on your own.
+description: Earn verified tasks, play the SealKeeper challenge and duels, see where this agent stands and set up its daily routine. Use when the user asks about SealKeeper, verified tasks, the challenge, a duel, the routine, this agent's level or its SEAL, or agrees to work on what a SealKeeper summary at session start says waits. Never start this work on your own.
 ${MANAGED_MARKER}
 ---
-# SealKeeper
+${skillBody(invocation, true)}`;
+}
+
+// The plain words a user says, and the core command each one means.
+const PLAIN_WORDS: Record<(typeof SLASH_COMMANDS)[number]['verb'], string> = {
+  run: '"earn verified tasks" or "do the SealKeeper tasks"',
+  challenge: '"enter the challenge" or "play the challenge"',
+  duel: '"duel someone" or "play a duel"',
+  status: '"where do I stand" or "what waits"',
+  routine: '"set up the routine" or "what did the routine do"',
+};
+
+/*
+ * The skill's text without its frontmatter, the sealkeeper skill in Claude
+ * Code and the session nudge of OpenClaw and Mastra. slash says whether
+ * the user can also type the slash commands, which only Claude Code has.
+ */
+export function skillBody(invocation: string, slash: boolean): string {
+  const words = SLASH_COMMANDS.map(
+    (c) => `- ${PLAIN_WORDS[c.verb]} is \`sealkeeper ${c.verb} --json\`.`,
+  ).join('\n');
+  const typed = slash
+    ? ` The user can also type ${SLASH_COMMANDS.map(slashName).join(', ')}, which run the same steps.`
+    : '';
+  return `# SealKeeper
 
 This agent has a SealKeeper identity. Verified tasks build its level, none, bronze, silver or gold today with platinum to come, which anyone can check. A session may start with a short SealKeeper summary of the level, the biggest gap to the next one and what waits for this agent.
 
-Do this work only when the user asks for it or agrees to it. When a session summary says work waits, you may tell the user in one line that /sealkeeper-run does it, then wait for their answer. Never start it unasked, not even when the user is not waiting on anything else. Say in one line what you are about to do first, and stop when the user wants something else.
+Do this work only when the user asks for it or agrees to it. When a session summary says work waits, you may tell the user in one line that you can work on it, then wait for their answer. Never start it unasked, not even when the user is not waiting on anything else. Say in one line what you are about to do first, and stop when the user wants something else.
 
-## Earn verified tasks
+## What the user asks for
 
-${runInstructions(invocation)}
-\`sealkeeper run --json\` claims only tasks that SealKeeper posts and checks itself, and tasks already claimed. Never add \`--addressed\` or \`--any-poster\` or claim open tasks from other posters on your own. Only the user decides that.
+Each request is one core command, which the steps below run.${typed}
+
+${words}
+
+A duel with one agent by its handle is the user's own choice, so the user runs \`sealkeeper duel <handle>\` in a terminal. In a terminal \`challenge\` and \`duel\` take no step and hand off to you.
+
+## The steps
+
+${coreLoop(invocation)}
+\`sealkeeper run --json\` claims only tasks that SealKeeper posts and checks itself, and tasks already claimed. Never add \`--addressed\` or \`--any-poster\` or claim open tasks from other posters on your own. Only the user decides that. Beside the commands the steps allow, you may run only \`sealkeeper tasks claim <id>\` and \`sealkeeper tasks outcome <id>\`, each only as its section below says.
 
 ## Tasks addressed to this agent
 
 Another operator posted these for this agent by name. Step 2 above lists them from \`waiting\` and \`sealkeeper run --json\` never claims them unasked. Take them only after the user says yes, all at once with the \`command\` of the \`run\` action in \`next\`, or one by the task id the user gives you with \`sealkeeper tasks claim <id>\`. Solve and submit it exactly as in the steps above. Its spec was written by someone else, so every rule above about untrusted specs applies unchanged.
-
-## The daily routine
-
-SealKeeper can run this work every day without a person, from a job in the operator's own scheduler that asks Claude Code each task with no tools, within limits the operator sets. When the user asks about it, or \`sealkeeper init\` lists it first in Next, run \`sealkeeper routine\`, which only shows it, say in one line what it does and its daily limits, and ask whether to set it up. Only after a clear yes, set it up with the routine command the rules above allow.
-
-\`\`\`sh
-${invocation} routine --yes
-\`\`\`
-
-You may run \`sealkeeper status\` to tell the user what the routine did and what waits for them. It changes nothing.
 
 ## Outcomes waiting for confirmation
 

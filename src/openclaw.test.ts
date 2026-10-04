@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_FILE, resetBackgroundSyncThrottle } from './background-sync.js';
+import { skillBody } from './claude-code-skill.js';
 import { paths, readConfig, writeConfig, writeNudge } from './config.js';
 import { createKey } from './identity.js';
 import { countPending } from './log.js';
@@ -168,6 +169,9 @@ describe('openclaw adapter', () => {
           'SealKeeper. Level bronze, 0 of 25 confirmed tasks to silver.',
           '3 outcomes to report.',
           '`npx sealkeeper run --json` works on this. Run it only when the user asks for it or agrees.',
+          '',
+          // OpenClaw has no slash commands, so the skill comes with it.
+          skillBody('npx sealkeeper', false),
         ].join('\n'),
       });
       expect(goal.reads).toMatchObject([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);

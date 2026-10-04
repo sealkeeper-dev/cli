@@ -3,6 +3,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { skillBody } from './claude-code-skill.js';
 import { paths, writeConfig, writeNudge } from './config.js';
 import { sealKeeperContext } from './mastra.js';
 import { NUDGE_CACHE_MAX_MS } from './nudge.js';
@@ -71,6 +72,10 @@ describe('mastra sealKeeperContext', () => {
         'SealKeeper. Level none, 13 of 25 verified tasks to bronze.',
         '1 task addressed to you.',
         '`npx sealkeeper run --json` works on this. Run it only when the user asks for it or agrees.',
+        '',
+        // Mastra has no slash commands, so the skill comes with it, without
+        // naming them.
+        skillBody('npx sealkeeper', false),
       ].join('\n'),
     );
     expect(goal.reads).toMatchObject([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);

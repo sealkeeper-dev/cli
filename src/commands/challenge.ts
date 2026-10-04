@@ -2,6 +2,7 @@
 import { ChallengeNextRequest, GAME } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
+import { CHALLENGE_STEP } from '../claude-code-command.js';
 import { handleOf } from '../config.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { cli } from '../invocation.js';
@@ -91,7 +92,7 @@ export const EXPLAIN = [
 // The hand-off to the agent, which takes the step with the agent's form of
 // the command, the held task with its spec or the next one.
 export const handOff = (): string =>
-  `Have your agent run ${cli('challenge --json')}. It turns the game on and enters this week's challenge when needed, then hands over the next task.`;
+  `Have your agent run ${cli('challenge --json')}. It ${CHALLENGE_STEP}`;
 
 // Said when every task of the agent's entry is submitted, so there is
 // nothing to hand over.
