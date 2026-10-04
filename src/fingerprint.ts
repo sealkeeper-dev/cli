@@ -15,6 +15,8 @@
 //   folder Claude Code runs in, see fingerprint-claude-code.ts.
 // - mastra and openclaw, written by the adapters in the agent's own process
 //   as they see a change (observeParts).
+// - Any of the three, written by a routine run with the model the runtime
+//   reported for its answers, through the same observer (routine-run.ts).
 // - Prompt is not declared by any source yet.
 //
 // Each source also keeps the model name it read, as text, never hashed and
@@ -142,25 +144,26 @@ export async function recordCapture(
 
 // What an in-process adapter observed, as part hashes. A part it has not
 // seen is left out. model_name is the one model id the source last read, as
-// text, not a part (VOU-566). A value this CLI cannot read drops alone, so
-// it never costs the source its hashes.
+// text, not a part (VOU-566). model_reported says the model part and name
+// came from the model id the runtime itself reported, a session hook's
+// payload or a model step, not from the settings (VOU-614). A value this
+// CLI cannot read drops alone, so it never costs the source its hashes.
 const Observed = z.object({
   at: z.number().int().min(0),
   model_set: Sha256Base64url.optional(),
   tools: Sha256Base64url.optional(),
   framework: Sha256Base64url.optional(),
   model_name: z.string().optional().catch(undefined),
+  model_reported: z.boolean().optional().catch(undefined),
 });
 export type Observed = z.infer<typeof Observed>;
 export type ObservedParts = Omit<Observed, 'at'>;
 
-export const OBSERVING_ADAPTERS = ['mastra', 'openclaw'] as const;
-export type ObservingAdapter = (typeof OBSERVING_ADAPTERS)[number];
-
 // Every source, named as the runtime it stands for.
 export const FINGERPRINT_SOURCES = [
   'claude-code',
-  ...OBSERVING_ADAPTERS,
+  'mastra',
+  'openclaw',
 ] as const;
 export type FingerprintSource = (typeof FINGERPRINT_SOURCES)[number];
 
@@ -189,12 +192,20 @@ async function readSources(p: Paths): Promise<SourcesFile> {
   return { v: 1 };
 }
 
-// Writes what an in-process adapter observed. A part given replaces the last
-// one written for that adapter, and a part left out keeps it, so a new
-// process that has not run a model step yet keeps the model set the last
-// one saw. Called only when an observation changes.
+// What a source last wrote, or undefined when it wrote nothing that reads.
+export async function readSource(
+  source: FingerprintSource,
+  p: Paths = paths(),
+): Promise<Observed | undefined> {
+  return (await readSources(p))[source];
+}
+
+// Writes what an in-process adapter or a routine run observed. A part given
+// replaces the last one written for that source, and a part left out keeps
+// it, so a new process that has not run a model step yet keeps the model
+// set the last one saw. Called only when an observation changes.
 export async function observeParts(
-  adapter: ObservingAdapter,
+  adapter: FingerprintSource,
   parts: ObservedParts,
   p: Paths = paths(),
   atSeconds: number = nowSeconds(),
@@ -211,8 +222,9 @@ export async function observeParts(
 }
 
 // Replaces what a source last wrote with a whole capture, so a part that is
-// no longer seen reads not declared. The Claude Code hooks write this way.
-// Only into a home with a config.
+// no longer seen reads not declared. The Claude Code hooks write this way,
+// and keep a reported model themselves, see observeClaudeCode. Only into a
+// home with a config.
 export async function replaceSource(
   source: FingerprintSource,
   parts: ObservedParts,
@@ -252,7 +264,12 @@ async function declaredSource(
 // Sources older than SOURCE_MAX_AGE_SECONDS are ignored. Of the rest, the
 // one that matches the declared runtime wins, else the newest. undefined
 // when none is left. Never reads the project, so the folder it runs in
-// does not matter. The model name sync declares comes from the same one.
+// does not matter. The model name sync declares comes from the same one,
+// as that source last wrote it. Within the claude-code source a model id
+// Claude Code reported wins over ANTHROPIC_MODEL and the settings, see
+// observeClaudeCode. Two sessions or runs on one machine that run
+// different models write the same source in turn, and the last one written
+// is the one declared.
 export async function chosenSource(
   options: CaptureOptions = {},
 ): Promise<{ name: FingerprintSource; observed: Observed } | undefined> {
@@ -317,7 +334,7 @@ function nowSeconds(): number {
 // The fingerprint block of what-is-shared.
 const PART_TEXT: Record<FingerprintPartName, string> = {
   model_set:
-    'the model ids the agent runs, from the Claude Code settings or ANTHROPIC_MODEL, or the ids Mastra and OpenClaw report',
+    'the model ids the agent runs, the id Claude Code passes to its session start hook or reports on a routine run, else the Claude Code settings or ANTHROPIC_MODEL, or the ids Mastra and OpenClaw report',
   prompt: 'not declared yet by any adapter',
   tools:
     'the MCP server names in .mcp.json, ~/.claude.json and the Claude Code settings with the MCP tools they allow, or the names and schemas of the Mastra tools',
@@ -326,7 +343,7 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
 };
 
 // The model name block of what-is-shared (VOU-566).
-export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, from ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
+export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A routine run sends the id the runtime reported for its answers. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
 
 export function describeFingerprint(): string {
   const width = Math.max(...FINGERPRINT_PARTS.map((n) => n.length)) + 2;

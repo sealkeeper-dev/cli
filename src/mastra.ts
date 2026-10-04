@@ -17,7 +17,11 @@
 // as sealkeeper routine run, see routine-mastra.ts (VOU-601).
 import { createHash, randomUUID } from 'node:crypto';
 import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
-import { mastraVersion, toolLine } from './adapter-fingerprint.js';
+import {
+  mastraVersion,
+  rawModelIdOf,
+  toolLine,
+} from './adapter-fingerprint.js';
 import {
   type CheckOptions,
   type CheckThresholds,
@@ -146,16 +150,6 @@ function usageOf(step: unknown, latencyMs: number): EmitInput | null {
       model: modelId,
     },
   };
-}
-
-// response.modelId, else step.model.modelId, else step.model, the first
-// that gives a name, as it is written.
-function rawModelIdOf(response: unknown, model: unknown): unknown {
-  return [
-    (response as { modelId?: unknown } | null | undefined)?.modelId,
-    (model as { modelId?: unknown } | null | undefined)?.modelId,
-    model,
-  ].find((id) => toolNameOf(id) !== null);
 }
 
 // The model id of a step as a name.

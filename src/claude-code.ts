@@ -56,6 +56,9 @@ type HookInput = {
   // The folder Claude Code runs in, which picks the agent, see
   // sealkeeperHome. null when the payload has no absolute path there.
   cwd: string | null;
+  // The model id SessionStart names, as it came, for the fingerprint source
+  // (VOU-614). null when the payload has no string there.
+  model: string | null;
 };
 
 type HookDeps = {
@@ -70,8 +73,10 @@ type HookDeps = {
 export const CLAUDE_CODE_RUN = '/sealkeeper-run';
 
 // Picks the few fields the adapter uses out of the raw stdin text, or null
-// when it is not a hook payload. Only the event name, the session id and cwd
-// are read. Nothing a tool event carries is read, logged or emitted.
+// when it is not a hook payload. Only the event name, the session id, cwd
+// and the model id are read. The model id is used only by SessionStart, the
+// one hook Claude Code passes it to. Nothing a tool event carries is read,
+// logged or emitted.
 export function parseHookInput(text: string): HookInput | null {
   let json: unknown;
   try {
@@ -88,6 +93,7 @@ export function parseHookInput(text: string): HookInput | null {
     event: raw.hook_event_name,
     sessionId: idOf(raw.session_id),
     cwd: cwdOf(raw.cwd),
+    model: typeof raw.model === 'string' ? raw.model : null,
   };
 }
 
@@ -149,18 +155,19 @@ async function logHook(
       emit({ ...event, version: config.version }, p);
     // The fingerprint parts, read from the folder Claude Code runs in and
     // kept for the next sync or run, see fingerprint-claude-code.ts. Only
-    // at session start and end. Never throws.
-    const observe = () =>
+    // at session start and end, with the model id SessionStart names.
+    // Never throws.
+    const observe = (model: string | null) =>
       observeClaudeCode(
         config.agentId,
-        { cwd: input.cwd ?? process.cwd(), env: process.env },
+        { cwd: input.cwd ?? process.cwd(), env: process.env, model },
         p,
       );
 
     switch (input.event) {
       case 'SessionStart': {
         if (input.sessionId === null) return;
-        await observe();
+        await observe(input.model);
         await removeStaleMarkers(p, now, append);
         // A resume or compact fires SessionStart again for the same session.
         // The marker, open or ended, keeps it to one session.start.
@@ -184,7 +191,8 @@ async function logHook(
       case 'SessionEnd': {
         if (input.sessionId === null) return;
         // Before the sync below, which recomputes the fingerprint.
-        await observe();
+        // SessionEnd names no model, so a reported one is kept.
+        await observe(null);
         // No open marker means the session already ended, or began before
         // the hooks were installed. Either way there is nothing to close.
         const session = await readSession(p, input.sessionId);

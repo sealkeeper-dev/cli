@@ -165,6 +165,26 @@ describe('the envelope reader', () => {
     expect(c.problem).toBeUndefined();
   });
 
+  // VOU-614. model as it came, the provider is not read. Read on any
+  // outcome, and loosely, since a turn that answers is not checked live.
+  it('reads the model the envelope names, without the provider', () => {
+    const named = read(
+      JSON.stringify({
+        ok: true,
+        final: 'x',
+        provider: 'openai',
+        model: 'gpt-5.4',
+      }),
+    );
+    expect(named.model).toBe('gpt-5.4');
+    expect(read(JSON.stringify({ ok: true, final: 'x', model: 3 })).model).toBe(
+      null,
+    );
+    expect(read(JSON.stringify({ ok: false, model: 'gpt-5.4' }), 1).model).toBe(
+      'gpt-5.4',
+    );
+  });
+
   it('drops the answer of a turn that reports a tool call', () => {
     for (const extra of [
       { toolSummary: { calls: 2 } },

@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
+import { rawModelIdOf } from './adapter-fingerprint.js';
 import { paths, readConfig, readRoutineConfig } from './config.js';
 import type {
   AgentProblem,
@@ -30,7 +31,7 @@ export type MastraGenerateOptions = {
 };
 
 // Anything with a generate that takes a prompt and options. A Mastra Agent
-// fits. The result is read loosely, text, usage and toolCalls.
+// fits. The result is read loosely, text, usage, toolCalls and the model id.
 export type MastraAgentLike = {
   generate(prompt: string, options: MastraGenerateOptions): Promise<unknown>;
 };
@@ -150,10 +151,14 @@ const num = (value: unknown): number | null =>
     ? value
     : null;
 
-// text, usage and toolCalls of a generate result, read loosely. Tokens are
-// totalTokens, else input and output, in either naming Mastra has used.
+// text, usage, toolCalls and the model id of a generate result, read
+// loosely. Tokens are totalTokens, else input and output, in either naming
+// Mastra has used. The model id as the live adapter reads a step's,
+// response.modelId first (rawModelIdOf).
 function resultOf(value: unknown): AgentResult {
   const result = record(value);
+  const raw = rawModelIdOf(result?.response, result?.model);
+  const model = typeof raw === 'string' ? { model: raw } : {};
   const usage = record(result?.usage);
   const input = num(usage?.inputTokens) ?? num(usage?.promptTokens);
   const output = num(usage?.outputTokens) ?? num(usage?.completionTokens);
@@ -164,6 +169,7 @@ function resultOf(value: unknown): AgentResult {
   if (calls > 0) {
     return {
       ...empty(),
+      ...model,
       tokens,
       exitCode: 1,
       problem: {
@@ -177,7 +183,7 @@ function resultOf(value: unknown): AgentResult {
     typeof result?.text === 'string' && result.text.trim() !== ''
       ? result.text
       : null;
-  return { ...empty(), text, tokens };
+  return { ...empty(), ...model, text, tokens };
 }
 
 // A provider credential that is missing or refused, by the status or the

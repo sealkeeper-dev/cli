@@ -85,14 +85,16 @@ export type AgentSpec = {
 };
 
 // What a runtime reads from the agent's stdout, the answer, the tokens and
-// the cost it reported, whether it says it ran out of time, and a problem
-// that fails the run. end is called once, with the exit code.
+// the cost it reported, the model it named, whether it says it ran out of
+// time, and a problem that fails the run. end is called once, with the
+// exit code.
 export type StdoutReader = {
   write(chunk: string): void;
   end(code: number | null): void;
   readonly tokens: number | null;
   readonly costUsd: number | null;
   readonly text: string | null;
+  readonly model?: string | null;
   readonly timedOut?: boolean;
   readonly problem?: AgentProblem;
 };
@@ -116,6 +118,10 @@ export type AgentResult = {
   // reads are not counted. null when it reported none.
   tokens: number | null;
   costUsd: number | null;
+  // The model id the runtime reported for the answer, as it came, when it
+  // reported one (VOU-614). What the agent says about itself, which the
+  // routine records for the fingerprint source and sync declares.
+  model?: string;
   // Why it could not start.
   error?: string;
   // Why it ran but gave no usable answer, which fails the run.
@@ -255,6 +261,7 @@ export function runAgent(
         stoppedFor: stopped,
         tokens: reader.tokens,
         costUsd: reader.costUsd,
+        ...(typeof reader.model === 'string' ? { model: reader.model } : {}),
         ...(problem === undefined ? {} : { problem }),
       });
     });
@@ -360,16 +367,18 @@ type Usage = {
   cache_creation_input_tokens?: number;
 };
 
-// Reads Claude Code's stream-json lines. Each assistant message reports its
-// usage, once per message id, and the result line has the answer, the
-// total cost and the final usage, which wins when present. A result line
-// that says it is an error gives no answer.
+// Reads Claude Code's stream-json lines. The system init line names the
+// model, each assistant message reports its usage, once per message id, and
+// the result line has the answer, the total cost and the final usage, which
+// wins when present. A result line that says it is an error gives no
+// answer.
 export class UsageCounter implements StdoutReader {
   private readonly seen = new Map<string, number>();
   private buffer = '';
   private final: number | null = null;
   costUsd: number | null = null;
   text: string | null = null;
+  model: string | null = null;
 
   get tokens(): number | null {
     if (this.final !== null) return this.final;
@@ -405,12 +414,21 @@ export class UsageCounter implements StdoutReader {
     if (typeof json !== 'object' || json === null) return;
     const event = json as {
       type?: unknown;
+      subtype?: unknown;
+      model?: unknown;
       message?: { id?: unknown; usage?: Usage };
       usage?: Usage;
       total_cost_usd?: unknown;
       result?: unknown;
       is_error?: unknown;
     };
+    if (
+      event.type === 'system' &&
+      event.subtype === 'init' &&
+      typeof event.model === 'string'
+    ) {
+      this.model = event.model;
+    }
     if (event.type === 'assistant' && event.message?.usage) {
       const id =
         typeof event.message.id === 'string'

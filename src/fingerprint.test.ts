@@ -45,6 +45,7 @@ import {
 import { captureClaudeCode, projectDir } from './fingerprint-claude-code.js';
 import { stableJson } from './fingerprint-content.js';
 import { sealKeeperSession, withSealKeeper } from './mastra.js';
+import { declaredModel } from './model-name.js';
 import { sealKeeperPlugin } from './openclaw.js';
 
 const AGENT = '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo';
@@ -345,9 +346,13 @@ describe('Claude Code capture', () => {
       vi.stubEnv('ANTHROPIC_MODEL', '');
     });
 
-    const hook = (event: string, session: string) =>
+    const hook = (
+      event: string,
+      session: string,
+      model: string | null = null,
+    ) =>
       handleHook(
-        { event, sessionId: session, cwd: project },
+        { event, sessionId: session, cwd: project, model },
         { fetch: (async () => Response.json({})) as typeof fetch, paths: p },
       );
 
@@ -429,6 +434,42 @@ describe('Claude Code capture', () => {
       const source = JSON.parse(text)['claude-code'];
       expect(source.model_name).toBe('claude-sonnet-4-5');
       expect(text.split('claude-sonnet-4-5')).toHaveLength(2);
+    });
+
+    // VOU-614. SessionStart names the model Claude Code runs. It wins over
+    // the settings, SessionEnd and a SessionStart that name none keep it,
+    // and the last one named wins.
+    it('declares the model SessionStart names over the settings, and keeps it', async () => {
+      const declared = async () =>
+        (await declaredModel({ paths: p, env: {} }))?.name;
+      await hook('SessionStart', 's1', 'claude-opus-5');
+      const start = await refresh();
+      expect(start.parts.model_set).toEqual({ hash: await h('claude-opus-5') });
+      expect(await declared()).toBe('claude-opus-5');
+
+      await hook('SessionEnd', 's1');
+      expect((await refresh()).parts.model_set).toEqual(start.parts.model_set);
+      await hook('SessionStart', 's2');
+      expect(await declared()).toBe('claude-opus-5');
+
+      // A second session on another model, the last one seen wins.
+      await hook('SessionStart', 's3', 'claude-haiku-4-5');
+      expect(await declared()).toBe('claude-haiku-4-5');
+      expect((await refresh()).parts.model_set).toEqual({
+        hash: await h('claude-haiku-4-5'),
+      });
+
+      // A name that is not a model name drops, the id is still hashed.
+      await hook('SessionStart', 's4', 'sealkeeper-verified');
+      expect(await declared()).toBeUndefined();
+    });
+
+    it('reads the settings when no model was ever reported', async () => {
+      await hook('SessionStart', 's1', '');
+      await hook('SessionEnd', 's1');
+      expect((await refresh()).parts.model_set).toEqual({
+        hash: await h('claude-sonnet-4-5'),
+      });
     });
   });
 });

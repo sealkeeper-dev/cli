@@ -145,15 +145,19 @@ const PLAIN_KIND = /^[a-z][a-z0-9_.-]{0,39}$/i;
 // Reads the one JSON envelope agent exec --json prints, loosely, so a
 // field a newer OpenClaw adds or leaves out never breaks the run. ok and
 // status say whether the turn worked, final is the answer, payloads the
-// answer in parts, usage the tokens, costUsd the cost, error.kind and
-// error.message what failed, and toolSummary and bridgeCalls the tool
-// calls. Exit 2, or status timeout, is OpenClaw's own timeout.
+// answer in parts, usage the tokens, costUsd the cost, model the model id
+// that answered, error.kind and error.message what failed, and toolSummary
+// and bridgeCalls the tool calls. Exit 2, or status timeout, is OpenClaw's
+// own timeout. The envelope also names the provider, which is not read, so
+// the id is the one the live adapter reads from llm_output and both hash
+// alike (VOU-614).
 export class EnvelopeReader implements StdoutReader {
   private out = '';
   private over = false;
   tokens: number | null = null;
   costUsd: number | null = null;
   text: string | null = null;
+  model: string | null = null;
   timedOut = false;
   problem?: AgentProblem;
 
@@ -169,7 +173,7 @@ export class EnvelopeReader implements StdoutReader {
   end(code: number | null): void {
     const envelope = this.over ? null : envelopeOf(this.out);
     this.out = '';
-    if (envelope !== null) this.readUsage(envelope);
+    if (envelope !== null) this.readReport(envelope);
     if (code === 2 || envelope?.status === 'timeout') {
       this.timedOut = true;
       return;
@@ -198,7 +202,8 @@ export class EnvelopeReader implements StdoutReader {
     this.text = answerOf(envelope);
   }
 
-  private readUsage(envelope: Envelope): void {
+  // The tokens, the cost and the model the envelope reports, on any outcome.
+  private readReport(envelope: Envelope): void {
     const usage = record(envelope.usage);
     const total = num(usage?.total);
     const input = num(usage?.input);
@@ -207,6 +212,7 @@ export class EnvelopeReader implements StdoutReader {
       total ??
       (input !== null || output !== null ? (input ?? 0) + (output ?? 0) : null);
     this.costUsd = num(envelope.costUsd);
+    this.model = typeof envelope.model === 'string' ? envelope.model : null;
   }
 }
 

@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // What the in-process adapters (Mastra, OpenClaw) see of the fingerprint
-// parts, held for the life of the process. The hashes go to
+// parts, held for the life of the process, and the model a routine run's
+// runtime reported, held for the run (VOU-614). The hashes go to
 // fingerprint-sources.json only when a part changes, a new model id, a new
 // tool set or the framework version found once, never per model step that
 // shows nothing new. The model name of the first model id goes too, as
@@ -10,8 +11,8 @@
 import { partHash } from '@sealkeeper/schema';
 import { paths as defaultPaths, type Paths, readConfig } from './config.js';
 import {
+  type FingerprintSource,
   type ObservedParts,
-  type ObservingAdapter,
   observeParts,
 } from './fingerprint.js';
 import {
@@ -34,10 +35,11 @@ export type FingerprintObserver = {
   settled: () => Promise<void>;
 };
 
-// One observer per adapter per process. Every write is queued behind the
-// last, and none can reject or print, since the agent must never notice.
+// One observer per adapter per process, or per routine run. Every write is
+// queued behind the last, and none can reject or print, since the agent
+// must never notice.
 export function createObserver(
-  adapter: ObservingAdapter,
+  adapter: FingerprintSource,
   paths?: () => Paths,
 ): FingerprintObserver {
   const models = new Set<string>();
@@ -77,7 +79,8 @@ export function createObserver(
     // so names the same one at every sync and never records a change of
     // model it did not make. When the first id gives no name, none is
     // written and an earlier process's name is cleared. Written only when
-    // the set grows, never per step.
+    // the set grows, never per step. The runtime reported the id, so a
+    // Claude Code hook later keeps it over the settings (VOU-614).
     model: (id, idName) => {
       if (models.has(id)) return queue;
       models.add(id);
@@ -85,6 +88,7 @@ export function createObserver(
       return write(async (agentId) => ({
         model_set: await partHash(agentId, modelSetContent(models)),
         model_name: name,
+        model_reported: true,
       }));
     },
     tools: (lines) => {

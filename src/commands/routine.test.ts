@@ -36,10 +36,12 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { tildePath } from '../files.js';
+import { readSource } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { MANAGED_MARKER } from '../managed.js';
 import { routine } from '../mastra.js';
+import { declaredModel } from '../model-name.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
@@ -1439,6 +1441,55 @@ describe('routine', () => {
       ]);
     });
 
+    // VOU-614. claude -p names its model in the init line, and the run
+    // records it for the claude-code source, so the next sync declares it.
+    // A name that does not parse is dropped and the run goes on.
+    it('records the model claude -p names for the next sync, and drops one that is no name', async () => {
+      const init = (model: string) => ({
+        type: 'system',
+        subtype: 'init',
+        model,
+      });
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [
+              init('claude-opus-5'),
+              assistant(randomUUID(), 50),
+              { type: 'result', result: 'a\nb', total_cost_usd: 0.01 },
+            ],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(await readSource('claude-code', paths())).toMatchObject({
+        model_name: 'claude-opus-5',
+        model_reported: true,
+      });
+      expect(
+        (await declaredModel({ paths: paths(), env: { CLAUDECODE: '1' } }))
+          ?.name,
+      ).toBe('claude-opus-5');
+
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [
+              init('sealkeeper-verified'),
+              { type: 'result', result: 'a\nb', total_cost_usd: 0.01 },
+            ],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect((await runs())[0]).toMatchObject({ outcome: 'done' });
+      expect(
+        (await readSource('claude-code', paths()))?.model_name,
+      ).toBeUndefined();
+    });
+
     it('starts no agent when the API has nothing to do, and says why', async () => {
       api.routineReply = (p) =>
         Response.json(
@@ -2137,6 +2188,12 @@ describe('routine', () => {
         tokens: 120,
         costUsd: 0.01,
       });
+      // The envelope's model goes to the OpenClaw source, as the live
+      // adapter reads it, without the provider (VOU-614).
+      expect(await readSource('openclaw', paths())).toMatchObject({
+        model_name: 'gpt-x',
+        model_reported: true,
+      });
     });
 
     it('a hostile spec cannot make OpenClaw run anything, and an answer from a turn that reports a tool call is dropped', async () => {
@@ -2279,6 +2336,7 @@ describe('routine', () => {
         text: 'a\nb',
         usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
         toolCalls: [],
+        response: { modelId: 'gpt-4.1' },
       }));
       const result = await routine({ generate });
       expect(result).toMatchObject({
@@ -2306,6 +2364,8 @@ describe('routine', () => {
       expect(spawned).toEqual([]);
       expect(api.submitted.map((p) => p.submission)).toEqual(['a\nb']);
       expect((await runs())[0]).toMatchObject({ runtime: 'mastra' });
+      // The result's model id goes to the Mastra source (VOU-614).
+      expect((await readSource('mastra', paths()))?.model_name).toBe('gpt-4.1');
 
       // No job, so routine shows the screen, never the setup.
       tty = true;

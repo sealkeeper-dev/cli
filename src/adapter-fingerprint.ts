@@ -7,6 +7,7 @@ import { realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findPackageVersion, stableJson } from './fingerprint-content.js';
+import { toolNameOf } from './names.js';
 
 // Anything with an id, as the Mastra adapter wraps.
 type ToolLike = { id: string };
@@ -81,4 +82,15 @@ export async function openClawVersion(
   if (entry === undefined || entry === '') return null;
   const real = await realpath(entry).catch(() => entry);
   return findPackageVersion('openclaw', dirname(real));
+}
+
+// The model id of a Mastra step or generate result, response.modelId, else
+// model.modelId, else model, the first that gives a name, as it is written.
+// The live adapter reads it per step, the routine per answer (VOU-614).
+export function rawModelIdOf(response: unknown, model: unknown): unknown {
+  return [
+    (response as { modelId?: unknown } | null | undefined)?.modelId,
+    (model as { modelId?: unknown } | null | undefined)?.modelId,
+    model,
+  ].find((id) => toolNameOf(id) !== null);
 }

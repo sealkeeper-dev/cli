@@ -6,6 +6,17 @@
 // text, the model name sync declares (VOU-566), less an ARN's account and
 // region (modelNameOf). Server and tool names and the version stay on this
 // machine.
+//
+// The model id (VOU-614). Claude Code passes the active model to its
+// SessionStart hooks as model, the one hook input that carries it, and
+// leaves it out at times, after /clear, on a recovered session and, as seen
+// on Claude Code 2.1.289 on 4 October 2026, under claude -p. When it is
+// there it wins, since it is the model Claude Code runs and the settings
+// may only name an alias such as opus. When it is not, a model the runtime
+// reported earlier is kept, so a SessionEnd, which never carries it, does
+// not swap the real id back for the settings' alias. Else ANTHROPIC_MODEL
+// and the settings, as before (modelIdOf). A /model switch inside a
+// session is seen at the next SessionStart.
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
@@ -17,6 +28,7 @@ import {
   type CapturedPart,
   type CapturedParts,
   type ObservedParts,
+  readSource,
   replaceSource,
 } from './fingerprint.js';
 import {
@@ -37,6 +49,9 @@ export type ClaudeCodeWhere = {
   // ~/.claude, or CLAUDE_CONFIG_DIR, when unset.
   claudeDir?: string;
   home?: string;
+  // The model the hook payload names, SessionStart's model, as it came.
+  // Read only when it is a string that gives a name (toolNameOf).
+  model?: unknown;
 };
 
 type Json = Record<string, unknown>;
@@ -86,11 +101,12 @@ export async function captureClaudeCode(
 }
 
 // The parts and the model name of the one model id they hash, null when
-// none is set or the id gives no name.
+// none is set or the id gives no name. reported says the id is the one the
+// hook payload names.
 async function readClaudeCode(
   agentId: string,
   where: ClaudeCodeWhere,
-): Promise<{ parts: CapturedParts; name: string | null }> {
+): Promise<{ parts: CapturedParts; name: string | null; reported: boolean }> {
   const project = await projectDir(where.cwd, where.home);
   // Highest precedence first, the way Claude Code merges them.
   const files = [
@@ -111,7 +127,11 @@ async function readClaudeCode(
     project === where.cwd ? null : objectOf(projects?.[where.cwd]),
   ].flatMap((o) => Object.keys(objectOf(o?.mcpServers) ?? {}));
   const hash = (content: string) => partHash(agentId, content);
-  const raw = modelIdOf(settings, where.env);
+  const reported =
+    typeof where.model === 'string' && toolNameOf(where.model) !== null;
+  const raw = reported
+    ? (where.model as string)
+    : modelIdOf(settings, where.env);
   const model = toolNameOf(raw);
   return {
     parts: {
@@ -124,6 +144,7 @@ async function readClaudeCode(
       framework: await frameworkPart(where.env, hash),
     },
     name: modelNameOf(raw),
+    reported,
   };
 }
 
@@ -135,12 +156,23 @@ export async function observeClaudeCode(
   p: Paths,
 ): Promise<void> {
   try {
-    const { parts, name } = await readClaudeCode(agentId, where);
+    const { parts, name, reported } = await readClaudeCode(agentId, where);
     const observed: ObservedParts = {};
-    // The model the model part hashes, as a name, the one sync declares.
-    if (name !== null) observed.model_name = name;
-    if (parts.model_set !== FINGERPRINT_NOT_DECLARED) {
-      observed.model_set = parts.model_set;
+    // A model the runtime reported before, by an earlier hook or a routine
+    // run, is kept when this payload names none. The last one reported
+    // wins, whichever session or run it came from.
+    const last = reported ? undefined : await readSource('claude-code', p);
+    if (last?.model_reported === true && last.model_set !== undefined) {
+      observed.model_set = last.model_set;
+      if (last.model_name !== undefined) observed.model_name = last.model_name;
+      observed.model_reported = true;
+    } else {
+      // The model the model part hashes, as a name, the one sync declares.
+      if (name !== null) observed.model_name = name;
+      if (parts.model_set !== FINGERPRINT_NOT_DECLARED) {
+        observed.model_set = parts.model_set;
+      }
+      if (reported) observed.model_reported = true;
     }
     if (parts.tools !== FINGERPRINT_NOT_DECLARED) observed.tools = parts.tools;
     if (parts.framework !== FINGERPRINT_NOT_DECLARED) {
@@ -154,7 +186,8 @@ export async function observeClaudeCode(
 
 type Hash = (content: string) => Promise<string>;
 
-// One model id, as it is written. ANTHROPIC_MODEL in the environment, then
+// One model id from the environment and the settings, as it is written, for
+// a hook whose payload names none. ANTHROPIC_MODEL in the environment, then
 // ANTHROPIC_MODEL in a settings file's env block, which Claude Code puts in
 // its environment, then a settings file's model, which may be an alias
 // such as opus. The model part hashes it through toolNameOf, the model

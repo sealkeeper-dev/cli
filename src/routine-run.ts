@@ -20,8 +20,10 @@ import {
   readConfig,
   writeFileAtomic,
 } from './config.js';
+import { createObserver } from './fingerprint-observer.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
+import { modelNameOf, toolNameOf } from './names.js';
 import type { RoutineAnswerResponse } from './responses.js';
 import {
   acquireLock,
@@ -149,6 +151,12 @@ export async function routineRun(
   let tokens: number | null = null;
   let costUsd: number | null = null;
   let entry: Omit<RunEntry, 'at'> | null = null;
+  // The model the runtime reports for an answer goes to the runtime's
+  // fingerprint source, as the live adapters write it, so the next sync
+  // declares it (VOU-614). Written when the run sees a new id, never fails
+  // the run.
+  const observer =
+    agent === null ? null : createObserver(agent.runtime, () => p);
 
   const finish = async (
     outcome: RunOutcome,
@@ -450,6 +458,10 @@ export async function routineRun(
       });
       if (result.tokens !== null) tokens = (tokens ?? 0) + result.tokens;
       if (result.costUsd !== null) costUsd = (costUsd ?? 0) + result.costUsd;
+      const model = toolNameOf(result.model);
+      if (model !== null) {
+        await observer?.model(model, modelNameOf(result.model));
+      }
       if (result.stoppedFor !== null) {
         await stop(result.stoppedFor);
         return 'stop';

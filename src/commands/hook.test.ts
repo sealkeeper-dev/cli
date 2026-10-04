@@ -823,6 +823,21 @@ describe('parseHookInput', () => {
     expect(parseHookInput(payload(42))?.cwd).toBeNull();
     expect(parseHookInput(payload(undefined))?.cwd).toBeNull();
   });
+
+  // VOU-614. The model id SessionStart names, as it came.
+  it('takes the model only when it is a string', () => {
+    const start = (model: unknown) =>
+      parseHookInput(
+        JSON.stringify({
+          hook_event_name: 'SessionStart',
+          session_id: 's1',
+          model,
+        }),
+      )?.model;
+    expect(start('claude-opus-5')).toBe('claude-opus-5');
+    expect(start(42)).toBeNull();
+    expect(start(undefined)).toBeNull();
+  });
 });
 
 describe('toolNameOf', () => {
