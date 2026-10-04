@@ -24,6 +24,7 @@ import {
 } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import { createObserver } from './fingerprint-observer.js';
+import { takeAskAgain } from './handed.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { declaredModel } from './model-name.js';
@@ -652,28 +653,63 @@ export async function routineRun(
     // game task. A game task has no release, so every later run is handed
     // it again until it is submitted or its duel or challenge ends. One an
     // earlier run already answered gets the answer that run kept, and the
-    // agent is not asked again.
+    // agent is not asked again. When a check here refuses that kept answer
+    // before anything is sent, the agent is asked again and its new answer
+    // replaces the kept one, at most GAME_ASKS_AGAIN times for a task
+    // across runs, noted in handed.ts. Past that the run asks no more and
+    // says the task needs the operator, and the kept answer stays.
     async function solve(
       s: LiveSession,
       task: RoutineTask & { kind: string },
     ): Promise<'stop' | null> {
       const kept = isGame(task) ? await keptAnswer(workDir, task.id) : null;
-      let text = kept;
-      let solvedBy: string | null = null;
-      if (text === null) {
-        const result = await ask(taskPrompt(task));
-        if (result === 'stop') {
+      if (kept !== null) {
+        const sent = await submit(s, task, kept, null);
+        if (sent !== 'local') return sent;
+        const over = overLimit();
+        if (over !== null) {
           await giveUp(s, task, 'the run stopped before an answer');
+          await stop(over);
           return 'stop';
         }
-        text = answerOf(result.text, task.spec);
-        if (text === null) {
-          await giveUp(s, task, 'the agent gave no answer');
+        if (!(await takeAskAgain(task.id, GAME_ASKS_AGAIN, p))) {
+          await appendRoutine(
+            {
+              kind: 'unanswered',
+              runId,
+              taskId: task.id,
+              taskType: task.type,
+              reason: `the kept answer fails a check before submit and the agent is asked again at most ${GAME_ASKS_AGAIN} times a task, so it needs the operator. Fix .sealkeeper-answers/${task.id}.txt in the routine's working folder, or submit it by hand`,
+              released: false,
+            },
+            p,
+          );
           return null;
         }
-        solvedBy = modelNameOf(result.model);
-        await keepAnswer(workDir, task.id, text);
       }
+      const result = await ask(taskPrompt(task));
+      if (result === 'stop') {
+        await giveUp(s, task, 'the run stopped before an answer');
+        return 'stop';
+      }
+      const text = answerOf(result.text, task.spec);
+      if (text === null) {
+        await giveUp(s, task, 'the agent gave no answer');
+        return null;
+      }
+      await keepAnswer(workDir, task.id, text);
+      const sent = await submit(s, task, text, modelNameOf(result.model));
+      return sent === 'local' ? null : sent;
+    }
+
+    // Submits one answer and logs it, local when a check here refused it
+    // before anything was sent.
+    async function submit(
+      s: LiveSession,
+      task: RoutineTask & { kind: string },
+      text: string,
+      solvedBy: string | null,
+    ): Promise<'stop' | 'local' | null> {
       // A submit the API rate limited is sent again after the wait a step
       // takes, since the API refused it before reading it (VOU-613). Past
       // the tries, or when the wait does not fit, it fails as any refused
@@ -734,7 +770,7 @@ export async function routineRun(
             else await comeBackLater(later);
             return 'stop';
           }
-          return null;
+          return error instanceof SubmitRefused && error.local ? 'local' : null;
         }
       }
     }
@@ -800,6 +836,12 @@ const askAgain = (error: ApiError): boolean =>
 // Retry-After, rather than an API it could not read.
 const askedLater = (error: ApiError): boolean =>
   error.status === 429 || error.retryAfterSec !== null;
+
+// How often the agent is asked again for one game task whose kept answer
+// a check refuses before submit, across runs (VOU-635). Small, since a game
+// task has one submit and no release, so a later run is handed it again
+// until it is submitted or ends.
+const GAME_ASKS_AGAIN = 2;
 
 const isGame = (task: { kind: string }) =>
   task.kind === 'duel' || task.kind === 'challenge';

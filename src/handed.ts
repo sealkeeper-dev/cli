@@ -12,7 +12,9 @@ import { specAsksFinalLineFeed } from './line-break.js';
 // read from that spec by specAsksFinalLineFeed, and submit reads it back.
 // Only that bit is kept, never the spec, and only until the task expires.
 // The newest MAX_KEPT tasks are kept, more than the claims an agent can
-// hold, so the file never grows past that.
+// hold, so the file never grows past that. Beside it, how often the routine
+// asked its model again for the task because the answer it kept failed a
+// check before submit (takeAskAgain), so those asks stay capped across runs.
 
 const MAX_KEPT = 100;
 
@@ -20,6 +22,7 @@ const Kept = z.object({
   id: z.uuid(),
   finalLineFeed: z.boolean(),
   expiresAt: z.iso.datetime({ offset: true }),
+  asksAgain: z.number().int().min(0).optional(),
 });
 type Kept = z.infer<typeof Kept>;
 
@@ -43,6 +46,11 @@ async function readKept(p: Paths): Promise<Kept[]> {
   }
 }
 
+async function writeKept(tasks: Kept[], p: Paths): Promise<void> {
+  await ensureHome(p);
+  await writeFileAtomic(p.handed, `${JSON.stringify({ v: 1, tasks })}\n`);
+}
+
 // Keeps what submit needs of these game tasks, past the ones already kept,
 // dropping those expired by now. A side task, so it never throws, and the
 // worst case is a submit that cannot see the spec and says so.
@@ -53,18 +61,23 @@ export async function keepHanded(
 ): Promise<void> {
   if (tasks.length === 0) return;
   try {
-    const fresh: Kept[] = tasks.map((task) => ({
-      id: task.id,
-      finalLineFeed: specAsksFinalLineFeed(task.spec),
-      expiresAt: task.expiresAt,
-    }));
+    const before = await readKept(p);
+    // A task handed over again keeps the asks already noted for it.
+    const asked = new Map(before.map((task) => [task.id, task.asksAgain]));
+    const fresh: Kept[] = tasks.map((task) => {
+      const asksAgain = asked.get(task.id);
+      return {
+        id: task.id,
+        finalLineFeed: specAsksFinalLineFeed(task.spec),
+        expiresAt: task.expiresAt,
+        ...(asksAgain === undefined ? {} : { asksAgain }),
+      };
+    });
     const ids = new Set(fresh.map((task) => task.id));
-    const kept = (await readKept(p)).filter(
+    const kept = before.filter(
       (task) => !ids.has(task.id) && Date.parse(task.expiresAt) > now.getTime(),
     );
-    const file = { v: 1, tasks: [...kept, ...fresh].slice(-MAX_KEPT) };
-    await ensureHome(p);
-    await writeFileAtomic(p.handed, `${JSON.stringify(file)}\n`);
+    await writeKept([...kept, ...fresh].slice(-MAX_KEPT), p);
   } catch {
     // Not kept.
   }
@@ -78,4 +91,25 @@ export async function handedFinalLineFeed(
 ): Promise<boolean | null> {
   const found = (await readKept(p)).find((task) => task.id === taskId);
   return found?.finalLineFeed ?? null;
+}
+
+// Notes one more ask of the model for a game task whose kept answer failed
+// a check before submit, and true when the ask may go. False when cap asks
+// are noted already, when the task is not kept here or when the note could
+// not be written, so no ask goes uncounted.
+export async function takeAskAgain(
+  taskId: string,
+  cap: number,
+  p: Paths = paths(),
+): Promise<boolean> {
+  try {
+    const kept = await readKept(p);
+    const found = kept.find((task) => task.id === taskId);
+    if (found === undefined || (found.asksAgain ?? 0) >= cap) return false;
+    found.asksAgain = (found.asksAgain ?? 0) + 1;
+    await writeKept(kept, p);
+    return true;
+  } catch {
+    return false;
+  }
 }

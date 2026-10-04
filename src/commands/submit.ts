@@ -79,10 +79,15 @@ type SubmitOptions = {
 // line to show, code the API's error code, or the check here that refused
 // it, verification the verification failure when SealKeeper checked the
 // answer and found it wrong. rateLimited is the API's 429, kept so the
-// routine waits for its Retry-After before the next step (VOU-613).
+// routine waits for its Retry-After before the next step (VOU-613). local
+// is true for a check here that refused the answer before anything was
+// signed or sent, which has neither a verification nor an API error, so
+// the routine asks its model again rather than send a kept answer that
+// fails it (VOU-635).
 export class SubmitRefused extends Error {
   override name = 'SubmitRefused';
   readonly rateLimited?: ApiError;
+  readonly local: boolean;
   constructor(
     message: string,
     readonly code: string,
@@ -91,6 +96,7 @@ export class SubmitRefused extends Error {
   ) {
     super(message);
     if (cause?.status === 429) this.rateLimited = cause;
+    this.local = verification === undefined && cause === undefined;
   }
 }
 

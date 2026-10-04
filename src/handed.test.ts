@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Paths, paths } from './config.js';
-import { handedFinalLineFeed, keepHanded } from './handed.js';
+import { handedFinalLineFeed, keepHanded, takeAskAgain } from './handed.js';
 
 const NOW = new Date('2026-10-04T12:00:00.000Z');
 const LATER = '2026-10-05T12:00:00.000Z';
@@ -69,5 +69,18 @@ describe('the handed over game task specs (VOU-635)', () => {
     expect(await handedFinalLineFeed(id, p)).toBeNull();
     await keepHanded([{ id, spec: ASKS, expiresAt: LATER }], NOW, p);
     expect(await handedFinalLineFeed(id, p)).toBe(true);
+  });
+
+  it('takes the asks again of a task up to the cap, kept when the task is handed over again', async () => {
+    const id = randomUUID();
+    await keepHanded([{ id, spec: ASKS, expiresAt: LATER }], NOW, p);
+    expect(await takeAskAgain(id, 2, p)).toBe(true);
+    await keepHanded([{ id, spec: ASKS, expiresAt: LATER }], NOW, p);
+    expect(await takeAskAgain(id, 2, p)).toBe(true);
+    expect(await takeAskAgain(id, 2, p)).toBe(false);
+    expect(await handedFinalLineFeed(id, p)).toBe(true);
+    // A task not kept here is never asked again, since its asks cannot be
+    // counted.
+    expect(await takeAskAgain(randomUUID(), 2, p)).toBe(false);
   });
 });

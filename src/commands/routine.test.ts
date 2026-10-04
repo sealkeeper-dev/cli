@@ -1934,11 +1934,39 @@ describe('routine', () => {
       expect(api.released).toEqual([]);
     });
 
-    it('submits the answer an earlier run kept for a game task it could not submit, and asks the agent nothing (VOU-635)', async () => {
+    it('submits the answer an earlier run kept for a game task, and asks the agent nothing (VOU-635)', async () => {
       const duel = api.add({
         origin: 'duel',
         verification: { kind: 'schema', jsonSchema: { type: 'object' } },
       });
+      // The first run's submit the API could not take, so the answer is
+      // kept and the task is handed over again.
+      api.submitReply = () => error(400, 'bad_request');
+      api.steps = [api.task(duel, 'duel')];
+      nextAgents = [() => says('{"a":1}')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(1);
+
+      api.submitReply = null;
+      api.steps = [api.task(duel, 'duel')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(api.submitted.map((p) => p.submission)).toEqual([
+        '{"a":1}',
+        '{"a":1}',
+      ]);
+    });
+
+    it('asks the agent again for a game task whose kept answer a check refuses, at most twice, then leaves it to the operator (VOU-635)', async () => {
+      const duel = api.add({
+        origin: 'duel',
+        verification: { kind: 'schema', jsonSchema: { type: 'object' } },
+      });
+      const keptFile = join(
+        routinePaths().work,
+        '.sealkeeper-answers',
+        `${duel.id}.txt`,
+      );
       api.steps = [api.task(duel, 'duel')];
       nextAgents = [() => says('not json')];
       expect((await run('routine', 'run')).code).toBe(0);
@@ -1953,22 +1981,90 @@ describe('routine', () => {
       );
       expect(spawned).toHaveLength(1);
 
-      // The next run is handed the same task, still claimed. The kept answer
-      // is checked again and the agent is not asked.
+      // The next run is handed the same task, still claimed. The kept
+      // answer is still not JSON, so the agent is asked again, and its
+      // new answer replaces the kept one.
       api.steps = [api.task(duel, 'duel')];
+      nextAgents = [() => says('still not json')];
       expect((await run('routine', 'run')).code).toBe(0);
-      expect(spawned).toHaveLength(1);
+      expect(spawned).toHaveLength(2);
+      expect(await readFile(keptFile, 'utf8')).toBe('still not json');
+      api.steps = [api.task(duel, 'duel')];
+      nextAgents = [() => says('nor this')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(3);
       expect(api.submitted).toEqual([]);
 
-      // An answer the operator fixed in the kept file goes through.
-      await writeFile(
-        join(routinePaths().work, '.sealkeeper-answers', `${duel.id}.txt`),
-        '{"a":1}',
-      );
+      // Past the cap the agent is asked no more, one line says the task
+      // needs the operator, and the kept answer stays.
       api.steps = [api.task(duel, 'duel')];
       expect((await run('routine', 'run')).code).toBe(0);
-      expect(spawned).toHaveLength(1);
+      expect(spawned).toHaveLength(3);
+      expect(api.submitted).toEqual([]);
+      expect(await readFile(keptFile, 'utf8')).toBe('nor this');
+      const last = (await runs()).at(-1)?.runId;
+      const operator = (await readRoutine()).filter(
+        (e) => e.kind === 'unanswered' && e.runId === last,
+      );
+      expect(operator).toEqual([
+        expect.objectContaining({
+          taskId: duel.id,
+          released: false,
+          reason: expect.stringContaining('needs the operator'),
+        }),
+      ]);
+
+      // An answer the operator fixed in the kept file goes through.
+      await writeFile(keptFile, '{"a":1}');
+      api.steps = [api.task(duel, 'duel')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(3);
       expect(api.submitted.map((p) => p.submission)).toEqual(['{"a":1}']);
+    });
+
+    it('submits the new answer when the agent asked again gives a valid one (VOU-635)', async () => {
+      const challenge = api.add({
+        origin: 'challenge',
+        verification: { kind: 'schema', jsonSchema: { type: 'object' } },
+      });
+      api.steps = [api.task(challenge, 'challenge')];
+      nextAgents = [() => says('not json')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      api.steps = [api.task(challenge, 'challenge')];
+      nextAgents = [() => says('{"a":2}')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(2);
+      expect(api.submitted.map((p) => [p.taskId, p.submission])).toEqual([
+        [challenge.id, '{"a":2}'],
+      ]);
+      expect(
+        await readFile(
+          join(
+            routinePaths().work,
+            '.sealkeeper-answers',
+            `${challenge.id}.txt`,
+          ),
+          'utf8',
+        ),
+      ).toBe('{"a":2}');
+    });
+
+    it('gives back a task that is not a game task whose answer a check refuses, and asks afresh when it comes again (VOU-635)', async () => {
+      const task = api.add({
+        verification: { kind: 'schema', jsonSchema: { type: 'object' } },
+      });
+      api.steps = [api.task(task)];
+      nextAgents = [() => says('not json')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.released).toEqual([task.id]);
+      api.steps = [api.task(task)];
+      nextAgents = [() => says('{"a":3}')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(2);
+      expect(api.submitted.map((p) => p.submission)).toEqual(['{"a":3}']);
+      expect((await readRoutine()).some((e) => e.kind === 'unanswered')).toBe(
+        false,
+      );
     });
 
     it('puts a submission to judge to the agent and sends its verdict with the next call, none when it cannot tell', async () => {
