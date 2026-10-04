@@ -6,7 +6,7 @@ import {
 } from '@sealkeeper/schema';
 import type { ApiError } from './api.js';
 import { refusal } from './refusal.js';
-import type { GameStatusResponse } from './responses.js';
+import type { GameSettingsResponse, GameStatusResponse } from './responses.js';
 import type { TaskSession } from './tasks.js';
 
 // The agent's switch for the game layer, duels and weekly challenges on top
@@ -32,13 +32,22 @@ export const BAD_CAP = (value: string) =>
 export async function changeGame(
   { signer, api }: Pick<TaskSession, 'signer' | 'api'>,
   change: { enabled?: boolean; cap?: number },
-): Promise<GameStatusResponse> {
+): Promise<GameSettingsResponse> {
   return api.gameSettings(
     await signer.sign(
       SignedGameSettingsRequest.parse({ ...change, issuedAt: now() }),
     ),
   );
 }
+
+// The duels started today against the ceiling, as a sentence that starts
+// with a space, or nothing when the API did not send both numbers (VOU-618).
+// config game and status print it on their game line, numbers as the API
+// sent them.
+export const duelsStarted = (game: GameStatusResponse): string =>
+  game.duelsStartedToday === undefined || game.duelsPerDay === undefined
+    ? ''
+    : ` ${game.duelsStartedToday} of ${game.duelsPerDay} duels started today.`;
 
 // One line for a refused settings change, OLD_API for a 404, else the
 // refusal line of its code.

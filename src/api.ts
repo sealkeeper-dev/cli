@@ -22,6 +22,7 @@ import {
   type ErrorIssue,
   ErrorResponse,
   EventsBatchResponse,
+  GameSettingsResponse,
   GameStatusResponse,
   GoalResponse,
   type ListTasksPage,
@@ -172,8 +173,9 @@ export type ApiClient = {
   // answers 404 not_found.
   gameStatus(envelope: string): Promise<GameStatusResponse>;
   // PUT /v1/game/settings, signed over { enabled?, cap?, issuedAt }. The
-  // status after the change, as gameStatus answers it.
-  gameSettings(envelope: string): Promise<GameStatusResponse>;
+  // status after the change, as gameStatus answers it, and what turning
+  // the game off closed when the API sends it.
+  gameSettings(envelope: string): Promise<GameSettingsResponse>;
   // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
   // tasks the agent solves now and answers the core answer. An API from
   // before it answers 404 not_found.
@@ -406,7 +408,7 @@ export function createApiClient(options: {
     gameStatus: (envelope) =>
       call('/v1/game/status', GameStatusResponse, { body: { envelope } }),
     gameSettings: (envelope) =>
-      call('/v1/game/settings', GameStatusResponse, {
+      call('/v1/game/settings', GameSettingsResponse, {
         body: { envelope },
         method: 'PUT',
       }),

@@ -3,25 +3,45 @@ import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { requireConfig } from '../cli-config.js';
 import { paths, readNudge, writeConfig } from '../config.js';
-import { changeGame, gameRefusal, readGameStatus } from '../game.js';
+import {
+  changeGame,
+  duelsStarted,
+  gameRefusal,
+  readGameStatus,
+} from '../game.js';
 import { cli } from '../invocation.js';
 import { NUDGE_OFF, NUDGE_ON, setNudge } from '../nudge.js';
 import { stdout, wantsJson } from '../output.js';
-import type { GameStatusResponse } from '../responses.js';
+import type { GameSettingsResponse, GameStatusResponse } from '../responses.js';
 import { openTaskSession, utc } from '../tasks.js';
 import { AUTO_SYNC_ON } from './sync.js';
 
 const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
-// The game switch, as config game shows it and as on and off leave it. The
-// cap and the units come from the API's answer.
+// The game switch, as config game shows it and as on leaves it. The cap,
+// the units and the duels started come from the API's answer.
 export const gameSwitchLine = (game: GameStatusResponse): string =>
   game.enabled
-    ? `Game on, ${game.usedToday} of ${game.cap} game units used today, they reset ${utc(game.resetAt)}. ${cli('config game off')} stops it.`
+    ? `Game on, ${game.usedToday} of ${game.cap} game units used today, they reset ${utc(game.resetAt)}.${duelsStarted(game)} ${cli('config game off')} stops it.`
     : `Game off, cap ${game.cap} game units a UTC day. ${cli('config game on')} turns it on.`;
 
-// What turning the game off closed, the API's rule in changeGameSettings.
-export const GAME_OFF = `Game off. The agent's open seeks end and its invites, sent and received, are declined. A duel already started goes on. ${cli('config game on')} turns it on again.`;
+// What config game off prints, Game off and what the API says the change
+// closed (VOU-618). Only Game off when it closed nothing, the game was off
+// already, or the API sends no counts.
+export function gameOffLine({ closed }: GameSettingsResponse): string {
+  const parts = closed
+    ? [
+        closed.seeks > 0 && `${count(closed.seeks, 'open seek')} ended`,
+        closed.invitesSent > 0 &&
+          `${count(closed.invitesSent, 'sent invite')} withdrawn`,
+        closed.invitesReceived > 0 &&
+          `${count(closed.invitesReceived, 'received invite')} declined`,
+      ].filter((p) => p !== false)
+    : [];
+  return parts.length === 0 ? 'Game off.' : `Game off. ${parts.join(', ')}.`;
+}
+
+const count = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 // fetch fills the goal cache when the nudge is turned on, and sends the
 // game switch.
@@ -133,7 +153,7 @@ export function register(
         this.error('game takes on or off, or nothing to show it');
       }
       const session = await openTaskSession(this, deps);
-      let game: GameStatusResponse;
+      let game: GameSettingsResponse;
       try {
         game =
           state === undefined
@@ -147,7 +167,7 @@ export function register(
         stdout(JSON.stringify(game));
         return;
       }
-      stdout(state === 'off' ? GAME_OFF : gameSwitchLine(game));
+      stdout(state === 'off' ? gameOffLine(game) : gameSwitchLine(game));
     });
 
   return config;

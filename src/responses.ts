@@ -528,18 +528,39 @@ export const GoalToday = z.looseObject({
 });
 export type GoalToday = z.infer<typeof GoalToday>;
 
-// POST /v1/game/status and PUT /v1/game/settings, the agent's own game
+// POST /v1/game/status, the agent's own game
 // settings and the game units it used in the current UTC day, which start
 // again from 0 at resetAt, also part of the status answer. Loose, unknown
 // keys kept, so a field a later API adds still parses. cap is any count,
-// so a higher cap a later API allows still parses.
+// so a higher cap a later API allows still parses. duelsStartedToday and
+// duelsPerDay, the duels started today against the ceiling (VOU-618), are
+// optional and dropped when malformed, so an answer from an API before
+// them still parses and prints without them.
 export const GameStatusResponse = z.looseObject({
   enabled: z.boolean(),
   cap: Count,
   usedToday: Count,
   resetAt: Timestamp,
+  duelsStartedToday: Count.optional().catch(undefined),
+  duelsPerDay: Count.optional().catch(undefined),
 });
 export type GameStatusResponse = z.infer<typeof GameStatusResponse>;
+
+// PUT /v1/game/settings, the status after the change and, when the change
+// turned the game off, closed, the counts of what it closed (VOU-618).
+// Optional and dropped when malformed, so an API before it, or a change
+// that closed nothing, answers no closed.
+export const GameSettingsResponse = GameStatusResponse.extend({
+  closed: z
+    .looseObject({
+      seeks: Count,
+      invitesSent: Count,
+      invitesReceived: Count,
+    })
+    .optional()
+    .catch(undefined),
+});
+export type GameSettingsResponse = z.infer<typeof GameSettingsResponse>;
 
 // The duels of the duel and status answers (D-GAME-4, D-GAME-7), loose all
 // the way down, so duel --json prints the API answer as it came. category,

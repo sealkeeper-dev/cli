@@ -495,6 +495,21 @@ describe('status', () => {
       expect(out).not.toContain('Challenge');
     });
 
+    it('says the duels started against the ceiling the API sent (VOU-618)', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        status: {
+          ...base.status,
+          game: { ...base.status.game, duelsStartedToday: 4, duelsPerDay: 10 },
+        },
+      };
+      const { out } = await run('status');
+      expect(out).toContain(
+        `           Game on, 2 of ${GAME_CAP_MAX} game units used, they reset 2026-10-03 00:00 UTC. 4 of 10 duels started today.\n`,
+      );
+    });
+
     it('leaves the scores out of an answer from an API before them', async () => {
       const base = statusAnswer(agentId);
       const { scores: _scores, ...before } = base.status;

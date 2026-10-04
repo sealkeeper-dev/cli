@@ -11,7 +11,6 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GAME_OFF } from './commands/config.js';
 import { writeConfig } from './config.js';
 import { BAD_CAP, OLD_API } from './game.js';
 import { createKey } from './identity.js';
@@ -28,13 +27,21 @@ type Sent = { method: string; path: string; payload: Record<string, unknown> };
 // name this API. The status starts on with the full cap, and a settings
 // change moves it as the API does. refuse answers every request with that
 // error instead, and gone answers 404 as an API from before the game does.
+// status starts as an API before VOU-618 answers it, with no duels started
+// and no closed, and closed is what a settings change answers beside it.
 class FakeGame {
-  status = {
+  status: Record<string, unknown> & {
+    enabled: boolean;
+    cap: number;
+    usedToday: number;
+    resetAt: string;
+  } = {
     enabled: true,
     cap: GAME_CAP_MAX,
     usedToday: 2,
     resetAt: RESET_AT,
   };
+  closed: Record<string, unknown> | undefined;
   sent: Sent[] = [];
   errors: string[] = [];
   refuse: { status: number; code: string; message: string } | null = null;
@@ -79,7 +86,11 @@ class FakeGame {
       };
     }
     // A field a later API adds, which --json keeps.
-    return Response.json({ ...this.status, later: 'kept' });
+    return Response.json({
+      ...this.status,
+      ...(method === 'PUT' && this.closed ? { closed: this.closed } : {}),
+      later: 'kept',
+    });
   }) as typeof fetch;
 }
 
@@ -252,9 +263,37 @@ describe('the game settings', () => {
       ]);
       expect(game.sent[0]?.payload.enabled).toBe(false);
       expect(game.status.enabled).toBe(false);
-      expect(result.out).toBe(`${GAME_OFF}\n`);
-      expect(GAME_OFF).toBe(
-        "Game off. The agent's open seeks end and its invites, sent and received, are declined. A duel already started goes on. npx sealkeeper config game on turns it on again.",
+      // An API before VOU-618 sends no counts, so only Game off.
+      expect(result.out).toBe('Game off.\n');
+    });
+
+    it('off prints what the API says it closed, and only Game off for nothing', async () => {
+      game.closed = { seeks: 1, invitesSent: 0, invitesReceived: 2 };
+      expect((await run('config', 'game', 'off')).out).toBe(
+        'Game off. 1 open seek ended, 2 received invites declined.\n',
+      );
+      game.closed = { seeks: 2, invitesSent: 1, invitesReceived: 1 };
+      expect((await run('config', 'game', 'off')).out).toBe(
+        'Game off. 2 open seeks ended, 1 sent invite withdrawn, 1 received invite declined.\n',
+      );
+      game.closed = { seeks: 0, invitesSent: 0, invitesReceived: 0 };
+      expect((await run('config', 'game', 'off')).out).toBe('Game off.\n');
+      // A malformed closed is dropped, never a failed command.
+      game.closed = { seeks: 'one' };
+      const odd = await run('config', 'game', 'off');
+      expect(odd.code).toBe(0);
+      expect(odd.out).toBe('Game off.\n');
+    });
+
+    it('with no word says the duels started against the ceiling the API sent', async () => {
+      game.status = { ...game.status, duelsStartedToday: 3, duelsPerDay: 10 };
+      expect((await run('config', 'game')).out).toBe(
+        'Game on, 2 of 5 game units used today, they reset 2026-10-02 00:00 UTC. 3 of 10 duels started today. npx sealkeeper config game off stops it.\n',
+      );
+      // Half the pair, or a malformed one, is left out.
+      game.status = { ...game.status, duelsStartedToday: 3, duelsPerDay: -1 };
+      expect((await run('config', 'game')).out).toBe(
+        'Game on, 2 of 5 game units used today, they reset 2026-10-02 00:00 UTC. npx sealkeeper config game off stops it.\n',
       );
     });
 

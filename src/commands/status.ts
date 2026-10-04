@@ -24,6 +24,7 @@ import {
   profileUrl,
 } from '../config.js';
 import { exists } from '../files.js';
+import { duelsStarted } from '../game.js';
 import { cli } from '../invocation.js';
 import { readLiveAgent } from '../live-agent.js';
 import {
@@ -363,7 +364,7 @@ function todaySection(
   if (game !== undefined) {
     lines.push(
       game.enabled
-        ? `Game on, ${game.usedToday} of ${game.cap} game units used, they reset ${utc(game.resetAt)}.`
+        ? `Game on, ${game.usedToday} of ${game.cap} game units used, they reset ${utc(game.resetAt)}.${duelsStarted(game)}`
         : `Game off. ${gameOnHint()}.`,
     );
   }

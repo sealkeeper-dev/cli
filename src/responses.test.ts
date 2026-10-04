@@ -16,6 +16,8 @@ import {
   CredentialResponse,
   ErrorResponse,
   EventsBatchResponse,
+  GameSettingsResponse,
+  GameStatusResponse,
   ListTasksResponse,
   operatorSlugOf,
   RatingResponse,
@@ -187,6 +189,20 @@ const cases: [string, z.ZodType, Record<string, unknown>, string[]][] = [
   ],
   ['StatusAnswerResponse', StatusAnswerResponse, statusAnswer, ['status']],
   [
+    'GameSettingsResponse',
+    GameSettingsResponse,
+    {
+      enabled: false,
+      cap: 5,
+      usedToday: 1,
+      resetAt: AT,
+      duelsStartedToday: 3,
+      duelsPerDay: 10,
+      closed: { seeks: 1, invitesSent: 0, invitesReceived: 2 },
+    },
+    ['closed'],
+  ],
+  [
     'CheckResponse',
     CheckResponse,
     {
@@ -241,6 +257,25 @@ describe('response schemas parse loosely', () => {
     const [first] = Object.keys(value);
     const { [first as string]: _dropped, ...rest } = value;
     expect(schema.safeParse(rest).success).toBe(false);
+  });
+
+  it('the game answers take an API before VOU-618 and drop a malformed new field', () => {
+    const before = { enabled: true, cap: 5, usedToday: 1, resetAt: AT };
+    expect(GameStatusResponse.parse(before)).toEqual(before);
+    expect(GameSettingsResponse.parse(before)).toEqual(before);
+    expect(
+      GameSettingsResponse.parse({
+        ...before,
+        duelsStartedToday: 'three',
+        duelsPerDay: -1,
+        closed: { seeks: 'one' },
+      }),
+    ).toEqual({
+      ...before,
+      duelsStartedToday: undefined,
+      duelsPerDay: undefined,
+      closed: undefined,
+    });
   });
 
   it('StatusAnswerResponse leaves out a part of status it cannot read, never the answer (VOU-596)', () => {
