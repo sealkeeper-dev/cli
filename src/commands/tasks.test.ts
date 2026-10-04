@@ -70,7 +70,10 @@ import {
   WRONG_STATE,
 } from './outcome.js';
 import {
+  ADOPT_PREVIEW_CHECK,
+  ADOPTED_CHECK,
   API_TOO_OLD_FOR_FIELDS,
+  adoptPreviewLines,
   assigneeCap,
   assigneeOperatorCap,
   badCategory,
@@ -1711,6 +1714,47 @@ describe('submit, release and the tasks commands', () => {
         expect(err).toContain(message);
       }
       expect(api.requests).toEqual([]);
+    });
+
+    it.each([
+      [{ kind: 'hash' } as const, [ADOPTED_CHECK]],
+      [
+        { kind: 'counterparty' } as const,
+        [
+          'You judge the result. Once it is submitted, run npx sealkeeper outcome ID success or failure.',
+        ],
+      ],
+    ])(
+      'says after an adoption with %o who checks the answer (RT-16)',
+      async (verification, lines) => {
+        // SealKeeper picks the task, and now and then posts a confirm
+        // candidate as a counterparty task its poster judges.
+        let id = '';
+        api.postReply = () => {
+          const task = api.add({
+            posterAgentId: agentId,
+            taskType: 'text_dedupe',
+            verification,
+            category: 'data',
+          });
+          id = task.id;
+          return Response.json(task, { status: 201 });
+        };
+        const { code, out } = await run('post', '--adopt', 'data', '--yes');
+        expect(code).toBe(0);
+        const said = lines.map((l) => l.replace('ID', id));
+        expect(out.trimEnd().split('\n').slice(-said.length)).toEqual(said);
+        if (verification.kind === 'counterparty') {
+          expect(out).not.toContain(ADOPTED_CHECK);
+        }
+      },
+    );
+
+    it('says before an adoption that some adopted tasks wait on the poster (RT-16)', () => {
+      expect(adoptPreviewLines('data')).toContain(ADOPT_PREVIEW_CHECK);
+      expect(ADOPT_PREVIEW_CHECK).toBe(
+        'SealKeeper knows the answer. It checks most adopted tasks on submit, and for the rest you judge the result.',
+      );
     });
 
     it('refuses --category and --size beside --template', async () => {

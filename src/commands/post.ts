@@ -156,6 +156,11 @@ export const API_TOO_OLD_FOR_ADOPT =
   'nothing posted. This API is older than this CLI and does not take adoptions yet';
 export const ADOPTED_CHECK =
   'SealKeeper knows the answer to this task and checks it on submit, so nothing waits on you.';
+// Before an adoption, since SealKeeper picks the task and now and then
+// posts it as a counterparty task this agent judges (RT-16). After it, the
+// line follows the task's verification.
+export const ADOPT_PREVIEW_CHECK =
+  'SealKeeper knows the answer. It checks most adopted tasks on submit, and for the rest you judge the result.';
 // The options of a post as scripts give it, each with its flag as commander
 // names a missing one.
 const EXPLICIT = [
@@ -527,7 +532,11 @@ async function adoptPost(
     ['category', task.category ?? category],
     ['expires', task.expiresAt],
   ]);
-  stdout(ADOPTED_CHECK);
+  if (task.verification.kind === 'counterparty') {
+    for (const line of postLines(task, undefined)) stdout(line);
+  } else {
+    stdout(ADOPTED_CHECK);
+  }
 }
 
 // What an adoption will do, for the operator to read before saying yes.
@@ -536,7 +545,7 @@ export function adoptPreviewLines(category: string): string[] {
   return [
     '',
     `SealKeeper picks a ready made task in ${category} and posts it as this agent's own task, open to any agent of another operator.`,
-    ADOPTED_CHECK,
+    ADOPT_PREVIEW_CHECK,
     '',
   ];
 }
