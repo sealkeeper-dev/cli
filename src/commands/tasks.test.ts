@@ -44,8 +44,6 @@ import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { readRoutine } from '../routine.js';
 import { GAME_SPEC_AT_CLAIM } from '../tasks.js';
-import { OLD_API } from './release.js';
-import { AWAITING_POSTER } from './submit.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -54,7 +52,7 @@ import {
   OWN_TASK,
   SAME_OPERATOR,
   UNTRUSTED,
-} from './tasks-claim.js';
+} from './claim.js';
 import {
   ALREADY_VERIFIED,
   BOTH_FAILURE,
@@ -70,7 +68,7 @@ import {
   WAITING,
   WAITING_AFTER_FAILURE,
   WRONG_STATE,
-} from './tasks-outcome.js';
+} from './outcome.js';
 import {
   API_TOO_OLD_FOR_FIELDS,
   assigneeCap,
@@ -91,7 +89,9 @@ import {
   sameOperator,
   TEMPLATE_SETS_FIELDS,
   templateNeedsYes,
-} from './tasks-post.js';
+} from './post.js';
+import { OLD_API } from './release.js';
+import { AWAITING_POSTER } from './submit.js';
 
 const API_URL = 'https://api.test';
 
@@ -519,9 +519,9 @@ describe('submit, release and the tasks commands', () => {
   let home: string;
   let agentId: string;
   let api: FakeApi;
-  // What tasks outcome reads its answer from. Unset is no terminal.
+  // What outcome reads its answer from. Unset is no terminal.
   let stdin: Input | undefined;
-  // Whether stdout is a terminal, for the guided tasks post.
+  // Whether stdout is a terminal, for the guided post.
   let stdoutTTY = false;
   // Files a test wrote next to the home, removed after it.
   let onCleanup: string[] = [];
@@ -607,18 +607,9 @@ describe('submit, release and the tasks commands', () => {
 
   describe('without setup', () => {
     it.each([
-      ['tasks', 'claim', randomUUID()],
+      ['claim', randomUUID()],
       ['submit', randomUUID(), '--text', 'x'],
-      [
-        'tasks',
-        'post',
-        '--type',
-        'a',
-        '--spec',
-        '{}',
-        '--verify',
-        'counterparty',
-      ],
+      ['post', '--type', 'a', '--spec', '{}', '--verify', 'counterparty'],
     ])('%s %s without config gives the init hint', async (...args) => {
       await rm(paths().config);
       const { code, err } = await run(...args);
@@ -665,7 +656,7 @@ describe('submit, release and the tasks commands', () => {
     it('claims exactly the task named, not the oldest of its type', async () => {
       api.add({ postedAt: new Date(Date.now() - 9e6).toISOString() });
       const picked = api.add({});
-      const { code, out } = await run('tasks', 'claim', picked.id, '--json');
+      const { code, out } = await run('claim', picked.id, '--json');
       expect(code).toBe(0);
       expect(api.posts().map((r) => r.path)).toEqual([
         `/v1/tasks/${picked.id}/claim`,
@@ -701,7 +692,7 @@ describe('submit, release and the tasks commands', () => {
 
     it('prints who posted it and that the spec is untrusted', async () => {
       const task = api.add({});
-      const { code, out } = await run('tasks', 'claim', task.id);
+      const { code, out } = await run('claim', task.id);
       expect(code).toBe(0);
       const lines = out.split('\n');
       expect(lines[0]).toBe(`Claimed ${task.id}.`);
@@ -716,7 +707,7 @@ describe('submit, release and the tasks commands', () => {
         posterAgentId: SEED_AGENT,
         verification: { kind: 'hash', sha256: sha256('x') },
       });
-      const { code, out } = await run('tasks', 'claim', task.id);
+      const { code, out } = await run('claim', task.id);
       expect(code).toBe(0);
       expect(out).toContain(
         'Posted by sealkeeper/sealkeeper-seed, a seed task run by SealKeeper.',
@@ -727,10 +718,10 @@ describe('submit, release and the tasks commands', () => {
     it('says when the poster is an agent of the same operator', async () => {
       api.agents.set(OTHER_AGENT, agentAnswer(OTHER_AGENT, 'Alice', 'helper'));
       const task = api.add({});
-      const { code, out } = await run('tasks', 'claim', task.id, '--json');
+      const { code, out } = await run('claim', task.id, '--json');
       expect(code).toBe(0);
       expect(JSON.parse(out).poster.same_operator).toBe(true);
-      const text = await run('tasks', 'claim', api.add({}).id);
+      const text = await run('claim', api.add({}).id);
       expect(text.out).toContain(SAME_OPERATOR);
     });
 
@@ -738,7 +729,7 @@ describe('submit, release and the tasks commands', () => {
       api.agents.clear();
       api.anyAgent = false;
       const task = api.add({});
-      const { code, out } = await run('tasks', 'claim', task.id);
+      const { code, out } = await run('claim', task.id);
       expect(code).toBe(0);
       expect(out).toContain(
         `Posted by agent ${OTHER_AGENT}, which the API could not name.`,
@@ -753,7 +744,7 @@ describe('submit, release and the tasks commands', () => {
       'prints the spec of a %s task from the claim answer',
       async (origin) => {
         const task = api.add({ origin, spec: { rows: 3 } });
-        const { code, out } = await run('tasks', 'claim', task.id);
+        const { code, out } = await run('claim', task.id);
         expect(code).toBe(0);
         expect(out).toContain('"rows": 3');
         expect(out).not.toContain(GAME_SPEC_AT_CLAIM);
@@ -769,7 +760,7 @@ describe('submit, release and the tasks commands', () => {
         claimedAt: new Date().toISOString(),
       });
       api.claims.set(task.id, 409);
-      const { code, out } = await run('tasks', 'claim', task.id);
+      const { code, out } = await run('claim', task.id);
       expect(code).toBe(0);
       expect(out).toContain(`This agent already holds ${task.id}.`);
       expect(out).toContain(`${GAME_SPEC_AT_CLAIM}\n`);
@@ -784,7 +775,7 @@ describe('submit, release and the tasks commands', () => {
     ] as const)('refuses %s in one line', async (reply, message) => {
       const task = api.add({});
       api.claims.set(task.id, reply);
-      const { code, out, err } = await run('tasks', 'claim', task.id);
+      const { code, out, err } = await run('claim', task.id);
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${message}\n`);
@@ -797,7 +788,7 @@ describe('submit, release and the tasks commands', () => {
     it('refuses past the claim bound between two operators in one line, the API message', async () => {
       const task = api.add({});
       api.claims.set(task.id, 'poster_operator_cap');
-      const { code, out, err } = await run('tasks', 'claim', task.id);
+      const { code, out, err } = await run('claim', task.id);
       expect(code).toBe(1);
       expect(out).toBe('');
       expect(err).toBe(`${POSTER_OPERATOR_CAP}\n`);
@@ -805,7 +796,7 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('refuses an unknown task in one line', async () => {
-      const { code, err } = await run('tasks', 'claim', randomUUID());
+      const { code, err } = await run('claim', randomUUID());
       expect(code).toBe(1);
       expect(err).toBe(`${NOT_FOUND}\n`);
     });
@@ -817,14 +808,14 @@ describe('submit, release and the tasks commands', () => {
         claimedAt: new Date().toISOString(),
       });
       api.claims.set(task.id, 409);
-      const { code, out } = await run('tasks', 'claim', task.id);
+      const { code, out } = await run('claim', task.id);
       expect(code).toBe(0);
       expect(out.split('\n')[0]).toBe(`This agent already holds ${task.id}.`);
       expect(await logged()).toEqual([]);
     });
 
     it('refuses anything but a full task id before any request', async () => {
-      const { code, err } = await run('tasks', 'claim', 'abcd1234');
+      const { code, err } = await run('claim', 'abcd1234');
       expect(code).toBe(1);
       expect(err).toBe(
         'abcd1234 is not a task id, copy the full id from the board\n',
@@ -1330,7 +1321,6 @@ describe('submit, release and the tasks commands', () => {
       ['counterparty', { kind: 'counterparty' }],
     ])('posts a %s task', async (verify, verification) => {
       const { code, out } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1360,14 +1350,13 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('posts a schema task with the schema and spec read from files', async () => {
-      // Outside the SealKeeper home, which tasks post never reads from.
+      // Outside the SealKeeper home, which post never reads from.
       const schemaFile = `${home}-schema.json`;
       const specFile = `${home}-spec.json`;
       onCleanup.push(schemaFile, specFile);
       await writeFile(schemaFile, '{"type":"object","required":["title"]}');
       await writeFile(specFile, '{"source":"https://example.com"}');
       const { code, out } = await run(
-        'tasks',
         'post',
         '--type',
         'extract',
@@ -1396,7 +1385,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('posts the --category and --size it is given (RT-2)', async () => {
       const { code } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1418,7 +1406,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('posts --category math and names the six in its refusal (D-UI-12)', async () => {
       const { code } = await run(
-        'tasks',
         'post',
         '--type',
         'integer_sum',
@@ -1440,7 +1427,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('leaves category and size out when not given, for the API to derive', async () => {
       const { code } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1465,7 +1451,6 @@ describe('submit, release and the tasks commands', () => {
       [['--size', 'l'], badSize('l')],
     ])('refuses %j before anything is read or sent', async (flags, message) => {
       const { code, err } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1499,7 +1484,6 @@ describe('submit, release and the tasks commands', () => {
       'refuses an inline --spec %s in one line (VOU-304)',
       async (_, spec, message) => {
         const { code, err } = await run(
-          'tasks',
           'post',
           '--type',
           'summarise',
@@ -1534,7 +1518,6 @@ describe('submit, release and the tasks commands', () => {
           { status: 400 },
         );
       const { code, err } = await run(
-        'tasks',
         'post',
         '--template',
         'text_dedupe',
@@ -1563,7 +1546,6 @@ describe('submit, release and the tasks commands', () => {
       'posts --difficulty %i on a counterparty task',
       async (difficulty) => {
         const { code } = await run(
-          'tasks',
           'post',
           '--type',
           'review',
@@ -1589,7 +1571,6 @@ describe('submit, release and the tasks commands', () => {
       'sends difficulty for --type %s without the flag',
       async (type, difficulty) => {
         const { code } = await run(
-          'tasks',
           'post',
           '--type',
           type,
@@ -1609,7 +1590,6 @@ describe('submit, release and the tasks commands', () => {
       'refuses --difficulty %j before anything is read or sent',
       async (value) => {
         const { code, err } = await run(
-          'tasks',
           'post',
           '--type',
           'review',
@@ -1633,7 +1613,6 @@ describe('submit, release and the tasks commands', () => {
       'refuses --verify %s at --difficulty %s before signing',
       async (verify, value) => {
         const { code, err } = await run(
-          'tasks',
           'post',
           '--type',
           'review',
@@ -1670,7 +1649,6 @@ describe('submit, release and the tasks commands', () => {
           { status: 400 },
         );
       const { code, err } = await run(
-        'tasks',
         'post',
         '--type',
         'review',
@@ -1702,13 +1680,7 @@ describe('submit, release and the tasks commands', () => {
         [['--adopt', 'data', '--yes'], '--adopt picks the whole task'],
         [[], '--category, --size and --difficulty go with --type'],
       ] as const) {
-        const { code, err } = await run(
-          'tasks',
-          'post',
-          ...flags,
-          '--difficulty',
-          '2',
-        );
+        const { code, err } = await run('post', ...flags, '--difficulty', '2');
         expect(code).toBe(1);
         expect(err).toContain(message);
       }
@@ -1717,7 +1689,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('refuses --category and --size beside --template', async () => {
       const { code, err } = await run(
-        'tasks',
         'post',
         '--template',
         'text_dedupe',
@@ -1735,7 +1706,6 @@ describe('submit, release and the tasks commands', () => {
       ['nonsense', '--verify must be'],
     ])('rejects --verify %s', async (verify, message) => {
       const { code, err } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1766,11 +1736,11 @@ describe('submit, release and the tasks commands', () => {
     }
 
     it('refuses no options without a terminal and sends nothing', async () => {
-      const { code, err } = await run('tasks', 'post');
+      const { code, err } = await run('post');
       expect(code).toBe(1);
       expect(err).toBe(`${NO_TERMINAL}\n`);
       expect(NO_TERMINAL).toBe(
-        'nothing posted. Give --type, --spec and --verify, or --template <id> with --yes. In a terminal, npx sealkeeper tasks post with no options walks you through it',
+        'nothing posted. Give --type, --spec and --verify, or --template <id> with --yes. In a terminal, npx sealkeeper post with no options walks you through it',
       );
       expect(api.requests).toEqual([]);
     });
@@ -1778,7 +1748,7 @@ describe('submit, release and the tasks commands', () => {
     it('refuses no options with --json even in a terminal', async () => {
       stdoutTTY = true;
       stdin = answers('1');
-      const { code, err } = await run('tasks', 'post', '--json');
+      const { code, err } = await run('post', '--json');
       expect(code).toBe(1);
       expect(err).toBe(`${NO_OPTIONS_JSON}\n`);
       expect(api.requests).toEqual([]);
@@ -1786,7 +1756,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('refuses --yes without --template', async () => {
       const { code, err } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -1836,7 +1805,7 @@ describe('submit, release and the tasks commands', () => {
       ],
     ])('never reads a %s file inside the SealKeeper home', async (_, args) => {
       const key = paths(home).key;
-      const { code, err } = await run('tasks', 'post', ...args(key));
+      const { code, err } = await run('post', ...args(key));
       expect(code).toBe(1);
       expect(err).toContain(`refusing to read ${key}`);
       expect(err).toContain("which holds this agent's private key");
@@ -1866,7 +1835,7 @@ describe('submit, release and the tasks commands', () => {
           'counterparty',
         ],
       ]) {
-        const { code, err } = await run('tasks', 'post', ...args);
+        const { code, err } = await run('post', ...args);
         expect(code, args.join(' ')).toBe(1);
         expect(err).toContain(KEY_IN_TASK);
       }
@@ -1902,7 +1871,7 @@ describe('submit, release and the tasks commands', () => {
           'counterparty',
         ],
       ]) {
-        const { code, err } = await run('tasks', 'post', ...args);
+        const { code, err } = await run('post', ...args);
         expect(code, args.join(' ')).toBe(1);
         expect(err).toContain(KEY_IN_TASK);
         errs += err;
@@ -1917,7 +1886,7 @@ describe('submit, release and the tasks commands', () => {
       stdoutTTY = true;
       const seed = (await readFile(paths(home).key, 'utf8')).trim();
       stdin = answers('answer_question', `What is ${seed} for?`, '');
-      const { code, out } = await run('tasks', 'post');
+      const { code, out } = await run('post');
       expect(code).toBe(0);
       expect(out).toContain(KEY_IN_TASK);
       expect(out.trimEnd().endsWith(NOTHING_POSTED)).toBe(true);
@@ -1927,7 +1896,6 @@ describe('submit, release and the tasks commands', () => {
     it('with --json and a terminal, shows the task on stderr and keeps stdout empty on no', async () => {
       stdin = answers('n');
       const { code, out, err } = await run(
-        'tasks',
         'post',
         '--template',
         'json_shape',
@@ -1944,7 +1912,7 @@ describe('submit, release and the tasks commands', () => {
       stdoutTTY = true;
       const input = answers('1', '', 'y');
       stdin = input;
-      const { code, err } = await run('tasks', 'post', '--for', 'alice/other');
+      const { code, err } = await run('post', '--for', 'alice/other');
       expect(code).toBe(1);
       expect(err).toContain(sameOperator('alice/other'));
       expect(input.reads).toBe(0);
@@ -1956,12 +1924,7 @@ describe('submit, release and the tasks commands', () => {
       stdoutTTY = true;
       const input = answers('1', '', 'y');
       stdin = input;
-      const { code, err } = await run(
-        'tasks',
-        'post',
-        '--for',
-        'alice-dev/other',
-      );
+      const { code, err } = await run('post', '--for', 'alice-dev/other');
       expect(code).toBe(1);
       expect(err).toContain(sameOperator('alice-dev/other'));
       expect(input.reads).toBe(0);
@@ -1969,7 +1932,7 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('still names a missing option when some are given', async () => {
-      const { code, err } = await run('tasks', 'post', '--type', 'summarise');
+      const { code, err } = await run('post', '--type', 'summarise');
       expect(code).toBe(1);
       expect(err).toContain("required option '--spec <json>' not specified");
       expect(api.requests).toEqual([]);
@@ -1996,7 +1959,7 @@ describe('submit, release and the tasks commands', () => {
         'could not read the input file /no/such/file',
       ],
     ])('refuses %j before sending', async (args, message) => {
-      const { code, err } = await run('tasks', 'post', ...args);
+      const { code, err } = await run('post', ...args);
       expect(code).toBe(1);
       expect(err).toContain(message);
       expect(api.requests).toEqual([]);
@@ -2022,7 +1985,6 @@ describe('submit, release and the tasks commands', () => {
         await truncate(big, MAX_INPUT_FILE_BYTES + 1);
         const post = (file: string, ...extra: string[]) =>
           run(
-            'tasks',
             'post',
             '--template',
             'summarise',
@@ -2076,7 +2038,6 @@ describe('submit, release and the tasks commands', () => {
         await truncate(big, MAX_TASK_SPEC_BYTES + 1);
         const post = (spec: string, verify: string, ...extra: string[]) =>
           run(
-            'tasks',
             'post',
             '--type',
             'extract',
@@ -2131,7 +2092,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('refuses a template without --yes and without a terminal, before anything else', async () => {
       const { code, err } = await run(
-        'tasks',
         'post',
         '--template',
         'summarise',
@@ -2145,7 +2105,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('posts a drawn hash template with --yes and the sha256 of its answer', async () => {
       const { code, out } = await run(
-        'tasks',
         'post',
         '--template',
         'text_dedupe',
@@ -2183,7 +2142,6 @@ describe('submit, release and the tasks commands', () => {
       const text = 'The harbor opens at dawn and closes at dusk. '.repeat(6);
       await writeFile(file, `${text}\n`);
       const { code, out } = await run(
-        'tasks',
         'post',
         '--template',
         'summarise',
@@ -2207,12 +2165,7 @@ describe('submit, release and the tasks commands', () => {
 
     it('with a terminal and no --yes, shows the task and posts nothing on no', async () => {
       stdin = answers('n');
-      const { code, out, err } = await run(
-        'tasks',
-        'post',
-        '--template',
-        'json_shape',
-      );
+      const { code, out, err } = await run('post', '--template', 'json_shape');
       expect(code).toBe(1);
       expect(err).toBe(`Post it? [y/N] ${NOT_POSTED}\n`);
       expect(out).toContain('type     json_shape');
@@ -2226,7 +2179,7 @@ describe('submit, release and the tasks commands', () => {
 
     it('with a terminal and no --yes, posts on y', async () => {
       stdin = answers('y');
-      const { code } = await run('tasks', 'post', '--template', 'line_sort');
+      const { code } = await run('post', '--template', 'line_sort');
       expect(code).toBe(0);
       expect(api.posts()).toHaveLength(1);
     });
@@ -2234,7 +2187,7 @@ describe('submit, release and the tasks commands', () => {
     it('walks through a post in a terminal and posts only on yes', async () => {
       stdoutTTY = true;
       stdin = answers('2', '', 'bob/writer', 'y');
-      const { code, out, err } = await run('tasks', 'post');
+      const { code, out, err } = await run('post');
       expect(code).toBe(0);
       expect(out).toContain(
         ' 2  line_sort        hash          Sort the lines of a text. SealKeeper checks the answer.',
@@ -2258,7 +2211,7 @@ describe('submit, release and the tasks commands', () => {
         '',
         'y',
       );
-      const { code, out } = await run('tasks', 'post');
+      const { code, out } = await run('post');
       expect(code).toBe(0);
       expect(out).toContain(
         'That input does not fit, the question has fewer than 3 words, too short to answer.',
@@ -2288,7 +2241,7 @@ describe('submit, release and the tasks commands', () => {
     ])('posts nothing unless the last answer is yes, %j', async (lines) => {
       stdoutTTY = true;
       stdin = answers(...lines);
-      const { code, out } = await run('tasks', 'post');
+      const { code, out } = await run('post');
       expect(code).toBe(0);
       expect(out.trimEnd().endsWith(NOTHING_POSTED)).toBe(true);
       expect(api.posts()).toEqual([]);
@@ -2302,7 +2255,6 @@ describe('submit, release and the tasks commands', () => {
       ...rest: string[]
     ) =>
       run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -2325,7 +2277,7 @@ describe('submit, release and the tasks commands', () => {
         'Only bob/writer can claim this task. It sees it in npx sealkeeper run and npx sealkeeper status, and claims it with npx sealkeeper run --addressed.\n',
       );
       expect(out).toContain(
-        `You judge the result. Once it is submitted, run npx sealkeeper tasks outcome ${payload.taskId} success or failure.\n`,
+        `You judge the result. Once it is submitted, run npx sealkeeper outcome ${payload.taskId} success or failure.\n`,
       );
     });
 
@@ -2349,7 +2301,6 @@ describe('submit, release and the tasks commands', () => {
 
     it('post without --for says nothing about an assignee', async () => {
       const { out } = await run(
-        'tasks',
         'post',
         '--type',
         'summarise',
@@ -2360,7 +2311,7 @@ describe('submit, release and the tasks commands', () => {
       );
       expect(out).not.toContain('for ');
       expect(out).not.toContain('Only');
-      expect(out).not.toContain('tasks outcome');
+      expect(out).not.toContain('sealkeeper outcome');
       expect(api.posts()[0]?.payload).not.toHaveProperty('assignee');
     });
 
@@ -2485,7 +2436,7 @@ describe('submit, release and the tasks commands', () => {
     }
 
     const report = (id: string, outcome: string, ...more: string[]) =>
-      run('tasks', 'outcome', id, outcome, '--yes', ...more);
+      run('outcome', id, outcome, '--yes', ...more);
 
     it('confirms success, which verifies the task', async () => {
       const task = submitted();
@@ -2568,7 +2519,7 @@ describe('submit, release and the tasks commands', () => {
       expect(out).toContain('outcome  failure');
       expect(out).toContain(DISAGREED);
       expect(out).toContain(
-        `Run npx sealkeeper tasks outcome ${task.id} success if you change your mind`,
+        `Run npx sealkeeper outcome ${task.id} success if you change your mind`,
       );
       expect(outcomePosts()[0]?.payload).toMatchObject({ outcome: 'failure' });
       expect(api.tasks.get(task.id)?.verifiedAt).toBeNull();
@@ -2628,12 +2579,7 @@ describe('submit, release and the tasks commands', () => {
     it('asks in a terminal and reports on yes', async () => {
       const task = submitted();
       stdin = tty('y');
-      const { code, out, err } = await run(
-        'tasks',
-        'outcome',
-        task.id,
-        'success',
-      );
+      const { code, out, err } = await run('outcome', task.id, 'success');
       expect(code).toBe(0);
       expect(err).toContain('Report success for this submission? [y/N]');
       expect(out).toContain(VERIFIED);
@@ -2642,7 +2588,7 @@ describe('submit, release and the tasks commands', () => {
     it('reports nothing when the answer is not yes', async () => {
       const task = submitted();
       stdin = tty('');
-      const { code, err } = await run('tasks', 'outcome', task.id, 'success');
+      const { code, err } = await run('outcome', task.id, 'success');
       expect(code).toBe(1);
       expect(err).toContain('nothing reported');
       expect(outcomePosts()).toEqual([]);
@@ -2651,10 +2597,10 @@ describe('submit, release and the tasks commands', () => {
 
     it('refuses without a terminal unless --yes, before any request', async () => {
       const task = submitted();
-      const { code, err } = await run('tasks', 'outcome', task.id, 'success');
+      const { code, err } = await run('outcome', task.id, 'success');
       expect(code).toBe(1);
       expect(err).toContain(
-        `nothing reported. There is no terminal to ask, so run npx sealkeeper tasks outcome ${task.id} success --yes to report success`,
+        `nothing reported. There is no terminal to ask, so run npx sealkeeper outcome ${task.id} success --yes to report success`,
       );
       expect(api.requests).toEqual([]);
     });
@@ -2792,7 +2738,7 @@ describe('submit, release and the tasks commands', () => {
 
     it('rejects an outcome other than success or failure', async () => {
       const task = submitted();
-      const { code, err } = await run('tasks', 'outcome', task.id, 'maybe');
+      const { code, err } = await run('outcome', task.id, 'maybe');
       expect(code).toBe(1);
       expect(err).toContain('outcome must be success or failure, got maybe');
       expect(api.requests).toEqual([]);
@@ -2821,7 +2767,7 @@ describe('submit, release and the tasks commands', () => {
     it('sends it on claim, submit and the claimant report when the file exists', async () => {
       const fingerprint = await written();
       const task = api.add({});
-      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
+      expect((await run('claim', task.id)).code).toBe(0);
       expect((await run('submit', task.id, '--text', 'the summary')).code).toBe(
         0,
       );
@@ -2849,9 +2795,7 @@ describe('submit, release and the tasks commands', () => {
         submission: 'done',
       });
       api.reports.set(task.id, new Map([[OTHER_AGENT, 'success']]));
-      expect(
-        (await run('tasks', 'outcome', task.id, 'success', '--yes')).code,
-      ).toBe(0);
+      expect((await run('outcome', task.id, 'success', '--yes')).code).toBe(0);
       expect(sent('/outcome')[0]?.payload).toEqual({
         taskId: task.id,
         outcome: 'success',
@@ -2862,7 +2806,7 @@ describe('submit, release and the tasks commands', () => {
 
     it('leaves it out when there is no file, or its hash is not its parts', async () => {
       const task = api.add({});
-      expect((await run('tasks', 'claim', task.id)).code).toBe(0);
+      expect((await run('claim', task.id)).code).toBe(0);
       expect(sent('/claim')[0]?.payload).toEqual({ taskId: task.id });
 
       const fingerprint = await written();
@@ -2870,7 +2814,7 @@ describe('submit, release and the tasks commands', () => {
       file.current = { ...fingerprint, hash: MODEL };
       await writeFileAtomic(paths().fingerprint, JSON.stringify(file));
       const other = api.add({});
-      expect((await run('tasks', 'claim', other.id)).code).toBe(0);
+      expect((await run('claim', other.id)).code).toBe(0);
       expect(sent('/claim')[1]?.payload).toEqual({ taskId: other.id });
     });
 
@@ -2878,7 +2822,7 @@ describe('submit, release and the tasks commands', () => {
       const fingerprint = await written();
       const task = api.add({});
       api.claims.set(task.id, 'own_task');
-      const { code } = await run('tasks', 'claim', task.id);
+      const { code } = await run('claim', task.id);
       expect(code).toBe(1);
       expect(sent('/claim').map((r) => r.payload)).toEqual([
         { taskId: task.id, fingerprint },
@@ -2889,7 +2833,7 @@ describe('submit, release and the tasks commands', () => {
       await written();
       api.refuseFingerprint = true;
       const task = api.add({});
-      const { code } = await run('tasks', 'claim', task.id);
+      const { code } = await run('claim', task.id);
       expect(code).toBe(0);
       expect(sent('/claim').map((r) => Object.keys(r.payload ?? {}))).toEqual([
         ['taskId', 'fingerprint'],

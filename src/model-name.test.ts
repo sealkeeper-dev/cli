@@ -3,19 +3,17 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { partHash } from '@sealkeeper/schema';
-import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Paths, paths, writeConfig } from './config.js';
 import { observeParts, replaceSource } from './fingerprint.js';
 import { observeClaudeCode } from './fingerprint-claude-code.js';
 import { modelSetContent } from './fingerprint-content.js';
 import { createObserver } from './fingerprint-observer.js';
-import { declaredModel, readModelSet, writeModelSet } from './model-name.js';
+import { declaredModel } from './model-name.js';
 import { modelNameOf, toolNameOf } from './names.js';
 import { createProgram } from './program.js';
 
-// VOU-566. The model name the next sync declares. A name an adapter reads
-// wins over one set by hand, which is for a runtime with no adapter.
+// VOU-566. The model name the next sync declares, the one an adapter reads.
 
 const AGENT_ID = 'A'.repeat(43);
 const NOW = 1_790_812_800;
@@ -54,18 +52,11 @@ const readSources = async (): Promise<
 > => JSON.parse(await readFile(p.fingerprintSources, 'utf8'));
 
 describe('declaredModel', () => {
-  it('is null when no adapter read one and none is set', async () => {
+  it('is null when no adapter read one', async () => {
     expect(await declared()).toBeNull();
-    expect(await readModelSet(p)).toBeNull();
   });
 
-  it('takes the name set by hand', async () => {
-    await writeModelSet('gpt-4.1', p);
-    expect(await declared()).toEqual({ name: 'gpt-4.1', source: 'set' });
-  });
-
-  it("takes the chosen adapter's name over the one set by hand", async () => {
-    await writeModelSet('gpt-4.1', p);
+  it("takes the chosen adapter's name", async () => {
     await observeParts('mastra', { model_name: 'claude-opus-4-5' }, p, NOW);
     expect(await declared()).toEqual({
       name: 'claude-opus-4-5',
@@ -76,14 +67,13 @@ describe('declaredModel', () => {
     expect(await declared()).toEqual({ name: 'opus', source: 'claude-code' });
   });
 
-  it('falls back to the name set by hand when the adapter has none, a bad one or a stale one', async () => {
-    await writeModelSet('gpt-4.1', p);
+  it('is null when the adapter has none, a bad one or a stale one', async () => {
     await observeParts('openclaw', {}, p, NOW);
-    expect((await declared())?.source).toBe('set');
+    expect(await declared()).toBeNull();
     await observeParts('openclaw', { model_name: 'anthropic/' }, p, NOW);
-    expect((await declared())?.source).toBe('set');
+    expect(await declared()).toBeNull();
     await observeParts('openclaw', { model_name: 'gpt-5' }, p, NOW - 8 * 86400);
-    expect((await declared())?.source).toBe('set');
+    expect(await declared()).toBeNull();
   });
 
   it('keeps the hashes of a source whose name does not read', async () => {
@@ -92,15 +82,13 @@ describe('declaredModel', () => {
       JSON.stringify({ v: 1, mastra: { at: NOW, model_name: 42 } }),
     );
     expect(await declared()).toBeNull();
-    await writeModelSet('gpt-4.1', p);
-    expect(await declared()).toEqual({ name: 'gpt-4.1', source: 'set' });
   });
 
-  it('reads a model.json that does not parse as none', async () => {
-    await writeFile(p.model, '{"v":1,"name":"gpt 4"}\n');
-    expect(await readModelSet(p)).toBeNull();
-    await writeFile(p.model, 'not json');
-    expect(await readModelSet(p)).toBeNull();
+  // VOU-603. model set and model show are gone, the adapter's name is the
+  // only one.
+  it('model is no command', async () => {
+    const program = createProgram();
+    expect(program.commands.map((c) => c.name())).not.toContain('model');
   });
 });
 
@@ -200,98 +188,5 @@ describe('the adapters declare modelNameOf of the id they read', () => {
     await after.settled();
     expect((await readSources()).openclaw?.model_name).toBeUndefined();
     expect(await declared()).toBeNull();
-  });
-});
-
-type RunResult = { code: number; out: string; err: string };
-
-function throwOnExit(cmd: Command): void {
-  cmd.exitOverride();
-  for (const sub of cmd.commands) throwOnExit(sub);
-}
-
-async function run(...args: string[]): Promise<RunResult> {
-  const program = createProgram();
-  throwOnExit(program);
-  let out = '';
-  let err = '';
-  vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
-    out += String(chunk);
-    return true;
-  });
-  vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-    err += String(chunk);
-    return true;
-  });
-  try {
-    await program.parseAsync(args, { from: 'user' });
-    return { code: 0, out, err };
-  } catch (error) {
-    if (error instanceof CommanderError) {
-      return { code: error.exitCode, out, err };
-    }
-    throw error;
-  } finally {
-    vi.restoreAllMocks();
-  }
-}
-
-describe('model set and model show', () => {
-  it('shows none, sets a name and shows it, as text and as JSON', async () => {
-    const none = await run('model', 'show');
-    expect(none.code).toBe(0);
-    expect(none.out).toContain('no model name, sync sends none');
-
-    const set = await run('model', 'set', 'openai/gpt-4.1');
-    expect(set.code).toBe(0);
-    expect(set.out).toBe(
-      'openai/gpt-4.1 set, sent as text with the next sync\n',
-    );
-    expect(await readModelSet(p)).toBe('openai/gpt-4.1');
-
-    const shown = await run('model', 'show');
-    expect(shown.out).toMatch(/^openai\/gpt-4\.1, set with .*model set\n$/);
-    const json = await run('model', 'show', '--json');
-    expect(JSON.parse(json.out)).toEqual({
-      model: 'openai/gpt-4.1',
-      source: 'set',
-      set: 'openai/gpt-4.1',
-    });
-  });
-
-  it('says the adapter name wins over the one set by hand', async () => {
-    await observeParts('mastra', { model_name: 'claude-opus-4-5' }, p);
-    const set = await run('model', 'set', 'gpt-4.1');
-    expect(set.out).toBe(
-      'gpt-4.1 set. The Mastra adapter reads claude-opus-4-5, which wins\n',
-    );
-    const shown = await run('model', 'show');
-    expect(shown.out).toBe(
-      "claude-opus-4-5, read by the Mastra adapter\ngpt-4.1 is set by hand, and the adapter's name wins\n",
-    );
-  });
-
-  it('refuses a name the API would refuse and keeps the one before', async () => {
-    await run('model', 'set', 'gpt-4.1');
-    for (const bad of [
-      'gpt 4',
-      'a'.repeat(65),
-      'anthropic/',
-      '',
-      'sealkeeper-verified',
-    ]) {
-      const res = await run('model', 'set', bad);
-      expect(res.code, bad).toBe(1);
-      expect(res.err).toContain('a model name is 1 to 64 letters');
-    }
-    expect(await readModelSet(p)).toBe('gpt-4.1');
-  });
-
-  it('needs init', async () => {
-    await rm(p.config);
-    const res = await run('model', 'set', 'gpt-4.1');
-    expect(res.code).toBe(1);
-    expect(res.err).toContain('not initialised');
-    expect(await readModelSet(p)).toBeNull();
   });
 });

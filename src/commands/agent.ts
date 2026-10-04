@@ -21,6 +21,20 @@ import { type ApiClient, ApiError } from '../api.js';
 import { type Input, streamInput } from '../ask.js';
 import { LOCK_FILE, STAMP_FILE } from '../background-sync.js';
 import {
+  type ClaudeCodeUninstall,
+  installedPaths,
+  uninstallClaudeCode,
+  uninstallLines,
+} from '../claude-code-install.js';
+import {
+  claudeConfigDir,
+  hookCommand,
+  refuseOutsideProject,
+  SettingsError,
+  settingsPath,
+  sharedProjectSettingsPath,
+} from '../claude-code-settings.js';
+import {
   boundFolders,
   ConfigError,
   handleOf,
@@ -59,8 +73,15 @@ import {
 } from './routine.js';
 
 // agent talks to the API the same way the task commands do, so it takes the
-// same injectable fetch. delete asks on stdin, which tests replace.
-export type AgentDeps = TasksDeps & { stdin?: () => Input };
+// same injectable fetch. delete asks on stdin, which tests replace, and
+// takes the Claude Code files out of claudeDir and the project in cwd,
+// matching hooks that run hookCommand.
+export type AgentDeps = TasksDeps & {
+  stdin?: () => Input;
+  claudeDir?: () => string;
+  cwd?: () => string;
+  hookCommand?: () => string;
+};
 
 const defaultAgentDeps: AgentDeps = {
   ...defaultTasksDeps,
@@ -71,7 +92,9 @@ const defaultAgentDeps: AgentDeps = {
 const DELETE_ON_SERVER =
   'the agent, its events, the tasks it posted, its claims, its scores and its SEAL';
 const DELETE_ON_MACHINE =
-  'the key and any copies of it, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache';
+  'the key and any copies of it, config.json, the log, the routine settings and log, the agent card, the SEAL cache and the well-known cache';
+const DELETE_CLAUDE_CODE =
+  'the SealKeeper hooks, slash commands and skill, when no other agent on this machine is left';
 
 // The agent's own identity on SealKeeper. Its name and its version.
 export function register(
@@ -274,6 +297,7 @@ export function register(
         ['profile', profileUrl(config, slug)],
         ['on SealKeeper', DELETE_ON_SERVER],
         ['on this machine', `${DELETE_ON_MACHINE}, in ${p.home}`],
+        ['in Claude Code', DELETE_CLAUDE_CODE],
       ];
       // A daily routine job would run for an agent that is gone, so it goes
       // too, and is named before the question.
@@ -349,6 +373,7 @@ export function register(
       }
       const keyCopies = await removeLocal(p);
       const folders = await releaseFolders(p);
+      const claudeCode = await removeClaudeCode(deps, p);
       if (routineJob !== null && !json) {
         for (const line of jobLines(routineJob)) stdout(line);
       }
@@ -360,10 +385,14 @@ export function register(
             keyCopies,
             routineJob,
             folders,
+            claudeCode: claudeCode.map(({ result }) => result),
             ...(routineJobError === null ? {} : { routineJobError }),
           }),
         );
         return;
+      }
+      for (const { result, shared } of claudeCode) {
+        for (const line of uninstallLines(result, shared)) stdout(line);
       }
       for (const line of unboundLines(folders)) stdout(line);
       if (result === 'gone') {
@@ -437,6 +466,54 @@ export function unboundLines(folders: string[]): string[] {
   );
 }
 
+// The Claude Code hooks, slash commands and skill go with the last agent
+// on this machine, the same uninstall init's install is undone by. Every
+// agent here shares them, so while another agent is left they stay. Both
+// the user settings and the project settings of this folder, with the
+// shared settings.json an older install wrote. Only what SealKeeper wrote
+// goes, hooks by their command and files by the managed-by marker, and a
+// project folder that links outside the project is left alone. The agent
+// is deleted by then, so a file that cannot be changed only warns.
+async function removeClaudeCode(
+  deps: AgentDeps,
+  p: Paths,
+): Promise<{ result: ClaudeCodeUninstall; shared: string | null }[]> {
+  let others: MachineAgent[];
+  try {
+    others = (await listMachineAgents()).filter(
+      (agent) => agent.config !== null && agent.home !== p.home,
+    );
+  } catch {
+    return [];
+  }
+  if (others.length > 0) return [];
+  const claudeDir = (deps.claudeDir ?? claudeConfigDir)();
+  const cwd = (deps.cwd ?? process.cwd)();
+  const hook = (deps.hookCommand ?? hookCommand)();
+  const dirs = { home: '', cwd, claudeDir };
+  const done: { result: ClaudeCodeUninstall; shared: string | null }[] = [];
+  for (const scope of ['user', 'project'] as const) {
+    const file = settingsPath(scope, dirs);
+    const shared = scope === 'project' ? sharedProjectSettingsPath(cwd) : null;
+    try {
+      if (scope === 'project') {
+        await refuseOutsideProject(cwd, [
+          ...installedPaths(file),
+          sharedProjectSettingsPath(cwd),
+        ]);
+      }
+      done.push({
+        result: await uninstallClaudeCode(file, shared, hook),
+        shared,
+      });
+    } catch (error) {
+      if (!(error instanceof SettingsError)) throw error;
+      stderr(`the Claude Code files were left as they are, ${error.message}`);
+    }
+  }
+  return done;
+}
+
 function noInput(): Input {
   return { isTTY: false, readLine: async () => null };
 }
@@ -466,6 +543,7 @@ async function stillRegistered(
 async function removeLocal(p: Paths): Promise<string[]> {
   for (const target of [
     p.credential,
+    p.card,
     p.cardWrite,
     p.wellKnown,
     p.status,

@@ -52,7 +52,7 @@ import {
   type TasksDeps,
 } from '../tasks.js';
 
-// sealkeeper tasks post. Four ways in.
+// sealkeeper post. Four ways in.
 //
 // --type, --spec and --verify post exactly what they say, as before, for
 // scripts.
@@ -93,7 +93,7 @@ type PostOptions = {
 };
 
 export const NOTHING_POSTED = 'Nothing posted.';
-export const NO_TERMINAL = `nothing posted. Give --type, --spec and --verify, or --template <id> with --yes. In a terminal, ${cli('tasks post')} with no options walks you through it`;
+export const NO_TERMINAL = `nothing posted. Give --type, --spec and --verify, or --template <id> with --yes. In a terminal, ${cli('post')} with no options walks you through it`;
 export const NO_OPTIONS_JSON =
   'nothing posted. With --json, give --type, --spec and --verify, or --template <id> with --yes';
 export const NOT_POSTED = 'nothing posted';
@@ -103,7 +103,7 @@ export const keyFile = (file: string, home: string): string =>
 export const KEY_IN_TASK =
   "refusing to post, the task contains this agent's private key";
 export const templateNeedsYes = (id: string): string =>
-  `nothing posted. There is no terminal to ask, so run ${cli(`tasks post --template ${id}`)} again with --yes to post it`;
+  `nothing posted. There is no terminal to ask, so run ${cli(`post --template ${id}`)} again with --yes to post it`;
 
 // The refusals of an addressed post, one line each. ref is what --for gave.
 export const noAssignee = (ref: string): string =>
@@ -145,7 +145,7 @@ export const badAdopt = (value: string): string =>
 export const ADOPT_ALONE =
   '--adopt picks the whole task, so it takes only --yes, --expires-hours and --json';
 export const adoptNeedsYes = (category: string): string =>
-  `nothing posted. There is no terminal to ask, so run ${cli(`tasks post --adopt ${category}`)} again with --yes to post it`;
+  `nothing posted. There is no terminal to ask, so run ${cli(`post --adopt ${category}`)} again with --yes to post it`;
 export const noneWaiting = (category: string): string =>
   `nothing posted. No ready made task is waiting in ${category}, try again later or post one with --template`;
 export const adoptCap = (cap: number | null): string =>
@@ -915,7 +915,7 @@ export function previewLines(
     );
   } else {
     lines.push(
-      `You judge the answer. Once it is submitted, run ${cli('tasks outcome <id> success')} or failure.`,
+      `You judge the answer. Once it is submitted, run ${cli('outcome <id> success')} or failure.`,
     );
   }
   lines.push(
@@ -939,7 +939,7 @@ export function postLines(
   }
   if (task.verification.kind === 'counterparty') {
     lines.push(
-      `You judge the result. Once it is submitted, run ${cli(`tasks outcome ${task.id} success`)} or failure.`,
+      `You judge the result. Once it is submitted, run ${cli(`outcome ${task.id} success`)} or failure.`,
     );
   }
   return lines;

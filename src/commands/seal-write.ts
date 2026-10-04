@@ -12,8 +12,8 @@ const SEAL_FILE = 'seal.txt';
 // Public, like the card, so whatever serves it can read it.
 const SEAL_FILE_MODE = 0o644;
 
-// seal.txt goes where card write puts agent-card.json by default, the
-// current directory, so the two can be served side by side.
+// seal.txt goes to the current directory by default, beside whatever
+// serves it.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent
     .command('write')

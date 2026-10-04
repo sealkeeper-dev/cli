@@ -23,6 +23,7 @@ import { cliInvocation, cliProgram } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
   type Config,
+  ConfigError,
   type Paths,
   paths,
   ROUTINE_LIMIT_MAX,
@@ -39,6 +40,7 @@ import {
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
+import { BAD_CAP, changeGame, gameRefusal, readGameStatus } from '../game.js';
 import { KeyError, loadSigner, type Signer } from '../identity.js';
 import { cli, printedInvocation } from '../invocation.js';
 import { readOperatorSlug } from '../operator-slug.js';
@@ -119,7 +121,6 @@ import {
 } from '../routine-watch.js';
 import { createStyle } from '../style.js';
 import { VERSION } from '../version.js';
-import { BAD_CAP, changeGame, gameRefusal, readGameStatus } from './game.js';
 import { releaseClaim } from './release.js';
 import { recordClaims } from './run.js';
 import { SubmitRefused, submitAnswer } from './submit.js';
@@ -340,7 +341,7 @@ function yesOrTerminal(
 // install after the Claude Code hooks. A string is the reason nothing can
 // be installed, said as is. A scheduler that cannot be read throws a
 // SchedulerError.
-export type PreparedInstall = {
+type PreparedInstall = {
   plan: Plan;
   agentCommand: string;
   current: RoutineConfig;
@@ -417,7 +418,7 @@ export async function prepareInstall(
 // A job from an earlier install under another name or scheduler goes
 // first, so there is only ever one. Throws a SchedulerError when the copy
 // cannot be written or the scheduler refuses.
-export async function finishInstall(
+async function finishInstall(
   prepared: PreparedInstall,
   time: string,
   options: { keepPause?: boolean } = {},
@@ -478,7 +479,7 @@ export async function refreshCopy(
   }
 }
 
-export const installedLine = (time: string): string =>
+const installedLine = (time: string): string =>
   `Routine on. It runs every day at ${time}. See it with ${cli('routine')}, turn it off with ${cli('routine off')}.`;
 
 // The questions of the setup, yes by default (D-RS-1, D-RS-2).
@@ -508,9 +509,13 @@ export async function askYes(
 
 // Asks for a time on a 24 hour clock, current on an empty answer or a
 // closed input, and again after one that is not HH:MM.
-async function askTime(input: Input, current: string): Promise<string> {
+async function askTime(
+  input: Input,
+  current: string,
+  print: SetupPrint,
+): Promise<string> {
   for (let asked = 0; asked < MAX_ASKS; asked++) {
-    process.stderr.write(
+    print.ask(
       `${asked === 0 ? '' : 'Please answer HH:MM, such as 09:30. '}${timeQuestion(current)}`,
     );
     const line = await input.readLine();
@@ -524,11 +529,9 @@ async function askTime(input: Input, current: string): Promise<string> {
 
 // Asks tasks only or tasks and the game, tasks only on an empty answer, a
 // closed input or no clear answer.
-async function askGame(input: Input): Promise<boolean> {
+async function askGame(input: Input, print: SetupPrint): Promise<boolean> {
   for (let asked = 0; asked < MAX_ASKS; asked++) {
-    process.stderr.write(
-      `${asked === 0 ? '' : 'Please answer t or g. '}${WORK_QUESTION}`,
-    );
+    print.ask(`${asked === 0 ? '' : 'Please answer t or g. '}${WORK_QUESTION}`);
     const line = await input.readLine();
     if (line === null) return false;
     const answer = cleanAnswer(line).trim().toLowerCase();
@@ -540,7 +543,7 @@ async function askGame(input: Input): Promise<boolean> {
 
 // Said after a no to the first run. The job runs later today when its time
 // has not come yet.
-export function laterLine(time: string, now: Date = new Date()): string {
+function laterLine(time: string, now: Date = new Date()): string {
   return `It runs ${nextRunText(time, now)}.`;
 }
 
@@ -564,7 +567,7 @@ const stdoutIsTTY = (deps: RoutineDeps): boolean =>
 
 // How the first run's lines are printed. init indents and dims them, the
 // setup prints them as they are.
-export type FirstRunPrint = {
+type FirstRunPrint = {
   line: (text: string) => void;
   dim: (text: string) => void;
   indent: string;
@@ -575,7 +578,7 @@ export type FirstRunPrint = {
 // the watching ends. The watcher prints a line per event as the run logs
 // it, a spinner with the elapsed time on a terminal, then the run line and
 // where to see every run. Ctrl-C ends the watching only.
-export async function firstRun(
+async function firstRun(
   deps: RoutineDeps,
   routine: RoutineConfig,
   p: Paths,
@@ -670,10 +673,10 @@ export const NO_SETTINGS_NOTE =
 // routine screen only.
 export const BLOCK_TITLE = 'Daily routine';
 
-export const blockHeadTail = (time: string): string =>
+const blockHeadTail = (time: string): string =>
   `${time}, only when there is work`;
 
-export function routineRows(limits: RoutineLimits): [string, string][] {
+function routineRows(limits: RoutineLimits): [string, string][] {
   return [
     ['Claims', 'Seed tasks and tasks from operators you allow'],
     ['Posts', '1 task a day when posting is behind'],
@@ -682,11 +685,10 @@ export function routineRows(limits: RoutineLimits): [string, string][] {
   ];
 }
 
-export const checkLaterLine = (): string =>
-  `Check it later with ${cli('routine')}`;
+const checkLaterLine = (): string => `Check it later with ${cli('routine')}`;
 
 // The width of the label column of the rows.
-export const BLOCK_LABEL = 9;
+const BLOCK_LABEL = 9;
 
 // The block as the setup prints it, without style. init prints the same
 // lines with the label dim and the check line dim.
@@ -816,76 +818,143 @@ async function routineCommand(
     await printScreen(cmd, deps);
     return;
   }
-  await setup(cmd, deps, current, input);
+  const failed = await guidedSetup(deps, current, input, plainPrint());
+  if (failed !== null) cmd.error(failed);
 }
 
-// The guided setup (VOU-599). The agent found on this machine, the time,
-// tasks only or tasks and the game, the block with the limits, then the
-// install and one run now, watched.
-async function setup(
-  cmd: Command,
+// How the guided setup prints and asks. init indents its lines and dims
+// some, the routine command prints them as they are. ask writes a
+// question, with again in front after an unclear answer.
+export type SetupPrint = FirstRunPrint & { ask: (text: string) => void };
+
+// The routine command's own print, on stdout with its questions on stderr.
+const plainPrint = (): SetupPrint => {
+  const s = createStyle(process.stdout);
+  return {
+    line: stdout,
+    dim: (text) => stdoutStyled(s.line`${s.dim(text)}`),
+    indent: '',
+    ask: (text) => process.stderr.write(text),
+  };
+};
+
+// The guided setup (VOU-599), the one routine and init share. The agent
+// found on this machine, the time, tasks only or tasks and the game, the
+// block with the limits, then the install and one run now, watched. null
+// once it is installed, else why nothing was installed. A scheduler that
+// cannot be read or refuses is said as its reason.
+export async function guidedSetup(
   deps: RoutineDeps,
   current: RoutineConfig,
   input: Input,
-): Promise<void> {
+  print: SetupPrint,
+): Promise<string | null> {
   const agent = await findRuntime(deps);
-  if (agent === null) cmd.error(`nothing installed. ${NO_CLAUDE}`);
-  stdout(`Agent     ${RUNTIME_NAME['claude-code']}, ${tildePath(agent)}`);
-  const time = await askTime(input, current.time);
-  const game = await askGame(input);
+  if (agent === null) return `nothing installed. ${NO_CLAUDE}`;
+  print.line(`Agent     ${RUNTIME_NAME['claude-code']}, ${tildePath(agent)}`);
+  const time = await askTime(input, current.time, print);
+  const game = await askGame(input, print);
   const chosen = { ...current, time, game };
-  await install(cmd, deps, chosen, input, { gameOn: game });
+  const installed = await installJob(deps, chosen, input, print, {
+    gameOn: game,
+  });
+  if (typeof installed === 'string') return installed;
+  print.line(installedLine(time));
+  await offerFirstRun(deps, input, installed, print);
+  return null;
 }
 
+// Why a setup installed nothing when the person said no.
+export const NOTHING_INSTALLED = 'nothing installed';
+
+// What an install wrote, for the lines after it.
+type Installed = { schedule: RoutineSchedule; saved: RoutineConfig; p: Paths };
+
 // Writes the job with the settings in routine, after the block and a yes
-// in a terminal, or at once with --yes (input undefined). Turns the game on
-// only when the person chose tasks and the game in the setup's terminal
-// (gameOn), never from routine on or --yes, so a game the person turned
-// off stays off. Offers one run now in a terminal.
-async function install(
-  cmd: Command,
+// in a terminal, or at once with --yes (input undefined). print null is a
+// --json run, which keeps the full preview, on stderr. Turns the game on
+// only when the person chose tasks and the game in the setup (gameOn),
+// never from routine on or --yes, so a game the person turned off stays
+// off. A string is why nothing was installed.
+async function installJob(
   deps: RoutineDeps,
   routine: RoutineConfig,
   input: Input | undefined,
+  print: SetupPrint | null,
   options: { gameOn?: boolean } = {},
-): Promise<void> {
-  const json = wantsJson(cmd);
+): Promise<Installed | string> {
   let prepared: PreparedInstall | string;
   try {
     prepared = await prepareInstall(deps, routine.time, routine);
   } catch (error) {
-    if (error instanceof SchedulerError) cmd.error(error.message);
+    if (error instanceof SchedulerError) return error.message;
     throw error;
   }
-  if (typeof prepared === 'string') cmd.error(`nothing installed. ${prepared}`);
+  if (typeof prepared === 'string') return `nothing installed. ${prepared}`;
 
-  // --json keeps the full preview, on stderr. A person reads the block.
-  if (json) {
+  if (print === null) {
     for (const line of preview(prepared, routine.time)) stderr(line);
   } else {
     const lines = blockLines(routine.time, routine.limits);
-    for (const line of lines.slice(0, -1)) stdout(line);
-    // The check line is dim where the terminal takes colour.
-    const s = createStyle(process.stdout);
-    stdoutStyled(s.line`${s.dim(checkLaterLine())}`);
+    for (const line of lines.slice(0, -1)) print.line(line);
+    print.dim(checkLaterLine());
   }
   if (input !== undefined) {
+    const ask = print?.ask ?? ((text: string) => process.stderr.write(text));
     const yes = await askYes(input, (again) =>
-      process.stderr.write(`${again}${INSTALL_QUESTION}`),
+      ask(`${again}${INSTALL_QUESTION}`),
     );
-    if (!yes) cmd.error('nothing installed');
+    if (!yes) return NOTHING_INSTALLED;
   }
 
   let schedule: RoutineSchedule;
   try {
     schedule = await finishInstall(prepared, routine.time);
   } catch (error) {
-    if (error instanceof SchedulerError) cmd.error(error.message);
+    if (error instanceof SchedulerError) return error.message;
     throw error;
   }
   if (options.gameOn === true) await gameOn(deps, prepared.p);
-  const saved = await loadRoutineConfig(cmd);
-  if (json) {
+  try {
+    const saved = await readRoutineConfig(prepared.p);
+    return { schedule, saved, p: prepared.p };
+  } catch (error) {
+    if (error instanceof ConfigError) return error.message;
+    throw error;
+  }
+}
+
+// Offers one run now after an install in a terminal, and watches it.
+async function offerFirstRun(
+  deps: RoutineDeps,
+  input: Input,
+  { saved, p }: Installed,
+  print: SetupPrint,
+): Promise<void> {
+  const now = await askYes(input, (again) =>
+    print.ask(`${again}${FIRST_RUN_QUESTION}`),
+  );
+  if (!now) {
+    print.line(laterLine(saved.time));
+    return;
+  }
+  await firstRun(deps, saved, p, print);
+}
+
+// routine on and routine --yes. The install, then its line, or with --json
+// what was written. A terminal is offered one run now.
+async function install(
+  cmd: Command,
+  deps: RoutineDeps,
+  routine: RoutineConfig,
+  input: Input | undefined,
+): Promise<void> {
+  const json = wantsJson(cmd);
+  const print = json ? null : plainPrint();
+  const installed = await installJob(deps, routine, input, print);
+  if (typeof installed === 'string') cmd.error(installed);
+  const { schedule, saved } = installed;
+  if (print === null) {
     stdout(
       JSON.stringify({
         on: true,
@@ -897,21 +966,10 @@ async function install(
     );
     return;
   }
-  stdout(installedLine(routine.time));
+  print.line(installedLine(routine.time));
   // --yes is for scripts and agents, which never start a run here.
   if (input === undefined) return;
-  const now = await askYes(input, (again) =>
-    process.stderr.write(`${again}${FIRST_RUN_QUESTION}`),
-  );
-  if (!now) {
-    stdout(laterLine(routine.time));
-    return;
-  }
-  await firstRun(deps, saved, prepared.p, {
-    line: stdout,
-    dim: stdout,
-    indent: '',
-  });
+  await offerFirstRun(deps, input, installed, print);
 }
 
 // Turns the game on for a routine that plays it, the person's own choice
@@ -2037,7 +2095,7 @@ export async function routineView(
         ]),
     // Where the last run's transcript is, never what it says (RS-10).
     ...(transcript === null ? [] : [row('Transcript', tildePath(transcript))]),
-    // The card card write last wrote, which each run refreshes (VOU-383).
+    // The card init wrote, which each run refreshes (VOU-383).
     ...(cardRecord === null
       ? []
       : [

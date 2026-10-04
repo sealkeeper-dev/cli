@@ -25,7 +25,7 @@ export function register(
   deps: SyncDeps = defaultSyncDeps,
 ): Command {
   return parent
-    .command('emit')
+    .command('emit', { hidden: true })
     .description('Append one event to the local log. Adapters call this')
     .requiredOption('--type <type>', 'event type, for example session.start')
     .option('--payload <json>', 'event payload as a JSON object (default: {})')

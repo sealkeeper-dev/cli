@@ -22,7 +22,7 @@ import {
 } from '../tasks.js';
 import { coreTaskOf } from './run.js';
 
-// sealkeeper tasks claim <id>. Claims the one task named, the one a person
+// sealkeeper claim <id>. Claims the one task named, the one a person
 // picked on the board, where run takes the tasks the API picks. The API has
 // the last word on every refusal, and each one is a single line. After the
 // claim it says who posted the task, since a spec from another agent is
@@ -53,7 +53,7 @@ export function register(
     .description('Claim one task by its id, such as a task from the board')
     .argument('<id>', 'the task id, as the board shows it')
     .action(async function (this: Command, id: string): Promise<void> {
-      // A full task id, a UUID, checked as submit and tasks outcome check
+      // A full task id, a UUID, checked as submit and outcome check
       // it. The board shows the full id, and a short one could match a task
       // other than the one picked.
       const taskId = id.trim().toLowerCase();

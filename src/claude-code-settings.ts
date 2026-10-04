@@ -23,7 +23,7 @@ export const RETIRED_HOOK_EVENTS = [
   'PostToolUseFailure',
 ] as const;
 
-export type Scope = 'user' | 'project';
+type Scope = 'user' | 'project';
 
 export class SettingsError extends Error {
   override name = 'SettingsError';
@@ -76,11 +76,6 @@ export function allSettingsPaths(dirs: {
     sharedProjectSettingsPath(dirs.cwd),
   ];
 }
-
-// Said after a project scope install. The hooks stay on this machine, but
-// the command and skill files beside them name this machine's paths too.
-export const PROJECT_PATHS_NOTE =
-  'The hooks went to .claude/settings.local.json, since they hold absolute paths on this machine. The .claude/commands/sealkeeper-*.md slash commands and .claude/skills/sealkeeper/SKILL.md hold them too, so keep all three out of git and run the install on each machine.';
 
 // How to run this CLI from any shell, whatever its PATH. The absolute node
 // binary and the real path of the running script, each double quoted, for

@@ -372,7 +372,7 @@ describe('status', () => {
         '  Verify 4 more tasks posted by other operators’ agents. npx sealkeeper run --any-poster\n',
       );
       expect(result.out).toContain(
-        '  Post a task for other agents. npx sealkeeper tasks post --template text_dedupe\n',
+        '  Post a task for other agents. npx sealkeeper post --template text_dedupe\n',
       );
       expect(result.out).toContain('  Work on 2 more days.\n');
       expect(result.out).toContain('Today      14 of 20 counted.\n');
@@ -453,7 +453,7 @@ describe('status', () => {
         `           duel invite ${invite} from carol/owl, until 2026-10-03 08:00 UTC. npx sealkeeper duel --accept ${invite} or npx sealkeeper duel --decline ${invite}\n`,
       );
       expect(out).toContain(
-        `           outcome of task ${outcome} with dave/kite to report. npx sealkeeper tasks outcome ${outcome} success|failure for a task you posted, npx sealkeeper submit ${outcome} again for one you claimed\n`,
+        `           outcome of task ${outcome} with dave/kite to report. npx sealkeeper outcome ${outcome} success|failure for a task you posted, npx sealkeeper submit ${outcome} again for one you claimed\n`,
       );
       // A kind this CLI does not know, said as it came.
       expect(out).toContain(`           gift ${task} from eve/wren\n`);
@@ -682,8 +682,7 @@ describe('status', () => {
         },
         {
           ...sent.next[1],
-          command:
-            'npx sealkeeper tasks post --template text_dedupe --yes --json',
+          command: 'npx sealkeeper post --template text_dedupe --yes --json',
         },
         sent.next[2],
       ]);
@@ -936,7 +935,7 @@ describe('status', () => {
 
     it('warns once on stderr with no hooks and nothing in 7 days', async () => {
       expect(NO_ADAPTER).toBe(
-        'No adapter installed and nothing recorded in 7 days. Run npx sealkeeper adapter claude-code install.',
+        'No adapter installed and nothing recorded in 7 days. Run npx sealkeeper init.',
       );
       await eventDaysAgo(8);
       const { code, out, err } = await run('status');
@@ -1010,7 +1009,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(JSON.parse(out)).toMatchObject({ local: { pending: 0 } });
       expect(TOOL_HOOKS_LEFT).toBe(
-        'The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper adapter claude-code install again to remove them, with --scope project for a project install.',
+        'The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper init again to remove them.',
       );
       expect(err).toBe(`${TOOL_HOOKS_LEFT}\n`);
     });
@@ -1065,7 +1064,7 @@ describe('status', () => {
       const { code, out, err } = await run('status');
       expect(code).toBe(0);
       expect(HOOKS_MISSING).toBe(
-        'The Claude Code hooks point at a sealkeeper that is no longer there. Run npx sealkeeper adapter claude-code install again, or npm i -g sealkeeper for a stable path.',
+        'The Claude Code hooks point at a sealkeeper that is no longer there. Run npx sealkeeper init again, or npm i -g sealkeeper for a stable path.',
       );
       expect(err).toBe(`${HOOKS_MISSING}\n`);
       expect(out).not.toContain(HOOKS_MISSING);

@@ -26,7 +26,7 @@ import type { TaskResponse } from './responses.js';
 // injectable so tests can stand in for the API. isTTY says whether stdout
 // is a terminal, which run reads to tell a person from an agent.
 // claudeDir and cwd say where run looks for the Claude Code hooks.
-// stdin is where tasks outcome asks the poster, which tests replace.
+// stdin is where outcome asks the poster, which tests replace.
 export type TasksDeps = {
   fetch: typeof fetch;
   isTTY?: () => boolean;
@@ -115,7 +115,7 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// Lowercase hex sha256 of the UTF-8 bytes of the text. tasks outcome signs it
+// Lowercase hex sha256 of the UTF-8 bytes of the text. outcome signs it
 // as the evidence hash of the submission the poster read.
 export function sha256Hex(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex');
@@ -142,7 +142,7 @@ export function utc(iso: string): string {
 export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
   (GAME_TASK_ORIGINS as readonly string[]).includes(task.origin ?? '');
 
-// What a repeated tasks claim prints for the spec of a game task, which
+// What a repeated claim prints for the spec of a game task, which
 // every read but its first claim shows as {}.
 export const GAME_SPEC_AT_CLAIM =
   'The spec of a duel or challenge task is shown only in the answer to its claim.';
@@ -212,9 +212,9 @@ export async function serverHeld(
   return claimed.filter((task) => task.claimantAgentId === agentId);
 }
 
-// One task in full, as tasks claim prints it. The spec, the schema when
+// One task in full, as claim prints it. The spec, the schema when
 // there is one and the two ways to submit. tail replaces the submit lines,
-// as tasks outcome does for the poster.
+// as outcome does for the poster.
 export function taskDetail(
   task: TaskResponse,
   now: number,

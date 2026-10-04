@@ -1,12 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,9 +11,11 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeCard as writeAgentCard } from '../card.js';
 import {
   defaultRoutineConfig,
   paths,
+  readConfig,
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
@@ -29,7 +24,7 @@ import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
 import { type RoutineEntry, readRoutine } from '../routine.js';
 
-// The daily routine refreshes the card card write last wrote (VOU-383).
+// The daily routine refreshes the card init wrote (VOU-383).
 
 const API_URL = 'https://api.test';
 const KID = 'sealkeeper-test-1';
@@ -111,7 +106,6 @@ describe('the routine refreshes the card', () => {
     ...args: string[]
   ): Promise<RunResult> {
     const program = createProgram({
-      card: { fetch: fetcher },
       routine: { fetch: fetcher, stdoutTTY: () => false },
       // status prints its screen, as in a terminal.
       tasks: { fetch: fetcher, isTTY: () => true },
@@ -222,8 +216,7 @@ describe('the routine refreshes the card', () => {
     vi.stubEnv('SEALKEEPER_ROUTINE_RUN_ID', '');
     vi.stubEnv('SEALKEEPER_INVOCATION', 'sealkeeper');
     resetInvocation();
-    await mkdir(join(root, 'site'));
-    cardFile = join(root, 'site', 'agent-card.json');
+    cardFile = paths().card;
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -270,17 +263,11 @@ describe('the routine refreshes the card', () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  // The card init writes into the home.
   async function writeCard(): Promise<string> {
-    const written = await run(
-      fetchFn,
-      'card',
-      'write',
-      '--out',
-      cardFile,
-      '--url',
-      'https://agent.example.com/a2a',
-    );
-    expect(written.code).toBe(0);
+    const config = await readConfig();
+    if (config === null) throw new Error('no config');
+    expect(await writeAgentCard(config, { fetch: fetchFn })).toBe(cardFile);
     return readFile(cardFile, 'utf8');
   }
 
@@ -297,10 +284,7 @@ describe('the routine refreshes the card', () => {
     expect(sealOf(after)).not.toBe(sealOf(before));
     const cached = JSON.parse(await readFile(paths().credential, 'utf8'));
     expect(sealOf(after)).toBe(cached.seal);
-    // The same card, with the --url card write took.
-    expect(AgentCard.parse(JSON.parse(after)).url).toBe(
-      'https://agent.example.com/a2a',
-    );
+    expect(AgentCard.parse(JSON.parse(after)).name).toBe('scout');
     expect((await stat(cardFile)).mode & 0o777).toBe(0o644);
     expect(await lastRun()).toMatchObject({
       outcome: 'nothing',
@@ -331,12 +315,12 @@ describe('the routine refreshes the card', () => {
     expect(requests).not.toContain(`${API_URL}/v1/agents/${agentId}/seal`);
     expect(await lastRun()).toMatchObject({ card: 'current' });
     expect(result.out).toContain('Card up to date.');
-    // The record keeps the time card write wrote it.
+    // The record keeps the time init wrote it.
     const screen = await run(fetchFn, 'routine');
     expect(screen.out).toContain(`, last written ${NOW.toISOString()}\n`);
   });
 
-  it('writes nothing when card write never wrote a card', async () => {
+  it('writes nothing when init never wrote a card', async () => {
     await installed();
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
@@ -351,7 +335,7 @@ describe('the routine refreshes the card', () => {
     expect(screen.out).not.toContain('Card ');
   });
 
-  it("never writes over a card another agent's card write recorded", async () => {
+  it("never writes over a card another agent's init recorded", async () => {
     const before = await writeCard();
     await installed();
     // init --force made a new agent in this home.
@@ -374,42 +358,7 @@ describe('the routine refreshes the card', () => {
     expect(await lastRun()).not.toHaveProperty('card');
   });
 
-  it("never writes over the card another agent's card write put at the same path", async () => {
-    seal = issues(HOUR);
-    await writeCard();
-    await installed();
-    const agentA = agentId;
-    // A second agent in its own home writes its card to the same file.
-    vi.stubEnv('SEALKEEPER_HOME', join(root, 'sk', 'agents', 'b'));
-    ({ agentId } = await createKey());
-    await writeConfig({
-      agentId,
-      operatorLogin: 'alice',
-      name: 'scout-b',
-      version: '1.0.0',
-      apiUrl: API_URL,
-      registeredAt: NOW.toISOString(),
-    });
-    seal = issues(24 * HOUR);
-    const cardB = await writeCard();
-    // Back to the first agent, whose SEAL is inside the margin.
-    vi.stubEnv('SEALKEEPER_HOME', join(root, 'sk'));
-    agentId = agentA;
-    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
-
-    const result = await run(fetchFn, 'routine', 'run');
-    expect(result.code).toBe(0);
-    expect(await readFile(cardFile, 'utf8')).toBe(cardB);
-    expect(await lastRun()).toMatchObject({
-      outcome: 'nothing',
-      card: 'changed',
-    });
-    expect(result.out).toBe(
-      `${NOTHING} Card not refreshed, the file holds another card.\n`,
-    );
-  });
-
-  it('never writes over a card the operator edited after card write', async () => {
+  it('never writes over a card the operator edited after init wrote it', async () => {
     seal = issues(HOUR);
     const before = await writeCard();
     await installed();
@@ -448,7 +397,7 @@ describe('the routine refreshes the card', () => {
     );
   });
 
-  it('goes on when the SEAL is withheld, and the card holds what card write leaves', async () => {
+  it('goes on when the SEAL is withheld, and the card holds what it held', async () => {
     seal = issues(HOUR);
     const before = await writeCard();
     await installed();
@@ -464,14 +413,7 @@ describe('the routine refreshes the card', () => {
     expect(result.out).toContain(
       'Card kept, no SEAL is issued for this agent now.',
     );
-    const kept = await readFile(cardFile, 'utf8');
-    expect(kept).toBe(before);
-
-    // card write in the same state writes nothing and exits 1, so the card
-    // holds the same.
-    const written = await run(fetchFn, 'card', 'write', '--out', cardFile);
-    expect(written.code).toBe(1);
-    expect(await readFile(cardFile, 'utf8')).toBe(kept);
+    expect(await readFile(cardFile, 'utf8')).toBe(before);
   });
 
   it('takes no step of the run', async () => {

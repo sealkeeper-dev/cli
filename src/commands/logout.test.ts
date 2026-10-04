@@ -153,7 +153,7 @@ describe('logout', () => {
     expect(await exists(p.cursor)).toBe(true);
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(
-      'logged out, removed credential.json, status.json, post-prompt.json, score.json, inbox.json, routine-claim.lock, routine-confirm.lock, routine-post.lock, config.json',
+      'logged out, removed credential.json, status.json, post-prompt.json, score.json, inbox.json, routine-claim.lock, routine-confirm.lock, routine-post.lock, model.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
     expect(out).toContain('run npx sealkeeper init to sign in again');
@@ -272,6 +272,7 @@ describe('logout', () => {
         'routine-claim.lock',
         'routine-confirm.lock',
         'routine-post.lock',
+        'model.json',
         'config.json',
       ],
       keyDeleted: false,

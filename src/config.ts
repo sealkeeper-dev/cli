@@ -233,6 +233,7 @@ export const LEGACY_FILES = [
   'routine-claim.lock',
   'routine-confirm.lock',
   'routine-post.lock',
+  'model.json',
 ] as const;
 
 export type Paths = {
@@ -245,8 +246,9 @@ export type Paths = {
   // older CLIs still parse that, see log.ts.
   cursorOffset: string;
   credential: string;
-  // Where card write last wrote the agent card, so the daily routine
-  // refreshes that file and no other, see card.ts.
+  // The A2A agent card init writes, and where it wrote it, so the daily
+  // routine refreshes that file and no other, see card.ts.
+  card: string;
   cardWrite: string;
   // The SealKeeper public keys seal verify last fetched, with the fetch time.
   wellKnown: string;
@@ -274,9 +276,6 @@ export type Paths = {
   // The part hashes the Mastra and OpenClaw adapters observed in the
   // agent's process, for the next capture, see fingerprint.ts.
   fingerprintSources: string;
-  // The model name set by hand with model set, for a runtime with no
-  // adapter, see model-name.ts.
-  model: string;
   logFile(day: string): string;
 };
 
@@ -586,6 +585,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     cursor: join(home, 'cursor.json'),
     cursorOffset: join(home, 'cursor-offset.json'),
     credential: join(home, 'credential.json'),
+    card: join(home, 'agent-card.json'),
     cardWrite: join(home, 'card-write.json'),
     wellKnown: join(home, 'well-known.json'),
     status: join(home, 'status.json'),
@@ -597,7 +597,6 @@ export function paths(home: string = sealkeeperHome()): Paths {
     operatorSlug: join(home, 'operator-slug.json'),
     fingerprint: join(home, 'fingerprint.json'),
     fingerprintSources: join(home, 'fingerprint-sources.json'),
-    model: join(home, 'model.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

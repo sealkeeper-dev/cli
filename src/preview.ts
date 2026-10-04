@@ -119,7 +119,7 @@ export function previewLines(preview: Preview, p: Paths = paths()): string[] {
 // is the one value that leaves as text (VOU-46, VOU-566).
 export function besideText(model: string | null): string {
   return model === null
-    ? "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one and none is set."
+    ? "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one."
     : `Beside them go the agent's fingerprint, SHA-256 hashes only, and the model name ${model}, as text.`;
 }
 

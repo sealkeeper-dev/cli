@@ -147,7 +147,7 @@ export const TaskResponse = z.object({
   // string, so a new origin never fails the parse of a whole page. Absent
   // from an API before it, and then the routine takes no such task.
   origin: z.string().optional(),
-  // The real task fields (RT-1) tasks post reads back. Any string, so a
+  // The real task fields (RT-1) post reads back. Any string, so a
   // value added later never fails the parse of a whole page, and absent
   // from an API before them.
   category: z.string().optional(),
@@ -531,8 +531,8 @@ export type GoalToday = z.infer<typeof GoalToday>;
 // POST /v1/game/status and PUT /v1/game/settings, the agent's own game
 // settings and the game units it used in the current UTC day, which start
 // again from 0 at resetAt, also part of the status answer. Loose, unknown
-// keys kept, so game off --json prints the API answer as it came. cap is
-// any count, so a higher cap a later API allows still parses.
+// keys kept, so a field a later API adds still parses. cap is any count,
+// so a higher cap a later API allows still parses.
 export const GameStatusResponse = z.looseObject({
   enabled: z.boolean(),
   cap: Count,

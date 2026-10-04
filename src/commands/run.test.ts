@@ -339,7 +339,7 @@ describe('run', () => {
       expect(printed.next.map((a: { command?: string }) => a.command)).toEqual([
         'npx sealkeeper run --addressed --json',
         'npx sealkeeper run --any-poster --json',
-        'npx sealkeeper tasks post --template text_dedupe --yes --json',
+        'npx sealkeeper post --template text_dedupe --yes --json',
         undefined,
       ]);
       expect(printed.waiting).toEqual(
@@ -392,7 +392,7 @@ describe('run', () => {
       );
       expect(
         actionCommand(of('post', { template: 'text_dedupe' }), 'person'),
-      ).toBe('npx sealkeeper tasks post --template text_dedupe');
+      ).toBe('npx sealkeeper post --template text_dedupe');
       expect(actionCommand(of('outcome', {}))).toBeNull();
     });
 

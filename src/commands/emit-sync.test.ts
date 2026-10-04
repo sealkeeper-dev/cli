@@ -30,7 +30,7 @@ import {
   STAMP_FILE,
 } from '../background-sync.js';
 import { paths, readConfig, writeConfig } from '../config.js';
-import { currentFingerprint } from '../fingerprint.js';
+import { currentFingerprint, observeParts } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import {
   appendEvent,
@@ -39,7 +39,6 @@ import {
   readCursor,
   readDay,
 } from '../log.js';
-import { writeModelSet } from '../model-name.js';
 import { createProgram } from '../program.js';
 import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
@@ -773,10 +772,10 @@ describe('emit and sync', () => {
 
     // VOU-566. The model name goes beside the fingerprint in the same
     // signed declaration, as text.
-    it('sends the model name set by hand beside the fingerprint', async () => {
+    it('sends the model name the adapter read beside the fingerprint', async () => {
       await initialise();
       await seed(1);
-      await writeModelSet('gpt-4.1', paths());
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
       expect((await api('sync')).code).toBe(0);
       const [first] = server.fingerprints;
       if (first === undefined) throw new Error('no fingerprint sent');
@@ -790,7 +789,7 @@ describe('emit and sync', () => {
     it('sends the fingerprint again without the model name when an API from before it refuses the name', async () => {
       await initialise();
       await seed(2);
-      await writeModelSet('gpt-4.1', paths());
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
       const named = (jws: string) =>
         'model' in
         JSON.parse(
@@ -1585,7 +1584,7 @@ describe('emit and sync', () => {
         '',
         '2 events pending, nothing sent yet.',
         WIRE,
-        "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one and none is set.",
+        "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one.",
         '',
       ]);
       expect(server.batches).toEqual([]);

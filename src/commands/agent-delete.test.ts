@@ -8,6 +8,7 @@ import {
   realpath,
   rename,
   rm,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,10 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { commandPaths } from '../claude-code-command.js';
+import { installClaudeCode } from '../claude-code-install.js';
+import { hookCommand } from '../claude-code-settings.js';
+import { skillPath } from '../claude-code-skill.js';
 import {
   agentsMapPath,
   bindFolder,
@@ -41,6 +46,11 @@ import { jobName, type Runner } from '../routine-scheduler.js';
 
 const API_URL = 'https://api.test';
 const DELETE_LINE_START = 'the key and any copies of it, config.json, the log';
+// What the hooks of these tests run.
+const HOOK = hookCommand(
+  '/usr/local/bin/node',
+  '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
+);
 
 // Every signed payload names the API it is for (VOU-111). The fake takes
 // aud off before it parses, and a payload without the right aud fails the
@@ -129,6 +139,12 @@ async function exists(path: string): Promise<boolean> {
 
 describe('sealkeeper agent delete', () => {
   let home: string;
+  // The Claude Code config dir and the project folder agent delete takes
+  // the SealKeeper files out of, and the root whose agents it counts.
+  // Never the real ones.
+  let elsewhere: string;
+  const claudeDir = () => join(elsewhere, 'claude');
+  const project = () => join(elsewhere, 'project');
   let agentId: string;
   let api: FakeApi;
   // What the terminal answers. isTTY false means no one could type.
@@ -156,6 +172,9 @@ describe('sealkeeper agent delete', () => {
       },
       agent: {
         fetch: api.fetch,
+        claudeDir,
+        cwd: project,
+        hookCommand: () => HOOK,
         stdin: () => ({
           isTTY: input.isTTY,
           readLine: async () => {
@@ -213,7 +232,10 @@ describe('sealkeeper agent delete', () => {
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-agent-delete-'));
+    elsewhere = await mkdtemp(join(tmpdir(), 'sealkeeper-agent-delete-cc-'));
+    await mkdir(project());
     vi.stubEnv('SEALKEEPER_HOME', home);
+    vi.stubEnv('SEALKEEPER_ROOT', join(elsewhere, 'root'));
     vi.stubEnv('SEALKEEPER_API_URL', '');
     ({ agentId } = await createKey());
     await writeConfig({
@@ -249,6 +271,7 @@ describe('sealkeeper agent delete', () => {
     expect(api.errors).toEqual([]);
     vi.unstubAllEnvs();
     await rm(home, { recursive: true, force: true });
+    await rm(elsewhere, { recursive: true, force: true });
   });
 
   it('prints what goes, asks for the name, deletes on the server, then the files', async () => {
@@ -264,7 +287,8 @@ describe('sealkeeper agent delete', () => {
         'handle           alice/app',
         'profile          https://sealkeeper.run/agents/alice/app',
         'on SealKeeper    the agent, its events, the tasks it posted, its claims, its scores and its SEAL',
-        `on this machine  the key and any copies of it, config.json, the log, the routine settings and log, the SEAL cache and the well-known cache, in ${home}`,
+        `on this machine  the key and any copies of it, config.json, the log, the routine settings and log, the agent card, the SEAL cache and the well-known cache, in ${home}`,
+        'in Claude Code   the SealKeeper hooks, slash commands and skill, when no other agent on this machine is left',
         'deleted alice/app',
         '',
       ].join('\n'),
@@ -436,6 +460,18 @@ describe('sealkeeper agent delete', () => {
       keyCopies: [],
       routineJob: null,
       folders: [],
+      // No other agent is left, so both settings files were looked at, and
+      // neither held anything of SealKeeper's.
+      claudeCode: [
+        join(claudeDir(), 'settings.json'),
+        join(project(), '.claude', 'settings.local.json'),
+      ].map((path) => ({
+        path,
+        removed: 0,
+        removedFromShared: 0,
+        commands: [],
+        skill: false,
+      })),
     });
     expect(err).toContain('handle           alice/app');
     expect(await remaining()).toEqual([]);
@@ -538,6 +574,86 @@ describe('sealkeeper agent delete', () => {
     expect(json.routineJob).toBeNull();
     expect(json.routineJobError).toContain('crontab -e');
     expect(err).toContain('could not be removed');
+  });
+
+  // VOU-603. agent delete runs the Claude Code uninstall init's install is
+  // undone by, once no other agent on this machine is left. Only what
+  // SealKeeper wrote goes.
+  describe('the Claude Code files', () => {
+    const userFile = () => join(claudeDir(), 'settings.json');
+    const projectFile = () => join(project(), '.claude', 'settings.local.json');
+    const FOREIGN = { type: 'command', command: 'other-tool stop' };
+
+    async function installed(file: string): Promise<void> {
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(
+        file,
+        JSON.stringify({ hooks: { Stop: [{ hooks: [FOREIGN] }] } }),
+      );
+      await installClaudeCode(file, HOOK, () => {});
+    }
+
+    it('go with the last agent, hooks, slash commands and skill, and a foreign hook stays', async () => {
+      await installed(userFile());
+      await installed(projectFile());
+      // A command of the same name the operator wrote stays.
+      const [mine = ''] = commandPaths(projectFile());
+      await writeFile(mine, 'my own run command\n');
+      const { code, out } = await run('agent', 'delete', '--yes');
+      expect(code).toBe(0);
+      for (const file of [userFile(), projectFile()]) {
+        expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({
+          hooks: { Stop: [{ hooks: [FOREIGN] }] },
+        });
+        expect(await exists(skillPath(file))).toBe(false);
+        expect(out).toContain(`removed 3 sealkeeper hooks from ${file}\n`);
+        expect(out).toContain(
+          `removed the sealkeeper skill from ${skillPath(file)}\n`,
+        );
+      }
+      for (const path of commandPaths(userFile())) {
+        expect(await exists(path)).toBe(false);
+      }
+      expect(await readFile(mine, 'utf8')).toBe('my own run command\n');
+      expect(out.trim().split('\n').at(-1)).toBe('deleted alice/app');
+    });
+
+    it('stay while another agent on this machine is left', async () => {
+      await installed(userFile());
+      const root = join(elsewhere, 'root');
+      await mkdir(root, { recursive: true });
+      await writeConfig(
+        {
+          agentId: `${'B'.repeat(42)}A`,
+          operatorLogin: 'alice',
+          name: 'other',
+          version: '1.0.0',
+          registeredAt: new Date().toISOString(),
+        },
+        paths(root),
+      );
+      const before = await readFile(userFile(), 'utf8');
+      const { code, out } = await run('agent', 'delete', '--yes', '--json');
+      expect(code).toBe(0);
+      expect(JSON.parse(out).claudeCode).toEqual([]);
+      expect(await readFile(userFile(), 'utf8')).toBe(before);
+      expect(await exists(skillPath(userFile()))).toBe(true);
+    });
+
+    it('are left alone in a project folder that links outside the project', async () => {
+      await installed(userFile());
+      const outside = join(elsewhere, 'outside');
+      await mkdir(outside);
+      await installed(join(outside, 'settings.local.json'));
+      await symlink(outside, join(project(), '.claude'));
+      const { code, err } = await run('agent', 'delete', '--yes', '--json');
+      expect(code).toBe(0);
+      expect(err).toContain('the Claude Code files were left as they are');
+      expect(
+        await exists(skillPath(join(outside, 'settings.local.json'))),
+      ).toBe(true);
+      expect(await exists(skillPath(userFile()))).toBe(false);
+    });
   });
 
   it('says to run init without a config', async () => {

@@ -239,9 +239,7 @@ export function actionCommand(
     // Only a template this CLI can post, which also keeps the line to a
     // known id.
     if (templateById(template) === undefined) return null;
-    return cli(
-      `tasks post --template ${template}${agent ? ' --yes --json' : ''}`,
-    );
+    return cli(`post --template ${template}${agent ? ' --yes --json' : ''}`);
   }
   return null;
 }
@@ -294,7 +292,7 @@ export function duelWords(args: CoreActionResponse['args']): string[] | null {
   return null;
 }
 
-// A task tasks claim claimed or held, in the shape of a run --json
+// A task the claim command claimed or held, in the shape of a run --json
 // task. The submits its claim has left are not known here, so they are
 // left out.
 export function coreTaskOf(task: TaskResponse) {

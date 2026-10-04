@@ -35,7 +35,6 @@ import { z } from 'zod';
 import { type Paths, paths, readConfig, writeFileAtomic } from './config.js';
 import { readEnv } from './env.js';
 import { exists, readIfExists } from './files.js';
-import { cli } from './invocation.js';
 
 // A part whose hash differed from the capture before it on each of the last
 // this many captures reads unstable (D-VB-4). The file keeps this many.
@@ -327,7 +326,7 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
 };
 
 // The model name block of what-is-shared (VOU-566).
-export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, from ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report, else the name you set with ${cli('model set')}. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output. ${cli('model show')} prints it.`;
+export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, from ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
 
 export function describeFingerprint(): string {
   const width = Math.max(...FINGERPRINT_PARTS.map((n) => n.length)) + 2;

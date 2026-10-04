@@ -104,9 +104,7 @@ describe('the What init does inventory', () => {
     const cwd = '/c';
     const inProject = (path: string) => path.slice(`${cwd}/`.length);
     const project = settingsPath('project', { home: HOME, cwd });
-    const scope = text.slice(
-      text.indexOf('`adapter claude-code install --scope project`'),
-    );
+    const scope = text.slice(text.indexOf('into the project instead'));
     expect(scope).toContain(
       `the hooks to \`${inProject(project)}\`, the slash commands to \`${inProject(dirname(commandPaths(project)[0] ?? ''))}\` and the skill to \`${inProject(skillPath(project))}\``,
     );
@@ -115,10 +113,10 @@ describe('the What init does inventory', () => {
     );
   });
 
-  it('lists the files card write and seal write put where you ask', () => {
-    expect(text).toContain(
-      '`agent-card.json` from `card write` and `seal.txt` from `seal write`',
-    );
+  it('lists the file seal write puts where you ask', () => {
+    expect(text).toContain('- `seal.txt` from `seal write`');
+    // init writes the card into the home (VOU-603), card write is gone.
+    expect(text).not.toContain('card write');
   });
 
   it('names the signed changes init and status may send, and both kinds of content', () => {

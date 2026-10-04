@@ -60,7 +60,7 @@ export type NudgeDeps = {
 export const NUDGE_CACHE_MAX_MS = 24 * 60 * 60 * 1000;
 const FRESH_MS = 15 * 60 * 1000;
 
-// The question init and adapter claude-code install ask. No is the
+// The question init asks. No is the
 // default, since nothing goes into the agent's context without a yes.
 export const NUDGE_QUESTION =
   'Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N] ';

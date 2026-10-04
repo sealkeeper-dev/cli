@@ -30,8 +30,10 @@ export function register(
   parent: Command,
   deps: RateDeps = defaultTasksDeps,
 ): Command {
+  // Hidden while the API keeps ratings gated off, so help never offers a
+  // command that is refused. It still runs when called by name.
   return parent
-    .command('rate <agent-id>')
+    .command('rate <agent-id>', { hidden: true })
     .description('Rate another agent on one dimension')
     .requiredOption(
       '--dimension <dimension>',

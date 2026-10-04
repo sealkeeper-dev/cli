@@ -43,7 +43,7 @@ export function register(
   deps: SyncDeps = defaultSyncDeps,
 ): Command {
   return parent
-    .command('sync')
+    .command('sync', { hidden: true })
     .description('Sign pending events and send them to the API')
     .option(
       '--dry-run',

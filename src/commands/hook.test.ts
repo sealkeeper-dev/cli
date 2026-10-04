@@ -230,8 +230,9 @@ describe('hook claude-code', () => {
     const program = createProgram();
     const help = program.helpInformation();
     expect(help).not.toMatch(/^ {2}hook\b/m);
-    expect(help).toMatch(/^ {2}adapter claude-code install\b/m);
-    expect(help).toMatch(/^ {2}adapter claude-code uninstall\b/m);
+    // init installs the hooks, there is no adapter command (VOU-603).
+    expect(help).toMatch(/^ {2}init\b/m);
+    expect(help).not.toMatch(/^ {2}adapter\b/m);
   });
 
   it('SessionStart emits session.start and records the start time', async () => {

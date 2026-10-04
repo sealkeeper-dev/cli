@@ -45,7 +45,7 @@ export async function makeHandshake(
   );
 }
 
-// makeHandshake that never throws, for card write, which must not fail
+// makeHandshake that never throws, for the card, which must not fail
 // over a handshake. null when there is none.
 export async function makeHandshakeQuietly(
   nowMs: number,

@@ -11,35 +11,36 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type Command, CommanderError } from 'commander';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Input } from '../ask.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ANSWERS_FALLBACK,
   answerRules,
+  commandPaths,
   commandText,
   coreLoop,
   ROUTINE_COMMANDS,
   ROUTINE_RULE,
   SLASH_COMMANDS,
   shellFunction,
-} from '../claude-code-command.js';
+} from './claude-code-command.js';
+import {
+  installClaudeCode,
+  installedPaths,
+  installLines,
+  uninstallClaudeCode,
+  uninstallLines,
+} from './claude-code-install.js';
 import {
   hookCommand,
   invocationOf,
-  PROJECT_PATHS_NOTE,
-} from '../claude-code-settings.js';
-import { skillBody, skillText } from '../claude-code-skill.js';
-import { paths, readNudge, writeConfig, writeNudge } from '../config.js';
-import { isManaged, MANAGED_MARKER } from '../managed.js';
-import { createProgram } from '../program.js';
+  refuseOutsideProject,
+  SettingsError,
+  settingsPath,
+} from './claude-code-settings.js';
+import { skillBody, skillPath, skillText } from './claude-code-skill.js';
+import { isManaged, MANAGED_MARKER } from './managed.js';
 
 type RunResult = { code: number; out: string; err: string };
-
-function throwOnExit(cmd: Command): void {
-  cmd.exitOverride();
-  for (const sub of cmd.commands) throwOnExit(sub);
-}
 
 // Settings another tool already wrote, with hooks of its own on some of the
 // same events.
@@ -76,7 +77,11 @@ const EVENTS = ['SessionStart', 'SessionEnd', 'Stop'];
 // The tool call hooks an install before 0.4.14 wrote next to them.
 const TOOL_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
 
-describe('adapter claude-code', () => {
+// The Claude Code install init runs and the uninstall agent delete runs
+// (VOU-603), driven here as one run per call. install and uninstall take
+// --scope project for the project's settings.local.json and --json for
+// what they did as data.
+describe('the Claude Code install and uninstall', () => {
   let root: string;
   let home: string;
   let project: string;
@@ -99,56 +104,55 @@ describe('adapter claude-code', () => {
     commandLines(dir, (name, path) => `added the ${name} command at ${path}`);
   const userSkill = () =>
     join(home, '.claude', 'skills', 'sealkeeper', 'SKILL.md');
-  const sealkeeperHome = () => join(root, 'sealkeeper-home');
-
-  // The terminal the nudge question reads from. None means no stdin.
-  let stdin: (Input & { reads: number }) | undefined;
 
   // The command install writes, changed by tests that move the script.
   let command = HOOK_COMMAND;
 
-  // Every URL install asked for. The API never answers, so no test reaches
-  // the real one.
-  let fetched: string[] = [];
-  const offline = (async (input: string | URL | Request) => {
-    fetched.push(String(input));
-    throw new TypeError('fetch failed');
-  }) as typeof fetch;
-
+  // One install or uninstall, as init and agent delete run it. A project
+  // folder that links outside the project is refused first, as both do.
   async function run(...args: string[]): Promise<RunResult> {
-    const program = createProgram({
-      adapter: {
-        home: () => home,
-        cwd: () => project,
-        hookCommand: () => command,
-        stdin: stdin ? () => stdin as Input : undefined,
-        paths: () => paths(sealkeeperHome()),
-        fetch: offline,
-      },
-    });
-    throwOnExit(program);
-    let out = '';
+    const [verb] = args;
+    const scope = args.includes('project') ? 'project' : 'user';
+    const json = args.includes('--json');
+    const file = settingsPath(scope, { home, cwd: project });
+    const shared = scope === 'project' ? sharedFile() : null;
     let err = '';
-    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
-      out += String(chunk);
-      return true;
-    });
-    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-      err += String(chunk);
-      return true;
-    });
+    const warn = (message: string) => {
+      err += `${message}\n`;
+    };
     try {
-      await program.parseAsync(['adapter', 'claude-code', ...args], {
-        from: 'user',
-      });
+      if (scope === 'project') {
+        await refuseOutsideProject(project, [
+          ...installedPaths(file),
+          sharedFile(),
+        ]);
+      }
+      if (verb === 'install') {
+        const result = await installClaudeCode(file, command, warn);
+        const out = json
+          ? JSON.stringify({
+              path: file,
+              ...result,
+              commands: result.commands?.map(({ path, result }) => ({
+                path,
+                result,
+              })),
+            })
+          : installLines(result, file)
+              .map((line) => `${line}\n`)
+              .join('');
+        return { code: 0, out, err };
+      }
+      const result = await uninstallClaudeCode(file, shared, command);
+      const out = json
+        ? JSON.stringify(result)
+        : uninstallLines(result, shared)
+            .map((line) => `${line}\n`)
+            .join('');
       return { code: 0, out, err };
     } catch (error) {
-      if (error instanceof CommanderError) {
-        return { code: error.exitCode, out, err };
-      }
-      throw error;
-    } finally {
-      vi.restoreAllMocks();
+      if (!(error instanceof SettingsError)) throw error;
+      return { code: 1, out: '', err: `${error.message}\n` };
     }
   }
 
@@ -158,8 +162,6 @@ describe('adapter claude-code', () => {
 
   beforeEach(async () => {
     command = HOOK_COMMAND;
-    stdin = undefined;
-    fetched = [];
     root = await mkdtemp(join(tmpdir(), 'sealkeeper-adapter-'));
     home = join(root, 'home');
     project = join(root, 'project');
@@ -188,36 +190,22 @@ describe('adapter claude-code', () => {
   });
 
   it('--scope project writes the local settings under the working directory, never the shared file', async () => {
-    const { code, out, err } = await run('install', '--scope', 'project');
+    const { code, out } = await run('install', '--scope', 'project');
     expect(code).toBe(0);
     expect(out).toContain(projectFile());
     expect(
       Object.keys((await readJson(projectFile())).hooks as object),
     ).toEqual(EVENTS);
     await expect(readFile(sharedFile(), 'utf8')).rejects.toThrow();
-    // The command and skill files hold this machine's paths too.
-    expect(err).toBe(`${PROJECT_PATHS_NOTE}\n`);
-    expect(PROJECT_PATHS_NOTE).toContain('keep all three out of git');
   });
 
-  it('--scope project moves hooks an older install wrote to the shared settings.json', async () => {
+  it('--scope project uninstall takes ours out of the shared settings.json an older install wrote', async () => {
     await mkdir(join(project, '.claude'));
     const shared = JSON.parse(OTHER_TEXT) as {
       hooks: Record<string, unknown[]>;
     };
     shared.hooks.Stop = [...(shared.hooks.Stop ?? []), OUR_ENTRY];
-    await writeFile(sharedFile(), `${JSON.stringify(shared, null, 2)}\n`);
-    const { code, out } = await run('install', '--scope', 'project');
-    expect(code).toBe(0);
-    expect(out).toContain(
-      `moved 1 sealkeeper hook out of ${sharedFile()}, which a repo shares\n`,
-    );
-    expect(await readFile(sharedFile(), 'utf8')).toBe(OTHER_TEXT);
-    expect(
-      Object.keys((await readJson(projectFile())).hooks as object),
-    ).toEqual(EVENTS);
-
-    // Uninstall takes ours out of both files.
+    await run('install', '--scope', 'project');
     await writeFile(sharedFile(), `${JSON.stringify(shared, null, 2)}\n`);
     const removed = await run('uninstall', '--scope', 'project', '--json');
     expect(JSON.parse(removed.out)).toMatchObject({
@@ -226,44 +214,8 @@ describe('adapter claude-code', () => {
       removedFromShared: 1,
     });
     expect(await readFile(sharedFile(), 'utf8')).toBe(OTHER_TEXT);
-  });
-
-  it.each([
-    ['is not valid JSON', '{ nope', 'is not valid JSON'],
-    ['has hooks that are not an object', '{"hooks": []}', 'is not an object'],
-  ])(
-    '--scope project warns when the shared settings.json %s and still writes the command and skill',
-    async (_, text, message) => {
-      await mkdir(join(project, '.claude'));
-      await writeFile(sharedFile(), text);
-      const { code, out, err } = await run('install', '--scope', 'project');
-      expect(code).toBe(0);
-      expect(err).toContain(sharedFile());
-      expect(err).toContain(message);
-      expect(
-        Object.keys((await readJson(projectFile())).hooks as object),
-      ).toEqual(EVENTS);
-      const commandFile = commandIn(project, 'run');
-      const skillFile = join(
-        project,
-        '.claude',
-        'skills',
-        'sealkeeper',
-        'SKILL.md',
-      );
-      expect(out).toContain(added(project));
-      expect(out).toContain(`added the sealkeeper skill at ${skillFile}\n`);
-      await readFile(commandFile, 'utf8');
-      await readFile(skillFile, 'utf8');
-      // The shared file is left as it was.
-      expect(await readFile(sharedFile(), 'utf8')).toBe(text);
-    },
-  );
-
-  it('rejects an unknown scope', async () => {
-    const { code, err } = await run('install', '--scope', 'global');
-    expect(code).toBe(1);
-    expect(err).toContain('Allowed choices are user, project');
+    const again = await run('uninstall', '--scope', 'project');
+    expect(again.out).toBe('');
   });
 
   it('install keeps every existing entry and only appends ours', async () => {
@@ -306,9 +258,7 @@ describe('adapter claude-code', () => {
       expect(code).toBe(0);
       expect(JSON.parse(out)).toMatchObject({
         path: file(),
-        added: [],
-        updated: [],
-        removed: TOOL_EVENTS,
+        hooks: { added: [], updated: [], removed: TOOL_EVENTS },
       });
       const after = await readJson(file());
       const hooks = after.hooks as Record<string, unknown[]>;
@@ -396,8 +346,9 @@ describe('adapter claude-code', () => {
     expect(JSON.parse(out)).toEqual({
       path: userFile(),
       removed: EVENTS.length,
-      commands: VERBS.map((v) => ({ path: commandIn(home, v), removed: true })),
-      skill: { path: userSkill(), removed: true },
+      removedFromShared: 0,
+      commands: VERBS.map((v) => commandIn(home, v)),
+      skill: true,
     });
 
     const after = await readJson(userFile());
@@ -424,9 +375,7 @@ describe('adapter claude-code', () => {
   });
 
   it('uninstall with no file or none of ours changes nothing', async () => {
-    expect((await run('uninstall')).out).toBe(
-      `no sealkeeper hooks in ${userFile()}\n`,
-    );
+    expect((await run('uninstall')).out).toBe('');
     await mkdir(join(home, '.claude'));
     await writeFile(userFile(), OTHER_TEXT);
     await run('uninstall');
@@ -445,6 +394,9 @@ describe('adapter claude-code', () => {
   describe('the slash commands', () => {
     it('install writes each next to the settings with frontmatter first', async () => {
       const { out } = await run('install', '--json');
+      expect(commandPaths(userFile())).toEqual(
+        VERBS.map((v) => commandIn(home, v)),
+      );
       expect(JSON.parse(out).commands).toEqual(
         VERBS.map((v) => ({ path: commandIn(home, v), result: 'written' })),
       );
@@ -609,7 +561,7 @@ describe('adapter claude-code', () => {
       );
 
       const removed = await run('uninstall', '--json');
-      expect(JSON.parse(removed.out).commands[0].removed).toBe(false);
+      expect(JSON.parse(removed.out).commands).not.toContain(userCommand());
       expect(await readFile(userCommand(), 'utf8')).toBe(
         'my own run command\n',
       );
@@ -641,9 +593,7 @@ describe('adapter claude-code', () => {
         await expect(stat(commandIn(home, verb))).rejects.toThrow('ENOENT');
       }
       await expect(stat(retired)).rejects.toThrow('ENOENT');
-      expect((await run('uninstall')).out).toBe(
-        `no sealkeeper hooks in ${userFile()}\n`,
-      );
+      expect((await run('uninstall')).out).toBe('');
     });
   });
 
@@ -652,10 +602,8 @@ describe('adapter claude-code', () => {
 
     it('install writes it with the run instructions and the marker', async () => {
       const { out } = await run('install', '--json');
-      expect(JSON.parse(out).skill).toEqual({
-        path: userSkill(),
-        result: 'written',
-      });
+      expect(skillPath(userFile())).toBe(userSkill());
+      expect(JSON.parse(out).skill).toBe('written');
       const text = await readFile(userSkill(), 'utf8');
       expect(text).toBe(SKILL_TEXT());
       expect(isManaged(text)).toBe(true);
@@ -696,8 +644,12 @@ describe('adapter claude-code', () => {
         'the user runs `sealkeeper duel <handle>` in a terminal',
       );
       // Plus outcomes and addressed tasks, never open tasks of strangers.
-      expect(text).toContain('`sealkeeper tasks outcome <id> success`');
-      expect(text).toContain('`sealkeeper tasks claim <id>`');
+      expect(text).toContain('`sealkeeper outcome <id> success`');
+      expect(text).toContain('`sealkeeper claim <id>`');
+      // VOU-603. The commands moved to the top level, and no text names
+      // the tasks group, which is gone.
+      expect(text).not.toContain('sealkeeper tasks ');
+      expect(RUN_COMMAND_TEXT).not.toContain('sealkeeper tasks ');
       expect(text).toContain('Never add `--addressed` or `--any-poster`');
     });
 
@@ -805,10 +757,10 @@ describe('adapter claude-code', () => {
     it('is idempotent, and brings an old copy of ours up to date', async () => {
       await run('install');
       const again = await run('install', '--json');
-      expect(JSON.parse(again.out).skill.result).toBe('unchanged');
+      expect(JSON.parse(again.out).skill).toBe('unchanged');
       await writeFile(userSkill(), `---\n${MANAGED_MARKER}\n---\nold\n`);
       const updated = await run('install', '--json');
-      expect(JSON.parse(updated.out).skill.result).toBe('written');
+      expect(JSON.parse(updated.out).skill).toBe('written');
       expect(await readFile(userSkill(), 'utf8')).toBe(SKILL_TEXT());
     });
 
@@ -822,7 +774,7 @@ describe('adapter claude-code', () => {
         `left ${userSkill()} alone, sealkeeper did not write it`,
       );
       const removed = await run('uninstall', '--json');
-      expect(JSON.parse(removed.out).skill.removed).toBe(false);
+      expect(JSON.parse(removed.out).skill).toBe(false);
       expect(await readFile(userSkill(), 'utf8')).toBe('my own skill\n');
     });
 
@@ -833,91 +785,6 @@ describe('adapter claude-code', () => {
       await expect(
         stat(join(home, '.claude', 'skills', 'sealkeeper')),
       ).rejects.toThrow('ENOENT');
-    });
-  });
-
-  describe('the session nudge question', () => {
-    async function registered(nudge?: boolean): Promise<void> {
-      await writeConfig(
-        {
-          agentId: 'A'.repeat(43),
-          operatorLogin: 'alice',
-          name: 'scout',
-          version: '1.0.0',
-          registeredAt: '2026-09-23T08:00:00Z',
-        },
-        paths(sealkeeperHome()),
-      );
-      await rm(paths(sealkeeperHome()).nudge, { force: true });
-      if (nudge !== undefined) await writeNudge(nudge, paths(sealkeeperHome()));
-    }
-
-    function answering(line: string | null, isTTY = true) {
-      const input = {
-        isTTY,
-        reads: 0,
-        readLine: async () => {
-          input.reads++;
-          return line;
-        },
-      };
-      return input;
-    }
-
-    const nudgeOf = async () => readNudge(paths(sealkeeperHome()));
-
-    it('asks on a terminal and turns it on only after yes', async () => {
-      await registered();
-      stdin = answering('y');
-      const { code, out, err } = await run('install');
-      expect(code).toBe(0);
-      expect(stdin.reads).toBe(1);
-      expect(err).toContain('three line SealKeeper summary');
-      expect(out).toContain('session nudge is on');
-      expect(await nudgeOf()).toBe(true);
-      // It tried to fill the goal cache once, and said nothing when it could
-      // not.
-      expect(fetched).toEqual([
-        `https://api.sealkeeper.run/v1/agents/${'A'.repeat(43)}/goal`,
-      ]);
-      expect(err).not.toContain('goal');
-    });
-
-    it('Enter is no, kept so it is not asked again', async () => {
-      await registered();
-      stdin = answering('');
-      const { out } = await run('install');
-      expect(out).toContain('session nudge is off');
-      expect(await nudgeOf()).toBe(false);
-      await run('install');
-      expect(stdin.reads).toBe(1);
-    });
-
-    it('asks again on an unclear answer, then counts it as no', async () => {
-      await registered();
-      stdin = answering('maybe');
-      await run('install');
-      expect(stdin.reads).toBe(3);
-      expect(await nudgeOf()).toBe(false);
-    });
-
-    it('never asks without a terminal, with --json, once answered or before init', async () => {
-      await registered();
-      stdin = answering('y', false);
-      await run('install');
-      stdin = answering('y');
-      await run('install', '--json');
-      expect(stdin.reads).toBe(0);
-      expect(await nudgeOf()).toBeUndefined();
-
-      await registered(false);
-      await run('install');
-      expect(stdin.reads).toBe(0);
-      expect(await nudgeOf()).toBe(false);
-
-      await rm(sealkeeperHome(), { recursive: true, force: true });
-      await run('install');
-      expect(stdin.reads).toBe(0);
     });
   });
 

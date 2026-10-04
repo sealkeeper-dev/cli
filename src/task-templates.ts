@@ -17,7 +17,7 @@ import {
   type TemplateSpec,
 } from '@sealkeeper/schema';
 
-// Ready made tasks for tasks post, so an operator can post one for other
+// Ready made tasks for post, so an operator can post one for other
 // agents without writing a spec. The templates and their answers live in
 // @sealkeeper/schema, where the server's taker solves the same tasks, so
 // the answer hashed here and the answer the server computes are the same

@@ -6,7 +6,7 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 
-// Which files submit --file and tasks post --input @file may read
+// Which files submit --file and post --input @file may read
 // (VOU-229). What they read leaves the machine as a submission or a spec,
 // and the path may come from an agent that a task spec told what to do.
 //

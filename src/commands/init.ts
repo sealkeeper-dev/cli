@@ -3,6 +3,8 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import {
   AgentName,
+  GAME_CAP_MAX,
+  GameCap,
   isRuntimeName,
   LEVEL_THRESHOLDS,
   type Level,
@@ -35,16 +37,19 @@ import {
   readYesNo,
   streamInput,
 } from '../ask.js';
+import { writeCard } from '../card.js';
+import { commandPaths, refreshCommands } from '../claude-code-command.js';
 import {
-  commandPaths,
-  installCommands,
-  refreshCommands,
-} from '../claude-code-command.js';
+  askNudge,
+  type ClaudeCodeInstall,
+  INSTALL_COMMAND,
+  installClaudeCode,
+  installLines,
+} from '../claude-code-install.js';
 import {
   claudeConfigDir,
   hasHooks,
   hookCommand,
-  installHooks,
   invocationOf,
   isNpxCopy,
   refuseOutsideProject,
@@ -80,6 +85,7 @@ import {
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { exists, isDirectory, tildePath } from '../files.js';
+import { changeGame, readGameStatus } from '../game.js';
 import { repoName } from '../git-remote.js';
 import {
   DeviceFlowError,
@@ -119,6 +125,7 @@ import {
   wantsJson,
 } from '../output.js';
 import { gameOnHint, refusal } from '../refusal.js';
+import type { GameStatusResponse } from '../responses.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
 import {
@@ -128,6 +135,7 @@ import {
   type Style,
   type Styled,
 } from '../style.js';
+import type { TaskSession } from '../tasks.js';
 import { describeTaxonomy } from '../taxonomy.js';
 import { VERSION } from '../version.js';
 import {
@@ -136,31 +144,15 @@ import {
   type VersionChange,
 } from '../version-change.js';
 import {
-  askNudge,
-  commandLine,
-  hooksLines,
-  INSTALL_COMMAND,
-  skillLine,
-} from './adapter.js';
-import { readGameStatus } from './game.js';
-import {
   askYes,
-  BLOCK_LABEL,
   BLOCK_TITLE,
-  blockHeadTail,
-  checkLaterLine,
   defaultRoutineDeps,
-  FIRST_RUN_QUESTION,
-  finishInstall,
-  firstRun,
-  INSTALL_QUESTION,
-  installedLine,
-  laterLine,
-  type PreparedInstall,
+  guidedSetup,
+  MAX_ASKS,
+  NOTHING_INSTALLED,
   prepareInstall,
   type RoutineDeps,
   refreshCopy,
-  routineRows,
 } from './routine.js';
 
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
@@ -184,8 +176,9 @@ export function otherApiLine(apiUrl: string): string {
 }
 
 // The human output. The welcome box, then the name, the runtime and the
-// game, the terms and the sign in, the registration, what leaves this
-// machine, the Claude Code hooks and what to do next.
+// game, the terms and the sign in, the registration and the card, what
+// leaves this machine, the Claude Code hooks, the skill and the slash
+// commands, the routine and what to do next.
 export const TAGLINE = [
   'Prove your agent. A signed, portable track record',
   'anyone can check offline.',
@@ -220,7 +213,6 @@ export const INPUT_CLOSED = `init stopped, stdin closed before an answer. There 
 // one block the routine setup shows too, with yes as the default (RS-1). The
 // limits are on the screen before the question.
 export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine')} to set it up later.`;
-export const ROUTINE_TIME_LINE = `Change the time with ${cli('routine set --time HH:MM')}.`;
 export const routinePresentLine = (time: string): string =>
   `Daily routine at ${time}`;
 // Said on a repeat init when the job was installed by a CLI from before
@@ -237,11 +229,19 @@ export const versionQuestion = (server: string, local: string): string =>
 // The game layer, duels and weekly challenges (D-GAME-2). Asked in a
 // terminal after the runtime, before the sign in, with yes as the default.
 // Without a terminal, or when Claude Code runs init, nobody is asked and
-// the default goes. The answer goes with the registration, and the line
-// after it says what SealKeeper has and how to change it.
+// the default goes. The answer goes with the registration. A yes asks
+// the daily cap of game units next, the most by default, which goes once
+// the agent is registered. The line after the registration says what
+// SealKeeper has and how to change it.
 export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
-export const gameLine = (on: boolean): string =>
-  on ? `on, turn it off with ${cli('game off')}` : `off, ${gameOnHint()}`;
+export const gameCapQuestion = (again: string): string =>
+  `${again}Game units a UTC day, 0 to ${GAME_CAP_MAX}? [${GAME_CAP_MAX}] `;
+export const GAME_CAP_AGAIN = `Please answer a whole number from 0 to ${GAME_CAP_MAX}. `;
+export function gameLine(game: { enabled: boolean; cap: number | null }) {
+  if (!game.enabled) return `off, ${gameOnHint()}`;
+  if (game.cap === null) return 'on';
+  return `on, ${game.cap} game units a UTC day, change it with ${cli('routine set --game-cap <n>')}`;
+}
 // The next steps a --json run lists in nextSteps.
 export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
@@ -249,16 +249,16 @@ export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code ses
 // Every level needs tasks the agent posted that other operators' agents
 // completed (POST-3), which exist only when it posts them. Said once there
 // are verified tasks, and as what comes after them before that.
-export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('tasks post')}`;
-export const POST_STEP = `Post a task for other agents with ${cli('tasks post')}, every level needs posted tasks other agents completed`;
+export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('post')}`;
+export const POST_STEP = `Post a task for other agents with ${cli('post')}, every level needs posted tasks other agents completed`;
 export const NEXT_NPX =
-  'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper adapter claude-code install.';
+  'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper init.';
 
 // fetch and sleep are injectable so tests can drive GitHub and the API
 // without a network or real waits. stdin answers the hooks question, which is
 // never asked without it. claudeDir is the Claude Code config dir and
-// hookCommand the command the hooks run, both defaulting to what sealkeeper
-// adapter claude-code install uses. isNpx says whether this CLI runs from
+// hookCommand the command the hooks run, both defaulting to this machine's
+// Claude Code and this CLI. isNpx says whether this CLI runs from
 // the npx cache.
 export type InitDeps = {
   fetch: typeof fetch;
@@ -384,7 +384,9 @@ export function register(
 ): Command {
   return parent
     .command('init')
-    .description('Create a keypair, register via GitHub, write config')
+    .description(
+      'Set up this agent, its key, the GitHub sign in, the hooks, the skill and slash commands, the game and the routine',
+    )
     .option(
       '--name <name>',
       'agent name (default: the git repository name, then the directory name)',
@@ -713,9 +715,11 @@ async function init(
     askedRuntime = true;
   }
   let gameEnabled = true;
+  let gameCap: number | undefined;
   if (terminal !== undefined && ui !== null) {
     note();
     gameEnabled = await askYes(terminal, question(ui, GAME_QUESTION));
+    if (gameEnabled) gameCap = await askGameCap(terminal, ui);
   }
 
   // The terms, right before the device code. On stderr with the device flow
@@ -809,6 +813,9 @@ async function init(
   const registeredRuntime =
     live?.runtime ??
     (runtime === undefined || runtime === 'unknown' ? 'unknown' : runtime);
+  // The A2A card, with the SEAL once there is one, which the routine keeps
+  // fresh (VOU-603).
+  const card = await writeCard(config, { fetch: deps.fetch }, p);
   if (ui === null) {
     const hooks = await offerHooks(deps, null);
     stdout(
@@ -821,6 +828,7 @@ async function init(
         runtime: registeredRuntime,
         apiUrl: api.apiUrl,
         profileUrl,
+        ...(card === null ? {} : { card }),
         ...(folder === null ? {} : { folder, home: p.home }),
         nextSteps: nextSteps(
           hooks,
@@ -846,8 +854,9 @@ async function init(
   if (registeredRuntime !== 'unknown') {
     say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
   }
-  const game = await registeredGame(api.apiUrl, deps, p, gameEnabled);
+  const game = await registeredGame(api.apiUrl, deps, p, gameEnabled, gameCap);
   say(s.line`  ${s.dim('Game')}  ${gameLine(game)}`);
+  if (card !== null) say(s.line`  ${s.dim('Card')}  ${tildePath(card)}`);
   await printOperator(s, config, live, deps);
   if (folder !== null && target.folder !== null) {
     say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
@@ -864,28 +873,56 @@ async function init(
   );
 }
 
-// Whether SealKeeper has the game on for the agent just registered, read
-// with the signed status read. A key registered before keeps its switch,
-// as it keeps its runtime, so the answer sent may not be what the API has.
-// The answer sent when the read fails, with the short timeout of the agent
-// read, so a slow API never holds init up.
+// The game SealKeeper has for the agent just registered, read with the
+// signed status read, and the cap asked for sent when it differs. A key
+// registered before keeps its switch, as it keeps its runtime, so the
+// answer sent may not be what the API has. The answer sent, with no cap,
+// when the read fails, and the cap read when only the change fails, each
+// with the short timeout of the agent read, so a slow API never holds init
+// up.
 async function registeredGame(
   apiUrl: string,
   deps: InitDeps,
   p: Paths,
   sent: boolean,
-): Promise<boolean> {
+  cap: number | undefined,
+): Promise<{ enabled: boolean; cap: number | null }> {
+  let session: Pick<TaskSession, 'signer' | 'api'>;
+  let status: GameStatusResponse;
   try {
     const api = createApiClient({
       apiUrl,
       fetch: deps.fetch,
       timeoutMs: SCORE_TIMEOUT_MS,
     });
-    const signer = await loadSigner(api.apiUrl, p);
-    return (await readGameStatus({ signer, api })).enabled;
+    session = { api, signer: await loadSigner(api.apiUrl, p) };
+    status = await readGameStatus(session);
   } catch {
-    return sent;
+    return { enabled: sent, cap: null };
   }
+  if (status.enabled && cap !== undefined && cap !== status.cap) {
+    status = await changeGame(session, { cap }).catch(() => status);
+  }
+  return { enabled: status.enabled, cap: status.cap };
+}
+
+// The daily cap of game units, asked after a yes to the game. Enter or a
+// closed input keeps the most, and an answer that is not a whole number in
+// range asks again, up to MAX_ASKS questions, then keeps the most.
+async function askGameCap(input: Input, ui: Ui): Promise<number> {
+  const e = ui.err;
+  for (let asked = 0; asked < MAX_ASKS; asked++) {
+    promptStyled(
+      indent(e.line`${gameCapQuestion(asked === 0 ? '' : GAME_CAP_AGAIN)}`),
+    );
+    const line = await input.readLine();
+    if (line === null) return GAME_CAP_MAX;
+    const answer = cleanAnswer(line).trim();
+    if (answer === '') return GAME_CAP_MAX;
+    const cap = GameCap.safeParse(/^\d+$/.test(answer) ? Number(answer) : NaN);
+    if (cap.success) return cap.data;
+  }
+  return GAME_CAP_MAX;
 }
 
 // Who the agent is, as a repeat init prints it with --json.
@@ -1131,10 +1168,11 @@ async function offerNudge(
   say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
 }
 
-// Offers the daily routine when Claude Code is set up here, claude is on
-// PATH and a person can answer (RS-1). One block and one question, yes by
-// default, then the first run, yes by default (RS-3). One with a job
-// installed already is named, its copy of the CLI refreshed when its
+// Offers the daily routine when Claude Code is set up here and a person
+// can answer, through the same guided setup as sealkeeper routine (RS-1),
+// so the agent, the time, tasks only or the game, the block with the
+// limits, the install and one run now are asked the same way. One with a
+// job installed already is named, its copy of the CLI refreshed when its
 // version is not this one (RS-2), and nothing is asked. No is not stored,
 // so a repeat init asks again the way it asks about the hooks. A machine
 // where the routine cannot be installed, no claude on PATH or a scheduler
@@ -1168,47 +1206,28 @@ async function offerRoutine(
     }
     return;
   }
-  let prepared: PreparedInstall | string;
   try {
-    prepared = await prepareInstall(routineDeps, current.time, current);
+    if (
+      typeof (await prepareInstall(routineDeps, current.time, current)) ===
+      'string'
+    ) {
+      return;
+    }
   } catch (error) {
     if (!(error instanceof SchedulerError)) throw error;
     return;
   }
-  if (typeof prepared === 'string') return;
   note();
-  note(e.line`${e.bold(BLOCK_TITLE)}   ${blockHeadTail(current.time)}`);
-  note();
-  for (const [label, text] of routineRows(current.limits)) {
-    const pad = ' '.repeat(BLOCK_LABEL - label.length);
-    note(e.line`  ${e.dim(label)}${pad}${text}`);
-  }
-  note();
-  note(e.line`${e.dim(checkLaterLine())}`);
-  if (!(await askYes(input, question(ui, INSTALL_QUESTION)))) {
-    say(o.line`${ROUTINE_NOT_INSTALLED}`);
-    return;
-  }
-  try {
-    await finishInstall(prepared, current.time);
-  } catch (error) {
-    if (!(error instanceof SchedulerError)) throw error;
-    note(e.line`${error.message}`);
-    say(o.line`${ROUTINE_NOT_INSTALLED}`);
-    return;
-  }
-  say(o.line`${o.tick()} ${installedLine(current.time)}`);
-  say(o.line`${o.dim(ROUTINE_TIME_LINE)}`);
-  if (!(await askYes(input, question(ui, FIRST_RUN_QUESTION)))) {
-    say(o.line`${laterLine(current.time)}`);
-    return;
-  }
-  if ((await readConfig(p)) === null) return;
-  await firstRun(routineDeps, await readRoutineConfig(p), p, {
+  note(e.bold(BLOCK_TITLE));
+  const failed = await guidedSetup(routineDeps, current, input, {
     line: (text) => say(o.line`${text}`),
     dim: (text) => say(o.line`${o.dim(text)}`),
     indent: INDENT,
+    ask: (text) => promptStyled(indent(e.line`${text}`)),
   });
+  if (failed === null) return;
+  if (failed !== NOTHING_INSTALLED) note(e.line`${failed}`);
+  say(o.line`${ROUTINE_NOT_INSTALLED}`);
 }
 
 // A yes by default question as init asks it, indented, with the default
@@ -1404,9 +1423,8 @@ async function offerVersionMove(
 type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up
-// here and a person can answer. Yes, or just Enter, runs the same install as
-// sealkeeper adapter claude-code install, the slash commands and the skill
-// included.
+// here and a person can answer. Yes, or just Enter, runs installClaudeCode,
+// the hooks, the slash commands and the skill.
 // Hooks already there, in the user or the project settings, count as
 // installed and nothing is asked. Current hooks in the shared project
 // settings.json move to settings.local.json on the way. A --json run, ui
@@ -1544,7 +1562,7 @@ async function moveFromShared(
 }
 
 // Takes the tool call hooks an older CLI installed out of a settings file
-// that holds the current hooks, as adapter claude-code install does. A
+// that holds the current hooks, as installHooks does. A
 // project file outside the project, or one that cannot be changed, is left
 // as it is with a warning.
 async function dropRetired(
@@ -1622,11 +1640,10 @@ async function refreshCommand(
   }
 }
 
-// The same install as sealkeeper adapter claude-code install into one
-// settings file, the hooks, the slash commands and the skill. false
-// when the settings file could not be changed. A --json run, ui null,
-// prints the lines adapter claude-code install prints, on stderr, so the
-// --json output stays one object.
+// The install of the hooks, the slash commands and the skill into one
+// settings file, see installClaudeCode. false when the settings file could
+// not be changed. A --json run, ui null, prints what it did on stderr, so
+// the --json output stays one object.
 async function installAt(
   file: string,
   hook: string,
@@ -1634,14 +1651,9 @@ async function installAt(
 ): Promise<boolean> {
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
+  let result: ClaudeCodeInstall;
   try {
-    const result = await installHooks(file, hook);
-    if (ui === null) {
-      for (const text of hooksLines(result, file)) stderr(text);
-    } else {
-      const s = ui.out;
-      say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
-    }
+    result = await installClaudeCode(file, hook, warn);
   } catch (error) {
     // Registration already worked, so a settings file we will not touch
     // only means the hooks wait for a later install.
@@ -1651,46 +1663,28 @@ async function installAt(
     }
     throw error;
   }
-  try {
-    const commands = await installCommands(file, invocationOf(hook));
-    if (ui === null) {
-      for (const c of commands) stderr(commandLine(c.result, c.path));
-    } else {
-      const s = ui.out;
-      for (const c of commands) {
-        if (c.result !== 'kept') continue;
-        say(
-          s.line`Left ${tildePath(c.path)} alone, SealKeeper did not write it`,
-        );
-      }
-      const ours = commands.find((c) => c.result !== 'kept');
-      if (ours !== undefined) {
-        say(
-          s.line`${s.tick()} Slash commands in ${tildePath(dirname(ours.path))}`,
-        );
-      }
-    }
-  } catch (error) {
-    // The hooks are in, so this is only a warning.
-    if (!(error instanceof SettingsError)) throw error;
-    warn(error.message);
+  if (ui === null) {
+    for (const text of installLines(result, file)) stderr(text);
+    return true;
   }
-  const skillFile = skillPath(file);
-  try {
-    const skill = await installSkill(skillFile, invocationOf(hook));
-    if (ui === null) {
-      stderr(skillLine(skill, skillFile));
-    } else {
-      const s = ui.out;
-      say(
-        skill === 'kept'
-          ? s.line`Left ${tildePath(skillFile)} alone, SealKeeper did not write it`
-          : s.line`${s.tick()} sealkeeper skill in ${tildePath(dirname(skillFile))}`,
-      );
-    }
-  } catch (error) {
-    if (!(error instanceof SettingsError)) throw error;
-    warn(error.message);
+  const s = ui.out;
+  say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
+  const commands = result.commands ?? [];
+  for (const c of commands) {
+    if (c.result !== 'kept') continue;
+    say(s.line`Left ${tildePath(c.path)} alone, SealKeeper did not write it`);
+  }
+  const ours = commands.find((c) => c.result !== 'kept');
+  if (ours !== undefined) {
+    say(s.line`${s.tick()} Slash commands in ${tildePath(dirname(ours.path))}`);
+  }
+  if (result.skill !== null) {
+    const skillFile = skillPath(file);
+    say(
+      result.skill === 'kept'
+        ? s.line`Left ${tildePath(skillFile)} alone, SealKeeper did not write it`
+        : s.line`${s.tick()} sealkeeper skill in ${tildePath(dirname(skillFile))}`,
+    );
   }
   return true;
 }

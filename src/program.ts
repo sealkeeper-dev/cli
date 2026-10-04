@@ -1,28 +1,23 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { Command, Help } from 'commander';
-import type { CardDeps } from './card.js';
-import {
-  type AdapterDeps,
-  register as registerAdapter,
-} from './commands/adapter.js';
+import { Command } from 'commander';
 import { type AgentDeps, register as registerAgent } from './commands/agent.js';
-import { register as registerCard } from './commands/card.js';
 import { register as registerChallenge } from './commands/challenge.js';
 import { register as registerCheck } from './commands/check.js';
+import { register as registerClaim } from './commands/claim.js';
 import {
   type ConfigDeps,
   register as registerConfig,
 } from './commands/config.js';
 import { register as registerDuel } from './commands/duel.js';
 import { register as registerEmit } from './commands/emit.js';
-import { register as registerGame } from './commands/game.js';
 import {
   type HookCommandDeps,
   register as registerHook,
 } from './commands/hook.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
-import { register as registerModel } from './commands/model.js';
+import { register as registerOutcome } from './commands/outcome.js';
+import { register as registerPost } from './commands/post.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
 import { register as registerRelease } from './commands/release.js';
 import {
@@ -37,33 +32,14 @@ import {
 } from './commands/status.js';
 import { register as registerSubmit } from './commands/submit.js';
 import { register as registerSync, type SyncDeps } from './commands/sync.js';
-import { register as registerTasks } from './commands/tasks.js';
 import { register as registerWhatIsShared } from './commands/what-is-shared.js';
 import { JSON_FLAG, JSON_HELP, terminalSafe } from './output.js';
 import { VERSION } from './version.js';
 
-// Root help lists leaf commands with their full path ("card show", not "card",
-// and "adapter claude-code install") so `sealkeeper --help` is the whole map
-// of the CLI.
-function visibleCommands(this: Help, cmd: Command): Command[] {
-  const direct = Help.prototype.visibleCommands.call(this, cmd);
-  if (cmd.parent) return direct;
-  const leaves = (sub: Command): Command[] =>
-    sub.commands.length === 0
-      ? [sub]
-      : Help.prototype.visibleCommands
-          .call(this, sub)
-          .filter((leaf) => leaf.name() !== 'help')
-          .flatMap(leaves);
-  return direct.flatMap(leaves);
-}
-
-function subcommandTerm(this: Help, cmd: Command): string {
-  const term = Help.prototype.subcommandTerm.call(this, cmd);
-  const groups: string[] = [];
-  for (let c = cmd.parent; c?.parent; c = c.parent) groups.unshift(c.name());
-  return [...groups, term].join(' ');
-}
+// The two groups of sealkeeper --help. The six core commands first, then
+// the rest under More. Hidden commands are in neither.
+export const CORE_GROUP = 'Core:';
+export const MORE_GROUP = 'More:';
 
 // Adds --json to every leaf command. Root options are positional (see
 // createProgram), so without this `sealkeeper status --json` would be rejected.
@@ -78,8 +54,6 @@ function addJsonFlag(cmd: Command): void {
 type ProgramDeps = {
   init?: InitDeps;
   sync?: SyncDeps;
-  card?: CardDeps;
-  adapter?: AdapterDeps;
   hook?: HookCommandDeps;
   // run, submit, release, the task and game commands, and status, which
   // also reads env for the one time runtime question.
@@ -103,35 +77,40 @@ export function createProgram(deps: ProgramDeps = {}): Command {
     .version(VERSION)
     .option(JSON_FLAG, JSON_HELP)
     .enablePositionalOptions()
-    .configureHelp({ visibleCommands, subcommandTerm })
     // Errors carry API messages, so they get the same escaping as stdout.
     .configureOutput({
       writeErr: (text) => process.stderr.write(terminalSafe(text)),
     });
 
+  // The core commands, in the order a new agent meets them.
+  program.commandsGroup(CORE_GROUP);
   registerInit(program, deps.init, deps.routine);
-  registerEmit(program, deps.sync);
-  registerSync(program, deps.sync);
-  registerCard(program, deps.card);
-  registerSeal(program, deps.seal);
-  registerStatus(program, deps.tasks, deps.routine);
   registerRun(program, deps.tasks);
+  registerChallenge(program, deps.tasks);
+  registerDuel(program, deps.tasks);
+  registerStatus(program, deps.tasks, deps.routine);
+  registerRoutine(program, deps.routine);
+
+  program.commandsGroup(MORE_GROUP);
   registerSubmit(program, deps.tasks);
   registerRelease(program, deps.tasks);
-  registerTasks(program, deps.tasks);
-  registerGame(program, deps.tasks);
-  registerDuel(program, deps.tasks);
-  registerChallenge(program, deps.tasks);
-  registerRoutine(program, deps.routine);
-  registerRate(program, deps.rate);
+  registerClaim(program, deps.tasks);
+  registerPost(program, deps.tasks);
+  registerOutcome(program, deps.tasks);
+  registerSeal(program, deps.seal);
+  registerCheck(program);
   registerAgent(program, deps.agent, deps.routine);
   registerConfig(program, deps.config);
-  registerModel(program);
   registerLogout(program, deps.routine);
-  registerAdapter(program, deps.adapter);
-  registerHook(program, deps.hook);
   registerWhatIsShared(program);
-  registerCheck(program);
+  program.helpCommand(true);
+
+  // Hidden. Adapters and the hooks call emit, sync and hook, and rate waits
+  // until ratings open. Each one still runs when called by name.
+  registerEmit(program, deps.sync);
+  registerSync(program, deps.sync);
+  registerHook(program, deps.hook);
+  registerRate(program, deps.rate);
 
   for (const sub of program.commands) addJsonFlag(sub);
   return program;

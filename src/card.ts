@@ -30,33 +30,24 @@ import {
 } from './credential.js';
 import { readIfExists } from './files.js';
 import { makeHandshakeQuietly } from './handshake.js';
-import { stderr } from './output.js';
 import { sha256Hex } from './tasks.js';
 
-// card show and card write build the same card, and the seal commands read
-// the same SEAL. fetch is injectable so tests can stand in for the API.
+// init and the routine build the same card, and the seal commands read the
+// SEAL the card carries. fetch is injectable so tests can stand in for the
+// API.
 export type CardDeps = {
   fetch: typeof fetch;
 };
 
-export const defaultCardDeps: CardDeps = {
-  fetch: (...args) => fetch(...args),
-};
-
-// Short, so a scheduled card write never hangs on a slow network.
+// Short, so neither init nor a scheduled run hangs on a slow network.
 const CARD_TIMEOUT_MS = 10_000;
 
-export const NO_CREDENTIAL =
-  "warning: could not get the agent's SEAL, the card carries no SEAL extension";
-
-const CardUrl = AgentCard.shape.url.unwrap();
-
 // The card is public, so the file is world readable for whatever serves it.
-export const CARD_FILE_MODE = 0o644;
+const CARD_FILE_MODE = 0o644;
 
-// The card as card write and the routine write it, one JSON object and a
+// The card as init and the routine write it, one JSON object and a
 // newline.
-export const cardText = (card: AgentCard): string =>
+const cardText = (card: AgentCard): string =>
   `${JSON.stringify(card, null, 2)}\n`;
 
 // handshake is the agent's signed handshake (VB-6), carried beside the SEAL
@@ -85,26 +76,48 @@ function buildCard(
   });
 }
 
-// Everything card show and card write share. Ends the command with the init
-// hint when there is no config, and with the reason when the API sent
-// something unusable.
-export async function loadCard(
-  cmd: Command,
+// init writes the card into the home (VOU-603), once for each agent, and
+// records it so the daily routine keeps its SEAL fresh. A card recorded
+// already is the routine's to refresh, so a repeat init leaves it alone.
+// The card carries no SEAL when the API cannot be reached or issues none
+// yet, and the routine adds it once there is one. Never throws, the card is
+// a side task of init. The path written, or null when nothing was written.
+export async function writeCard(
+  config: Config,
   deps: CardDeps,
-  url: string | undefined,
-  fresh = false,
-): Promise<AgentCard> {
-  if (url !== undefined && !CardUrl.safeParse(url).success) {
-    cmd.error(`--url must be an https URL, got ${url}`);
+  p: Paths = paths(),
+): Promise<string | null> {
+  try {
+    if ((await readCardRecord(config.agentId, p)) !== null) return null;
+    const api = createApiClient({
+      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      fetch: deps.fetch,
+      timeoutMs: CARD_TIMEOUT_MS,
+    });
+    const credential = await getCredential({
+      api,
+      agentId: config.agentId,
+      fetch: deps.fetch,
+      paths: p,
+    }).catch(() => null);
+    const handshake =
+      credential === null ? null : await makeHandshakeQuietly(Date.now(), p);
+    const text = cardText(buildCard(config, credential, handshake));
+    await ensureHome(p);
+    await writeFileAtomic(p.card, text, CARD_FILE_MODE);
+    await recordCard(
+      {
+        agentId: config.agentId,
+        path: p.card,
+        sha256: sha256Hex(text),
+        writtenAt: new Date().toISOString(),
+      },
+      p,
+    );
+    return p.card;
+  } catch {
+    return null;
   }
-  const { config, credential } = await loadSeal(cmd, deps, fresh);
-  if (credential === null) stderr(NO_CREDENTIAL);
-  // A fresh handshake each time the card is built, over the fingerprint
-  // sync or run last wrote, so it is refreshed whenever card write runs.
-  // None when there is no fingerprint yet. Only beside a SEAL.
-  const handshake =
-    credential === null ? null : await makeHandshakeQuietly(Date.now());
-  return buildCard(config, credential, handshake, url);
 }
 
 // The agent's config and current SEAL, from the cache or the API, the same
@@ -141,13 +154,13 @@ export async function loadSeal(
   return { config, credential };
 }
 
-// Where card write last wrote the card, in card-write.json (VOU-383), so
-// the daily routine refreshes that file with the same --url and writes no
-// card anywhere else. It names the agent, so after init --force the new
-// agent never writes over the card of the one before. sha256 is of the
-// bytes last written there, so the routine rewrites the file only while it
-// still holds that card, and never a card another agent's card write or the
-// operator put there since. Read loosely.
+// Where init wrote the card, in card-write.json (VOU-383), so the daily
+// routine refreshes that file and writes no card anywhere else. It names
+// the agent, so after init --force the new agent writes a card of its own.
+// sha256 is of the bytes last written there, so the routine rewrites the
+// file only while it still holds that card, and never a card the operator
+// put there since. url is kept for a record an earlier CLI wrote with one.
+// Read loosely.
 const CardRecord = z.looseObject({
   v: z.literal(1),
   agentId: z.string().min(1),
@@ -179,7 +192,7 @@ export async function readCardRecord(
 // Records where the card was written. Never throws, a card on disk counts
 // for more than the record of it, and the worst case is a routine that does
 // not refresh it.
-export async function recordCard(
+async function recordCard(
   record: Omit<CardRecord, 'v'>,
   p: Paths = paths(),
 ): Promise<void> {
@@ -235,8 +248,8 @@ function sealOnCard(text: string): string | null {
   }
 }
 
-// The daily routine's refresh of the card card write last wrote (VOU-383).
-// null when card write never wrote one for this agent, and then nothing is
+// The daily routine's refresh of the card init wrote (VOU-383).
+// null when init never wrote one for this agent, and then nothing is
 // written. A file whose bytes are not the ones last written there is left
 // alone. Never throws, a card is a side task of the run.
 //
@@ -244,18 +257,17 @@ function sealOnCard(text: string): string | null {
 // on a card expires before the next run, and no margin short of a whole
 // day would keep a daily card fresh. So the routine looks at the card on
 // every run and rewrites it whenever the SEAL the CLI holds now, from the
-// cache or the API as card write gets it, is not the one on the card. The
+// cache or the API as init gets it, is not the one on the card. The
 // cache is reused while it has more than two hours left, and the API
 // serves its stored SEAL until two hours before it expires. So after a run
 // the card carries a SEAL with more than two hours left, and one the API
 // issued for the run's own read lasts until about the next run. One the
 // API issued for another read, earlier in the day, may leave the card with
 // an expired SEAL for up to 22 hours before the next run. A card that must
-// never carry an expired SEAL needs card write every hour or so.
+// never carry an expired SEAL needs a refresh every hour or so.
 //
-// A withheld SEAL leaves the card as it was, as card write does, which then
-// writes nothing and exits 1. So does an API that cannot be reached with no
-// usable SEAL cached, where card write would write a card without a SEAL.
+// A withheld SEAL leaves the card as it was. So does an API that cannot be
+// reached with no usable SEAL cached.
 export async function refreshCard(
   config: Config,
   deps: CardDeps,

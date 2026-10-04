@@ -12,7 +12,7 @@ import {
   type TaskSession,
   type TasksDeps,
 } from '../tasks.js';
-import { NOT_FOUND } from './tasks-claim.js';
+import { NOT_FOUND } from './claim.js';
 
 // sealkeeper release <id>. Gives a claim this agent cannot finish
 // back (VOU-572). An open task goes back to the pool, an addressed one
@@ -35,7 +35,7 @@ export function register(
     )
     .argument('<id>', 'the task id')
     .action(async function (this: Command, id: string): Promise<void> {
-      // A full task id, as tasks claim and submit check it.
+      // A full task id, as claim and submit check it.
       const taskId = id.trim().toLowerCase();
       if (!z.uuid().safeParse(taskId).success) {
         this.error(`task id must be a UUID, got ${id}`);

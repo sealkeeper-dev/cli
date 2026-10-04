@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { EVENT_MAX_AGE_DAYS, type Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Paths, paths } from './config.js';
+import { observeParts } from './fingerprint.js';
 import { resetInvocation } from './invocation.js';
 import { appendEvent } from './log.js';
-import { writeModelSet } from './model-name.js';
 import {
   besideText,
   PREVIEW_SAMPLE,
@@ -190,7 +190,12 @@ describe('sync preview', () => {
 
   it('names the model name that goes beside the events, as text', async () => {
     await append(sessionEnd(NOW));
-    await writeModelSet('gpt-4.1', p);
+    await observeParts(
+      'mastra',
+      { model_name: 'gpt-4.1' },
+      p,
+      NOW.getTime() / 1000,
+    );
     const preview = await readPreview(p, { now: NOW });
     expect(preview.model).toBe('gpt-4.1');
     const line =

@@ -151,10 +151,10 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     challenge: Count.optional(),
     tokens: Count.nullable(),
     costUsd: z.number().nullable(),
-    // What the run did with the agent card card write last wrote, a value
-    // of CardRefresh in card.ts, a string so a value a newer CLI writes
-    // still reads (VOU-383). Absent when card write wrote none, and on
-    // lines written before it.
+    // What the run did with the agent card init wrote, a value of
+    // CardRefresh in card.ts, a string so a value a newer CLI writes still
+    // reads (VOU-383). Absent when init wrote none, and on lines written
+    // before it.
     card: z.string().optional(),
   }),
   // One step the API answered. action is the API's, taskId the task the

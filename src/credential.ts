@@ -16,7 +16,7 @@ import { cacheKeys, keysOrigin, loadKeys } from './seal.js';
 
 // The agent's current SEAL, Signed Evidence of Agent Legitimacy. In code it
 // keeps its first name, the credential. It is cached in
-// ~/.sealkeeper/credential.json so card write and seal write can run on a
+// ~/.sealkeeper/credential.json so the card and seal write can run on a
 // schedule without a round trip each time. The cache holds only what the API
 // already made public.
 
@@ -46,7 +46,7 @@ type GetCredentialOptions = {
   api: ApiClient;
   agentId: string;
   // Fetch even when the cached SEAL is fresh, falling back to it only when
-  // the API cannot be reached. seal show and card show pass it, so a
+  // the API cannot be reached. seal show passes it, so a
   // withheld SEAL prints the hold rather than the cached SEAL.
   force?: boolean;
   // For the keys a cached SEAL is checked against, the same fetch as api.
@@ -103,7 +103,7 @@ export async function getCredential(
   const nowSec = Math.floor(nowMs / 1000);
   const read = await readCache(p, options.agentId);
   // A cached SEAL whose key has left the published keys is never reused,
-  // so card write, seal write and the routine stop embedding it.
+  // so the card, seal write and the routine stop embedding it.
   const cached =
     read !== null && (await keyStillListed(options, read, p, nowMs))
       ? read

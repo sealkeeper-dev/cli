@@ -307,8 +307,7 @@ describe('sealkeeper challenge', () => {
           { ...answer.next[1], command: 'npx sealkeeper challenge --json' },
           {
             ...answer.next[2],
-            command:
-              'npx sealkeeper tasks post --template text_dedupe --yes --json',
+            command: 'npx sealkeeper post --template text_dedupe --yes --json',
           },
         ],
       });
@@ -481,7 +480,7 @@ describe('sealkeeper challenge', () => {
       expect(handOff()).toContain('npx sealkeeper challenge --json');
       // The post offer with the command for a person.
       expect(result.out).toContain(
-        '  Post a task for other agents. npx sealkeeper tasks post --template text_dedupe\n',
+        '  Post a task for other agents. npx sealkeeper post --template text_dedupe\n',
       );
       expect(await claimedInLog()).toEqual([]);
     });

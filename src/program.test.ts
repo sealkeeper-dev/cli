@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from './config.js';
-import { createProgram } from './program.js';
+import { CORE_GROUP, createProgram, MORE_GROUP } from './program.js';
 
 const PKG_VERSION = (
   JSON.parse(
@@ -60,19 +60,38 @@ async function run(...args: string[]): Promise<RunResult> {
   }
 }
 
-const LAUNCH_COMMANDS = [
-  'init',
-  'emit',
-  'sync',
-  'card show',
-  'card write',
-  'status',
-  'run',
+// VOU-603. sealkeeper --help shows the six core commands first, then the
+// rest under More. Hidden commands run when called by name and are in
+// neither group.
+const CORE = ['init', 'run', 'challenge', 'duel', 'status', 'routine'];
+const MORE = [
   'submit',
-  'tasks post',
-  'rate',
+  'release',
+  'claim',
+  'post',
+  'outcome',
+  'seal',
+  'check',
+  'agent',
+  'config',
   'logout',
+  'what-is-shared',
+  'help',
 ];
+const HIDDEN = ['emit', 'sync', 'hook', 'rate'];
+// Removed, with no alias.
+const REMOVED = ['game', 'card', 'model', 'adapter', 'tasks', 'prove'];
+
+// The names a group of the root help lists, in order.
+function group(help: string, heading: string): string[] {
+  const start = help.indexOf(`\n${heading}\n`);
+  expect(start).toBeGreaterThan(-1);
+  const lines = help.slice(start + heading.length + 2).split('\n');
+  const end = lines.indexOf('');
+  return (end === -1 ? lines : lines.slice(0, end))
+    .filter((line) => /^ {2}\S/.test(line))
+    .map((line) => line.trim().split(' ')[0] ?? '');
+}
 
 describe('sealkeeper cli', () => {
   let home: string;
@@ -93,22 +112,38 @@ describe('sealkeeper cli', () => {
     expect(program.version()).toBe(PKG_VERSION);
   });
 
-  it('--help lists all eleven launch commands', async () => {
+  it('--help lists the six core commands first, then More', async () => {
     const { code, out } = await run('--help');
     expect(code).toBe(0);
-    for (const name of LAUNCH_COMMANDS) {
-      expect(out).toMatch(new RegExp(`^  ${name}\\b`, 'm'));
-    }
-    expect(LAUNCH_COMMANDS).toHaveLength(11);
+    expect(group(out, CORE_GROUP)).toEqual(CORE);
+    expect(group(out, MORE_GROUP)).toEqual(MORE);
+    expect(out.indexOf(CORE_GROUP)).toBeLessThan(out.indexOf(MORE_GROUP));
+    expect(out).not.toMatch(/credential/i);
+    expect(out).toContain('SEAL');
   });
 
-  it('--help lists the seal commands and says SEAL', async () => {
-    const { code, out } = await run('--help');
+  it('hides emit, sync, hook and rate, which still run by name', async () => {
+    const { out } = await run('--help');
+    const names = createProgram().commands.map((c) => c.name());
+    for (const name of HIDDEN) {
+      expect(out).not.toMatch(new RegExp(`^ {2}${name}\\b`, 'm'));
+      expect(names).toContain(name);
+    }
+  });
+
+  it.each(REMOVED)('has no %s command', async (name) => {
+    expect(createProgram().commands.map((c) => c.name())).not.toContain(name);
+    const { code, err } = await run(name);
+    expect(code).toBe(1);
+    expect(err).toContain(`unknown command '${name}'`);
+  });
+
+  it('seal --help lists the seal commands', async () => {
+    const { code, out } = await run('seal', '--help');
     expect(code).toBe(0);
-    for (const name of ['seal show', 'seal verify', 'seal write']) {
+    for (const name of ['show', 'verify', 'write', 'handshake']) {
       expect(out).toMatch(new RegExp(`^  ${name}\\b`, 'm'));
     }
-    expect(out).not.toMatch(/credential/i);
   });
 
   it('an agent command without config exits 1', async () => {

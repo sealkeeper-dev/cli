@@ -5,6 +5,7 @@ import { AgentHandle, type Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { offerRuntime } from '../agent-runtime.js';
 import { streamInput } from '../ask.js';
+import { INSTALL_COMMAND } from '../claude-code-install.js';
 import {
   allSettingsPaths,
   claudeCodeHooksIn,
@@ -50,7 +51,6 @@ import {
 } from '../tasks.js';
 import { isSent } from '../taxonomy.js';
 import { countedLine, todayOf } from '../today.js';
-import { INSTALL_COMMAND } from './adapter.js';
 import { inviteAnswer } from './duel.js';
 import {
   defaultRoutineDeps,
@@ -87,8 +87,8 @@ import { actionLine, agentAnswer, levelLine } from './run.js';
 export type StatusDeps = TasksDeps & { env?: () => NodeJS.ProcessEnv };
 
 export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
-export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${cli('adapter claude-code install')} again, or npm i -g sealkeeper for a stable path.`;
-export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run ${cli('adapter claude-code install')} again to remove them, with --scope project for a project install.`;
+export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${INSTALL_COMMAND} again, or npm i -g sealkeeper for a stable path.`;
+export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run ${INSTALL_COMMAND} again to remove them.`;
 export const NOTHING_WAITS = 'Nothing waits for you.';
 const QUIET_DAYS = 7;
 const stdoutIsTTY = () => process.stdout.isTTY === true;
@@ -396,7 +396,7 @@ function waitingSection(answer: StatusAnswerResponse): string[] {
         case 'invite':
           return `duel invite ${w.id} from ${w.from}${until}.${inviteAnswer(w.id)}`;
         case 'outcome':
-          return `outcome of task ${w.id} with ${w.from} to report. ${cli(`tasks outcome ${w.id} success|failure`)} for a task you posted, ${cli(`submit ${w.id}`)} again for one you claimed`;
+          return `outcome of task ${w.id} with ${w.from} to report. ${cli(`outcome ${w.id} success|failure`)} for a task you posted, ${cli(`submit ${w.id}`)} again for one you claimed`;
         default:
           return `${w.kind} ${w.id} from ${w.from}${until}`;
       }

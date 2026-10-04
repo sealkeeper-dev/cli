@@ -150,7 +150,7 @@ describe('sealkeeper seal', () => {
       now: () => now,
       readStdin: async () => stdin,
     };
-    const program = createProgram({ seal: deps, card: { fetch: fetcher } });
+    const program = createProgram({ seal: deps });
     throwOnExit(program);
     let out = '';
     let err = '';
@@ -276,7 +276,7 @@ describe('sealkeeper seal', () => {
     });
 
     it('seal show asks the API even with a cached SEAL, and falls back to it offline', async () => {
-      await run(fetchFn, 'card', 'show');
+      await run(fetchFn, 'seal', 'write', '--dir', home);
       requests = [];
       const { code } = await run(fetchFn, 'seal', 'show');
       expect(code).toBe(0);
@@ -375,7 +375,7 @@ describe('sealkeeper seal', () => {
       expect(JSON.parse(json.out)).toEqual({ path: target });
     });
 
-    it('seal write defaults to the current directory, like card write', async () => {
+    it('seal write defaults to the current directory', async () => {
       const spy = vi.spyOn(process, 'cwd').mockReturnValue(home);
       try {
         const { code, out } = await run(fetchFn, 'seal', 'write');

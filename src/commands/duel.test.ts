@@ -353,7 +353,7 @@ describe('duel', () => {
         `npx sealkeeper duel --rematch ${lost} --json`,
         undefined,
         'npx sealkeeper duel --json',
-        'npx sealkeeper tasks post --template text_dedupe --yes --json',
+        'npx sealkeeper post --template text_dedupe --yes --json',
       ]);
       expect(printed.duel).toEqual(answer.duel);
       expect(printed.standing).toEqual(STANDING);

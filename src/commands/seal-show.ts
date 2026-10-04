@@ -9,8 +9,8 @@ export const NO_SEAL =
   "could not get the agent's SEAL, the SealKeeper API is unreachable and none is cached";
 
 // The compact SEAL, then what it says one line each, then its payload, then
-// how long it has left. It is the SEAL card show embeds, from the same
-// cache.
+// how long it has left. It is the SEAL the agent card embeds, from the
+// same cache.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent
     .command('show')

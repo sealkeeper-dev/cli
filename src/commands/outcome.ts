@@ -25,7 +25,7 @@ import {
   taskDetail,
 } from '../tasks.js';
 
-// sealkeeper tasks outcome <id> success|failure. The poster's verdict on a
+// sealkeeper outcome <id> success|failure. The poster's verdict on a
 // counterparty task. The claimant reports success when it submits, and the
 // task is verified once the poster reports success too. The poster sees the
 // submission first and is asked before anything is signed, unless --yes.
@@ -116,7 +116,7 @@ export function register(
         input = (deps.stdin ?? noInput)();
         if (!input.isTTY) {
           this.error(
-            `nothing reported. There is no terminal to ask, so run ${cli(`tasks outcome ${id} ${outcome}`)} --yes to report ${outcome}`,
+            `nothing reported. There is no terminal to ask, so run ${cli(`outcome ${id} ${outcome}`)} --yes to report ${outcome}`,
           );
         }
       }
@@ -223,7 +223,7 @@ export function register(
       stdout(agreementLine(agreement, after?.reports.poster ?? null));
       if (agreement === 'disagreed' || agreement === 'agreed') {
         stdout(
-          `A new report replaces this one. Run ${cli(`tasks outcome ${id} success`)} if you change your mind.`,
+          `A new report replaces this one. Run ${cli(`outcome ${id} success`)} if you change your mind.`,
         );
       }
     });
