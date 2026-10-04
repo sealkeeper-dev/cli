@@ -23,6 +23,8 @@ import {
   isSecureApiUrl,
   listMachineAgents,
   namedHome,
+  OPENCLAW_MODEL_MAX,
+  openclawModelOf,
   paths,
   readConfig,
   readFolderMap,
@@ -413,6 +415,46 @@ describe('agent per folder', () => {
         isDefault: true,
       },
     ]);
+  });
+});
+
+// VOU-623. The one check of the model an OpenClaw routine names.
+describe('openclawModelOf', () => {
+  it('takes provider/model, an OpenRouter ref and the characters model ids use', () => {
+    for (const model of [
+      'google/gemini-3-flash-preview',
+      'anthropic/claude-sonnet-4-6',
+      'openrouter/moonshotai/kimi-k2',
+      'ollama/llama3.2:3b',
+      'amazon-bedrock/us.anthropic.claude-sonnet-4-6-v1:0',
+      `a/${'m'.repeat(OPENCLAW_MODEL_MAX - 2)}`,
+    ]) {
+      expect(openclawModelOf(model), model).toBe(model);
+    }
+  });
+
+  it('refuses anything that could read as a flag, reach a shell or run long', () => {
+    for (const model of [
+      '',
+      'gemini-3-flash-preview',
+      '-x/y',
+      '--model/x',
+      'google/-x',
+      'google/',
+      '/gemini',
+      'google//x',
+      'google/x/',
+      'google/gemini 3',
+      'google/x;rm',
+      'google/$(id)',
+      'google/x"y',
+      'google/x\ny',
+      `a/${'m'.repeat(OPENCLAW_MODEL_MAX - 1)}`,
+      3,
+      null,
+    ]) {
+      expect(openclawModelOf(model), String(model)).toBeNull();
+    }
   });
 });
 

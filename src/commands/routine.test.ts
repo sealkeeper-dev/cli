@@ -98,6 +98,7 @@ import {
   INSTALL_QUESTION,
   localTime,
   MASTRA_NOTE,
+  MODEL_HELP,
   NO_SETTINGS_NOTE,
   OPENCLAW_NOTE,
   preview,
@@ -116,6 +117,7 @@ const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 const INVOCATION = '"/usr/bin/node" "/opt/sealkeeper/dist/index.js"';
 const CLAUDE = '/usr/local/bin/claude';
 const OPENCLAW = '/usr/local/bin/openclaw';
+const MODEL = 'google/gemini-3-flash-preview';
 
 const audErrors: unknown[] = [];
 const unsigned = (payload: unknown) => {
@@ -1208,6 +1210,10 @@ describe('routine', () => {
         ['--minutes-per-run', '0'],
         ['--tokens-per-run', '500'],
         ['--claims-per-day', 'x'],
+        ['--model', 'gemini-3-flash-preview'],
+        ['--model', '-x/y'],
+        ['--model', 'google/gemini 3'],
+        ['--model', `google/${'m'.repeat(130)}`],
       ]) {
         const result = await run('routine', 'set', ...form, '--yes');
         expect(result.code, form.join(' ')).toBe(1);
@@ -2092,13 +2098,22 @@ describe('routine', () => {
 
   // VOU-601. OpenClaw as the job's agent, through a fake openclaw process.
   describe('OpenClaw', () => {
+    // Shaped as the live check saw it (VOU-600).
     const envelope = (final: string, over: Payload = {}) => ({
       ok: true,
       status: 'ok',
       final,
-      payloads: final === '' ? [] : [{ text: final }],
-      usage: { input: 100, output: 20, total: 120 },
-      costUsd: 0.01,
+      payloads: final === '' ? [] : [{ text: final, mediaUrl: null }],
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 120,
+        cost: { total: 0.01 },
+      },
+      codeModeEngaged: false,
+      assistantTurns: 1,
       model: 'gpt-x',
       provider: 'openai',
       sessionId: 's1',
@@ -2109,8 +2124,13 @@ describe('routine', () => {
     const argAfter = (args: string[], flag: string) =>
       args[args.indexOf(flag) + 1] ?? '';
 
+    // OpenClaw's answer to config get agents.defaults.model --json.
+    const defaultModel = (said: unknown) => new FakeAgent([said], 0);
+    const noDefault = () => new FakeAgent([], 1);
+
     async function installedOpenClaw(): Promise<void> {
       await setRoutine({
+        model: MODEL,
         schedule: {
           time: '10:00',
           scheduler: 'cron',
@@ -2126,29 +2146,211 @@ describe('routine', () => {
     it('the setup asks which agent when both are here and installs OpenClaw on 2', async () => {
       tty = true;
       onPath = { claude: CLAUDE, openclaw: OPENCLAW };
-      answers = ['2', '', '', '', 'n'];
+      // Enter takes the default model OpenClaw says (VOU-623).
+      nextAgents = [() => defaultModel({ primary: MODEL })];
+      answers = ['2', '', '', '', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.err).toContain(
         'Which agent runs it? 1 Claude Code  2 OpenClaw [1] ',
       );
       expect(result.out).toContain(`Agent     OpenClaw, ${OPENCLAW}\n`);
-      expect((await readRoutineConfig()).schedule).toMatchObject({
-        agent: 'openclaw',
-        agentCommand: OPENCLAW,
+      expect(result.out).toContain(MODEL_HELP);
+      expect(result.err).toContain(
+        `Which model does OpenClaw use? [${MODEL}] `,
+      );
+      expect(spawned[0]).toMatchObject({
+        command: OPENCLAW,
+        args: ['config', 'get', 'agents.defaults.model', '--json'],
+      });
+      expect(await readRoutineConfig()).toMatchObject({
+        model: MODEL,
+        schedule: { agent: 'openclaw', agentCommand: OPENCLAW },
       });
       tty = false;
       const screen = await run('routine');
       expect(screen.out).toContain(`Agent      OpenClaw, ${OPENCLAW}\n`);
+      expect(screen.out).toContain(`Model      ${MODEL}\n`);
       const json = await routineJson();
       expect(json.runtime).toBe('openclaw');
+      expect(json.model).toBe(MODEL);
       expect(json.notes).toContain(OPENCLAW_NOTE);
+    });
+
+    it('the setup asks the model with no default when OpenClaw says none, and again after one that is not provider/model', async () => {
+      tty = true;
+      onPath = { openclaw: OPENCLAW };
+      nextAgents = [noDefault];
+      answers = ['', '--help', 'anthropic/claude-sonnet-4-6', '', '', '', 'n'];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain('Which model does OpenClaw use? ');
+      expect(result.err).not.toContain('Which model does OpenClaw use? [');
+      expect(result.err).toContain(
+        'Please answer provider/model. Which model does OpenClaw use? ',
+      );
+      expect((await readRoutineConfig()).model).toBe(
+        'anthropic/claude-sonnet-4-6',
+      );
+    });
+
+    it('the setup installs nothing when no model is given, and names routine set --model', async () => {
+      tty = true;
+      onPath = { openclaw: OPENCLAW };
+      nextAgents = [noDefault];
+      answers = ['', '', ''];
+      const result = await run('routine');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        'nothing installed. OpenClaw has no default model to take, so name one with sealkeeper routine set --model <provider/model>',
+      );
+      expect(crontab).toBeNull();
+      expect((await readRoutineConfig()).schedule).toBeUndefined();
+    });
+
+    it('routine --yes takes the OpenClaw default model, and refuses with the fix when there is none', async () => {
+      onPath = { openclaw: OPENCLAW };
+      nextAgents = [noDefault];
+      const refused = await run('routine', '--yes');
+      expect(refused.code).toBe(1);
+      expect(refused.err).toContain(
+        'nothing installed. OpenClaw has no default model to take, so name one with sealkeeper routine set --model <provider/model>',
+      );
+      expect(crontab).toBeNull();
+
+      nextAgents = [() => defaultModel('anthropic/claude-sonnet-4-6')];
+      const on = await run('routine', 'on', '--yes');
+      expect(on.code).toBe(0);
+      expect(on.out).toContain(
+        'Model     anthropic/claude-sonnet-4-6, your OpenClaw default',
+      );
+      expect(await readRoutineConfig()).toMatchObject({
+        model: 'anthropic/claude-sonnet-4-6',
+        schedule: { agent: 'openclaw' },
+      });
+      // A model set before is kept, and OpenClaw is not asked again.
+      spawned = [];
+      expect((await run('routine', 'on', '--yes')).code).toBe(0);
+      expect(spawned).toEqual([]);
+    });
+
+    it('routine set --model changes the model, checked before anything changes', async () => {
+      await installedOpenClaw();
+      const result = await run(
+        'routine',
+        'set',
+        '--model',
+        'openrouter/moonshotai/kimi-k2',
+        '--yes',
+      );
+      expect(result.code).toBe(0);
+      expect(result.out).toBe(
+        'OpenClaw answers with openrouter/moonshotai/kimi-k2 from the next run.\n',
+      );
+      expect((await readRoutineConfig()).model).toBe(
+        'openrouter/moonshotai/kimi-k2',
+      );
+      const json = await run(
+        'routine',
+        'set',
+        '--model',
+        MODEL,
+        '--json',
+        '--yes',
+      );
+      expect(JSON.parse(json.out).model).toBe(MODEL);
+      const bad = await run('routine', 'set', '--model', '-rf/x', '--yes');
+      expect(bad.code).toBe(1);
+      expect(bad.err).toContain('--model takes provider/model');
+      expect((await readRoutineConfig()).model).toBe(MODEL);
+    });
+
+    it('an OpenClaw routine from before VOU-623 still reads, and its run fails before its first step with the fix', async () => {
+      // routine.json as a CLI from before VOU-623 wrote it, with no model.
+      await writeFile(
+        paths().routine,
+        `${JSON.stringify({
+          limits: defaultRoutineConfig().limits,
+          allow: [],
+          allowSlugs: [],
+          time: '10:00',
+          game: false,
+          schedule: {
+            time: '10:00',
+            scheduler: 'cron',
+            agent: 'openclaw',
+            agentCommand: OPENCLAW,
+            job: 'run.sealkeeper.routine',
+            files: [],
+            installedAt: new Date().toISOString(),
+          },
+        })}\n`,
+      );
+      api.steps = [api.task(api.add())];
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        'Routine run failed. No model is set for OpenClaw.',
+      );
+      expect(result.out).toContain(
+        'Fix: Run sealkeeper routine set --model <provider/model> with a model your OpenClaw provider key can use',
+      );
+      expect(api.routineCalls).toEqual([]);
+      expect(spawned).toEqual([]);
+      expect((await runs())[0]).toMatchObject({
+        runtime: 'openclaw',
+        outcome: 'failed',
+        failure: 'agent_model',
+        agentStarted: false,
+      });
+      const screen = await run('routine');
+      expect(screen.out).toContain(
+        'Model      none, set one with sealkeeper routine set --model <provider/model>\n',
+      );
+      expect((await routineJson()).model).toBeNull();
+    });
+
+    it('says a model the provider did not find with the routine set --model fix, and never logs the message', async () => {
+      await installedOpenClaw();
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          claw(
+            {
+              ok: false,
+              status: 'error',
+              final: '',
+              payloads: [],
+              model: null,
+              provider: null,
+              error: {
+                message:
+                  'The selected model was not found by the provider. Check the model id or choose a different model.',
+                kind: 'exception',
+              },
+            },
+            1,
+          ),
+      ];
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(1);
+      expect(result.out).toContain(
+        "Routine run failed. OpenClaw or its provider did not find the routine's model.",
+      );
+      expect(result.out).toContain(
+        'Fix: Run sealkeeper routine set --model <provider/model>',
+      );
+      expect((await runs())[0]).toMatchObject({ failure: 'agent_model' });
+      expect(await readFile(routinePaths().log, 'utf8')).not.toContain(
+        'selected model',
+      );
     });
 
     it('the setup takes OpenClaw with no question when it is the only agent here', async () => {
       tty = true;
       onPath = { openclaw: OPENCLAW };
-      answers = ['', '', '', 'n'];
+      nextAgents = [() => defaultModel(MODEL)];
+      answers = ['', '', '', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.err).not.toContain('Which agent runs it?');
@@ -2185,6 +2387,7 @@ describe('routine', () => {
         '-',
       ]);
       expect(argAfter(args, '--cwd')).toBe(s?.cwd);
+      expect(argAfter(args, '--model')).toBe(MODEL);
       expect(argAfter(args, '--code-mode')).toBe('direct');
       expect(argAfter(args, '--timeout')).toMatch(/^[1-9]\d*$/);
       expect(args).toContain('--json');
@@ -2446,6 +2649,33 @@ describe('routine', () => {
       expect(screen.out).toContain(
         "Fix: Check the provider key of your Mastra agent's model.",
       );
+    });
+
+    // VOU-623. A Gemini result as @mastra/core 1.74.0 gives it, no
+    // response.modelId and the id in response.modelMetadata.
+    it('reads the model id from response.modelMetadata when the result has no modelId', async () => {
+      const result = await mastraRuntime({
+        generate: async () => ({
+          text: 'x',
+          usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+          toolCalls: [],
+          finishReason: 'stop',
+          response: {
+            id: 'r1',
+            timestamp: new Date(),
+            modelMetadata: {
+              modelId: 'gemini-3-flash-preview',
+              modelVersion: 'v4',
+              modelProvider: 'google.generative-ai',
+            },
+          },
+        }),
+      }).ask({ prompt: 'q', timeoutMs: 1_000, tokenCap: 100 });
+      expect(result).toMatchObject({
+        text: 'x',
+        tokens: 12,
+        model: 'gemini-3-flash-preview',
+      });
     });
 
     it('aborts a generate at the wall clock and stops waiting for it', async () => {

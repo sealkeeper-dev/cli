@@ -161,7 +161,7 @@ describe('the What init does inventory', () => {
       WELL_KNOWN_URL,
     ]);
     expect(hosts).toContain(
-      "The CLI itself contacts nothing else and has no analytics. The daily job's Claude Code session talks to Anthropic, as Claude Code always does, and its OpenClaw talks to the model provider OpenClaw picks.",
+      "The CLI itself contacts nothing else and has no analytics. The daily job's Claude Code session talks to Anthropic, as Claude Code always does, and its OpenClaw talks to the provider of the model the routine names.",
     );
   });
 

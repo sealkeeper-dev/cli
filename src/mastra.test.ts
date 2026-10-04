@@ -287,6 +287,29 @@ describe('mastra adapter', () => {
       ]);
     });
 
+    // VOU-623. On Gemini, @mastra/core 1.74.0, a step's response.modelId
+    // is empty and the id is in response.modelMetadata.
+    it('reads response.modelMetadata.modelId when modelId is empty, as Gemini reports it', async () => {
+      const session = sealKeeperSession('gemini');
+      await session.onStepFinish({
+        usage: { inputTokens: 12, outputTokens: 4 },
+        response: {
+          id: 'r1',
+          modelId: '',
+          timestamp: new Date(),
+          modelMetadata: {
+            modelId: 'gemini-3-flash-preview',
+            modelVersion: 'v4',
+            modelProvider: 'google.generative-ai',
+          },
+        },
+      });
+      await session.end();
+      expect(await usages()).toMatchObject([
+        { tokens_in: 12, tokens_out: 4, model: 'gemini-3-flash-preview' },
+      ]);
+    });
+
     it('measures latency locally since the previous step', async () => {
       const session = sealKeeperSession('timing');
       await new Promise((done) => setTimeout(done, 40));

@@ -120,8 +120,9 @@ export function withSealKeeper<
 // The usage payload of a step, or null when the step has no token counts or
 // no model id. Tokens come from usage.promptTokens and usage.completionTokens
 // (inputTokens and outputTokens in newer versions). The model is
-// response.modelId, else step.model.modelId, through toolNameOf like a
-// tool id. Latency is measured locally by
+// response.modelId, else step.model.modelId, else
+// response.modelMetadata.modelId, as Gemini reports it (rawModelIdOf),
+// through toolNameOf like a tool id. Latency is measured locally by
 // the session, since the provider timestamp is missing or coarse for some
 // providers. emit validates the ranges. Text and tool data are never read.
 function usageOf(step: unknown, latencyMs: number): EmitInput | null {

@@ -128,6 +128,29 @@ export type SchedulerKind = (typeof SCHEDULERS)[number];
 export const SCHEDULED_AGENTS = ['claude-code', 'openclaw'] as const;
 export type ScheduledAgent = (typeof SCHEDULED_AGENTS)[number];
 
+// The model an OpenClaw routine names on every question (VOU-623), a model
+// ref as OpenClaw writes one, provider/model, such as
+// google/gemini-3-flash-preview. The model part may hold more slashes, as
+// an OpenRouter ref does. Every part starts with a letter or a digit, so it
+// never reads as a flag, and the set has no space, quote or shell character.
+// The one check, for the setup, routine set and the run alike, which pass
+// it to openclaw as its own argument after --model, never through a shell.
+export const OPENCLAW_MODEL_MAX = 128;
+const MODEL_PART = '[A-Za-z0-9][A-Za-z0-9._:@+-]*';
+const OPENCLAW_MODEL = new RegExp(
+  `^[A-Za-z0-9][A-Za-z0-9._-]*/${MODEL_PART}(?:/${MODEL_PART})*$`,
+);
+export const OpenClawModel = z
+  .string()
+  .max(OPENCLAW_MODEL_MAX)
+  .regex(OPENCLAW_MODEL);
+
+// value as an OpenClaw model, or null when it is not one.
+export function openclawModelOf(value: unknown): string | null {
+  const parsed = OpenClawModel.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // What routine on wrote, so off takes out exactly that. job is the
 // launchd label, the systemd unit name, the cron block id or the Task
 // Scheduler task name. files are the files it wrote.
@@ -177,6 +200,10 @@ export const RoutineConfig = z.object({
   // played only while it is on for the agent, which a routine never turns
   // on.
   game: z.boolean().default(false),
+  // The model the OpenClaw routine names, set by the setup, routine on or
+  // routine set --model. Absent in a file from before VOU-623, and then an
+  // OpenClaw run fails before its first step until one is set.
+  model: OpenClawModel.optional(),
   // The job routine on wrote, absent while the routine is off.
   schedule: RoutineSchedule.optional(),
   // Written by routine pause of CLI 0.4.14 and earlier, or by a third

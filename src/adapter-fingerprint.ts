@@ -85,12 +85,20 @@ export async function openClawVersion(
 }
 
 // The model id of a Mastra step or generate result, response.modelId, else
-// model.modelId, else model, the first that gives a name, as it is written.
+// model.modelId, else model, else response.modelMetadata.modelId, the first
+// that gives a name, as it is written, so an empty string never wins. On
+// Gemini response.modelId is undefined on the result and empty on a step,
+// and the id is in response.modelMetadata (VOU-623, @mastra/core 1.74.0).
 // The live adapter reads it per step, the routine per answer (VOU-614).
 export function rawModelIdOf(response: unknown, model: unknown): unknown {
+  const r = response as
+    | { modelId?: unknown; modelMetadata?: { modelId?: unknown } | null }
+    | null
+    | undefined;
   return [
-    (response as { modelId?: unknown } | null | undefined)?.modelId,
+    r?.modelId,
     (model as { modelId?: unknown } | null | undefined)?.modelId,
     model,
+    r?.modelMetadata?.modelId,
   ].find((id) => toolNameOf(id) !== null);
 }

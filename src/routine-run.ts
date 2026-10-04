@@ -75,16 +75,19 @@ export type RunDeps = {
 };
 
 // The agent of a run, made at the first question in the run's working
-// folder. close runs when the run ends, for a transcript.
+// folder. close runs when the run ends, for a transcript. unready is why
+// the agent cannot be asked at all, which fails the run before its first
+// step, as an OpenClaw routine with no model (VOU-623).
 export type RunAgent = {
   runtime: RoutineRuntimeName;
+  unready?: AgentProblem;
   start(workDir: string): { agent: AgentRuntime; close?: () => void };
 };
 
 // What failed in a failed run, kept in its run line as failure. The
 // routine screen says the fix beside it (RUN_FAILURES in
 // commands/routine.ts). agent_auth and agent_tools since VOU-601,
-// api_later since VOU-613.
+// api_later since VOU-613, agent_model since VOU-623.
 export type RunFailure =
   | 'key'
   | 'api'
@@ -94,11 +97,13 @@ export type RunFailure =
   | 'agent_missing'
   | 'agent_failed'
   | 'agent_auth'
-  | 'agent_tools';
+  | 'agent_tools'
+  | 'agent_model';
 
 const PROBLEM_FAILURE: Record<AgentProblem['kind'], RunFailure> = {
   auth: 'agent_auth',
   tools: 'agent_tools',
+  model: 'agent_model',
   failed: 'agent_failed',
 };
 
@@ -218,6 +223,14 @@ export async function routineRun(
     await finish(
       'skipped',
       `paused by an earlier CLI, ${routine.paused.reason}. Run ${cli('routine on')} to run it again`,
+    );
+    return done();
+  }
+  if (agent.unready !== undefined) {
+    await finish(
+      'failed',
+      agent.unready.reason,
+      PROBLEM_FAILURE[agent.unready.kind],
     );
     return done();
   }

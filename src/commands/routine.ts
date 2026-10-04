@@ -13,6 +13,8 @@ import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
   type Config,
   ConfigError,
+  OPENCLAW_MODEL_MAX,
+  openclawModelOf,
   type Paths,
   paths,
   ROUTINE_LIMIT_MAX,
@@ -65,7 +67,11 @@ import {
   runsCopy,
   writeCopy,
 } from '../routine-copy.js';
-import { openclawRuntime } from '../routine-openclaw.js';
+import {
+  NO_MODEL,
+  openclawDefaultModel,
+  openclawRuntime,
+} from '../routine-openclaw.js';
 import {
   openSession,
   type RunAgent,
@@ -113,8 +119,8 @@ import { VERSION } from '../version.js';
  *                routine screen. --files prints the job in full.
  *   routine on   Writes the job, or writes it again.
  *   routine off  Removes the job. Nothing runs until on.
- *   routine set  The time, a limit, whether to play the game, the game cap
- *                and the allowlist.
+ *   routine set  The time, a limit, whether to play the game, the game cap,
+ *                the allowlist and the model of an OpenClaw routine.
  *   routine run  Hidden. The job runs it.
  *
  * Every form that changes something takes --yes, which stands for the
@@ -182,7 +188,7 @@ export const startInProcess: RunStarter = (spec, deps) => {
         deps,
         config,
         routine,
-        scheduledAgent(deps, routine.schedule, p),
+        scheduledAgent(deps, routine, p),
         p,
         spec.runId,
       );
@@ -250,10 +256,14 @@ export function register(
   const set = routine
     .command('set')
     .description(
-      'Change the time, a limit, the game, the game cap or the allowlist',
+      'Change the time, a limit, the game, the game cap, the allowlist or the OpenClaw model',
     )
     .option('--time <HH:MM>', 'local time of day to run, on a 24 hour clock')
-    .option('--game <on|off>', 'whether the routine also plays the game');
+    .option('--game <on|off>', 'whether the routine also plays the game')
+    .option(
+      '--model <provider/model>',
+      'the model OpenClaw answers with, such as google/gemini-3-flash-preview',
+    );
   for (const [name, key] of Object.entries(LIMIT_OPTIONS)) {
     set.option(
       `--${name} <n>`,
@@ -705,7 +715,7 @@ export const NO_SETTINGS_NOTE =
 
 // Said on the routine screen of an OpenClaw routine, see routine-openclaw.ts.
 export const OPENCLAW_NOTE =
-  "The routine's OpenClaw runs on a config of its own that denies every tool, so your OpenClaw config, its default model and its tools do not apply. It uses the provider key OpenClaw stored with openclaw models auth paste-api-key.";
+  "The routine's OpenClaw runs on a config of its own that denies every tool, so your OpenClaw config and its tools do not apply. It answers with the model on the routine's Model line and uses the provider key OpenClaw stored with openclaw models auth paste-api-key, or one in its environment.";
 
 // Said on the routine screen of a Mastra routine, which has no job.
 export const MASTRA_NOTE =
@@ -914,10 +924,24 @@ export async function guidedSetup(
   print.line(
     `Agent     ${RUNTIME_LABELS[agent.agent]}, ${tildePath(agent.command)}`,
   );
+  let model = current.model;
+  if (agent.agent === 'openclaw') {
+    model = await askModel(
+      input,
+      current.model ??
+        (await openclawDefaultModel({
+          command: agent.command,
+          env: agentEnv(),
+          spawner: deps.spawner,
+        })),
+      print,
+    );
+    if (model === undefined) return `nothing installed. ${noModelLine()}`;
+  }
   if (current.time === undefined) print.dim(TIME_NOW_LINE);
   const time = await askTime(input, routineTime(deps, current), print);
   const game = await askGame(input, print);
-  const chosen = { ...current, time, game };
+  const chosen = { ...current, model, time, game };
   const installed = await installJob(deps, chosen, input, print, {
     gameOn: game,
     agent: agent.agent,
@@ -953,6 +977,41 @@ async function askAgent(
   return found[0];
 }
 
+// Said before the model question of an OpenClaw setup.
+export const MODEL_HELP =
+  'OpenClaw answers every task with this model, written provider/model, such as google/gemini-3-flash-preview.';
+
+const modelQuestion = (offered: string | null): string =>
+  `Which model does OpenClaw use?${offered === null ? '' : ` [${offered}]`} `;
+
+// Why an OpenClaw routine has no model, and the fix.
+const noModelLine = (): string =>
+  `OpenClaw has no default model to take, so name one with ${cli('routine set --model <provider/model>')}, such as google/gemini-3-flash-preview`;
+
+// Asks the model an OpenClaw routine names, the one offered on an empty
+// answer, a closed input or no clear answer, and again after one that is
+// not provider/model. undefined when nothing was offered and no answer
+// was clear.
+async function askModel(
+  input: Input,
+  offered: string | null,
+  print: SetupPrint,
+): Promise<string | undefined> {
+  print.dim(MODEL_HELP);
+  for (let asked = 0; asked < MAX_ASKS; asked++) {
+    print.ask(
+      `${asked === 0 ? '' : 'Please answer provider/model. '}${modelQuestion(offered)}`,
+    );
+    const line = await input.readLine();
+    if (line === null) return offered ?? undefined;
+    const answer = cleanAnswer(line).trim();
+    if (answer === '' && offered !== null) return offered;
+    const model = openclawModelOf(answer);
+    if (model !== null) return model;
+  }
+  return offered ?? undefined;
+}
+
 // Why a setup installed nothing when the person said no.
 export const NOTHING_INSTALLED = 'nothing installed';
 
@@ -981,6 +1040,18 @@ async function installJob(
     throw error;
   }
   if (typeof prepared === 'string') return `nothing installed. ${prepared}`;
+  // An OpenClaw routine with no model takes the operator's OpenClaw
+  // default, as routine on and --yes ask nothing (VOU-623).
+  if (prepared.agent === 'openclaw' && prepared.current.model === undefined) {
+    const model = await openclawDefaultModel({
+      command: prepared.agentCommand,
+      env: agentEnv(),
+      spawner: deps.spawner,
+    });
+    if (model === null) return `nothing installed. ${noModelLine()}`;
+    prepared = { ...prepared, current: { ...prepared.current, model } };
+    (print?.line ?? stderr)(`Model     ${model}, your OpenClaw default`);
+  }
 
   if (print === null) {
     for (const line of preview(prepared, time)) stderr(line);
@@ -1149,6 +1220,7 @@ async function off(
 type SetOptions = {
   time?: string;
   game?: string;
+  model?: string;
   gameCap?: string;
   allow?: string;
   disallow?: string;
@@ -1166,6 +1238,7 @@ async function setRoutine(
   if (
     options.time === undefined &&
     options.game === undefined &&
+    options.model === undefined &&
     options.gameCap === undefined &&
     options.allow === undefined &&
     options.disallow === undefined &&
@@ -1185,6 +1258,13 @@ async function setRoutine(
     options.game !== 'off'
   ) {
     cmd.error(`--game takes on or off, got ${options.game}`);
+  }
+  const model =
+    options.model === undefined ? undefined : openclawModelOf(options.model);
+  if (model === null) {
+    cmd.error(
+      `--model takes provider/model, such as google/gemini-3-flash-preview, at most ${OPENCLAW_MODEL_MAX} letters, digits and . _ - : @ + /, each part starting with a letter or digit`,
+    );
   }
   const limits: Partial<RoutineLimits> = {};
   for (const key of limitKeys) {
@@ -1225,6 +1305,7 @@ async function setRoutine(
     ...current,
     ...(options.time === undefined ? {} : { time: options.time }),
     ...(options.game === undefined ? {} : { game: options.game === 'on' }),
+    ...(model === undefined ? {} : { model }),
     limits: { ...current.limits, ...limits },
   };
   // A job that is on runs at the new time from today. It is planned before
@@ -1281,6 +1362,7 @@ async function setRoutine(
       JSON.stringify({
         time: saved.time,
         game: saved.game,
+        model: saved.model ?? null,
         limits: saved.limits,
         allow: saved.allow,
         allowSlugs: saved.allowSlugs,
@@ -1302,6 +1384,9 @@ async function setRoutine(
         ? 'The routine plays the game after its tasks, while the game is on.'
         : 'The routine works tasks only.',
     );
+  }
+  if (model !== undefined) {
+    lines.push(`OpenClaw answers with ${model} from the next run.`);
   }
   for (const key of limitKeys) {
     lines.push(`${LIMIT_TEXT[key][0]} is ${saved.limits[key]}.`);
@@ -1377,7 +1462,7 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
     deps,
     config,
     routine,
-    scheduledAgent(deps, routine.schedule, p),
+    scheduledAgent(deps, routine, p),
     p,
     runId,
   );
@@ -1406,15 +1491,21 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
 
 // The agent the job starts, by the schedule routine on wrote. null while
 // the routine is off. Every question of a run goes to one transcript,
-// which a run that asks nothing leaves as it was (RS-10).
+// which a run that asks nothing leaves as it was (RS-10). An OpenClaw
+// routine with no model, as one set up before VOU-623, is unready, and its
+// run fails before its first step.
 function scheduledAgent(
   deps: RoutineDeps,
-  schedule: RoutineSchedule | undefined,
+  routine: RoutineConfig,
   p: Paths,
 ): RunAgent | null {
+  const { schedule, model } = routine;
   if (schedule === undefined) return null;
   return {
     runtime: schedule.agent,
+    ...(schedule.agent === 'openclaw' && model === undefined
+      ? { unready: NO_MODEL }
+      : {}),
     start(workDir) {
       const transcript = Transcript.open(copyPaths(p).transcript);
       const o = {
@@ -1424,9 +1515,10 @@ function scheduledAgent(
         transcript,
       };
       return {
+        // An OpenClaw routine always has a model here, unready above.
         agent:
-          schedule.agent === 'openclaw'
-            ? openclawRuntime(o)
+          schedule.agent === 'openclaw' && model !== undefined
+            ? openclawRuntime({ ...o, model })
             : claudeCodeRuntime({ ...o, cwd: workDir }),
         close: () => transcript?.close(),
       };
@@ -1486,6 +1578,8 @@ export const RUN_FAILURES: Record<
     runtime === 'mastra'
       ? 'Check your Mastra agent. The routine asks it with toolChoice none, and an agent that still calls a tool gets no task.'
       : "Update OpenClaw. The routine's config denies every tool, and an OpenClaw that still calls one gets no task.",
+  agent_model: () =>
+    `Run ${cli('routine set --model <provider/model>')} with a model your OpenClaw provider key can use, such as google/gemini-3-flash-preview.`,
 };
 
 // The run line, and the fix when the run failed. A failure a newer CLI
@@ -1612,6 +1706,8 @@ export async function routineView(
     installed: s !== undefined,
     on: (s !== undefined || mastra) && routine.paused === undefined,
     runtime: s?.agent ?? (mastra ? 'mastra' : null),
+    // The model an OpenClaw routine names, null for any other agent.
+    model: s?.agent === 'openclaw' ? (routine.model ?? null) : null,
     schedule: s ?? null,
     time: routine.time ?? null,
     game: routine.game,
@@ -1678,6 +1774,15 @@ export async function routineView(
             'Agent',
             `${RUNTIME_LABELS[s.agent]}, ${tildePath(s.agentCommand)}`,
           ),
+          ...(s.agent === 'openclaw'
+            ? [
+                row(
+                  'Model',
+                  routine.model ??
+                    `none, set one with ${cli('routine set --model <provider/model>')}`,
+                ),
+              ]
+            : []),
         ]),
     row(
       'Work',

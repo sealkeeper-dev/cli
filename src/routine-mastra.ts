@@ -182,7 +182,8 @@ const num = (value: unknown): number | null =>
 // text, usage, toolCalls and the model id of a generate result, read
 // loosely. Tokens are totalTokens, else input and output, in either naming
 // Mastra has used. The model id as the live adapter reads a step's,
-// response.modelId first (rawModelIdOf).
+// response.modelId first, response.modelMetadata.modelId last
+// (rawModelIdOf).
 function resultOf(value: unknown): AgentResult {
   const result = record(value);
   const raw = rawModelIdOf(result?.response, result?.model);

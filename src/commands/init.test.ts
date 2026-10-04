@@ -3100,17 +3100,29 @@ describe('sealkeeper init', () => {
       await withBundle();
       world.openclaw = true;
       // The runtime, the game and its cap, no hooks and no nudge, then the
-      // time, tasks or the game, the install and the first run.
-      const stdin = answeringEach(['', '', '', '', '', '', 'n']);
+      // model, which OpenClaw gives no default for here, the time, tasks or
+      // the game, the install and the first run.
+      const stdin = answeringEach([
+        '',
+        '',
+        '',
+        'google/gemini-3-flash-preview',
+        '',
+        '',
+        '',
+        'n',
+      ]);
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(7);
+      expect(stdin.reads).toBe(8);
       expect(result.all).toContain(`  Agent     OpenClaw, ${OPENCLAW}`);
+      expect(result.err).toContain('  Which model does OpenClaw use? ');
       expect(result.err).not.toContain('Which agent runs it?');
-      const schedule = (await readRoutineConfig()).schedule;
-      expect(schedule?.agent).toBe('openclaw');
-      expect(schedule?.agentCommand).toBe(OPENCLAW);
+      const routine = await readRoutineConfig();
+      expect(routine.model).toBe('google/gemini-3-flash-preview');
+      expect(routine.schedule?.agent).toBe('openclaw');
+      expect(routine.schedule?.agentCommand).toBe(OPENCLAW);
     });
 
     it('asks which agent runs it when claude and openclaw are both on PATH (VOU-601)', async () => {
@@ -3118,11 +3130,18 @@ describe('sealkeeper init', () => {
       await withBundle();
       world.claude = true;
       world.openclaw = true;
-      const stdin = answersThen('2', '', '', '', 'n');
+      const stdin = answersThen(
+        '2',
+        'anthropic/claude-sonnet-4-6',
+        '',
+        '',
+        '',
+        'n',
+      );
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(10);
+      expect(stdin.reads).toBe(11);
       expect(result.err).toContain(
         '  Which agent runs it? 1 Claude Code  2 OpenClaw [1] ',
       );

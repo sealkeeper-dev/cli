@@ -101,10 +101,11 @@ export type StdoutReader = {
 
 // Why an agent that ran gave no usable answer, in one line that holds no
 // spec, answer or credential. auth is a provider credential missing or
-// refused, tools a tool call the routine never allows, failed anything
-// else.
+// refused, tools a tool call the routine never allows, model a model that
+// is not set or that OpenClaw or its provider did not find (VOU-623),
+// failed anything else.
 export type AgentProblem = {
-  kind: 'auth' | 'tools' | 'failed';
+  kind: 'auth' | 'tools' | 'model' | 'failed';
   reason: string;
 };
 
