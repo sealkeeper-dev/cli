@@ -9,6 +9,7 @@ import { describeFingerprint } from '../fingerprint.js';
 import { NUDGE_ON, nudgeLines } from '../nudge.js';
 import { createProgram } from '../program.js';
 import { describeTaxonomy } from '../taxonomy.js';
+import { describeRequests } from './what-is-shared.js';
 
 const AGENT_ID = 'A'.repeat(43);
 
@@ -191,15 +192,17 @@ describe('config', () => {
 });
 
 describe('what-is-shared', () => {
-  it('prints the same block as init, then the fingerprint, and is listed in help', async () => {
+  it('prints the same block as init, then the fingerprint and what each command sends, and is listed in help', async () => {
     const { code, out } = await run('what-is-shared');
     expect(code).toBe(0);
-    expect(out).toBe(`${describeTaxonomy()}\n\n${describeFingerprint()}\n`);
+    expect(out).toBe(
+      `${describeTaxonomy()}\n\n${describeFingerprint()}\n\n${describeRequests()}\n`,
+    );
     for (const part of ['model_set', 'prompt', 'tools', 'framework']) {
       expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
     }
     expect(out).toContain(
-      'Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes, and each sync and submit sends them with the model name below.',
+      "Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run, a look at the duels or the challenge board and a step of the daily routine send none, and the routine's submits do.",
     );
     // VOU-566. The model name is the one value that leaves as text.
     expect(out).toContain(

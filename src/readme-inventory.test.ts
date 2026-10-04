@@ -12,6 +12,7 @@ import {
   sharedProjectSettingsPath,
 } from './claude-code-settings.js';
 import { skillPath } from './claude-code-skill.js';
+import { COMMAND_SENDS, REQUESTS_SIGNED } from './commands/what-is-shared.js';
 import { agentsMapPath, DEFAULT_API_URL, type Paths, paths } from './config.js';
 import { ACCESS_TOKEN_URL, DEVICE_CODE_URL } from './github-device.js';
 import { routinePaths } from './routine.js';
@@ -135,6 +136,20 @@ describe('the What init does inventory', () => {
     expect(sends).toContain(
       'The answer and the task are the only content that leaves your machine',
     );
+  });
+
+  // VOU-624. what-is-shared prints the same list, so the README and the
+  // CLI cannot say different things. The README adds backticks only.
+  it('says what each command sends as what-is-shared prints it', () => {
+    const sends = text.slice(text.indexOf('### What each command sends'));
+    const plain = (line: string) => line.replaceAll('`', '');
+    const bullets = sends
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .map((line) => plain(line.slice(2)));
+    expect(bullets).toEqual(COMMAND_SENDS);
+    const intro = sends.split('\n\n')[1] ?? '';
+    expect(plain(intro).startsWith(REQUESTS_SIGNED)).toBe(true);
   });
 
   it('lists the scheduler entry on each platform', () => {

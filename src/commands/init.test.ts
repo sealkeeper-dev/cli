@@ -3586,7 +3586,7 @@ describe('sealkeeper init', () => {
           What leaves this machine
           Session boundaries, task outcomes, durations and token counts,
           each signed with your key. Never prompts, tool inputs or outputs,
-          file contents or model output.
+          file contents or model output, except answers and tasks you post.
           Full list  npx sealkeeper what-is-shared
 
           Claude Code

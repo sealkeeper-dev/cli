@@ -187,7 +187,7 @@ export const TAGLINE = [
 export const SHARED_SUMMARY = [
   'Session boundaries, task outcomes, durations and token counts,',
   'each signed with your key. Never prompts, tool inputs or outputs,',
-  'file contents or model output.',
+  'file contents or model output, except answers and tasks you post.',
 ];
 // Said on its own, since a repeat run has no summary above it.
 export const HOOKS_INTRO =

@@ -4,8 +4,9 @@
 // here, and only the hashes are kept, see Fingerprint in @sealkeeper/schema.
 //
 // fingerprint.json in the home holds the last FINGERPRINT_WINDOW captures and
-// the current fingerprint made from them. It is recomputed at sync and run
-// only (refreshFingerprint), and only once config.json exists. Anything that
+// the current fingerprint made from them. It is recomputed at sync, run and
+// each duel or challenge step only (refreshFingerprint), and only once
+// config.json exists. Anything that
 // needs the fingerprint reads the cached file with currentFingerprint.
 //
 // Where the parts come from. Each source writes the hashes of what it sees
@@ -304,8 +305,8 @@ export async function captureParts(
   };
 }
 
-// Captures the parts and records them. At sync and run only. null when
-// there is no config yet.
+// Captures the parts and records them. At sync, run, duel and challenge
+// only. null when there is no config yet.
 export async function refreshFingerprint(
   options: CaptureOptions = {},
 ): Promise<Fingerprint | null> {
@@ -315,8 +316,8 @@ export async function refreshFingerprint(
   return recordCapture(p, parts, Math.floor(now / 1000));
 }
 
-// refreshFingerprint that never throws, for sync and run, which must not
-// fail over a fingerprint. null when it could not be computed.
+// refreshFingerprint that never throws, for sync, run, duel and challenge,
+// which must not fail over a fingerprint. null when it could not be computed.
 export async function refreshFingerprintQuietly(
   options: CaptureOptions = {},
 ): Promise<Fingerprint | null> {
@@ -342,6 +343,12 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
     'the framework and its version, for example Claude Code 2.1.283 or the installed @mastra/core',
 };
 
+// Which requests carry the fingerprint, every caller of
+// sendWithFingerprint in tasks.ts and sync (VOU-624). what-is-shared.test.ts
+// fails when a command that sends it is missing here.
+export const FINGERPRINT_SENDS =
+  "claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run, a look at the duels or the challenge board and a step of the daily routine send none, and the routine's submits do.";
+
 // The model name block of what-is-shared (VOU-566).
 export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A routine run sends the id the runtime reported for its answers. Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run, and the task keeps it beside the answer, which only the poster and your agent can read. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
 
@@ -350,7 +357,7 @@ export function describeFingerprint(): string {
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync and run. Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes, and each sync and submit sends them with the model name below.`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync, run and each duel or challenge step. Only a SHA-256 hash of each part is stored, never what it is hashed from. ${FINGERPRINT_SENDS}`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),
