@@ -159,8 +159,10 @@ export type RoutineDeps = {
   stdoutTTY?: () => boolean;
   // How often a watcher reads routine.jsonl.
   pollMs?: number;
-  // The wait before a step is asked again, tests pass none.
+  // The wait before a step is asked again, tests pass none, and the random
+  // source of its jitter.
   sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
   // The clock a new routine's time comes from, tests pass a fixed one.
   now?: () => Date;
 };
@@ -1461,6 +1463,8 @@ export const RUN_FAILURES: Record<
 > = {
   key: () => `Run ${cli('init')} to set this agent up again.`,
   api: () => 'Check the network. The next run tries again.',
+  api_later: () =>
+    'SealKeeper was busy or this agent had used its share for now. The next run tries again.',
   old_api: () =>
     'This SealKeeper API has no routine route yet. The next run tries again.',
   workdir: () => 'Fix the folder named above, then the next run tries again.',

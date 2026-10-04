@@ -430,6 +430,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
     // real scheduler, and never the real PATH.
     routine: {
       fetch: fakeFetch(world),
+      sleep: async () => undefined,
       run: fakeScheduler(world),
       platform: () => 'darwin',
       homedir: () => process.env.SEALKEEPER_HOME ?? '',

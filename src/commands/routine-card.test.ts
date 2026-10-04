@@ -106,7 +106,12 @@ describe('the routine refreshes the card', () => {
     ...args: string[]
   ): Promise<RunResult> {
     const program = createProgram({
-      routine: { fetch: fetcher, stdoutTTY: () => false },
+      // A step asked again waits for nothing here.
+      routine: {
+        fetch: fetcher,
+        stdoutTTY: () => false,
+        sleep: async () => undefined,
+      },
       // status prints its screen, as in a terminal.
       tasks: { fetch: fetcher, isTTY: () => true },
     });

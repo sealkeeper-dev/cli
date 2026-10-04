@@ -333,7 +333,12 @@ class FakeApi {
   }) as typeof fetch;
 }
 
-function error(status: number, code: string, issue?: string): Response {
+function error(
+  status: number,
+  code: string,
+  issue?: string,
+  headers?: Record<string, string>,
+): Response {
   return Response.json(
     {
       error: {
@@ -344,7 +349,7 @@ function error(status: number, code: string, issue?: string): Response {
           : { issues: [{ path: [], code: issue, message: issue }] }),
       },
     },
-    { status },
+    { status, headers },
   );
 }
 
@@ -441,6 +446,9 @@ describe('routine', () => {
   let stdoutTTY: boolean;
   let interrupt: (stop: () => void) => () => void;
   let msPerMinute: number;
+  // Every wait a run took, in ms, and the random source of its jitter.
+  let sleeps: number[];
+  let random: number;
   // The clock a new routine's time comes from, local 14:37.
   let now: Date;
   let answer: string | null;
@@ -528,7 +536,10 @@ describe('routine', () => {
         stdoutTTY: () => stdoutTTY,
         interrupt,
         pollMs: 5,
-        sleep: async () => undefined,
+        sleep: async (ms) => {
+          sleeps.push(ms);
+        },
+        random: () => random,
         now: () => now,
       },
     });
@@ -611,6 +622,8 @@ describe('routine', () => {
     stdoutTTY = false;
     interrupt = () => () => undefined;
     msPerMinute = 60_000;
+    sleeps = [];
+    random = 0;
     now = new Date(2026, 9, 4, 14, 37);
     answer = null;
     answers = [];
@@ -1784,6 +1797,150 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect(api.routineCalls.map((p) => p.step)).toEqual([0, 0, 0]);
       expect((await runs())[0]?.outcome).toBe('nothing');
+      // A backoff that doubles, with up to half again at random (VOU-613).
+      expect(sleeps).toEqual([2_000, 4_000]);
+      random = 1;
+      busy = 2;
+      sleeps = [];
+      await run('routine', 'run');
+      expect(sleeps).toEqual([3_000, 6_000]);
+    });
+
+    it('waits for the Retry-After of a rate limited step, plus jitter, and asks the same step again (VOU-613)', async () => {
+      let limited = 1;
+      random = 0.5;
+      api.routineReply = () =>
+        limited-- > 0
+          ? error(429, 'rate_limited', undefined, { 'Retry-After': '30' })
+          : null;
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(sleeps).toEqual([37_500]);
+      const [first, again] = api.routineCalls;
+      expect(again).toMatchObject({ runId: first?.runId, step: 0 });
+      expect((await runs())[0]?.outcome).toBe('nothing');
+    });
+
+    it('takes the backoff for a Retry-After of 0 and a 503 with none (VOU-613)', async () => {
+      const replies = [
+        error(429, 'rate_limited', undefined, { 'Retry-After': '0' }),
+        error(503, 'unavailable'),
+      ];
+      api.routineReply = () => replies.shift() ?? null;
+      await run('routine', 'run');
+      expect(sleeps).toEqual([2_000, 4_000]);
+      expect((await runs())[0]?.outcome).toBe('nothing');
+    });
+
+    it('ends the run as api_later when the API asks for a wait past its cap, never waiting (VOU-613)', async () => {
+      for (const header of ['3600', '9'.repeat(400)]) {
+        api.routineReply = () =>
+          error(429, 'rate_limited', undefined, { 'Retry-After': header });
+        const result = await run('routine', 'run');
+        expect(result.code).toBe(1);
+        expect(sleeps).toEqual([]);
+        expect(api.routineCalls).toHaveLength(1);
+        api.routineCalls = [];
+        expect(result.out).toContain(
+          'Routine run failed. The API asked this run to come back later',
+        );
+        expect(result.out).toContain('Fix: SealKeeper was busy');
+        expect(result.out).not.toContain('Could not read the API');
+      }
+      expect((await runs()).map((r) => r.failure)).toEqual([
+        'api_later',
+        'api_later',
+      ]);
+      expect((await runs())[0]?.reason).toBe(
+        'the API asked this run to come back later, in 1 hour',
+      );
+    });
+
+    it('ends the run as api_later when a wait is past what is left of the run (VOU-613)', async () => {
+      // A run of 15 minutes of 4 seconds, 60 seconds, which a Retry-After
+      // of 61 is past.
+      msPerMinute = 4_000;
+      api.routineReply = () =>
+        error(429, 'rate_limited', undefined, { 'Retry-After': '61' });
+      await run('routine', 'run');
+      expect(sleeps).toEqual([]);
+      expect((await runs())[0]).toMatchObject({
+        outcome: 'failed',
+        failure: 'api_later',
+      });
+    });
+
+    it('ends the run at once on a 429 about the day, such as game_cap_reached (VOU-613)', async () => {
+      api.routineReply = () =>
+        error(429, 'game_cap_reached', undefined, { 'Retry-After': '43200' });
+      await run('routine', 'run');
+      expect(sleeps).toEqual([]);
+      expect(api.routineCalls).toHaveLength(1);
+      expect((await runs())[0]).toMatchObject({
+        outcome: 'failed',
+        reason: 'the API asked this run to come back later, in 12 hours',
+        failure: 'api_later',
+      });
+    });
+
+    it('ends the run as api_later after the last try of a rate limited step (VOU-613)', async () => {
+      api.routineReply = () =>
+        error(429, 'rate_limited', undefined, { 'Retry-After': '5' });
+      await run('routine', 'run');
+      expect(sleeps).toEqual([5_000, 5_000]);
+      expect(api.routineCalls).toHaveLength(3);
+      expect((await runs())[0]).toMatchObject({
+        outcome: 'failed',
+        reason: 'the API asked this run to come back later, in 1 minute',
+        failure: 'api_later',
+      });
+    });
+
+    it('sends a rate limited submit again after the wait and keeps the claim (VOU-613)', async () => {
+      const task = api.add();
+      api.steps = [api.task(task)];
+      let limited = 1;
+      api.submitReply = (t) => {
+        if (limited-- > 0) {
+          return error(429, 'rate_limited', undefined, { 'Retry-After': '20' });
+        }
+        Object.assign(t, { state: 'verified' });
+        return Response.json(t);
+      };
+      await run('routine', 'run');
+      expect(sleeps).toEqual([20_000]);
+      expect(api.submitted).toHaveLength(2);
+      expect(api.released).toEqual([]);
+      const lines = await readRoutine();
+      expect(lines.some((e) => e.kind === 'submit_failed')).toBe(false);
+      expect(lines.find((e) => e.kind === 'submit')).toMatchObject({
+        state: 'verified',
+      });
+    });
+
+    it('releases a submit still rate limited after its tries, and a wait that does not fit ends the run (VOU-613)', async () => {
+      const task = api.add();
+      api.steps = [api.task(task)];
+      api.submitReply = () =>
+        error(429, 'rate_limited', undefined, { 'Retry-After': '10' });
+      await run('routine', 'run');
+      expect(sleeps).toEqual([10_000, 10_000]);
+      expect(api.submitted).toHaveLength(3);
+      expect(api.released).toEqual([task.id]);
+      expect((await runs())[0]?.outcome).toBe('done');
+
+      const next = api.add();
+      api.steps = [api.task(next)];
+      sleeps = [];
+      api.submitReply = () =>
+        error(429, 'rate_limited', undefined, { 'Retry-After': '7200' });
+      await run('routine', 'run');
+      expect(sleeps).toEqual([]);
+      expect(api.released).toEqual([task.id, next.id]);
+      expect((await runs())[1]).toMatchObject({
+        outcome: 'failed',
+        failure: 'api_later',
+      });
     });
 
     it('is skipped while another run holds the lock, and when the routine is off', async () => {

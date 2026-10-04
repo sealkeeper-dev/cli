@@ -53,15 +53,19 @@ type SubmitOptions = {
 // Why a submit sent nothing, or what SealKeeper refused. message is the
 // line to show, code the API's error code, or the check here that refused
 // it, verification the verification failure when SealKeeper checked the
-// answer and found it wrong.
+// answer and found it wrong. rateLimited is the API's 429, kept so the
+// routine waits for its Retry-After before the next step (VOU-613).
 export class SubmitRefused extends Error {
   override name = 'SubmitRefused';
+  readonly rateLimited?: ApiError;
   constructor(
     message: string,
     readonly code: string,
     readonly verification?: string,
+    cause?: ApiError,
   ) {
     super(message);
+    if (cause?.status === 429) this.rateLimited = cause;
   }
 }
 
@@ -162,6 +166,8 @@ export async function submitAnswer(
           ? refusal(error)
           : error.message,
         error.code,
+        undefined,
+        error,
       );
     }
     await recordEvent({
@@ -187,6 +193,8 @@ export async function submitAnswer(
         throw new SubmitRefused(
           `submitted, but reporting the outcome failed: ${error.message}. Run ${cli('submit')} again to retry`,
           error.code,
+          undefined,
+          error,
         );
       }
       throw error;

@@ -48,6 +48,7 @@ import {
   taskPrompt,
   verdictOf,
 } from './routine-prompt.js';
+import { durationText } from './sync.js';
 import { recordClaims } from './tasks.js';
 
 // One routine run, the loop the API drives (VOU-599). sealkeeper routine
@@ -58,11 +59,13 @@ import { recordClaims } from './tasks.js';
 // the Mastra bundle, so it imports nothing that installs a job.
 
 // What a run needs besides the agent. Tests shorten the wall clock with
-// msPerMinute and pass a sleep that does not wait.
+// msPerMinute, pass a sleep that does not wait and a random source for the
+// jitter of a wait (VOU-613).
 export type RunDeps = {
   fetch: typeof fetch;
   msPerMinute?: number;
   sleep?: (ms: number) => Promise<void>;
+  random?: () => number;
 };
 
 // The agent of a run, made at the first question in the run's working
@@ -74,10 +77,12 @@ export type RunAgent = {
 
 // What failed in a failed run, kept in its run line as failure. The
 // routine screen says the fix beside it (RUN_FAILURES in
-// commands/routine.ts). agent_auth and agent_tools since VOU-601.
+// commands/routine.ts). agent_auth and agent_tools since VOU-601,
+// api_later since VOU-613.
 export type RunFailure =
   | 'key'
   | 'api'
+  | 'api_later'
   | 'old_api'
   | 'workdir'
   | 'agent_missing'
@@ -95,11 +100,15 @@ const PROBLEM_FAILURE: Record<AgentProblem['kind'], RunFailure> = {
 // the last call. A lock whose process is gone is stale sooner.
 const LOCK_MARGIN_MS = 10 * 60_000;
 
-// How often a step is asked again after the API said it is busy or could
-// not be reached, and the wait between. A step asked again is a no-op on
-// the server, so this is safe.
+// How often a step is asked again after the API said it is busy, rate
+// limited or could not be reached, and the first wait between, which
+// doubles with each try (VOU-613). A step asked again carries the same run
+// id and step, which the API answers as a no-op, so this is safe.
 const STEP_TRIES = 3;
 const STEP_RETRY_MS = 2_000;
+// The longest one wait of a run for the API, Retry-After included. A
+// longer one, or one past the run's wall clock, ends the run as api_later.
+const STEP_WAIT_MAX_MS = 2 * 60_000;
 
 const realSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -134,6 +143,7 @@ export async function routineRun(
   const deadline = startedAt.getTime() + timeoutMs;
   const tokenCap = routine.limits.tokensPerRun;
   const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
   let card: CardRefresh | null = null;
   let agentStarted = false;
   let tokens: number | null = null;
@@ -257,11 +267,15 @@ export async function routineRun(
         answer = await askStep(session, step, verdict);
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
-        await finish(
-          'failed',
-          `could not read the API: ${error.message}`,
-          error.status === 404 ? 'old_api' : 'api',
-        );
+        if (askedLater(error)) {
+          await comeBackLater(error);
+        } else {
+          await finish(
+            'failed',
+            `could not read the API: ${error.message}`,
+            error.status === 404 ? 'old_api' : 'api',
+          );
+        }
         return;
       }
       if (verdict !== null) {
@@ -357,15 +371,45 @@ export async function routineRun(
             await s.signer.sign(request),
           );
         } catch (error) {
-          const again =
-            error instanceof ApiError &&
-            (error.code === 'routine_step_busy' ||
-              error.status === 0 ||
-              error.status >= 500);
-          if (!again || tries >= STEP_TRIES) throw error;
-          await sleep(STEP_RETRY_MS);
+          if (!(error instanceof ApiError) || !askAgain(error)) throw error;
+          if (tries >= STEP_TRIES || !(await backOff(error, tries))) {
+            throw error;
+          }
         }
       }
+    }
+
+    // Waits before try n + 1 after a refusal on try n, and false, with no
+    // wait, when the wait does not fit. The wait is the API's Retry-After
+    // when it sent one, never shorter than the backoff of 2 then 4
+    // seconds, so a Retry-After of 0 is no tight loop. Up to half again
+    // at random goes on top, so runs refused together do not come back
+    // together. It fits when it is at most STEP_WAIT_MAX_MS and what is
+    // left of the run's wall clock, so no wait is past the run's own end,
+    // also in a Mastra operator's process. Retry-After is read as digits
+    // only (api.ts), so a negative or non-numeric one is none, and one too
+    // large to be a number is past every cap.
+    async function backOff(error: ApiError, tries: number): Promise<boolean> {
+      const asked = (error.retryAfterSec ?? 0) * 1000;
+      const base = Math.max(asked, STEP_RETRY_MS * 2 ** (tries - 1));
+      const room = Math.min(STEP_WAIT_MAX_MS, deadline - Date.now());
+      if (!(base <= room)) return false;
+      const spread = Math.min(Math.max(random(), 0), 1) * (base / 2);
+      await sleep(Math.min(room, Math.floor(base + spread)));
+      return true;
+    }
+
+    // Ends the run as api_later, the API asked it to come back later. The
+    // seconds it asked for, at most, never the header itself.
+    async function comeBackLater(error: ApiError): Promise<void> {
+      const sec = error.retryAfterSec;
+      await finish(
+        'failed',
+        sec !== null && sec <= DAY_SEC
+          ? `the API asked this run to come back later, in ${durationText(sec * 1000)}`
+          : 'the API asked this run to come back later',
+        'api_later',
+      );
     }
 
     // The wall clock or the token cap, when the run is past one.
@@ -455,38 +499,62 @@ export async function routineRun(
         return null;
       }
       await keepAnswer(workDir, task.id, text);
-      try {
-        const sent = await submitAnswer(s, task.id, text, { routine: true });
-        await appendRoutine(
-          {
-            kind: 'submit',
-            runId,
-            taskId: task.id,
-            taskType: task.type,
-            state: sent.result.state,
-          },
-          p,
-        );
-      } catch (error) {
-        if (!(error instanceof SubmitRefused || error instanceof ApiError)) {
-          throw error;
+      // A submit the API rate limited is sent again after the wait a step
+      // takes, since the API refused it before reading it (VOU-613). Past
+      // the tries, or when the wait does not fit, it fails as any refused
+      // submit, and a wait that does not fit ends the run.
+      for (let tries = 1; ; tries++) {
+        try {
+          const sent = await submitAnswer(s, task.id, text, {
+            routine: true,
+          });
+          await appendRoutine(
+            {
+              kind: 'submit',
+              runId,
+              taskId: task.id,
+              taskType: task.type,
+              state: sent.result.state,
+            },
+            p,
+          );
+          return null;
+        } catch (error) {
+          if (!(error instanceof SubmitRefused || error instanceof ApiError)) {
+            throw error;
+          }
+          const limited =
+            error instanceof SubmitRefused ? error.rateLimited : error;
+          const later =
+            limited !== undefined && askedLater(limited) && askAgain(limited)
+              ? limited
+              : null;
+          const fits =
+            later !== null &&
+            tries < STEP_TRIES &&
+            (await backOff(later, tries));
+          if (fits) continue;
+          await appendRoutine(
+            {
+              kind: 'submit_failed',
+              runId,
+              taskId: task.id,
+              taskType: task.type,
+              reason:
+                error instanceof SubmitRefused
+                  ? (error.verification ?? error.code)
+                  : error.code,
+            },
+            p,
+          );
+          if (!isGame(task)) await releaseQuietly(s, task.id);
+          if (later !== null && tries < STEP_TRIES) {
+            await comeBackLater(later);
+            return 'stop';
+          }
+          return null;
         }
-        await appendRoutine(
-          {
-            kind: 'submit_failed',
-            runId,
-            taskId: task.id,
-            taskType: task.type,
-            reason:
-              error instanceof SubmitRefused
-                ? (error.verification ?? error.code)
-                : error.code,
-          },
-          p,
-        );
-        if (!isGame(task)) await releaseQuietly(s, task.id);
       }
-      return null;
     }
 
     async function giveUp(
@@ -533,6 +601,23 @@ export async function routineRun(
     }
   }
 }
+
+const DAY_SEC = 24 * 60 * 60;
+
+// A refusal the next try may get through, a busy step, a network failure,
+// a 5xx and a 429 rate_limited, the burst answer of a quota. A 429 with a
+// code of its own, such as game_cap_reached with Retry-After at the next
+// 00:00 UTC, is about the day and is never asked again (VOU-613).
+const askAgain = (error: ApiError): boolean =>
+  error.code === 'routine_step_busy' ||
+  error.status === 0 ||
+  error.status >= 500 ||
+  (error.status === 429 && error.code === 'rate_limited');
+
+// A refusal that asks the run to come back later, a 429 or an answer with
+// Retry-After, rather than an API it could not read.
+const askedLater = (error: ApiError): boolean =>
+  error.status === 429 || error.retryAfterSec !== null;
 
 const isGame = (task: { kind: string }) =>
   task.kind === 'duel' || task.kind === 'challenge';
