@@ -23,6 +23,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
+import { resetBackgroundSyncThrottle } from '../background-sync.js';
 import {
   bindFolder,
   type Config,
@@ -33,12 +34,14 @@ import {
   readConfig,
   readRoutineConfig,
   writeConfig,
+  writeNudge,
   writeRoutineConfig,
 } from '../config.js';
 import { tildePath } from '../files.js';
 import { observeParts, readSource } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
+import { dayOf, readDay } from '../log.js';
 import { MANAGED_MARKER } from '../managed.js';
 import { routine } from '../mastra.js';
 import { declaredModel } from '../model-name.js';
@@ -191,6 +194,9 @@ class FakeApi {
   submitReply: ((task: TaskResponse) => Response) | null = null;
   // The fetch fails outright, as with no network.
   down = false;
+  // How many envelopes POST /v1/events took, and whether it fails.
+  synced = 0;
+  eventsDown = false;
 
   constructor(readonly agentId: string) {}
 
@@ -299,6 +305,14 @@ class FakeApi {
       if (reply !== null) return reply;
       const step = this.steps.shift();
       return Response.json(step ? step(p) : routineAnswer(p));
+    }
+    if (method === 'POST' && url.pathname === '/v1/events') {
+      if (this.eventsDown) return error(503, 'unavailable');
+      const { envelopes } = JSON.parse(String(init?.body)) as {
+        envelopes: string[];
+      };
+      this.synced += envelopes.length;
+      return Response.json({ accepted: envelopes.length, duplicates: 0 });
     }
     if (url.pathname === '/v1/game/status') {
       await this.payload(init);
@@ -456,6 +470,8 @@ describe('routine', () => {
   let random: number;
   // The clock a new routine's time comes from, local 14:37.
   let now: Date;
+  // The clock a run times its session and answers with, a second a read.
+  let tick: number;
   let answer: string | null;
   let answers: (string | null)[];
   let calls: { line: string; input?: string }[];
@@ -546,6 +562,10 @@ describe('routine', () => {
         },
         random: () => random,
         now: () => now,
+        clock: () => {
+          tick += 1000;
+          return tick;
+        },
       },
     });
     throwOnExit(program);
@@ -599,6 +619,23 @@ describe('routine', () => {
     });
   }
 
+  // The events in today's local log, as type and payload.
+  async function events(): Promise<[string, unknown][]> {
+    return (await readDay(dayOf(new Date()), paths())).map((e) => [
+      e.type,
+      e.payload,
+    ]);
+  }
+
+  // Turns automatic sync on, as a first sync the operator confirmed does,
+  // with the in-process throttle cleared, so a run's sync goes.
+  async function autoSyncOn(): Promise<void> {
+    const config = await readConfig();
+    if (config === null) throw new Error('no config');
+    await writeConfig({ ...config, autoSync: true });
+    resetBackgroundSyncThrottle();
+  }
+
   async function runs(): Promise<Extract<RoutineEntry, { kind: 'run' }>[]> {
     return (await readRoutine()).filter(
       (e): e is Extract<RoutineEntry, { kind: 'run' }> => e.kind === 'run',
@@ -630,6 +667,7 @@ describe('routine', () => {
     sleeps = [];
     random = 0;
     now = new Date(2026, 9, 4, 14, 37);
+    tick = 0;
     answer = null;
     answers = [];
     calls = [];
@@ -1402,6 +1440,156 @@ describe('routine', () => {
       await installed({ allow: ['dave'], allowSlugs: ['bob'] });
     });
 
+    // VOU-627. A run is SealKeeper work, the one place a session and its
+    // usage are recorded. claude -p reports input_tokens plus
+    // cache_creation_input_tokens in and output_tokens out, never cache
+    // reads, and the run times each answer with its clock.
+    it('records one session and one usage event per answer, timed by its clock', async () => {
+      const task = api.add();
+      api.steps = [api.task(task)];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [
+              { type: 'system', subtype: 'init', model: 'claude-opus-5' },
+              {
+                type: 'assistant',
+                message: {
+                  id: 'm1',
+                  usage: {
+                    input_tokens: 100,
+                    output_tokens: 40,
+                    cache_creation_input_tokens: 7,
+                    cache_read_input_tokens: 5000,
+                  },
+                },
+              },
+              { type: 'result', result: 'a\nb', total_cost_usd: 0.01 },
+            ],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      const [line] = await runs();
+      expect(line).toMatchObject({ outcome: 'done', agentStarted: true });
+      // The clock reads a second each time, the session start, the
+      // question, the answer and the session end.
+      expect(await events()).toEqual([
+        ['task.claimed', { task_id: task.id, task_type: task.taskType }],
+        ['session.start', { session_id: line?.runId }],
+        [
+          'usage',
+          {
+            tokens_in: 107,
+            tokens_out: 40,
+            latency_ms: 1000,
+            model: 'claude-opus-5',
+          },
+        ],
+        ['task.submitted', { task_id: task.id, task_type: task.taskType }],
+        ['session.end', { session_id: line?.runId, duration_ms: 3000 }],
+      ]);
+    });
+
+    it('records no session for a run that asks its agent nothing', async () => {
+      api.steps = [api.did('decline', 'Declined a duel invite.')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toEqual([]);
+      expect(await events()).toEqual([]);
+    });
+
+    it('writes no usage for an answer whose runtime reports no tokens in and out', async () => {
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [
+              {
+                type: 'assistant',
+                message: { id: 'm1', usage: { output_tokens: 40 } },
+              },
+              { type: 'result', result: 'a\nb', total_cost_usd: 0.01 },
+            ],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      const types = (await events()).map(([type]) => type);
+      expect(types).toContain('session.start');
+      expect(types).toContain('session.end');
+      expect(types).not.toContain('usage');
+    });
+
+    it('closes its session when the run fails or stops at a limit', async () => {
+      api.steps = [api.task(api.add())];
+      nextAgents = [() => new FakeAgent([assistant('m1', 50)], 1)];
+      expect((await run('routine', 'run')).code).toBe(1);
+      expect((await runs())[0]).toMatchObject({ outcome: 'failed' });
+      expect((await events()).map(([type]) => type)).toEqual([
+        'task.claimed',
+        'session.start',
+        'usage',
+        'session.end',
+      ]);
+
+      await setRoutine({
+        limits: { ...(await readRoutineConfig()).limits, tokensPerRun: 1000 },
+      });
+      api.steps = [api.task(api.add())];
+      nextAgents = [() => new FakeAgent([assistant('m2', 5000)], 'hang')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect((await runs()).at(-1)).toMatchObject({ outcome: 'stopped' });
+      const types = (await events()).map(([type]) => type).slice(4);
+      // A stopped answer took no answer's time, so no usage.
+      expect(types).toEqual(['task.claimed', 'session.start', 'session.end']);
+    });
+
+    it('syncs at its end once automatic sync is on, and never before', async () => {
+      api.steps = [api.task(api.add())];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.requests).not.toContain('POST /v1/events');
+      expect(api.synced).toBe(0);
+
+      await autoSyncOn();
+      api.steps = [api.task(api.add())];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.requests.at(-1)).toBe('POST /v1/events');
+      // Both runs' events, the first run's included.
+      expect(api.synced).toBe((await events()).length);
+    });
+
+    // VOU-627. The end of a run is a SealKeeper moment, so it refreshes
+    // the goal the session summary reads while the nudge is on, and only
+    // then.
+    it('reads the goal at its end once the nudge is on, and never with it off', async () => {
+      const goal = `GET /v1/agents/${agentId}/goal`;
+      api.steps = [api.task(api.add())];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.requests).not.toContain(goal);
+
+      await writeNudge(true, paths());
+      api.steps = [api.task(api.add())];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.requests.at(-1)).toBe(goal);
+    });
+
+    it('keeps a failed sync to one line and never fails the run', async () => {
+      await autoSyncOn();
+      api.eventsDown = true;
+      api.steps = [api.task(api.add())];
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(result.err).toBe('');
+      const [line] = await runs();
+      expect(line).toMatchObject({ outcome: 'done' });
+      const failed = (await readRoutine()).filter(
+        (e) => e.kind === 'sync_failed',
+      );
+      expect(failed).toEqual([
+        { kind: 'sync_failed', runId: line?.runId, at: expect.any(String) },
+      ]);
+    });
+
     it('asks the routine route step by step with the run id, the limits, the allowlist and the game choice, until done', async () => {
       await setRoutine({ game: true });
       api.steps = [
@@ -1831,7 +2019,7 @@ describe('routine', () => {
       expect(result.out).toContain(
         'Routine run stopped. Stopped after 15 minutes.',
       );
-      expect((await runs())[0]).toMatchObject({ outcome: 'stopped' });
+      expect((await runs()).at(-1)).toMatchObject({ outcome: 'stopped' });
     });
 
     it('fails with the fix when the agent does not start or the API does not answer', async () => {
@@ -2357,6 +2545,30 @@ describe('routine', () => {
       expect((await readRoutineConfig()).schedule?.agent).toBe('openclaw');
     });
 
+    // VOU-627. usage.input in and usage.output out, as the live adapter
+    // read them, and nothing when one is missing.
+    it('records the session and the usage OpenClaw reports for each answer', async () => {
+      await installedOpenClaw();
+      api.steps = [api.task(api.add()), api.task(api.add())];
+      nextAgents = [
+        () => claw(envelope('a\nb')),
+        () => claw(envelope('a\nb', { usage: { output: 20, total: 120 } })),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      const [line] = await runs();
+      const activity = (await events()).filter(
+        ([type]) => !type.startsWith('task.'),
+      );
+      expect(activity).toEqual([
+        ['session.start', { session_id: line?.runId }],
+        [
+          'usage',
+          { tokens_in: 100, tokens_out: 20, latency_ms: 1000, model: 'gpt-x' },
+        ],
+        ['session.end', { session_id: line?.runId, duration_ms: 5000 }],
+      ]);
+    });
+
     it('puts each task to openclaw agent exec in a fresh empty folder, on a config that denies every tool, and submits its answer', async () => {
       await installedOpenClaw();
       const task = api.add({ taskType: 'text_dedupe' });
@@ -2548,7 +2760,7 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect(agents[0]?.killed).toContain('SIGTERM');
       expect(existsSync(dirname(spawned[0]?.cwd ?? ''))).toBe(false);
-      expect((await runs())[0]).toMatchObject({ outcome: 'stopped' });
+      expect((await runs()).at(-1)).toMatchObject({ outcome: 'stopped' });
     });
   });
 
@@ -2616,6 +2828,37 @@ describe('routine', () => {
         on: true,
         runtime: 'mastra',
       });
+    });
+
+    // VOU-627. inputTokens in and outputTokens out, in either naming, and
+    // the run syncs at its end once automatic sync is on.
+    it('records the session and the usage of each generate, and syncs at its end', async () => {
+      await autoSyncOn();
+      api.steps = [api.task(api.add())];
+      const result = await routine({
+        generate: async () => ({
+          text: 'a\nb',
+          usage: { promptTokens: 12, completionTokens: 4 },
+          response: { modelId: 'gpt-4.1' },
+        }),
+      });
+      expect(result).toMatchObject({ outcome: 'done' });
+      const activity = (await events()).filter(
+        ([type]) => !type.startsWith('task.'),
+      );
+      expect(activity.map(([type]) => type)).toEqual([
+        'session.start',
+        'usage',
+        'session.end',
+      ]);
+      expect(activity[0]?.[1]).toEqual({ session_id: result.runId });
+      expect(activity[1]?.[1]).toMatchObject({
+        tokens_in: 12,
+        tokens_out: 4,
+        model: 'gpt-4.1',
+      });
+      expect(api.requests.at(-1)).toBe('POST /v1/events');
+      expect(api.synced).toBe((await events()).length);
     });
 
     it('drops an answer that reports a tool call, and says a refused credential without its message', async () => {
@@ -2729,6 +2972,24 @@ describe('routine', () => {
         );
         const screen = await run('routine');
         expect(screen.out).toContain('Routine run stopped by its caller.');
+      });
+
+      it('sends nothing after an abort, the events wait for the next sync', async () => {
+        await autoSyncOn();
+        api.steps = [api.task(api.add())];
+        const controller = new AbortController();
+        const result = await routine(
+          {
+            generate: () => {
+              controller.abort();
+              return new Promise(() => undefined);
+            },
+          },
+          { signal: controller.signal },
+        );
+        expect(result).toMatchObject({ outcome: 'aborted' });
+        expect(api.requests).not.toContain('POST /v1/events');
+        expect((await events()).map(([type]) => type)).toContain('session.end');
       });
 
       it('ends a wait for the API at once and asks no step after it', async () => {

@@ -34,10 +34,11 @@ import { readEnv } from './env.js';
 //
 // routine.jsonl under the CLI home is the routine's own log, one JSON object
 // a line. One run line per run, and a line for every step the API answered,
-// every submit, failed submit, verdict, answer the agent did not give and
-// limit that stopped the agent. A first run's watcher reads the lines of
-// its run as they come, see routine-watch.ts (RS-9). The API counts the
-// day against the limits from its own records, never from this log.
+// every submit, failed submit, verdict, answer the agent did not give,
+// limit that stopped the agent and failed sync at the end of a run. A
+// first run's watcher reads the lines of its run as they come, see
+// routine-watch.ts (RS-9). The API counts the day against the limits from
+// its own records, never from this log.
 
 export type RoutinePaths = {
   log: string;
@@ -221,6 +222,14 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskType: z.string().optional(),
     reason: z.string(),
     released: z.boolean(),
+  }),
+  // The sync at the end of a run failed (VOU-627). The run's events stay
+  // in the local log and go with the next sync. An older CLI skips the
+  // line, as any line it does not read.
+  z.object({
+    kind: z.literal('sync_failed'),
+    at: At,
+    runId: z.string(),
   }),
   z.object({
     kind: z.literal('limit'),

@@ -87,8 +87,7 @@ export async function loadGoal(
 /*
  * Asks the API for the goal and caches the answer. Throws the API client's
  * ApiError, network_error when it did not answer, and for an answer for
- * another agent. The SessionEnd hook keeps the nudge's cache filled with
- * it.
+ * another agent.
  */
 export async function fetchGoal(
   config: Pick<Config, 'agentId' | 'apiUrl'>,

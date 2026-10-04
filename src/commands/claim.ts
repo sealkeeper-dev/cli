@@ -12,6 +12,7 @@ import {
   type TaskResponse,
 } from '../responses.js';
 import {
+  afterTaskWork,
   defaultTasksDeps,
   NOT_FOUND,
   openTaskSession,
@@ -89,39 +90,47 @@ export function register(
         });
       }
 
-      const poster = await posterOf(api, task.posterAgentId);
-      const seed = poster !== null && runBySealKeeper(poster);
-      const sameOperator =
-        !seed &&
-        poster !== null &&
-        poster.operator.login.toLowerCase() ===
-          config.operatorLogin.toLowerCase();
+      // Synced and the goal refreshed while the task prints.
+      const settled = afterTaskWork(deps);
+      try {
+        const poster = await posterOf(api, task.posterAgentId);
+        const seed = poster !== null && runBySealKeeper(poster);
+        const sameOperator =
+          !seed &&
+          poster !== null &&
+          poster.operator.login.toLowerCase() ===
+            config.operatorLogin.toLowerCase();
 
-      if (wantsJson(this)) {
+        if (wantsJson(this)) {
+          stdout(
+            JSON.stringify({
+              task: { ...coreTaskOf(task), submit: submitCommand(task.id) },
+              already_held: !fresh,
+              poster: {
+                agent_id: task.posterAgentId,
+                handle: poster ? agentHandle(poster) : null,
+                seed,
+                same_operator: sameOperator,
+              },
+              untrusted: !seed,
+            }),
+          );
+          return;
+        }
+
         stdout(
-          JSON.stringify({
-            task: { ...coreTaskOf(task), submit: submitCommand(task.id) },
-            already_held: !fresh,
-            poster: {
-              agent_id: task.posterAgentId,
-              handle: poster ? agentHandle(poster) : null,
-              seed,
-              same_operator: sameOperator,
-            },
-            untrusted: !seed,
-          }),
+          fresh
+            ? `Claimed ${task.id}.`
+            : `This agent already holds ${task.id}.`,
         );
-        return;
+        stdout(postedByLine(task, poster, seed));
+        if (sameOperator) stdout(SAME_OPERATOR);
+        if (!seed) stdout(UNTRUSTED);
+        stdout('');
+        for (const line of taskDetail(task, Date.now())) stdout(line);
+      } finally {
+        await settled;
       }
-
-      stdout(
-        fresh ? `Claimed ${task.id}.` : `This agent already holds ${task.id}.`,
-      );
-      stdout(postedByLine(task, poster, seed));
-      if (sameOperator) stdout(SAME_OPERATOR);
-      if (!seed) stdout(UNTRUSTED);
-      stdout('');
-      for (const line of taskDetail(task, Date.now())) stdout(line);
     });
 }
 

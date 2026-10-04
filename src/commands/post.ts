@@ -32,6 +32,7 @@ import {
   insideHome,
 } from '../key-guard.js';
 import { POST_WHY } from '../ladder.js';
+import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
@@ -448,28 +449,35 @@ async function postAndPrint(
     throw error;
   }
 
-  if (wantsJson(cmd)) {
-    stdout(
-      JSON.stringify({
-        id: task.id,
-        state: task.state,
-        expiresAt: task.expiresAt,
-        // The assignee's handle. Left out for an open task.
-        ...(task.assignee ? { assignee: task.assignee.handle } : {}),
-      }),
-    );
-    return;
+  // A post writes no event, so nothing is synced. The goal the session
+  // summary reads is refreshed while the task prints.
+  const settled = keepNudgeFresh(deps.fetch);
+  try {
+    if (wantsJson(cmd)) {
+      stdout(
+        JSON.stringify({
+          id: task.id,
+          state: task.state,
+          expiresAt: task.expiresAt,
+          // The assignee's handle. Left out for an open task.
+          ...(task.assignee ? { assignee: task.assignee.handle } : {}),
+        }),
+      );
+      return;
+    }
+    // The handle as the API holds it now, else as it was given.
+    const handle =
+      assignee === undefined ? undefined : (task.assignee?.handle ?? assignee);
+    printFields([
+      ['id', task.id],
+      ['state', task.state],
+      ...(handle === undefined ? [] : [['for', handle] as [string, string]]),
+      ['expires', task.expiresAt],
+    ]);
+    for (const line of postLines(task, handle)) stdout(line);
+  } finally {
+    await settled;
   }
-  // The handle as the API holds it now, else as it was given.
-  const handle =
-    assignee === undefined ? undefined : (task.assignee?.handle ?? assignee);
-  printFields([
-    ['id', task.id],
-    ['state', task.state],
-    ...(handle === undefined ? [] : [['for', handle] as [string, string]]),
-    ['expires', task.expiresAt],
-  ]);
-  for (const line of postLines(task, handle)) stdout(line);
 }
 
 // --adopt. SealKeeper picks a ready made task in the category and posts it
@@ -512,30 +520,37 @@ async function adoptPost(
     if (error instanceof ApiError) cmd.error(adoptRefusal(error, category));
     throw error;
   }
-  if (wantsJson(cmd)) {
-    stdout(
-      JSON.stringify({
-        id: task.id,
-        state: task.state,
-        expiresAt: task.expiresAt,
-        taskType: task.taskType,
-        category: task.category ?? category,
-        adopted: true,
-      }),
-    );
-    return;
-  }
-  printFields([
-    ['id', task.id],
-    ['state', task.state],
-    ['type', task.taskType],
-    ['category', task.category ?? category],
-    ['expires', task.expiresAt],
-  ]);
-  if (task.verification.kind === 'counterparty') {
-    for (const line of postLines(task, undefined)) stdout(line);
-  } else {
-    stdout(ADOPTED_CHECK);
+  // The goal the session summary reads is refreshed while the task
+  // prints.
+  const settled = keepNudgeFresh(deps.fetch);
+  try {
+    if (wantsJson(cmd)) {
+      stdout(
+        JSON.stringify({
+          id: task.id,
+          state: task.state,
+          expiresAt: task.expiresAt,
+          taskType: task.taskType,
+          category: task.category ?? category,
+          adopted: true,
+        }),
+      );
+      return;
+    }
+    printFields([
+      ['id', task.id],
+      ['state', task.state],
+      ['type', task.taskType],
+      ['category', task.category ?? category],
+      ['expires', task.expiresAt],
+    ]);
+    if (task.verification.kind === 'counterparty') {
+      for (const line of postLines(task, undefined)) stdout(line);
+    } else {
+      stdout(ADOPTED_CHECK);
+    }
+  } finally {
+    await settled;
   }
 }
 

@@ -23,6 +23,7 @@ import {
   type Paths,
   paths,
   profileUrl,
+  readRoutineConfig,
 } from '../config.js';
 import { exists } from '../files.js';
 import { duelsStarted } from '../game.js';
@@ -89,9 +90,11 @@ import { actionLine, agentAnswer, levelLine } from './run.js';
 // env is what runtime detection reads, for the one time runtime question.
 export type StatusDeps = TasksDeps & { env?: () => NodeJS.ProcessEnv };
 
-export const NO_ADAPTER = `No adapter installed and nothing recorded in 7 days. Run ${INSTALL_COMMAND}.`;
+// The hooks and adapters record nothing since VOU-627, so the CLI sees an
+// adapter only as the Claude Code hooks or a daily routine job.
+export const NO_ADAPTER = `No Claude Code hooks or daily routine here, and no SealKeeper work recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${INSTALL_COMMAND} again, or npm i -g sealkeeper for a stable path.`;
-export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run ${INSTALL_COMMAND} again to remove them.`;
+export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold hooks of an older sealkeeper, which record nothing now. Run ${INSTALL_COMMAND} again to remove them.`;
 export const NOTHING_WAITS = 'Nothing waits for you.';
 const QUIET_DAYS = 7;
 const stdoutIsTTY = () => process.stdout.isTTY === true;
@@ -520,16 +523,21 @@ async function toolHooksLeft(deps: StatusDeps): Promise<boolean> {
   return found.some(Boolean);
 }
 
-// True when neither Claude Code settings file holds our hooks and the log
-// has no event in the last seven UTC days, today included. The CLI cannot see
-// the Mastra or OpenClaw adapters, which live in other code, but they write
-// to the same log, so an agent using them is never quiet for long.
+// True when neither Claude Code settings file holds our hooks, no daily
+// routine job is written, and the log has no event in the last seven UTC
+// days, today included. Since 0.5.0 the log holds SealKeeper work only,
+// tasks and routine runs, and no adapter writes an event for an agent's
+// own sessions (VOU-627). So the warning means this machine shows no way
+// in to SealKeeper work and none was done for a week. The CLI cannot see
+// the Mastra or OpenClaw adapters, which live in other code, and an agent
+// using them that did no SealKeeper work in a week is warned too.
 async function noAdapterAndQuiet(
   deps: StatusDeps,
   now: Date,
   p: Paths,
 ): Promise<boolean> {
   if (await claudeCodeHooksIn(deps)) return false;
+  if (await routineJobWritten(p)) return false;
   for (let i = 0; i < QUIET_DAYS; i++) {
     const day = dayOf(new Date(now.getTime() - i * DAY_MS));
     const size = await stat(p.logFile(day)).then(
@@ -539,6 +547,16 @@ async function noAdapterAndQuiet(
     if (size > 0) return false;
   }
   return true;
+}
+
+// Whether routine on wrote the daily job. A routine.json that does not
+// read counts as none.
+async function routineJobWritten(p: Paths): Promise<boolean> {
+  try {
+    return (await readRoutineConfig(p)).schedule !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 // The first line of each event_id, in log order. A line written twice, as

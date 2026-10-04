@@ -926,7 +926,7 @@ describe('status', () => {
         join(dir, name),
         JSON.stringify({
           hooks: {
-            Stop: [
+            SessionEnd: [
               {
                 hooks: [
                   {
@@ -951,7 +951,7 @@ describe('status', () => {
 
     it('warns once on stderr with no hooks and nothing in 7 days', async () => {
       expect(NO_ADAPTER).toBe(
-        'No adapter installed and nothing recorded in 7 days. Run npx sealkeeper init.',
+        'No Claude Code hooks or daily routine here, and no SealKeeper work recorded in 7 days. Run npx sealkeeper init.',
       );
       await eventDaysAgo(8);
       const { code, out, err } = await run('status');
@@ -985,11 +985,29 @@ describe('status', () => {
       await eventDaysAgo(6);
       expect((await run('status')).err).toBe('');
     });
+
+    // VOU-627. The log holds SealKeeper work only, so a written daily job
+    // counts as a way in, as the hooks do.
+    it('does not warn when the daily routine job is written', async () => {
+      await writeRoutineConfig({
+        ...defaultRoutineConfig(),
+        schedule: {
+          time: '23:59',
+          scheduler: 'cron',
+          agent: 'claude-code',
+          agentCommand: '/usr/local/bin/claude',
+          job: 'run.sealkeeper.routine',
+          files: [],
+          installedAt: new Date().toISOString(),
+        },
+      });
+      expect((await run('status')).err).not.toContain(NO_ADAPTER);
+    });
   });
 
-  // VOU-451. The hooks record sessions only. An install before 0.4.14 also
-  // wrote PreToolUse, PostToolUse and PostToolUseFailure, which record
-  // nothing now.
+  // VOU-451, VOU-627. An install before 0.4.14 also wrote PreToolUse,
+  // PostToolUse and PostToolUseFailure, and one before 0.5.0 Stop, which
+  // record nothing now.
   describe('tool call hooks an older install left', () => {
     async function writeHooks(file: string, events: string[]): Promise<void> {
       const scriptDir = join(home, 'lib', 'node_modules', 'sealkeeper', 'dist');
@@ -1011,11 +1029,17 @@ describe('status', () => {
         }),
       );
     }
-    const THREE = ['SessionStart', 'SessionEnd', 'Stop'];
-    const SIX = [...THREE, 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
+    const TWO = ['SessionStart', 'SessionEnd'];
+    const SIX = [
+      ...TWO,
+      'Stop',
+      'PreToolUse',
+      'PostToolUse',
+      'PostToolUseFailure',
+    ];
 
-    it('reads three hooks as complete and says nothing', async () => {
-      await writeHooks(join(home, 'claude', 'settings.json'), THREE);
+    it('reads two hooks as complete and says nothing', async () => {
+      await writeHooks(join(home, 'claude', 'settings.json'), TWO);
       expect((await run('status')).err).toBe('');
     });
 
@@ -1025,7 +1049,7 @@ describe('status', () => {
       expect(code).toBe(0);
       expect(JSON.parse(out)).toMatchObject({ local: { pending: 0 } });
       expect(TOOL_HOOKS_LEFT).toBe(
-        'The Claude Code settings still hold the tool call hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper init again to remove them.',
+        'The Claude Code settings still hold hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper init again to remove them.',
       );
       expect(err).toBe(`${TOOL_HOOKS_LEFT}\n`);
     });
@@ -1042,7 +1066,7 @@ describe('status', () => {
   describe('hooks that point at a sealkeeper that is gone', () => {
     function settings(command: string): string {
       return JSON.stringify({
-        hooks: { Stop: [{ hooks: [{ type: 'command', command }] }] },
+        hooks: { SessionEnd: [{ hooks: [{ type: 'command', command }] }] },
       });
     }
 

@@ -290,8 +290,9 @@ export type Paths = {
   // The last status answer, which status shows offline and labels as
   // cached, see status-answer.ts.
   status: string;
-  // Start time markers for hook adapters, one small file per session or tool
-  // call, so a later hook can compute a duration.
+  // Where a CLI before 0.5.0 kept a start time marker per Claude Code
+  // session. None is written now, and SessionEnd and agent delete remove
+  // the folder.
   sessions: string;
   // The goal answer, a cache the session nudge reads, see goal.ts.
   goal: string;

@@ -20,6 +20,7 @@ import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
 import {
+  afterTaskWork,
   CHALLENGE_SUBMITS,
   DUEL_SUBMITS,
   defaultTasksDeps,
@@ -282,24 +283,32 @@ export function register(
         if (error instanceof SubmitRefused) this.error(error.message);
         failOnApiError(this, error);
       }
-      const { result, task } = done;
-      if (wantsJson(this)) {
-        stdout(
-          JSON.stringify({
-            id: result.id,
-            state: result.state,
-            verification: task.verification.kind,
-            awaitingPoster: done.awaitingPoster,
-          }),
-        );
-        return;
-      }
-      printFields([
-        ['id', result.id],
-        ['state', result.state],
-      ]);
-      if (done.awaitingPoster) stdout(AWAITING_POSTER);
+      // Synced and the goal refreshed while the result prints.
+      const settled = afterTaskWork(deps);
+      printSubmitted(this, done);
+      await settled;
     });
+}
+
+// What submit prints, the result as JSON with --json.
+function printSubmitted(cmd: Command, done: Submitted): void {
+  const { result, task } = done;
+  if (wantsJson(cmd)) {
+    stdout(
+      JSON.stringify({
+        id: result.id,
+        state: result.state,
+        verification: task.verification.kind,
+        awaitingPoster: done.awaitingPoster,
+      }),
+    );
+    return;
+  }
+  printFields([
+    ['id', result.id],
+    ['state', result.state],
+  ]);
+  if (done.awaitingPoster) stdout(AWAITING_POSTER);
 }
 
 // Task specs come from other agents and an agent may follow what one says.

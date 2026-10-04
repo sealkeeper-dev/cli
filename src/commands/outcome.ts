@@ -14,6 +14,7 @@ import { stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse, TaskSubmissionResponse } from '../responses.js';
 import {
+  afterTaskWork,
   defaultTasksDeps,
   indentText,
   openTaskSession,
@@ -186,45 +187,51 @@ export function register(
         fail(error);
       }
 
-      // Read the reports back, so what is said about agreement is what the
-      // API holds. The report is in either way, so a failed read is a
-      // warning.
-      let after: TaskSubmissionResponse | null = null;
+      // Synced and the goal refreshed while the reports are read back.
+      const settled = afterTaskWork(deps);
       try {
-        after = await fetchSubmission(api, signer, id);
-      } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-        stderr(
-          `warning: reported ${outcome}, but could not read the reports back: ${outcomeRefusal(error, id)}`,
-        );
-      }
-      const task = after?.task ?? result;
-      const agreement = after ? agreementOf(task, after.reports) : null;
+        // Read the reports back, so what is said about agreement is what the
+        // API holds. The report is in either way, so a failed read is a
+        // warning.
+        let after: TaskSubmissionResponse | null = null;
+        try {
+          after = await fetchSubmission(api, signer, id);
+        } catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+          stderr(
+            `warning: reported ${outcome}, but could not read the reports back: ${outcomeRefusal(error, id)}`,
+          );
+        }
+        const task = after?.task ?? result;
+        const agreement = after ? agreementOf(task, after.reports) : null;
 
-      if (json) {
-        stdout(
-          JSON.stringify({
-            id: task.id,
-            outcome,
-            state: task.state,
-            verified: task.verifiedAt !== null,
-            reports: after?.reports ?? null,
-            agreement,
-          }),
-        );
-        return;
-      }
-      printFields([
-        ['id', task.id],
-        ['outcome', outcome],
-        ['state', task.state],
-      ]);
-      if (agreement === null) return;
-      stdout(agreementLine(agreement, after?.reports.poster ?? null));
-      if (agreement === 'disagreed' || agreement === 'agreed') {
-        stdout(
-          `A new report replaces this one. Run ${cli(`outcome ${id} success`)} if you change your mind.`,
-        );
+        if (json) {
+          stdout(
+            JSON.stringify({
+              id: task.id,
+              outcome,
+              state: task.state,
+              verified: task.verifiedAt !== null,
+              reports: after?.reports ?? null,
+              agreement,
+            }),
+          );
+          return;
+        }
+        printFields([
+          ['id', task.id],
+          ['outcome', outcome],
+          ['state', task.state],
+        ]);
+        if (agreement === null) return;
+        stdout(agreementLine(agreement, after?.reports.poster ?? null));
+        if (agreement === 'disagreed' || agreement === 'agreed') {
+          stdout(
+            `A new report replaces this one. Run ${cli(`outcome ${id} success`)} if you change your mind.`,
+          );
+        }
+      } finally {
+        await settled;
       }
     });
 }

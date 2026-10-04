@@ -130,16 +130,16 @@ describe('Claude Code settings', () => {
     expect(after.endsWith('\n')).toBe(false);
   });
 
-  // VOU-451. The hooks record sessions only.
-  it('a fresh install writes the three session hooks', async () => {
-    expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd', 'Stop']);
+  // VOU-451, VOU-627. The hooks write no event, Stop is retired.
+  it('a fresh install writes the two session hooks', async () => {
+    expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
-      added: ['SessionStart', 'SessionEnd', 'Stop'],
+      added: ['SessionStart', 'SessionEnd'],
       updated: [],
       removed: [],
     });
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
-      hooks: { SessionStart: [OURS], SessionEnd: [OURS], Stop: [OURS] },
+      hooks: { SessionStart: [OURS], SessionEnd: [OURS] },
     });
   });
 
@@ -224,7 +224,7 @@ describe('Claude Code settings', () => {
 
   it('keeps a tab indent, a four space indent and CRLF line endings', async () => {
     for (const indent of ['\t', '    ']) {
-      const before = { model: 'opus', hooks: { Stop: plain() } };
+      const before = { model: 'opus', hooks: { Notification: plain() } };
       const text = `${JSON.stringify(before, null, indent)}\n`;
       await writeFile(file(), text);
       await installHooks(file(), HOOK_COMMAND);
@@ -232,10 +232,7 @@ describe('Claude Code settings', () => {
         model: string;
         hooks: Record<string, unknown[]>;
       };
-      expected.hooks.Stop?.push(OURS);
-      for (const event of HOOK_EVENTS.filter((e) => e !== 'Stop')) {
-        expected.hooks[event] = [OURS];
-      }
+      for (const event of HOOK_EVENTS) expected.hooks[event] = [OURS];
       expect(await readFile(file(), 'utf8')).toBe(
         `${JSON.stringify(expected, null, indent)}\n`,
       );

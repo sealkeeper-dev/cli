@@ -12,6 +12,7 @@ import {
   type Spawner,
   type StdoutReader,
   spawnAgent,
+  type TokenSplit,
   type Transcript,
 } from './routine-agent.js';
 
@@ -184,11 +185,14 @@ const PLAIN_KIND = /^[a-z][a-z0-9_.-]{0,39}$/i;
 // calls no tool has neither. Exit 2, with status timeout, is OpenClaw's own
 // timeout and nothing else, a usage error is exit 1. The envelope also names
 // the provider, which is not read, so the id is the one the live adapter
-// reads from llm_output and both hash alike (VOU-614).
+// reads from llm_output and both hash alike (VOU-614). The split of an
+// answer's tokens is usage.input in and usage.output out, as OpenClaw's
+// llm_output reports them, known only when both are numbers.
 export class EnvelopeReader implements StdoutReader {
   private out = '';
   private over = false;
   tokens: number | null = null;
+  split: TokenSplit | null = null;
   costUsd: number | null = null;
   text: string | null = null;
   model: string | null = null;
@@ -245,6 +249,10 @@ export class EnvelopeReader implements StdoutReader {
     this.tokens =
       total ??
       (input !== null || output !== null ? (input ?? 0) + (output ?? 0) : null);
+    this.split =
+      input !== null && output !== null
+        ? { tokensIn: input, tokensOut: output }
+        : null;
     this.costUsd = num(record(usage?.cost)?.total) ?? num(envelope.costUsd);
     this.model = typeof envelope.model === 'string' ? envelope.model : null;
   }

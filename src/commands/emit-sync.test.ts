@@ -365,8 +365,8 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
-    // VOU-451. The hooks and adapters record sessions only. An adapter
-    // written for an older CLI that still emits tool.call keeps working.
+    // VOU-451. Tool calls are not recorded. An adapter written for an older
+    // CLI that still emits tool.call keeps working.
     it('with the type tool.call records nothing, says so in one line and exits 0', async () => {
       await initialise();
       const { code, out, err } = await api(

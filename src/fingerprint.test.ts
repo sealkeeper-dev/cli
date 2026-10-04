@@ -348,11 +348,11 @@ describe('Claude Code capture', () => {
 
     const hook = (
       event: string,
-      session: string,
+      _session: string,
       model: string | null = null,
     ) =>
       handleHook(
-        { event, sessionId: session, cwd: project, model },
+        { event, cwd: project, model },
         { fetch: (async () => Response.json({})) as typeof fetch, paths: p },
       );
 
@@ -399,10 +399,10 @@ describe('Claude Code capture', () => {
       });
     });
 
-    // VOU-451. The hooks are SessionStart, SessionEnd and Stop. A tool
-    // event from an older install reads nothing.
-    it('is captured by the three hooks install writes, and by no tool event', async () => {
-      expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd', 'Stop']);
+    // VOU-451, VOU-627. The hooks are SessionStart and SessionEnd. A tool
+    // event or Stop from an older install reads nothing.
+    it('is captured by the two hooks install writes, and by no retired hook', async () => {
+      expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
       for (const event of RETIRED_HOOK_EVENTS) await hook(event, 's1');
       await expect(readFile(p.fingerprintSources)).rejects.toThrow();
 

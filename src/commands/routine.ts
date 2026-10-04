@@ -156,6 +156,9 @@ export type RoutineDeps = {
   cli?: () => { program: string[]; invocation: string };
   // Tests shorten the wall clock with this.
   msPerMinute?: number;
+  // What times a run's session and each answer, in ms, see RunDeps. Tests
+  // pass one that ticks.
+  clock?: () => number;
   // How the first run starts, detached by default (RS-9). Tests run it in
   // this process with startInProcess.
   startRun?: RunStarter;

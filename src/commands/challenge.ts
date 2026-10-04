@@ -17,6 +17,7 @@ import type {
 } from '../responses.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import {
+  afterTaskWork,
   defaultTasksDeps,
   fieldLines,
   openTaskSession,
@@ -131,7 +132,11 @@ export function register(
       const answer = await attempt(this, () => send(session, step));
       if (step) await recordClaims(answer);
       if (json) {
+        // A step may claim, so it is synced and the goal refreshed while
+        // the answer prints.
+        const settled = step ? afterTaskWork(deps) : undefined;
         stdout(JSON.stringify(agentAnswer(answer)));
+        await settled;
         return;
       }
       const slug = await readOperatorSlug(session.config.agentId);

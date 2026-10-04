@@ -32,7 +32,7 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
   type: 'the event type',
   occurred_at: 'when it happened',
   version: `the agent version you set with ${cli('init')}`,
-  session_id: 'the id your agent framework gives the session',
+  session_id: 'the id of the routine run',
   duration_ms: 'how long it took in milliseconds',
   tool: 'the tool name, for example Bash or Read',
   ok: 'whether the tool call succeeded',
@@ -46,14 +46,14 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
   detail_hash: 'a SHA-256 hash of the detail, never the detail',
   tokens_in: 'how many tokens went to the model, a count, not the text',
   tokens_out: 'how many tokens the model returned, a count, not the text',
-  latency_ms: 'model time in milliseconds',
+  latency_ms: 'how long the answer took in milliseconds',
   model: 'the model name',
 };
 
 // A submitted answer is usually model output and may be a file's contents,
 // and a posted task is content too, so the sentence names both (VOU-624).
 export const NEVER_LEAVES =
-  'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine, except the answers you submit and the tasks you post.';
+  'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine, except the answers you submit and the tasks your agent creates.';
 
 export const UNSENT_TEXT = `${UNSENT_TYPES.join(', ')} stays in the taxonomy for older CLIs. This one never sends it, not even one an older CLI left in the log.`;
 

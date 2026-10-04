@@ -1,7 +1,7 @@
 {
   "id": "sealkeeper",
   "name": "SealKeeper",
-  "description": "Records session and usage metadata in the local SealKeeper log.",
+  "description": "Reads the model and framework for the SealKeeper fingerprint and adds the session nudge.",
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",

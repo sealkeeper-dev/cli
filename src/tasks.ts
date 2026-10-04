@@ -9,6 +9,7 @@ import {
   resolveApiUrl,
 } from './api.js';
 import { type Input, streamInput } from './ask.js';
+import { backgroundSync } from './background-sync.js';
 import { requireConfig } from './cli-config.js';
 import { type Config, type Paths, paths } from './config.js';
 import {
@@ -19,6 +20,7 @@ import { type EmitInput, emit } from './emit.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { dayOf, readDaysFrom } from './log.js';
+import { keepNudgeFresh } from './nudge.js';
 import { stderr, stdout } from './output.js';
 import type { CoreAnswerResponse, TaskResponse } from './responses.js';
 
@@ -88,6 +90,24 @@ export async function recordEvent(input: EmitInput): Promise<void> {
       `warning: could not record ${input.type} in the local log: ${(error as Error).message}`,
     );
   }
+}
+
+// What a task command does once it wrote a task event (VOU-627). Task work
+// is SealKeeper work, so it starts a sync through the gate every automatic
+// sync takes, as a routine run does at its end (backgroundSync), and
+// refreshes the goal the session summary reads (keepNudgeFresh). The gate
+// sends nothing before the operator's first sync showed the events and
+// asked, nothing with auto sync off and nothing inside the throttle. Both
+// are side tasks that print nothing and never reject, so a command starts
+// it after its write and awaits it after its output, and a failure never
+// fails the command.
+export async function afterTaskWork(
+  deps: Pick<TasksDeps, 'fetch'>,
+): Promise<void> {
+  await Promise.all([
+    backgroundSync({ fetch: deps.fetch }),
+    keepNudgeFresh(deps.fetch),
+  ]);
 }
 
 // Signs and sends a claim, submit or outcome request with the declared

@@ -73,9 +73,11 @@ const RUN_COMMAND_TEXT = commandText(RUN, INVOCATION);
 const VERBS = SLASH_COMMANDS.map((c) => c.verb);
 
 const OUR_ENTRY = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
-const EVENTS = ['SessionStart', 'SessionEnd', 'Stop'];
+const EVENTS = ['SessionStart', 'SessionEnd'];
 // The tool call hooks an install before 0.4.14 wrote next to them.
-const TOOL_EVENTS = ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
+// The hooks an older CLI installed, which install takes out (VOU-451,
+// VOU-627).
+const TOOL_EVENTS = ['Stop', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
 
 // The Claude Code install init runs and the uninstall agent delete runs
 // (VOU-603), driven here as one run per call. install and uninstall take
@@ -173,7 +175,7 @@ describe('the Claude Code install and uninstall', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('install into a missing file creates it with the three hooks', async () => {
+  it('install into a missing file creates it with the two hooks', async () => {
     const { code, out } = await run('install');
     expect(code).toBe(0);
     expect(out).toBe(
@@ -238,13 +240,14 @@ describe('the Claude Code install and uninstall', () => {
     expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
   });
 
-  // VOU-451. The hooks record sessions only, so a repeat install takes the
-  // tool call hooks of an older install out, in whichever file it writes.
+  // VOU-451, VOU-627. The hooks write no event, so a repeat install takes
+  // the tool call hooks and Stop of an older install out, in whichever file
+  // it writes.
   it.each([
     ['user', [], userFile],
     ['project', ['--scope', 'project'], projectFile],
   ] as const)(
-    'a repeat %s install over six hooks leaves three and every foreign hook',
+    'a repeat %s install over six hooks leaves two and every foreign hook',
     async (_scope, args, file) => {
       await mkdir(dirname(file()), { recursive: true });
       const older = JSON.parse(OTHER_TEXT) as {
@@ -272,7 +275,7 @@ describe('the Claude Code install and uninstall', () => {
 
       await writeFile(file(), `${JSON.stringify(older, null, 2)}\n`);
       expect((await run('install', ...args)).out).toContain(
-        `removed sealkeeper hooks for ${TOOL_EVENTS.join(', ')} from ${file()}, the hooks record sessions only\n`,
+        `removed sealkeeper hooks for ${TOOL_EVENTS.join(', ')} from ${file()}, which record nothing now\n`,
       );
     },
   );

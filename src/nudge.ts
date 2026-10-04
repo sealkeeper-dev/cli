@@ -17,10 +17,11 @@ import { dailyCeilingReached, todayOf } from './today.js';
 // stands and what waits for it without a person typing /sealkeeper-run.
 //
 // It is read from the cached goal only, so a session start never waits on
-// the network. A cache up to a day old is used, and the SessionEnd hook
-// refreshes it (claude-code.ts), as do status and the terminal run while
-// the nudge is on (keepNudgeFresh), which read the status route themselves.
-// Turning the nudge on fills it once, see setNudge. No cache, an older one or no config means
+// the network. A cache up to a day old is used. It is refreshed only at
+// SealKeeper moments, never by a session hook (VOU-627). status and the
+// terminal run, the task commands after their write, post, and a routine
+// run at its end call keepNudgeFresh while the nudge is on. Turning the
+// nudge on fills it once, see setNudge. No cache, an older one or no config means
 // no summary. It only runs once the operator said yes, nudge.json on, and
 // it only points at the run flow, which claims seed tasks, at tasks
 // addressed to this agent and at outcomes this agent owes. Never at open
@@ -218,7 +219,7 @@ export async function nudgeLines(
 
 // Writes the operator's answer to nudge.json, never config.json, which
 // CLI 0.4.4 and earlier read strictly. Turning it on also fills the goal
-// cache once, as the SessionEnd hook refreshes it, since the summary reads
+// cache once, since the summary reads
 // only that cache and the first session after would print nothing
 // (VOU-303). A cache under fifteen minutes old is kept. It is a side task,
 // so no answer, an error or no config leaves the cache as it was and says
@@ -232,11 +233,13 @@ export async function setNudge(
   if (on) await loadGoal({ fetch, paths: p }).catch(() => null);
 }
 
-// Refreshes the goal cache the summary reads, while the nudge is on, so
-// an agent without the SessionEnd hook, OpenClaw or Mastra, still gets a
-// summary. status and the terminal run call it beside their own read. A
-// cache under fifteen minutes old is kept. A side task, so it never
-// throws and says nothing. fetch defaults to the global one.
+// Refreshes the goal cache the summary reads, while the nudge is on. The
+// one way the cache is kept, at SealKeeper moments only (VOU-627). status
+// and the terminal run call it beside their own read, the task commands and
+// post after their write (afterTaskWork in tasks.ts), and a routine run at
+// its end. A cache under fifteen minutes old is kept, else one request with
+// the score's timeout. A side task, so it never throws and says nothing.
+// fetch defaults to the global one.
 export async function keepNudgeFresh(
   fetch?: typeof globalThis.fetch,
   p: Paths = paths(),

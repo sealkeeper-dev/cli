@@ -181,7 +181,9 @@ const num = (value: unknown): number | null =>
 
 // text, usage, toolCalls and the model id of a generate result, read
 // loosely. Tokens are totalTokens, else input and output, in either naming
-// Mastra has used. The model id as the live adapter reads a step's,
+// Mastra has used. The split is inputTokens (promptTokens) in and
+// outputTokens (completionTokens) out, known only when both are numbers.
+// The model id as the live adapter reads a step's,
 // response.modelId first, response.modelMetadata.modelId last
 // (rawModelIdOf).
 function resultOf(value: unknown): AgentResult {
@@ -194,11 +196,16 @@ function resultOf(value: unknown): AgentResult {
   const tokens =
     num(usage?.totalTokens) ??
     (input !== null || output !== null ? (input ?? 0) + (output ?? 0) : null);
+  const split =
+    input !== null && output !== null
+      ? { split: { tokensIn: input, tokensOut: output } }
+      : {};
   const calls = Array.isArray(result?.toolCalls) ? result.toolCalls.length : 0;
   if (calls > 0) {
     return {
       ...empty(),
       ...model,
+      ...split,
       tokens,
       exitCode: 1,
       problem: {
@@ -212,7 +219,7 @@ function resultOf(value: unknown): AgentResult {
     typeof result?.text === 'string' && result.text.trim() !== ''
       ? result.text
       : null;
-  return { ...empty(), ...model, text, tokens };
+  return { ...empty(), ...model, ...split, text, tokens };
 }
 
 // A provider credential that is missing or refused, by the status or the

@@ -12,12 +12,14 @@ import { writeFileAtomic } from './config.js';
 
 // What follows the CLI invocation in every hook command we write.
 const HOOK_ARGS = 'hook claude-code';
-// The hooks record sessions only. Stop closes a session that never gets a
-// SessionEnd, see claude-code.ts.
-export const HOOK_EVENTS = ['SessionStart', 'SessionEnd', 'Stop'] as const;
-// The tool call hooks a CLI before 0.4.14 installed. They record nothing
-// now, and install takes ours out of each file it writes.
+// The hooks write no event, see claude-code.ts. SessionStart reads the
+// model and prints the nudge, SessionEnd syncs what is pending.
+export const HOOK_EVENTS = ['SessionStart', 'SessionEnd'] as const;
+// The tool call hooks a CLI before 0.4.14 installed, and Stop, which a CLI
+// before 0.5.0 installed to close a session that never ended. They record
+// nothing now, and install takes ours out of each file it writes.
 export const RETIRED_HOOK_EVENTS = [
+  'Stop',
   'PreToolUse',
   'PostToolUse',
   'PostToolUseFailure',

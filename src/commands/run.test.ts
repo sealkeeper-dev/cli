@@ -19,10 +19,12 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetBackgroundSyncThrottle } from '../background-sync.js';
 import { hookCommand } from '../claude-code-settings.js';
 import { paths, writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
+import { countPending } from '../log.js';
 import { createProgram } from '../program.js';
 import { ANSWER_FILE, submitCommand } from '../tasks.js';
 import {
@@ -497,6 +499,50 @@ describe('run', () => {
       api.answer = { ...api.answer, tasks: [first, second] };
       await run('run', '--json');
       expect(await claimedInLog()).toEqual([first.id, second.id]);
+    });
+
+    // VOU-627. The claims run records sync themselves, through the gate.
+    it('sends the claims it recorded once automatic sync is on', async () => {
+      await writeConfig({
+        agentId,
+        operatorLogin: 'alice',
+        name: 'scout',
+        version: '1.0.0',
+        apiUrl: API_URL,
+        registeredAt: new Date().toISOString(),
+        autoSync: true,
+      });
+      resetBackgroundSyncThrottle();
+      const sent: string[] = [];
+      const runs = api.fetch;
+      api.fetch = (async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        const path = new URL(String(input)).pathname;
+        if (path !== '/v1/events') return runs(input, init);
+        sent.push(path);
+        return Response.json({ accepted: 1, duplicates: 0 });
+      }) as typeof fetch;
+      const task = coreTask();
+      api.answer = {
+        tasks: [task],
+        waiting: [],
+        next: [],
+        standing: {
+          level: 'none',
+          verified: 0,
+          nextLevel: 'bronze',
+          needs: null,
+        },
+        limited: null,
+      };
+      const result = await run('run', '--json');
+      expect(result.code).toBe(0);
+      expect(result.err).toBe('');
+      expect(result.out.trim().split('\n')).toHaveLength(1);
+      expect(sent).toEqual(['/v1/events']);
+      expect(await countPending(paths())).toBe(0);
     });
 
     it('prints limited as the API sent it', async () => {

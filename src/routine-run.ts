@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RoutineNextRequest, type TaskOutcome } from '@sealkeeper/schema';
+import { clampMs } from './adapter-core.js';
 import {
   type ApiClient,
   ApiError,
   createApiClient,
   resolveApiUrl,
 } from './api.js';
+import { backgroundSync } from './background-sync.js';
 import { type CardRefresh, refreshCard } from './card.js';
 import { releaseClaim } from './commands/release.js';
 import { SubmitRefused, submitAnswer } from './commands/submit.js';
@@ -20,11 +22,13 @@ import {
   readConfig,
   writeFileAtomic,
 } from './config.js';
+import { type EmitInput, emit } from './emit.js';
 import { createObserver } from './fingerprint-observer.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { declaredModel } from './model-name.js';
 import { modelNameOf, toolNameOf } from './names.js';
+import { keepNudgeFresh } from './nudge.js';
 import type { RoutineAnswerResponse } from './responses.js';
 import {
   acquireLock,
@@ -65,13 +69,15 @@ import { recordClaims } from './tasks.js';
 // msPerMinute, pass a sleep that does not wait and a random source for the
 // jitter of a wait (VOU-613). signal is the caller's of a Mastra routine,
 // which stops the run as its limits do (VOU-620). sleep ends at once when
-// it aborts.
+// it aborts. clock, in milliseconds, times the run's session and each
+// answer for their events (VOU-627), performance.now by default.
 export type RunDeps = {
   fetch: typeof fetch;
   msPerMinute?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
   signal?: AbortSignal;
+  clock?: () => number;
 };
 
 // The agent of a run, made at the first question in the run's working
@@ -156,6 +162,18 @@ type StopFor = NonNullable<AgentResult['stoppedFor']>;
  * gets what is left of both limits. An abort stops the run the way a limit
  * does, and also ends a wait for the API at once with no step asked after
  * it. A signal aborted before the call starts nothing and takes no lock.
+ *
+ * A run is SealKeeper work, so it records its activity in the local log
+ * (VOU-627), the one place the CLI writes a session or a usage event. A
+ * session.start, with the run id as the session id, when the run first
+ * asks its agent, so a run that asks nothing records no session, and a
+ * session.end with its duration when the run ends, whatever ends it. A
+ * usage event for each answer the runtime reported tokens in and out for,
+ * with the time the answer took and the model, see recordUsage. Once the
+ * lock is released a run that held it syncs through the gate every
+ * automatic sync takes, unless its caller aborted it, so nothing leaves
+ * before the operator's first sync and nothing with auto sync off. A sync
+ * that fails is a sync_failed line and never fails the run.
  */
 export async function routineRun(
   deps: RunDeps,
@@ -173,6 +191,10 @@ export async function routineRun(
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
   const aborted = () => deps.signal?.aborted === true;
+  const clock = deps.clock ?? (() => performance.now());
+  // When the run first asked its agent, by clock, until its session.end is
+  // written, then null again.
+  let sessionAt: number | null = null;
   let card: CardRefresh | null = null;
   let agentStarted = false;
   let tokens: number | null = null;
@@ -190,6 +212,7 @@ export async function routineRun(
     reason?: string,
     failure?: RunFailure,
   ): Promise<void> => {
+    await endSession();
     entry = {
       kind: 'run',
       runId,
@@ -251,9 +274,79 @@ export async function routineRun(
   try {
     await lockedRun();
   } finally {
+    // Also when the run threw, so no session is left open.
+    await endSession();
     await removeLock(runId, p);
   }
+  await syncAtEnd();
   return done();
+
+  // Appends one event of the run's activity to the local log. A failure
+  // only loses the event, never the run.
+  async function record(input: EmitInput): Promise<void> {
+    try {
+      await emit({ ...input, version: config.version }, p);
+    } catch {
+      // Not recorded.
+    }
+  }
+
+  async function startSession(): Promise<void> {
+    if (sessionAt !== null) return;
+    sessionAt = clock();
+    await record({ type: 'session.start', payload: { session_id: runId } });
+  }
+
+  async function endSession(): Promise<void> {
+    if (sessionAt === null) return;
+    const ms = clock() - sessionAt;
+    sessionAt = null;
+    await record({
+      type: 'session.end',
+      payload: { session_id: runId, duration_ms: clampMs(ms) },
+    });
+  }
+
+  // One usage event for an answer the agent gave, stopped by nothing, with
+  // tokens in and out as its runtime reported them, the time it took and
+  // the model when the runtime named one. An answer with no split writes
+  // none, and no number is ever made up. The schema's ranges hold, and an
+  // event outside them is not recorded.
+  async function recordUsage(
+    result: AgentResult,
+    ms: number,
+    model: string | null,
+  ): Promise<void> {
+    if (result.split === undefined) return;
+    if (result.stoppedFor !== null || result.error !== undefined) return;
+    await record({
+      type: 'usage',
+      payload: {
+        tokens_in: result.split.tokensIn,
+        tokens_out: result.split.tokensOut,
+        latency_ms: clampMs(ms),
+        ...(model === null ? {} : { model }),
+      },
+    });
+  }
+
+  // Through the gate, which says whether it may go, beside a refresh of the
+  // goal the session summary reads (keepNudgeFresh). Never fails the run.
+  // A run its caller aborted returns at once and sends nothing, and its
+  // events go with the next sync.
+  async function syncAtEnd(): Promise<void> {
+    if (aborted()) return;
+    const [synced] = await Promise.all([
+      backgroundSync({ fetch: deps.fetch, paths: p }),
+      keepNudgeFresh(deps.fetch, p),
+    ]);
+    if (synced !== 'failed') return;
+    try {
+      await appendRoutine({ kind: 'sync_failed', runId }, p);
+    } catch {
+      // Not kept.
+    }
+  }
 
   // The rest of the run, while this run holds the lock.
   async function lockedRun(): Promise<void> {
@@ -506,17 +599,21 @@ export async function routineRun(
     // did not start or failed.
     async function ask(prompt: string): Promise<AgentResult | 'stop'> {
       agentStarted = true;
+      await startSession();
+      const asked = clock();
       const result = await runtime().ask({
         prompt,
         timeoutMs: Math.max(1, deadline - Date.now()),
         tokenCap: Math.max(1, tokenCap - (tokens ?? 0)),
       });
+      const took = clock() - asked;
       if (result.tokens !== null) tokens = (tokens ?? 0) + result.tokens;
       if (result.costUsd !== null) costUsd = (costUsd ?? 0) + result.costUsd;
       const model = toolNameOf(result.model);
       if (model !== null) {
         await observer?.model(model, modelNameOf(result.model));
       }
+      await recordUsage(result, took, model);
       if (result.stoppedFor !== null) {
         await stop(result.stoppedFor);
         return 'stop';

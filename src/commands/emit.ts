@@ -26,8 +26,10 @@ export function register(
 ): Command {
   return parent
     .command('emit', { hidden: true })
-    .description('Append one event to the local log. Adapters call this')
-    .requiredOption('--type <type>', 'event type, for example session.start')
+    .description(
+      'Append one event of your own to the local log. The hooks and adapters record none',
+    )
+    .requiredOption('--type <type>', 'event type, for example incident')
     .option('--payload <json>', 'event payload as a JSON object (default: {})')
     .option('--version <version>', 'agent version (default: from config)')
     .option('--no-sync', 'only append to the log, do not send')

@@ -10,14 +10,10 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
+import type { Event } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCK_FILE, resetBackgroundSyncThrottle } from './background-sync.js';
-import { writeConfig } from './config.js';
-import { createKey } from './identity.js';
-import { countPending } from './log.js';
+import { paths } from './config.js';
 import { sealKeeperSession, withSealKeeper } from './mastra.js';
-import { VERSION } from './version.js';
 
 class RateLimitError extends Error {}
 
@@ -135,215 +131,57 @@ describe('mastra adapter', () => {
     });
   });
 
+  // VOU-627. The agent's own sessions are its operator's work, so the
+  // adapter writes no event. Only a routine run records a session.
   describe('sealKeeperSession', () => {
-    it('emits session.start, usage from a step and session.end', async () => {
+    it('keeps its shape, reads the model of a step and writes no event', async () => {
       const session = sealKeeperSession('run-42');
       expect(session.sessionId).toBe('run-42');
-      await new Promise((done) => setTimeout(done, 30));
       await session.onStepFinish({
         text: 'model output that must not be read',
         toolCalls: [],
         usage: { promptTokens: 120, completionTokens: 30, totalTokens: 150 },
         response: { modelId: 'gpt-4o-mini', timestamp: new Date() },
       });
-      await new Promise((done) => setTimeout(done, 5));
-      await session.end();
-
-      const events = await logged();
-      expect(events.map((e) => e.type)).toEqual([
-        'session.start',
-        'usage',
-        'session.end',
-      ]);
-      expect(events[0]?.payload).toEqual({ session_id: 'run-42' });
-      const usage = events[1]?.payload as {
-        tokens_in: number;
-        tokens_out: number;
-        latency_ms: number;
-        model: string;
-      };
-      expect(usage).toMatchObject({
-        tokens_in: 120,
-        tokens_out: 30,
-        model: 'gpt-4o-mini',
+      await expect(session.end()).resolves.toBeUndefined();
+      expect(await logged()).toEqual([]);
+      // The model id still goes to the fingerprint source.
+      await vi.waitFor(async () => {
+        expect(await readFile(paths().fingerprintSources, 'utf8')).toContain(
+          'gpt-4o-mini',
+        );
       });
-      expect(usage.latency_ms).toBeGreaterThanOrEqual(25);
-      expect(Object.keys(usage).sort()).toEqual([
-        'latency_ms',
-        'model',
-        'tokens_in',
-        'tokens_out',
-      ]);
-      const end = events[2]?.payload as {
-        session_id: string;
-        duration_ms: number;
-      };
-      expect(end.session_id).toBe('run-42');
-      expect(end.duration_ms).toBeGreaterThan(0);
     });
 
-    it('keeps a plain session id and logs the sha256 of any other', async () => {
-      const plain = sealKeeperSession('run_42-a');
-      await plain.end();
+    it('keeps a plain session id and gives the sha256 of any other', () => {
+      expect(sealKeeperSession('run_42-a').sessionId).toBe('run_42-a');
       const odd = 'alice@example.com/chat 1';
-      const hashed = sealKeeperSession(odd);
-      const sha = createHash('sha256').update(odd).digest('hex');
-      expect(hashed.sessionId).toBe(sha);
-      await hashed.end();
-      const tooLong = sealKeeperSession('a'.repeat(65));
-      await tooLong.end();
-      const ids = (await logged())
-        .filter((e) => e.type === 'session.start')
-        .map((e) => (e.payload as { session_id: string }).session_id);
-      expect(ids).toEqual([
-        'run_42-a',
-        sha,
+      expect(sealKeeperSession(odd).sessionId).toBe(
+        createHash('sha256').update(odd).digest('hex'),
+      );
+      expect(sealKeeperSession('a'.repeat(65)).sessionId).toBe(
         createHash('sha256').update('a'.repeat(65)).digest('hex'),
-      ]);
-      expect(JSON.stringify(await logged())).not.toContain('alice');
+      );
+      expect(sealKeeperSession().sessionId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
-    it('logs model ids that break the name rule as names', async () => {
-      const session = sealKeeperSession('names');
-      await session.onStepFinish({
-        usage: { promptTokens: 1, completionTokens: 2 },
-        response: { modelId: 'openai gpt 4o' },
-      });
-      await session.end();
-      const events = await logged();
-      expect(events.find((e) => e.type === 'usage')?.payload).toMatchObject({
-        model: 'openai-gpt-4o',
-      });
-    });
-
-    it('defaults the session id to a uuid', async () => {
-      const session = sealKeeperSession();
-      expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-      await session.end();
-      expect((await logged()).map((e) => e.type)).toEqual([
-        'session.start',
-        'session.end',
-      ]);
-    });
-
-    it('skips a step without tokens or a model id', async () => {
+    it('skips a step that is not one, or throws when read', async () => {
       const session = sealKeeperSession('s');
-      await session.onStepFinish(undefined);
-      await session.onStepFinish({
-        usage: { promptTokens: 1 },
-        response: { modelId: 'm' },
-      });
-      await session.onStepFinish({
-        usage: { promptTokens: 1, completionTokens: 2 },
-        response: { modelId: '', timestamp: new Date() },
-      });
-      await session.onStepFinish({
-        get usage(): unknown {
-          throw new Error('step was hostile');
-        },
-      });
-      await session.end();
-      expect((await logged()).map((e) => e.type)).toEqual([
-        'session.start',
-        'session.end',
-      ]);
-    });
-  });
-
-  describe('usage from a step', () => {
-    type Usage = {
-      tokens_in: number;
-      tokens_out: number;
-      latency_ms: number;
-      model: string;
-    };
-    const usages = async (): Promise<Usage[]> =>
-      (await logged())
-        .filter((e) => e.type === 'usage')
-        .map((e) => e.payload as Usage);
-
-    it('reads inputTokens and outputTokens from newer versions', async () => {
-      const session = sealKeeperSession('newer');
-      await session.onStepFinish({
-        usage: { inputTokens: 7, outputTokens: 3 },
-        response: { modelId: 'claude-sonnet-4-5' },
-      });
-      await session.end();
-      expect(await usages()).toMatchObject([
-        { tokens_in: 7, tokens_out: 3, model: 'claude-sonnet-4-5' },
-      ]);
-    });
-
-    it('falls back to step.model.modelId when the response has none', async () => {
-      const session = sealKeeperSession('fallback');
-      await session.onStepFinish({
-        usage: { promptTokens: 4, completionTokens: 2 },
-        response: { modelId: '', timestamp: new Date() },
-        model: { modelId: 'claude-opus-4-1', provider: 'anthropic' },
-      });
-      await session.end();
-      expect(await usages()).toMatchObject([
-        { tokens_in: 4, tokens_out: 2, model: 'claude-opus-4-1' },
-      ]);
-    });
-
-    // VOU-623. On Gemini, @mastra/core 1.74.0, a step's response.modelId
-    // is empty and the id is in response.modelMetadata.
-    it('reads response.modelMetadata.modelId when modelId is empty, as Gemini reports it', async () => {
-      const session = sealKeeperSession('gemini');
-      await session.onStepFinish({
-        usage: { inputTokens: 12, outputTokens: 4 },
-        response: {
-          id: 'r1',
-          modelId: '',
-          timestamp: new Date(),
-          modelMetadata: {
-            modelId: 'gemini-3-flash-preview',
-            modelVersion: 'v4',
-            modelProvider: 'google.generative-ai',
+      await expect(session.onStepFinish(undefined)).resolves.toBeUndefined();
+      await expect(
+        session.onStepFinish({
+          get response(): unknown {
+            throw new Error('step was hostile');
           },
-        },
-      });
+        }),
+      ).resolves.toBeUndefined();
       await session.end();
-      expect(await usages()).toMatchObject([
-        { tokens_in: 12, tokens_out: 4, model: 'gemini-3-flash-preview' },
-      ]);
-    });
-
-    it('measures latency locally since the previous step', async () => {
-      const session = sealKeeperSession('timing');
-      await new Promise((done) => setTimeout(done, 40));
-      // Mastra falls back to a timestamp made at step finish.
-      await session.onStepFinish({
-        usage: { promptTokens: 1, completionTokens: 1 },
-        response: { modelId: 'm', timestamp: new Date() },
-      });
-      await new Promise((done) => setTimeout(done, 60));
-      await session.onStepFinish({
-        usage: { promptTokens: 1, completionTokens: 1 },
-        response: { modelId: 'm', timestamp: new Date() },
-      });
-      await session.end();
-      const [first, second] = await usages();
-      expect(first?.latency_ms).toBeGreaterThanOrEqual(35);
-      expect(second?.latency_ms).toBeGreaterThanOrEqual(55);
-    });
-
-    it('keeps the event when the provider clock runs ahead', async () => {
-      const session = sealKeeperSession('skew');
-      await session.onStepFinish({
-        usage: { promptTokens: 1, completionTokens: 1 },
-        response: { modelId: 'm', timestamp: new Date(Date.now() + 5_000) },
-      });
-      await session.end();
-      const [usage] = await usages();
-      expect(usage?.latency_ms).toBeGreaterThanOrEqual(0);
+      expect(await logged()).toEqual([]);
     });
   });
 
-  describe('when the log cannot be written', () => {
+  describe('when the home cannot be written', () => {
     it('never throws into the agent', async () => {
-      // A file where the log directory should be, so every append fails.
       await writeFile(join(home, 'log'), 'not a directory');
       const boom = new RangeError('tool failed');
       const tools = withSealKeeper({
@@ -374,72 +212,6 @@ describe('mastra adapter', () => {
       await expect(tools[0]?.execute()).resolves.toBe(1);
       const session = sealKeeperSession();
       await expect(session.end()).resolves.toBeUndefined();
-    });
-  });
-  describe('background sync', () => {
-    // Turns automatic sync on for a real key and counts what reaches the
-    // API. The in-process throttle is reset so earlier tests do not hold it.
-    async function autoSyncOn(): Promise<{
-      requests: () => number;
-      versions: () => (string | null)[];
-    }> {
-      const { agentId } = await createKey();
-      await writeConfig({
-        agentId,
-        operatorLogin: 'alice',
-        name: 'bot',
-        version: '1.0.0',
-        apiUrl: 'https://api.test',
-        registeredAt: '2026-09-23T08:00:00Z',
-        autoSync: true,
-      });
-      resetBackgroundSyncThrottle();
-      vi.stubEnv('SEALKEEPER_API_URL', '');
-      let requests = 0;
-      const versions: (string | null)[] = [];
-      vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit = {}) => {
-        requests++;
-        versions.push(new Headers(init.headers).get(CLI_VERSION_HEADER));
-        const { envelopes } = JSON.parse(String(init.body)) as {
-          envelopes: string[];
-        };
-        return Response.json({ accepted: envelopes.length, duplicates: 0 });
-      });
-      return { requests: () => requests, versions: () => versions };
-    }
-
-    afterEach(() => {
-      vi.unstubAllGlobals();
-      resetBackgroundSyncThrottle();
-    });
-
-    it('sends in the background once automatic sync is on, at most once per interval', async () => {
-      const api = await autoSyncOn();
-      sealKeeperSession('first');
-      await vi.waitFor(async () => {
-        expect(await logged()).toHaveLength(1);
-        expect(await countPending()).toBe(0);
-        // The sync has ended, so the next event cannot join its last round.
-        expect(await readdir(home)).not.toContain(LOCK_FILE);
-      });
-      expect(api.requests()).toBe(1);
-      // It goes through the API client, so it says which CLI sends (VOU-453).
-      expect(api.versions()).toEqual([VERSION]);
-      // The next events inside five minutes only append.
-      await sealKeeperSession('next').end();
-      await new Promise((done) => setTimeout(done, 50));
-      expect(api.requests()).toBe(1);
-      expect(await countPending()).toBe(2);
-    });
-
-    it('never throws into the agent when the API is down', async () => {
-      await autoSyncOn();
-      vi.stubGlobal('fetch', async () => {
-        throw new TypeError('fetch failed');
-      });
-      await expect(sealKeeperSession('a').end()).resolves.toBeUndefined();
-      await new Promise((done) => setTimeout(done, 50));
-      expect(await countPending()).toBe(2);
     });
   });
 });

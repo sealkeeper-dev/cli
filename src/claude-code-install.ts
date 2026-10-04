@@ -163,9 +163,10 @@ function hooksLines(result: InstallResult, file: string): string[] {
   return lines;
 }
 
-// Said when install took the tool call hooks of an older CLI out.
+// Said when install took the hooks of an older CLI out, the tool call
+// hooks and Stop.
 function retiredLine(events: string[], file: string): string {
-  return `removed sealkeeper hooks for ${events.join(', ')} from ${file}, the hooks record sessions only`;
+  return `removed sealkeeper hooks for ${events.join(', ')} from ${file}, which record nothing now`;
 }
 
 // A slash command by its file, the /sealkeeper-run command for

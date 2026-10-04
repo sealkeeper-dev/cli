@@ -87,10 +87,10 @@ describe('the What init does inventory', () => {
 
   it('lists the files written into Claude Code and every hook event', () => {
     const user = settingsPath('user', { home: HOME, cwd: '/c' });
-    expect(text).toContain(`- \`${tilde(user)}\`, three hooks`);
-    expect(HOOK_EVENTS).toHaveLength(3);
+    expect(text).toContain(`- \`${tilde(user)}\`, two hooks`);
+    expect(HOOK_EVENTS).toHaveLength(2);
     for (const event of HOOK_EVENTS) expect(text).toContain(`\`${event}\``);
-    // The tool call hooks an older install wrote, which install takes out.
+    // The hooks an older install wrote, which install takes out.
     for (const event of RETIRED_HOOK_EVENTS) {
       expect(text).toContain(`\`${event}\``);
     }
@@ -183,7 +183,7 @@ describe('the What init does inventory', () => {
   it('points at what-is-shared for the fields and makes no hashes only claim', () => {
     expect(text).toContain('`npx sealkeeper what-is-shared`');
     expect(text).toContain(
-      'Events are metadata only, session boundaries, durations, outcomes, token counts and the model id. Never prompts, tool arguments, outputs or file contents. Hashes stand in where a check needs evidence.',
+      'Events are metadata only, task outcomes, and the start, end, token counts, answer times and model id of routine runs. Never prompts, tool arguments, outputs or file contents. Hashes stand in where a check needs evidence.',
     );
     expect(README).not.toMatch(/only hash/i);
     // The field table is linked, not repeated.

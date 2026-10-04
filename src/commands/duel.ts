@@ -16,6 +16,7 @@ import { refusal } from '../refusal.js';
 import type { DuelAnswerResponse, DuelResponse } from '../responses.js';
 import { durationText } from '../sync.js';
 import {
+  afterTaskWork,
   defaultTasksDeps,
   openTaskSession,
   recordClaims,
@@ -172,14 +173,18 @@ export function register(
         this.error(refusal(error));
       }
       await recordClaims(answer);
+      // A step may claim, so it is synced and the goal refreshed while the
+      // answer prints. A look writes nothing.
+      const settled = look ? undefined : afterTaskWork(deps);
       if (json) {
         stdout(JSON.stringify(duelJson(answer)));
-        return;
+      } else {
+        const lines = look
+          ? lookLines(answer, signer.agentId, Date.now())
+          : duelLines(answer, signer.agentId, Date.now());
+        for (const line of lines) stdout(line);
       }
-      const lines = look
-        ? lookLines(answer, signer.agentId, Date.now())
-        : duelLines(answer, signer.agentId, Date.now());
-      for (const line of lines) stdout(line);
+      await settled;
     });
 }
 

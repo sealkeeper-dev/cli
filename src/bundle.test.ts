@@ -284,7 +284,10 @@ describe('cli bundle', () => {
     expect(mastra).not.toMatch(importOf('@sealkeeper/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
     expect(bundledPackages(mastra).has('commander')).toBe(false);
-    expect(mastra).toContain('kickBackgroundSync');
+    // A routine run syncs at its end through the gate (VOU-627), and the
+    // adapter itself starts no sync.
+    expect(mastra).toContain('gatedSync');
+    expect(mastra).not.toContain('kickBackgroundSync');
     expect(mastra).toMatch(/export\s*\{[^}]*\bwithSealKeeper\b/);
     expect(mastra).toMatch(/export\s*\{[^}]*\bsealKeeperSession\b/);
     expect(mastra).toMatch(/export\s*\{[^}]*\broutine\b/);
@@ -334,7 +337,8 @@ describe('cli bundle', () => {
     expect(sources(openclaw).has('routine-run')).toBe(false);
   });
 
-  it('the built adapter passes a tool through and records a session', async () => {
+  // VOU-627. The adapter writes no event, only a routine run does.
+  it('the built adapter passes a tool through and records nothing', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-mastra-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
     try {
@@ -351,13 +355,7 @@ describe('cli bundle', () => {
         response: { modelId: 'gpt-4o', timestamp: new Date() },
       });
       await session.end();
-
-      const [file] = await readdir(join(home, 'log'));
-      const types = (await readFile(join(home, 'log', file ?? ''), 'utf8'))
-        .trim()
-        .split('\n')
-        .map((line) => (JSON.parse(line) as { type: string }).type);
-      expect(types.sort()).toEqual(['session.end', 'session.start', 'usage']);
+      await expect(readdir(join(home, 'log'))).rejects.toThrow();
     } finally {
       vi.unstubAllEnvs();
       await rm(home, { recursive: true, force: true });
@@ -369,8 +367,8 @@ describe('cli bundle', () => {
     expect(openclaw).not.toMatch(importOf('@sealkeeper/schema'));
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
     expect(bundledPackages(openclaw).has('commander')).toBe(false);
-    // It syncs only through the throttled background sync.
-    expect(openclaw).toContain('kickBackgroundSync');
+    // It writes no event, so it starts no sync (VOU-627).
+    expect(openclaw).not.toContain('kickBackgroundSync');
     expect(openclaw).toMatch(/export\s*\{[^}]*\bsealKeeperPlugin\b/);
     expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
   });
@@ -397,7 +395,8 @@ describe('cli bundle', () => {
     });
   });
 
-  it('the built OpenClaw entry records a session and usage, never a tool call', async () => {
+  // VOU-627. The plugin writes no event, only a routine run does.
+  it('the built OpenClaw entry records nothing, whatever OpenClaw fires', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-openclaw-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
     try {
@@ -421,13 +420,7 @@ describe('cli bundle', () => {
         usage: { input: 10, output: 5 },
       });
       await fire('session_end', { sessionId: 'bundle-session' });
-
-      const [file] = await readdir(join(home, 'log'));
-      const types = (await readFile(join(home, 'log', file ?? ''), 'utf8'))
-        .trim()
-        .split('\n')
-        .map((line) => (JSON.parse(line) as { type: string }).type);
-      expect(types).toEqual(['session.start', 'usage', 'session.end']);
+      await expect(readdir(join(home, 'log'))).rejects.toThrow();
     } finally {
       vi.unstubAllEnvs();
       await rm(home, { recursive: true, force: true });

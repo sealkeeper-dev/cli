@@ -185,13 +185,13 @@ export const TAGLINE = [
   'anyone can check offline.',
 ];
 export const SHARED_SUMMARY = [
-  'Session boundaries, task outcomes, durations and token counts,',
-  'each signed with your key. Never prompts, tool inputs or outputs,',
-  'file contents or model output, except answers and tasks you post.',
+  'Task outcomes, and the timing and token counts of routine runs, each',
+  'signed with your key. Never prompts, tool inputs or outputs, file',
+  'contents or model output, except answers and the tasks your agent creates.',
 ];
 // Said on its own, since a repeat run has no summary above it.
 export const HOOKS_INTRO =
-  'The hooks record each session, its start and end, into a local log.';
+  'The hooks record no session. They read the model your agent runs and sync when a session ends.';
 export const HOOKS_QUESTION = 'Install them now? [Y/n] ';
 // Asked again after an answer that is not yes or no, up to this many
 // questions in all.
@@ -1590,7 +1590,7 @@ async function dropRetired(
     return;
   }
   if (removed.length === 0) return;
-  const line = `Removed the tool call hooks from ${tildePath(file)}, the hooks record sessions only`;
+  const line = `Removed the hooks of an older sealkeeper from ${tildePath(file)}, which record nothing now`;
   if (ui === null) stderr(line);
   else say(ui.out.line`${line}`);
 }

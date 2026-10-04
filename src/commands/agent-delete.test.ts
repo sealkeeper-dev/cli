@@ -606,7 +606,7 @@ describe('sealkeeper agent delete', () => {
           hooks: { Stop: [{ hooks: [FOREIGN] }] },
         });
         expect(await exists(skillPath(file))).toBe(false);
-        expect(out).toContain(`removed 3 sealkeeper hooks from ${file}\n`);
+        expect(out).toContain(`removed 2 sealkeeper hooks from ${file}\n`);
         expect(out).toContain(
           `removed the sealkeeper skill from ${skillPath(file)}\n`,
         );

@@ -85,13 +85,14 @@ export type AgentSpec = {
 };
 
 // What a runtime reads from the agent's stdout, the answer, the tokens and
-// the cost it reported, the model it named, whether it says it ran out of
-// time, and a problem that fails the run. end is called once, with the
-// exit code.
+// the cost it reported, the tokens split into in and out, the model it
+// named, whether it says it ran out of time, and a problem that fails the
+// run. end is called once, with the exit code.
 export type StdoutReader = {
   write(chunk: string): void;
   end(code: number | null): void;
   readonly tokens: number | null;
+  readonly split?: TokenSplit | null;
   readonly costUsd: number | null;
   readonly text: string | null;
   readonly model?: string | null;
@@ -109,6 +110,11 @@ export type AgentProblem = {
   reason: string;
 };
 
+// The tokens of one answer, in and out, as the runtime reported them, for
+// the answer's usage event (VOU-627). Each runtime says which of its
+// fields it maps to which.
+export type TokenSplit = { tokensIn: number; tokensOut: number };
+
 export type AgentResult = {
   // The agent's answer, the text of its result, null when it gave none.
   text: string | null;
@@ -120,6 +126,8 @@ export type AgentResult = {
   // Input, output and cache write tokens as the agent reported them. Cache
   // reads are not counted. null when it reported none.
   tokens: number | null;
+  // tokens in and out, absent when the runtime did not report both.
+  split?: TokenSplit;
   costUsd: number | null;
   // The model id the runtime reported for the answer, as it came, when it
   // reported one (VOU-614). What the agent says about itself, which the
@@ -263,6 +271,7 @@ export function runAgent(
         exitCode: stopped === null ? code : null,
         stoppedFor: stopped,
         tokens: reader.tokens,
+        ...(reader.split ? { split: reader.split } : {}),
         costUsd: reader.costUsd,
         ...(typeof reader.model === 'string' ? { model: reader.model } : {}),
         ...(problem === undefined ? {} : { problem }),
@@ -374,11 +383,16 @@ type Usage = {
 // model, each assistant message reports its usage, once per message id, and
 // the result line has the answer, the total cost and the final usage, which
 // wins when present. A result line that says it is an error gives no
-// answer.
+// answer. The split counts as tokens the total counts, in is input_tokens
+// plus cache_creation_input_tokens, out is output_tokens, and cache reads
+// are in neither. It is known only from usage that reports both
+// input_tokens and output_tokens as numbers.
 export class UsageCounter implements StdoutReader {
   private readonly seen = new Map<string, number>();
+  private readonly seenSplit = new Map<string, TokenSplit>();
   private buffer = '';
   private final: number | null = null;
+  private finalSplit: TokenSplit | null = null;
   costUsd: number | null = null;
   text: string | null = null;
   model: string | null = null;
@@ -388,6 +402,17 @@ export class UsageCounter implements StdoutReader {
     if (this.seen.size === 0) return null;
     let sum = 0;
     for (const n of this.seen.values()) sum += n;
+    return sum;
+  }
+
+  get split(): TokenSplit | null {
+    if (this.finalSplit !== null) return this.finalSplit;
+    if (this.seenSplit.size === 0) return null;
+    const sum = { tokensIn: 0, tokensOut: 0 };
+    for (const s of this.seenSplit.values()) {
+      sum.tokensIn += s.tokensIn;
+      sum.tokensOut += s.tokensOut;
+    }
     return sum;
   }
 
@@ -438,9 +463,14 @@ export class UsageCounter implements StdoutReader {
           ? event.message.id
           : `n${this.seen.size}`;
       this.seen.set(id, count(event.message.usage));
+      const split = splitOf(event.message.usage);
+      if (split !== null) this.seenSplit.set(id, split);
     }
     if (event.type === 'result') {
-      if (event.usage) this.final = count(event.usage);
+      if (event.usage) {
+        this.final = count(event.usage);
+        this.finalSplit = splitOf(event.usage);
+      }
       if (typeof event.total_cost_usd === 'number') {
         this.costUsd = event.total_cost_usd;
       }
@@ -455,6 +485,21 @@ const count = (usage: Usage): number =>
   num(usage.input_tokens) +
   num(usage.output_tokens) +
   num(usage.cache_creation_input_tokens);
+
+// in and out of one usage, as UsageCounter says, or null unless it
+// reports input_tokens and output_tokens.
+function splitOf(usage: Usage): TokenSplit | null {
+  if (!isCount(usage.input_tokens) || !isCount(usage.output_tokens)) {
+    return null;
+  }
+  return {
+    tokensIn: usage.input_tokens + num(usage.cache_creation_input_tokens),
+    tokensOut: usage.output_tokens,
+  };
+}
+
+const isCount = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
 const num = (value: unknown) =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0;

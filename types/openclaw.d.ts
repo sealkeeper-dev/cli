@@ -22,8 +22,9 @@ export type SealKeeperOpenClawPlugin = {
   register: (api: OpenClawPluginApiLike) => void;
 };
 
-// A plugin entry that records session.start, session.end and usage. Tool
-// calls, prompts and model output are never read.
+// A plugin entry that hashes the model and the framework for the
+// fingerprint and adds the session nudge. It writes no event since 0.5.0.
+// Tool calls, prompts, usage and model output are never read.
 export declare function sealKeeperPlugin(): SealKeeperOpenClawPlugin;
 
 declare const plugin: SealKeeperOpenClawPlugin;

@@ -1313,8 +1313,9 @@ describe('sealkeeper init', () => {
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
-    // VOU-451. The hooks record sessions only, so a repeat init that finds
-    // ours takes out the tool call hooks an older install wrote.
+    // VOU-451, VOU-627. The hooks write no event, so a repeat init that
+    // finds ours takes out the tool call hooks and Stop an older install
+    // wrote.
     it.each([
       ['user', false],
       ['project', true],
@@ -1363,12 +1364,11 @@ describe('sealkeeper init', () => {
         expect(result.code).toBe(0);
         expect(result.err).not.toContain(HOOKS_QUESTION);
         expect(result.out).toContain(
-          `  Removed the tool call hooks from ${tildePath(file)}, the hooks record sessions only\n`,
+          `  Removed the hooks of an older sealkeeper from ${tildePath(file)}, which record nothing now\n`,
         );
         const after = JSON.parse(await readFile(file, 'utf8'));
         expect(after.model).toBe('opus');
         expect(hooksIn(JSON.stringify(after))).toEqual([
-          'Stop',
           'SessionStart',
           'SessionEnd',
         ]);
@@ -1420,7 +1420,9 @@ describe('sealkeeper init', () => {
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).toContain(`Moved the hooks out of ${sharedFile}`);
-      expect(hooksIn(await readFile(projectFile, 'utf8'))).toContain('Stop');
+      expect(hooksIn(await readFile(projectFile, 'utf8'))).toContain(
+        'SessionEnd',
+      );
       // The shared file a repo commits keeps its own settings and none of
       // this machine's paths.
       expect(JSON.parse(await readFile(sharedFile, 'utf8'))).toEqual({
@@ -1513,7 +1515,7 @@ describe('sealkeeper init', () => {
         '  1  In Claude Code, run /sealkeeper-run to earn your first verified tasks\n',
       );
       const after = await readFile(settingsFile(), 'utf8');
-      expect(hooksIn(after)).toEqual(['Stop', 'SessionStart', 'SessionEnd']);
+      expect(hooksIn(after)).toEqual(['SessionStart', 'SessionEnd']);
       expect(after).toContain('other-tool stop');
       const command = join(claudeDir(), 'commands', 'sealkeeper-run.md');
       expect(result.out).toContain(
@@ -1715,7 +1717,9 @@ describe('sealkeeper init', () => {
       // question, once hooks are in.
       expect(stdin.reads).toBe(6);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
-      expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain('Stop');
+      expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain(
+        'SessionEnd',
+      );
       expect(result.all).not.toContain(HOOKS_NOT_INSTALLED);
     });
 
@@ -1936,7 +1940,7 @@ describe('sealkeeper init', () => {
         expect(result.code).toBe(0);
         expect(stdin.reads).toBe(0);
         expect(result.err).not.toContain(HOOKS_QUESTION);
-        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(3);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(2);
         expect(result.out).toContain(
           `  ✓ Hooks in ${tildePath(settingsFile())}\n`,
         );
@@ -1960,7 +1964,7 @@ describe('sealkeeper init', () => {
         world.stdin = answering('y', false);
         const result = await run(world, 'init', '--name', 'scout', '--json');
         expect(result.code).toBe(0);
-        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(3);
+        expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toHaveLength(2);
         expect(result.err).toContain(`${HOOKS_BY_CLAUDE}\n`);
         const json = JSON.parse(result.out);
         expect(json.nextSteps[0]).toBe(NEXT_ROUTINE);
@@ -3584,13 +3588,13 @@ describe('sealkeeper init', () => {
             Card  <home>/agent-card.json
 
           What leaves this machine
-          Session boundaries, task outcomes, durations and token counts,
-          each signed with your key. Never prompts, tool inputs or outputs,
-          file contents or model output, except answers and tasks you post.
+          Task outcomes, and the timing and token counts of routine runs, each
+          signed with your key. Never prompts, tool inputs or outputs, file
+          contents or model output, except answers and the tasks your agent creates.
           Full list  npx sealkeeper what-is-shared
 
           Claude Code
-          The hooks record each session, its start and end, into a local log.
+          The hooks record no session. They read the model your agent runs and sync when a session ends.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
           ✓ Slash commands in <home>/claude/commands
           ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
@@ -3630,7 +3634,7 @@ describe('sealkeeper init', () => {
             Profile  https://sealkeeper.run/agents/alice/scout
 
           Claude Code
-          The hooks record each session, its start and end, into a local log.
+          The hooks record no session. They read the model your agent runs and sync when a session ends.
           ✓ Hooks in <home>/claude/settings.json
 
           Next

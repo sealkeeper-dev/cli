@@ -32,7 +32,8 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../api.js';
 import type { Input } from '../ask.js';
-import { paths, writeConfig, writeFileAtomic } from '../config.js';
+import { resetBackgroundSyncThrottle, STAMP_FILE } from '../background-sync.js';
+import { paths, writeConfig, writeFileAtomic, writeNudge } from '../config.js';
 import {
   currentFingerprint,
   NOTHING_DECLARED,
@@ -40,6 +41,7 @@ import {
   recordCapture,
 } from '../fingerprint.js';
 import { createKey } from '../identity.js';
+import { countPending } from '../log.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
@@ -2812,6 +2814,188 @@ describe('submit, release and the tasks commands', () => {
       expect(code).toBe(1);
       expect(err).toContain('outcome must be success or failure, got maybe');
       expect(api.requests).toEqual([]);
+    });
+  });
+
+  // VOU-627. The adapters write no event, so task work done by hand syncs
+  // itself. A task command that wrote a task event starts a sync through
+  // the gate every automatic sync takes, and every SealKeeper command
+  // refreshes the goal the session summary reads while the nudge is on.
+  describe('task work syncs itself', () => {
+    // The sync and goal requests, which the task fake does not answer.
+    let side: string[];
+    let eventsReply: () => Response;
+
+    async function setUp(autoSync: boolean | undefined, nudge?: boolean) {
+      await writeConfig({
+        agentId,
+        operatorLogin: 'alice',
+        name: 'summariser',
+        version: '1.0.0',
+        apiUrl: API_URL,
+        registeredAt: new Date().toISOString(),
+        ...(autoSync === undefined ? {} : { autoSync }),
+      });
+      if (nudge !== undefined) await writeNudge(nudge, paths());
+    }
+
+    beforeEach(() => {
+      side = [];
+      eventsReply = () => Response.json({ accepted: 1, duplicates: 0 });
+      // Each command stands for its own process.
+      resetBackgroundSyncThrottle();
+      const tasks = api.fetch;
+      api.fetch = (async (
+        input: string | URL | Request,
+        init?: RequestInit,
+      ) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/events') {
+          side.push(path);
+          return eventsReply();
+        }
+        if (path === `/v1/agents/${agentId}/goal`) {
+          side.push(path);
+          return Response.json({
+            agentId,
+            version: '1.0.0',
+            level: 'none',
+            nextLevel: 'bronze',
+            thresholds: [],
+            actions: [],
+            pending: { addressed: 0, outcomes: 0 },
+            asOf: null,
+          });
+        }
+        return tasks(input, init);
+      }) as typeof fetch;
+    });
+
+    const claimable = () => api.add({});
+    const claimed = () =>
+      api.add({
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+
+    it('claim sends its event once automatic sync is on', async () => {
+      await setUp(true);
+      const task = claimable();
+      const { code, out, err } = await run('claim', task.id, '--json');
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(JSON.parse(out).task.id).toBe(task.id);
+      expect(side).toEqual(['/v1/events']);
+      expect(await countPending(paths())).toBe(0);
+    });
+
+    it('submit and outcome send their events once automatic sync is on', async () => {
+      await setUp(true);
+      const task = claimed();
+      expect((await run('submit', task.id, '--text', 'x')).code).toBe(0);
+      expect(side).toEqual(['/v1/events']);
+      expect(await countPending(paths())).toBe(0);
+
+      resetBackgroundSyncThrottle();
+      await rm(join(home, STAMP_FILE), { force: true });
+      const posted = api.add({
+        posterAgentId: agentId,
+        claimantAgentId: OTHER_AGENT,
+        state: 'submitted',
+        claimedAt: new Date().toISOString(),
+        submittedAt: new Date().toISOString(),
+        submission: 'the answer',
+      });
+      api.reports.set(posted.id, new Map([[OTHER_AGENT, 'success']]));
+      expect((await run('outcome', posted.id, 'success', '--yes')).code).toBe(
+        0,
+      );
+      expect(side).toEqual(['/v1/events', '/v1/events']);
+      expect(await countPending(paths())).toBe(0);
+    });
+
+    // Nothing leaves before the first sync showed the events and asked,
+    // and nothing with automatic sync off.
+    it.each([
+      ['before the first sync', undefined],
+      ['with automatic sync off', false],
+    ])('claim sends nothing %s', async (_, autoSync) => {
+      await setUp(autoSync);
+      const task = claimable();
+      expect((await run('claim', task.id, '--json')).code).toBe(0);
+      expect(side).toEqual([]);
+      expect(await countPending(paths())).toBe(1);
+    });
+
+    it('a second task command inside the throttle sends nothing more', async () => {
+      await setUp(true);
+      expect((await run('claim', claimable().id)).code).toBe(0);
+      // A new process, so only the stamp file holds it back.
+      resetBackgroundSyncThrottle();
+      expect((await run('claim', claimable().id)).code).toBe(0);
+      expect(side).toEqual(['/v1/events']);
+      expect(await countPending(paths())).toBe(1);
+    });
+
+    // The sync is a side task. Its failure prints nothing, so --json
+    // output stays one JSON line, and the command still succeeds.
+    it('a failed sync never fails the command or touches its output', async () => {
+      await setUp(true);
+      eventsReply = () =>
+        Response.json(
+          { error: { code: 'internal', message: 'boom' } },
+          { status: 500 },
+        );
+      const task = claimed();
+      const { code, out, err } = await run(
+        'submit',
+        task.id,
+        '--text',
+        'x',
+        '--json',
+      );
+      expect(code).toBe(0);
+      expect(err).toBe('');
+      expect(out.trim().split('\n')).toHaveLength(1);
+      expect(JSON.parse(out)).toMatchObject({ id: task.id });
+      expect(side).toEqual(['/v1/events']);
+      // task.submitted and the counterparty task.outcome wait for the next
+      // sync.
+      expect(await countPending(paths())).toBe(2);
+    });
+
+    it('refreshes the goal the summary reads once the nudge is on', async () => {
+      await setUp(false, true);
+      expect((await run('claim', claimable().id)).code).toBe(0);
+      expect(side).toEqual([`/v1/agents/${agentId}/goal`]);
+      const cache = JSON.parse(await readFile(paths().goal, 'utf8'));
+      expect(cache.goal.agentId).toBe(agentId);
+    });
+
+    it('reads no goal with the nudge off', async () => {
+      await setUp(false, false);
+      expect((await run('claim', claimable().id)).code).toBe(0);
+      expect(side).toEqual([]);
+    });
+
+    // A post writes no event, so it syncs nothing, and reads the goal for
+    // the summary.
+    it('post reads the goal with the nudge on and sends no events', async () => {
+      await setUp(true, true);
+      const { code, out } = await run(
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        '{}',
+        '--verify',
+        'counterparty',
+        '--json',
+      );
+      expect(code).toBe(0);
+      expect(JSON.parse(out)).toMatchObject({ state: 'open' });
+      expect(side).toEqual([`/v1/agents/${agentId}/goal`]);
     });
   });
 

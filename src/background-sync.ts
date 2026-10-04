@@ -1,10 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// The one gate every automatic sync goes through. The in-process adapters
-// (Mastra, OpenClaw) start it in the background after they append an event,
-// and emit and the Claude Code SessionEnd hook run it before they return.
-// Without it an agent whose operator never runs a sealkeeper command would
-// only ever write to the local log, go quiet on its profile and drop down
-// the dormancy ladder.
+// The one gate every automatic sync goes through. A routine run takes it
+// at its end and a task command once it wrote a task event (VOU-627,
+// afterTaskWork in tasks.ts), and emit and the Claude Code SessionEnd hook
+// run it before they return. Without it an agent whose operator never runs a
+// sealkeeper command would only ever write to the local log, go quiet on
+// its profile and drop down the dormancy ladder.
 //
 // It only runs when automatic sync is on, at most once every
 // BACKGROUND_SYNC_INTERVAL_MS across every process on the machine, and
@@ -28,7 +28,8 @@ export const BACKGROUND_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 // is about deadlineMs plus timeoutMs.
 type SyncLimits = { timeoutMs: number; deadlineMs: number };
 
-// The background sync makes nobody wait, so it can take longer.
+// The background sync, a routine run's or a task command's after its
+// output, makes nobody wait on an answer, so it can take longer.
 const BACKGROUND_LIMITS: SyncLimits = { timeoutMs: 5_000, deadlineMs: 20_000 };
 
 // emit and the SessionEnd hook run while someone waits on them, an agent's
@@ -75,12 +76,6 @@ let lastTry = Number.NEGATIVE_INFINITY;
 // For tests, which run many homes in one process.
 export function resetBackgroundSyncThrottle(): void {
   lastTry = Number.NEGATIVE_INFINITY;
-}
-
-// Starts a background sync and returns at once. Nothing it does can reach
-// the caller, not even a rejected promise.
-export function kickBackgroundSync(deps: BackgroundSyncDeps = {}): void {
-  void backgroundSync(deps).catch(() => {});
 }
 
 // One background sync attempt, and what came of it. Resolves in every

@@ -7,7 +7,6 @@ import {
   readFile,
   rm,
   stat,
-  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,8 +15,12 @@ import { PassThrough } from 'node:stream';
 import { CLI_VERSION_HEADER, type Event } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LOCK_FILE, resetBackgroundSyncThrottle } from '../background-sync.js';
-import { parseHookInput, STALE_MARKER_MS } from '../claude-code.js';
+import {
+  LOCK_FILE,
+  resetBackgroundSyncThrottle,
+  STAMP_FILE,
+} from '../background-sync.js';
+import { parseHookInput } from '../claude-code.js';
 import {
   bindFolder,
   namedHome,
@@ -235,163 +238,55 @@ describe('hook claude-code', () => {
     expect(help).not.toMatch(/^ {2}adapter\b/m);
   });
 
-  it('SessionStart emits session.start and records the start time', async () => {
-    await initialise();
+  // VOU-627. An interactive session is the operator's own work, so the
+  // hooks write no event. Only a routine run records a session.
+  it('SessionStart and SessionEnd write no event and no marker', async () => {
+    await initialise(false);
     await hook(payloads.sessionStart());
-    const events = await logged();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: 'session.start',
-      version: '1.2.0',
-      payload: { session_id: SESSION },
-    });
-    const file = join(paths(home).sessions, SESSION);
-    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    await hook({ ...payloads.sessionStart(), source: 'compact' });
+    await hook(payloads.sessionEnd());
+    expect(await logged()).toEqual([]);
+    expect(await markers()).toEqual([]);
     expect(fetches).toEqual([]);
   });
 
-  it('a second SessionStart for the same session emits nothing', async () => {
+  it('SessionEnd syncs what the log holds, whatever session it ends', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
-    await hook({ ...payloads.sessionStart(), source: 'compact' });
-    expect(await logged()).toHaveLength(1);
-  });
-
-  it('SessionEnd emits session.end with the duration, ends the marker and syncs', async () => {
-    await initialise();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
-    await hook(payloads.sessionStart());
-    vi.setSystemTime(new Date('2026-09-23T10:05:30.250Z'));
+    await seedSessions(1);
+    // No SessionStart was seen for this session, and it still syncs.
     await hook(payloads.sessionEnd());
-
-    const [, end] = await logged();
-    expect(end).toMatchObject({
-      type: 'session.end',
-      payload: { session_id: SESSION, duration_ms: 330_250 },
-    });
-    expect(await markers()).toEqual([`ended.${SESSION}`]);
-    const ended = join(paths(home).sessions, `ended.${SESSION}`);
-    expect((await stat(ended)).mode & 0o777).toBe(0o600);
     expect(fetches).toEqual([`${API_URL}/v1/events`]);
-    expect((await readCursor(paths(home))).lastAcked?.eventId).toBe(
-      end?.event_id,
-    );
+    expect(await countPending(paths(home))).toBe(0);
   });
 
-  it('SessionEnd with auto-sync off appends and sends nothing', async () => {
+  it('SessionEnd with auto-sync off sends nothing', async () => {
     await initialise(false);
-    await hook(payloads.sessionStart());
-    const { code, err } = await hook(payloads.sessionEnd());
-    expect(code).toBe(0);
+    await seedSessions(1);
+    const { err } = await hook(payloads.sessionEnd());
     expect(err).toBe('');
-    expect((await logged()).map((e) => e.type)).toEqual([
-      'session.start',
-      'session.end',
-    ]);
     expect(fetches).toEqual([]);
     expect((await readCursor(paths(home))).lastAcked).toBeNull();
   });
 
-  it('Stop emits nothing, and SessionEnd after two Stops covers the whole session', async () => {
-    await initialise();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
-    await hook(payloads.sessionStart());
-    vi.setSystemTime(new Date('2026-09-23T10:00:02.000Z'));
-    await hook(payloads.stop());
-    vi.setSystemTime(new Date('2026-09-23T10:01:00.000Z'));
-    await hook(payloads.stop());
-    expect((await logged()).map((e) => e.type)).toEqual(['session.start']);
-    expect(fetches).toEqual([]);
-
-    vi.setSystemTime(new Date('2026-09-23T10:03:00.000Z'));
+  // A CLI before 0.5.0 kept a marker per session, and installed Stop.
+  it('Stop records nothing, and SessionEnd removes the markers an older CLI left', async () => {
+    await initialise(false);
+    const dir = paths(home).sessions;
+    await mkdir(dir, { recursive: true });
+    for (const name of [SESSION, `ended.${SESSION}`, 'tool.toolu_old']) {
+      await writeFile(join(dir, name), new Date().toISOString());
+    }
+    const { err } = await hook(payloads.stop());
+    expect(err).toBe('');
+    expect(await markers()).toHaveLength(3);
     await hook(payloads.sessionEnd());
-    await hook(payloads.stop());
-
-    const events = await logged();
-    expect(events.map((e) => e.type)).toEqual(['session.start', 'session.end']);
-    expect(events[1]?.payload).toEqual({
-      session_id: SESSION,
-      duration_ms: 180_000,
-    });
-  });
-
-  it('a compact or resume between Stops still gives one session.start and one session.end', async () => {
-    await initialise();
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-09-23T10:00:00.000Z'));
-    await hook(payloads.sessionStart());
-    await hook(payloads.stop());
-    await hook({ ...payloads.sessionStart(), source: 'compact' });
-    await hook(payloads.stop());
-    vi.setSystemTime(new Date('2026-09-23T10:10:00.000Z'));
-    await hook(payloads.sessionEnd());
-    await hook({ ...payloads.sessionStart(), source: 'resume' });
-
-    const events = await logged();
-    expect(events.map((e) => e.type)).toEqual(['session.start', 'session.end']);
-    expect(events[1]?.payload).toEqual({
-      session_id: SESSION,
-      duration_ms: 600_000,
-    });
-  });
-
-  it('a session with Stop but no SessionEnd is closed at its last Stop once stale', async () => {
-    await initialise();
-    // Early today, so every event lands in the day file logged() reads once
-    // the clock is real again.
-    const today = new Date().toISOString().slice(0, 10);
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date(`${today}T00:00:00.000Z`));
-    await hook(payloads.sessionStart());
-    vi.setSystemTime(new Date(`${today}T00:00:45.000Z`));
-    await hook(payloads.stop());
-    vi.useRealTimers();
-
-    const file = join(paths(home).sessions, SESSION);
-    const past = new Date(Date.now() - STALE_MARKER_MS - 60_000);
-    await utimes(file, past, past);
-    await hook({ ...payloads.sessionStart(), session_id: 'other-session' });
-
-    const events = await logged();
-    expect(events.map((e) => e.type)).toEqual([
-      'session.start',
-      'session.end',
-      'session.start',
-    ]);
-    expect(events[1]?.payload).toEqual({
-      session_id: SESSION,
-      duration_ms: 45_000,
-    });
-    expect(await markers()).toEqual(['other-session']);
-  });
-
-  it('a stale session without any Stop is removed without an event', async () => {
-    await initialise();
-    await hook(payloads.sessionStart());
-    const file = join(paths(home).sessions, SESSION);
-    const past = new Date(Date.now() - STALE_MARKER_MS - 60_000);
-    await utimes(file, past, past);
-    await hook({ ...payloads.sessionStart(), session_id: 'other-session' });
-
-    expect((await logged()).map((e) => e.type)).toEqual([
-      'session.start',
-      'session.start',
-    ]);
-    expect(await markers()).toEqual(['other-session']);
-  });
-
-  it('SessionEnd without a recorded start emits nothing', async () => {
-    await initialise();
-    await hook(payloads.sessionEnd());
+    await expect(stat(dir)).rejects.toThrow();
     expect(await logged()).toEqual([]);
-    expect(fetches).toEqual([]);
   });
 
   it('a failed sync at session end still exits 0 with one warning', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
+    await seedSessions(1);
     const program = createProgram({
       hook: {
         fetch: (async () => {
@@ -419,10 +314,7 @@ describe('hook claude-code', () => {
     expect(err).toBe(
       'sealkeeper: sync did not finish, run npx sealkeeper sync\n',
     );
-    expect((await logged()).map((e) => e.type)).toEqual([
-      'session.start',
-      'session.end',
-    ]);
+    expect(await countPending(paths(home))).toBe(1);
   });
 
   // Runs the SessionEnd hook with its own fetch and returns stderr.
@@ -465,11 +357,11 @@ describe('hook claude-code', () => {
 
   it('a second SessionEnd within five minutes of a sync sends nothing and prints nothing', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
+    await seedSessions(1);
     await hook(payloads.sessionEnd());
     expect(fetches).toEqual([`${API_URL}/v1/events`]);
+    await seedSessions(2);
     const other = { session_id: 'second-session' };
-    await hook({ ...payloads.sessionStart(), ...other });
     const { err } = await hook({ ...payloads.sessionEnd(), ...other });
     expect(err).toBe('');
     expect(fetches).toEqual([`${API_URL}/v1/events`]);
@@ -478,7 +370,7 @@ describe('hook claude-code', () => {
 
   it('SessionEnd stays out, silently, while another sync holds the lock', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
+    await seedSessions(1);
     await writeFile(join(home, LOCK_FILE), `${process.pid}\n`);
     const { err } = await hook(payloads.sessionEnd());
     expect(err).toBe('');
@@ -487,8 +379,7 @@ describe('hook claude-code', () => {
 
   it('SessionEnd stops starting rounds after its deadline', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
-    await seedSessions(1000);
+    await seedSessions(1002);
     // Each request takes 2.5 seconds on the clock the sync reads. Rounds
     // start at 0 and 2.5 seconds, and the 3 second deadline stops the third.
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -510,7 +401,7 @@ describe('hook claude-code', () => {
 
   it('SessionEnd returns within its deadline when the API never answers', async () => {
     await initialise();
-    await hook(payloads.sessionStart());
+    await seedSessions(2);
     // Stands in for an API that accepts the connection and never answers.
     // Like real fetch it gives up when the request signal aborts.
     const hanging = ((_input: unknown, init: RequestInit = {}) =>
@@ -532,9 +423,9 @@ describe('hook claude-code', () => {
     expect(await countPending(paths(home))).toBe(2);
   }, 15_000);
 
-  // VOU-451. The hooks record sessions only. A machine keeps the tool
-  // hooks of an older install until the install runs again, and each of
-  // them records nothing, prints nothing and exits 0.
+  // VOU-451, VOU-627. A machine keeps the tool hooks and Stop of an older
+  // install until the install runs again, and each of them records
+  // nothing, prints nothing and exits 0.
   it.each([
     ['PreToolUse', payloads.pre('toolu_01ABCdef')],
     ['PostToolUse', payloads.post('toolu_01ABCdef')],
@@ -543,6 +434,7 @@ describe('hook claude-code', () => {
       'an interrupted PostToolUseFailure',
       payloads.failure('toolu_02', 'Bash', true),
     ],
+    ['Stop', payloads.stop()],
   ])('%s records nothing', async (_label, payload) => {
     await initialise();
     const { err } = await hook(payload);
@@ -552,7 +444,7 @@ describe('hook claude-code', () => {
     expect(fetches).toEqual([]);
   });
 
-  it('a session with tool events in it logs only its start and end', async () => {
+  it('a session with tool events in it logs nothing and leaks nothing', async () => {
     await initialise(false);
     const results = [
       await hook(payloads.sessionStart()),
@@ -563,15 +455,16 @@ describe('hook claude-code', () => {
       await hook(payloads.stop()),
       await hook(payloads.sessionEnd()),
     ];
-    expect((await logged()).map((e) => e.type)).toEqual([
-      'session.start',
-      'session.end',
-    ]);
-    expect(await markers()).toEqual([`ended.${SESSION}`]);
-    const day = await readFile(paths(home).logFile(dayOf(new Date())), 'utf8');
-    for (const text of [day, ...results.map((r) => r.err)]) {
+    expect(await logged()).toEqual([]);
+    expect(await markers()).toEqual([]);
+    const files = await readdir(home);
+    const texts = await Promise.all(
+      files
+        .filter((f) => !f.startsWith('key'))
+        .map((f) => readFile(join(home, f), 'utf8').catch(() => '')),
+    );
+    for (const text of [...texts, ...results.map((r) => r.err)]) {
       expect(text).not.toContain('secret');
-      expect(text).not.toContain('Bash');
       expect(text).not.toContain('toolu_');
     }
   });
@@ -582,16 +475,13 @@ describe('hook claude-code', () => {
     ['an array', '[1, 2]'],
     ['no event name', JSON.stringify({ session_id: SESSION })],
     ['an unknown event', JSON.stringify(base('Notification'))],
-    [
-      'a bad session id',
-      JSON.stringify({ ...base('SessionStart'), session_id: '../x' }),
-    ],
   ])('%s on stdin exits 0 and writes nothing', async (_label, stdin) => {
     await initialise();
     const { err } = await hook(stdin);
     expect(err).toBe('');
     expect(await logged()).toEqual([]);
     expect(await markers()).toEqual([]);
+    expect(fetches).toEqual([]);
   });
 
   it('no stdin at all exits 0 and writes nothing', async () => {
@@ -622,25 +512,6 @@ describe('hook claude-code', () => {
     expect(await readdir(home)).toEqual(['config.json']);
   });
 
-  it('removes markers older than a day, and a tool call marker at any age', async () => {
-    await initialise();
-    const dir = paths(home).sessions;
-    await mkdir(dir, { recursive: true });
-    const old = join(dir, 'tool.toolu_old');
-    const oldEnded = join(dir, 'ended.old-session');
-    const fresh = join(dir, 'tool.toolu_fresh');
-    await writeFile(old, new Date().toISOString());
-    await writeFile(oldEnded, new Date().toISOString());
-    await writeFile(fresh, new Date().toISOString());
-    const past = new Date(Date.now() - STALE_MARKER_MS - 60_000);
-    await utimes(old, past, past);
-    await utimes(oldEnded, past, past);
-
-    await hook(payloads.sessionStart());
-    // An older CLI wrote the tool call markers, and none is written now.
-    expect(await markers()).toEqual([SESSION]);
-  });
-
   describe('session nudge', () => {
     const cached: NudgeGoal = {
       level: 'none',
@@ -667,12 +538,11 @@ describe('hook claude-code', () => {
       expect(out).toBe(`${SUMMARY}\n`);
       expect(err).toBe('');
       expect(goalReads).toEqual([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);
-      // The event is logged as without the nudge.
-      expect(await logged()).toHaveLength(1);
+      expect(await logged()).toEqual([]);
       expect(fetches).toEqual([]);
     });
 
-    it('prints again on a resume, and still logs one session', async () => {
+    it('prints again on a resume', async () => {
       await initialise(true, true);
       goal = cached;
       await run(JSON.stringify(payloads.sessionStart()));
@@ -680,7 +550,6 @@ describe('hook claude-code', () => {
         JSON.stringify({ ...payloads.sessionStart(), source: 'resume' }),
       );
       expect(again.out).toBe(`${SUMMARY}\n`);
-      expect(await logged()).toHaveLength(1);
     });
 
     it('prints nothing with the nudge off or never answered', async () => {
@@ -699,15 +568,13 @@ describe('hook claude-code', () => {
       goal = null;
       await hook(payloads.sessionStart());
       expect(goalReads).toEqual([{ maxAgeMs: NUDGE_CACHE_MAX_MS }]);
-      expect(await logged()).toHaveLength(1);
     });
 
-    it('prints nothing when reading the goal fails, and the event is logged', async () => {
+    it('prints nothing when reading the goal fails', async () => {
       await initialise(true, true);
       goal = new Error('disk on fire');
       const { err } = await hook(payloads.sessionStart());
       expect(err).toBe('');
-      expect(await logged()).toHaveLength(1);
     });
 
     it('prints nothing on the other hooks or without a config', async () => {
@@ -721,56 +588,53 @@ describe('hook claude-code', () => {
       expect(goalReads).toEqual([]);
     });
 
-    it('SessionEnd refreshes the cached goal once the nudge is on', async () => {
-      const agentId = await initialise(false, true);
-      goalAnswer = {
-        agentId,
-        version: '1.2.0',
-        level: 'none',
-        nextLevel: 'bronze',
-        thresholds: [],
-        actions: [],
-        pending: { addressed: 1, outcomes: 0 },
-        asOf: null,
-      };
-      await hook(payloads.sessionStart());
-      expect(fetches).toEqual([]);
-      await hook(payloads.sessionEnd());
-      expect(fetches).toEqual([`${API_URL}/v1/agents/${agentId}/goal`]);
-      const cache = JSON.parse(await readFile(paths(home).goal, 'utf8'));
-      expect(cache.goal.pending).toEqual({ addressed: 1, outcomes: 0 });
-    });
+    // VOU-627. The goal is read at SealKeeper moments only, never at the
+    // end of a session, so an unrelated session leaves no trace in the
+    // API's request log.
+    it.each([true, false])(
+      'SessionEnd never reads the goal, nudge %s',
+      async (nudge) => {
+        const agentId = await initialise(false, nudge);
+        goalAnswer = { agentId, version: '1.2.0' };
+        await hook(payloads.sessionStart());
+        await hook(payloads.sessionEnd());
+        expect(fetches).toEqual([]);
+        expect(await readFile(paths(home).goal, 'utf8').catch(() => null)).toBe(
+          null,
+        );
+      },
+    );
 
-    // VOU-453. Both requests of a SessionEnd go through the API client.
-    it('SessionEnd sends the CLI version with the sync and the goal read', async () => {
-      const agentId = await initialise(true, true);
-      await hook(payloads.sessionStart());
-      await hook(payloads.sessionEnd());
-      expect(fetches).toEqual([
-        `${API_URL}/v1/events`,
-        `${API_URL}/v1/agents/${agentId}/goal`,
-      ]);
-      expect(versions).toEqual([VERSION, VERSION]);
-    });
+    // VOU-627. A sync sends only pending events, so the end of a session
+    // with no SealKeeper work makes no request at all, with automatic sync
+    // on and the nudge on or off.
+    it.each([true, false])(
+      'SessionEnd with an empty queue makes no request, nudge %s',
+      async (nudge) => {
+        const agentId = await initialise(true, nudge);
+        goalAnswer = { agentId, version: '1.2.0' };
+        await hook(payloads.sessionStart());
+        const { err } = await hook(payloads.sessionEnd());
+        expect(err).toBe('');
+        expect(fetches).toEqual([]);
+        // The gate ran, so the empty queue is what kept it quiet, not the
+        // throttle or automatic sync being off.
+        expect(await stat(join(home, STAMP_FILE))).toBeTruthy();
+      },
+    );
 
-    it('SessionEnd sends nothing for the goal with the nudge off', async () => {
-      await initialise(false, false);
-      await hook(payloads.sessionStart());
+    // VOU-453. The sync of a SessionEnd goes through the API client.
+    it('SessionEnd sends the CLI version with the sync, and reads no goal', async () => {
+      await initialise(true, true);
+      await seedSessions(1);
       await hook(payloads.sessionEnd());
-      expect(fetches).toEqual([]);
-    });
-
-    it('SessionEnd stays quiet when the goal cannot be read', async () => {
-      await initialise(false, true);
-      await hook(payloads.sessionStart());
-      const { err } = await hook(payloads.sessionEnd());
-      expect(err).toBe('');
-      expect(await logged()).toHaveLength(2);
+      expect(fetches).toEqual([`${API_URL}/v1/events`]);
+      expect(versions).toEqual([VERSION]);
     });
   });
 
   describe('agent per folder', () => {
-    it('logs to the home of the folder the payload names as cwd', async () => {
+    it('syncs the home of the folder the payload names as cwd', async () => {
       // No SEALKEEPER_HOME, so the folder map picks the home.
       const root = join(home, 'root');
       vi.stubEnv('SEALKEEPER_HOME', '');
@@ -787,23 +651,29 @@ describe('hook claude-code', () => {
           version: '2.0.0',
           apiUrl: API_URL,
           registeredAt: '2026-09-23T10:00:00Z',
+          autoSync: true,
         },
         billing,
       );
       await bindFolder(project, billing.home, root);
+      await appendEvent(
+        {
+          event_id: randomUUID(),
+          type: 'session.start',
+          occurred_at: new Date().toISOString(),
+          version: '2.0.0',
+          payload: { session_id: 'routine-run' },
+        },
+        billing,
+      );
 
       // The hook runs from anywhere, the payload says where Claude Code is.
       await hook({
-        ...payloads.sessionStart(),
+        ...payloads.sessionEnd(),
         cwd: join(project, 'src'),
       });
-      const events = await readDay(dayOf(new Date()), billing);
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: 'session.start',
-        version: '2.0.0',
-      });
-      expect(await readdir(billing.sessions)).toEqual([SESSION]);
+      expect(fetches).toEqual([`${API_URL}/v1/events`]);
+      expect(await countPending(billing)).toBe(0);
       // The default agent in the root got nothing.
       expect(await readdir(root)).toEqual(['agents', 'agents.json']);
     });
@@ -813,6 +683,15 @@ describe('hook claude-code', () => {
 describe('parseHookInput', () => {
   const payload = (cwd: unknown) =>
     JSON.stringify({ hook_event_name: 'Stop', session_id: 's1', cwd });
+
+  // VOU-627. The session id is no longer read, nothing needs it.
+  it('reads only the event name, cwd and the model', () => {
+    expect(parseHookInput(payload('/Users/alice/app'))).toEqual({
+      event: 'Stop',
+      cwd: '/Users/alice/app',
+      model: null,
+    });
+  });
 
   it('takes cwd only when it is an absolute path', () => {
     expect(parseHookInput(payload('/Users/alice/app'))?.cwd).toBe(

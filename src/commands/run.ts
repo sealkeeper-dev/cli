@@ -29,6 +29,7 @@ import { readStatus } from '../status-answer.js';
 import { createStyle, indent, type Styled } from '../style.js';
 import { templateById } from '../task-templates.js';
 import {
+  afterTaskWork,
   defaultTasksDeps,
   isGameTask,
   openTaskSession,
@@ -153,7 +154,10 @@ export function register(
         this.error(error.status === 404 ? OLD_API : refusal(error));
       }
       await recordClaims(answer);
+      // Synced and the goal refreshed while the answer prints.
+      const settled = afterTaskWork(deps);
       stdout(JSON.stringify(agentAnswer(answer)));
+      await settled;
     });
 }
 

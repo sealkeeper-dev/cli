@@ -1,10 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The Mastra adapter, imported as sealkeeper/mastra. It runs in the agent's own
-// process and appends sessions and usage to the local log through emit from
-// lib.ts. Tool calls are not recorded. Once automatic sync is on it also
-// starts a background sync, at most once every five minutes, see
-// background-sync.ts. A failing emit or sync is swallowed so it never throws
-// into the agent, and the agent never waits on a sync.
+// process and writes no event (VOU-627). The agent's own sessions are its
+// operator's work, so only a routine run, routine(agent) below, which is
+// SealKeeper work, records a session and its usage. withSealKeeper and
+// sealKeeperSession read the fingerprint parts this process sees, the
+// tools, the framework and the model of each step. A CLI before 0.5.0 also
+// wrote session.start, session.end and usage here, and sealKeeperSession
+// keeps its shape so code that calls it keeps working. A failure is
+// swallowed so it never throws into the agent.
 // sealKeeperContext gives the session nudge for the agent's instructions.
 // Mastra is typed by shape only, so this file imports nothing from Mastra.
 // Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
@@ -16,7 +19,7 @@
 // routine(agent) runs one daily routine run with the agent, the same loop
 // as sealkeeper routine run, see routine-mastra.ts (VOU-601).
 import { createHash, randomUUID } from 'node:crypto';
-import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
+import { adapterNudge } from './adapter-core.js';
 import {
   mastraVersion,
   rawModelIdOf,
@@ -29,7 +32,6 @@ import {
   fetchCheck,
 } from './check.js';
 import { createObserver } from './fingerprint-observer.js';
-import type { EmitInput } from './lib.js';
 import { modelNameOf, toolNameOf } from './names.js';
 import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
@@ -60,15 +62,12 @@ export type MastraToolLike = {
 
 export type SealKeeperSession = {
   sessionId: string;
-  // Pass to agent.generate or agent.stream as onStepFinish.
+  // Pass to agent.generate or agent.stream as onStepFinish. It reads the
+  // step's model id for the fingerprint.
   onStepFinish: (step: unknown) => Promise<void>;
-  // Emits session.end. Resolves once every event of the session is written.
+  // Records nothing since 0.5.0 and resolves at once.
   end: () => Promise<void>;
 };
-
-function elapsed(start: number): number {
-  return clampMs(performance.now() - start);
-}
 
 // The fingerprint parts this process sees (VB-2). Model ids from steps,
 // the names and schemas of every tool passed to withSealKeeper and the
@@ -117,51 +116,8 @@ export function withSealKeeper<
   return tools;
 }
 
-// The usage payload of a step, or null when the step has no token counts or
-// no model id. Tokens come from usage.promptTokens and usage.completionTokens
-// (inputTokens and outputTokens in newer versions). The model is
-// response.modelId, else step.model.modelId, else
-// response.modelMetadata.modelId, as Gemini reports it (rawModelIdOf),
-// through toolNameOf like a tool id. Latency is measured locally by
-// the session, since the provider timestamp is missing or coarse for some
-// providers. emit validates the ranges. Text and tool data are never read.
-function usageOf(step: unknown, latencyMs: number): EmitInput | null {
-  if (typeof step !== 'object' || step === null) return null;
-  const { usage, response, model } = step as {
-    usage?: unknown;
-    response?: { modelId?: unknown } | null;
-    model?: unknown;
-  };
-  if (typeof usage !== 'object' || usage === null) return null;
-  const u = usage as Record<string, unknown>;
-  const tokensIn = u.promptTokens ?? u.inputTokens;
-  const tokensOut = u.completionTokens ?? u.outputTokens;
-  const modelId = modelIdOf(response, model);
-  if (
-    typeof tokensIn !== 'number' ||
-    typeof tokensOut !== 'number' ||
-    modelId === null
-  ) {
-    return null;
-  }
-  return {
-    type: 'usage',
-    payload: {
-      tokens_in: tokensIn,
-      tokens_out: tokensOut,
-      latency_ms: latencyMs,
-      model: modelId,
-    },
-  };
-}
-
-// The model id of a step as a name.
-function modelIdOf(response: unknown, model: unknown): string | null {
-  return toolNameOf(rawModelIdOf(response, model));
-}
-
-// The model id of a step for the fingerprint, with or without usage, and
-// the model name it gives (modelNameOf).
+// The model id of a step for the fingerprint, and the model name it gives
+// (modelNameOf).
 function stepModel(step: unknown): { id: string; name: string | null } | null {
   if (typeof step !== 'object' || step === null) return null;
   const { response, model } = step as { response?: unknown; model?: unknown };
@@ -182,45 +138,26 @@ function sessionIdOf(id: string): string {
     : createHash('sha256').update(id, 'utf8').digest('hex');
 }
 
-// Starts a session and emits session.start. The id defaults to a new UUID.
-// sessionId in the result is the id as logged, see sessionIdOf.
+// A session for the fingerprint. It reads the model id of each step and
+// writes no event. The id defaults to a new UUID. sessionId in the result
+// is the id as a CLI before 0.5.0 logged it, see sessionIdOf.
 export function sealKeeperSession(
   given: string = randomUUID(),
 ): SealKeeperSession {
   const sessionId = sessionIdOf(String(given));
-  const start = performance.now();
   observeFramework();
-  // A step's latency runs from the end of the previous step, or from session
-  // creation for the first one.
-  let last = start;
-  // Events of one session are written in order, one after another.
-  const enqueue = emitQueue();
-  void enqueue({
-    type: 'session.start',
-    payload: { session_id: sessionId },
-  });
-
   return {
     sessionId,
     onStepFinish: async (step) => {
-      const latencyMs = elapsed(last);
-      last = performance.now();
-      let input: EmitInput | null = null;
       try {
-        input = usageOf(step, latencyMs);
         const seen = stepModel(step);
         // Written only the first time this process sees the id.
         if (seen !== null) void observer.model(seen.id, seen.name);
       } catch {
         // A step that throws when read is skipped.
       }
-      if (input) await enqueue(input);
     },
-    end: () =>
-      enqueue({
-        type: 'session.end',
-        payload: { session_id: sessionId, duration_ms: elapsed(start) },
-      }),
+    end: async () => {},
   };
 }
 
