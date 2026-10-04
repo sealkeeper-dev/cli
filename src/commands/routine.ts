@@ -1508,6 +1508,7 @@ export function runLine(entry: Omit<RunEntry, 'at'>): string {
     stopped: 'Routine run stopped.',
     failed: 'Routine run failed.',
     skipped: 'Routine run skipped, no agent started.',
+    aborted: 'Routine run stopped by its caller.',
   };
   const parts = [head[entry.outcome]];
   if (entry.reason) parts.push(`${capital(entry.reason)}.`);

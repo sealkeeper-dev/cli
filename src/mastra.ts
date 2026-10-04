@@ -37,6 +37,7 @@ import {
   type MastraAgentLike,
   type MastraGenerateOptions,
   mastraRoutine,
+  type RoutineOptions,
   type RoutineRunResult,
 } from './routine-mastra.js';
 
@@ -47,6 +48,7 @@ export type {
   CheckThresholds,
   MastraAgentLike,
   MastraGenerateOptions,
+  RoutineOptions,
   RoutineRunResult,
 };
 
@@ -281,7 +283,11 @@ export async function assertTrusted(
 // decides every step, and agent answers each task through one generate
 // call with no tools. Resolves with what the run did, a failed run
 // included, and rejects only when no agent is set up here or routine.json
-// does not read. It never prints.
-export function routine(agent: MastraAgentLike): Promise<RoutineRunResult> {
-  return quietly(() => mastraRoutine(agent));
+// does not read. It never prints. options.signal stops the run at its next
+// safe point, and it then resolves with outcome aborted (VOU-620).
+export function routine(
+  agent: MastraAgentLike,
+  options?: RoutineOptions,
+): Promise<RoutineRunResult> {
+  return quietly(() => mastraRoutine(agent, options));
 }

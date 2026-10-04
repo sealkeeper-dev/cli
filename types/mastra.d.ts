@@ -127,9 +127,15 @@ export type MastraAgentLike = {
   generate(prompt: string, options: MastraGenerateOptions): Promise<unknown>;
 };
 
-// What one routine run did. outcome is done, nothing, stopped, failed or
-// skipped, and failure names what failed. Typed as text so a value a
-// newer CLI adds still reads.
+// What routine takes besides the agent. signal stops the run at its next
+// safe point, as its limits do.
+export type RoutineOptions = {
+  signal?: AbortSignal | undefined;
+};
+
+// What one routine run did. outcome is done, nothing, stopped, failed,
+// skipped or aborted, and failure names what failed. Typed as text so a
+// value a newer CLI adds still reads.
 export type RoutineRunResult = {
   runId: string;
   outcome: string;
@@ -151,7 +157,12 @@ export type RoutineRunResult = {
 // SealKeeper decides every step, and agent answers each task through one
 // generate call with no tools. Resolves with what the run did, a failed
 // run included. Rejects only when no agent is set up here or routine.json
-// does not read. It never prints.
+// does not read. It never prints. When options.signal aborts, a wait for
+// SealKeeper ends at once, a generate in flight gets the abort, no new
+// step is asked, a task the run holds goes back as at its time limit, and
+// the run resolves with outcome aborted. A signal already aborted starts
+// no run.
 export declare function routine(
   agent: MastraAgentLike,
+  options?: RoutineOptions,
 ): Promise<RoutineRunResult>;

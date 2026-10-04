@@ -113,7 +113,9 @@ export type AgentResult = {
   text: string | null;
   // null when the agent was stopped or never started.
   exitCode: number | null;
-  stoppedFor: 'minutesPerRun' | 'tokensPerRun' | null;
+  // What stopped the agent, a limit of the run or, for a Mastra routine,
+  // the caller's signal (VOU-620).
+  stoppedFor: 'minutesPerRun' | 'tokensPerRun' | 'caller' | null;
   // Input, output and cache write tokens as the agent reported them. Cache
   // reads are not counted. null when it reported none.
   tokens: number | null;

@@ -76,6 +76,7 @@ import {
   taskPrompt,
   verdictOf,
 } from '../routine-prompt.js';
+import { routineRun } from '../routine-run.js';
 import {
   applyPlan,
   cronBlock,
@@ -2462,6 +2463,170 @@ describe('routine', () => {
       });
       expect(result).toMatchObject({ stoppedFor: 'minutesPerRun', text: null });
       expect(signal?.aborted).toBe(true);
+    });
+
+    // The caller's signal (VOU-620). Each abort is made by the test at a
+    // known point, and no wait is real.
+    describe("the caller's signal", () => {
+      it('aborts a generate in flight, gives the task back, frees the lock and the screen says so', async () => {
+        const task = api.add();
+        api.steps = [api.task(task)];
+        const controller = new AbortController();
+        let given: AbortSignal | undefined;
+        const result = await routine(
+          {
+            generate: (_prompt, options) => {
+              given = options.abortSignal;
+              controller.abort();
+              return new Promise(() => undefined);
+            },
+          },
+          { signal: controller.signal },
+        );
+        expect(result).toMatchObject({
+          outcome: 'aborted',
+          reason: null,
+          failure: null,
+          claimed: 1,
+          submitted: 0,
+        });
+        expect(given?.aborted).toBe(true);
+        expect(api.routineCalls).toHaveLength(1);
+        expect(api.released).toEqual([task.id]);
+        expect(existsSync(routinePaths().lock)).toBe(false);
+        expect(await readRoutine()).not.toContainEqual(
+          expect.objectContaining({ kind: 'limit' }),
+        );
+        const screen = await run('routine');
+        expect(screen.out).toContain('Routine run stopped by its caller.');
+      });
+
+      it('ends a wait for the API at once and asks no step after it', async () => {
+        api.routineReply = () => error(409, 'routine_step_busy');
+        const controller = new AbortController();
+        const waits: { ms: number; signal?: AbortSignal }[] = [];
+        const entry = await routineRun(
+          {
+            fetch: api.fetch,
+            random: () => 0,
+            signal: controller.signal,
+            sleep: async (ms, signal) => {
+              waits.push({ ms, signal });
+              controller.abort();
+            },
+          },
+          (await readConfig()) as Config,
+          await readRoutineConfig(),
+          {
+            runtime: 'mastra',
+            start: () => ({
+              agent: mastraRuntime(
+                { generate: async () => ({ text: '1' }) },
+                controller.signal,
+              ),
+            }),
+          },
+        );
+        expect(waits).toEqual([{ ms: 2_000, signal: controller.signal }]);
+        expect(api.routineCalls).toHaveLength(1);
+        expect(entry).toMatchObject({
+          outcome: 'aborted',
+          agentStarted: false,
+        });
+        expect(existsSync(routinePaths().lock)).toBe(false);
+      });
+
+      it('ends a wait to send a rate limited submit again at once and gives the task back', async () => {
+        const task = api.add({ taskType: 'text_dedupe' });
+        api.steps = [api.task(task)];
+        api.submitReply = () =>
+          error(429, 'rate_limited', undefined, { 'Retry-After': '20' });
+        const controller = new AbortController();
+        const waits: number[] = [];
+        const entry = await routineRun(
+          {
+            fetch: api.fetch,
+            random: () => 0,
+            signal: controller.signal,
+            sleep: async (ms) => {
+              waits.push(ms);
+              controller.abort();
+            },
+          },
+          (await readConfig()) as Config,
+          await readRoutineConfig(),
+          {
+            runtime: 'mastra',
+            start: () => ({
+              agent: mastraRuntime(
+                { generate: async () => ({ text: 'a\nb' }) },
+                controller.signal,
+              ),
+            }),
+          },
+        );
+        expect(waits).toEqual([20_000]);
+        expect(api.submitted).toHaveLength(1);
+        expect(api.released).toEqual([task.id]);
+        expect(api.routineCalls).toHaveLength(1);
+        expect(entry).toMatchObject({ outcome: 'aborted' });
+        expect(entry.failure).toBeUndefined();
+        expect(existsSync(routinePaths().lock)).toBe(false);
+      });
+
+      it('sends a verdict in hand with one last call, as at the time limit, and gives back a task that call hands over', async () => {
+        const posted = api.add({
+          posterAgentId: agentId,
+          claimantAgentId: BOB_AGENT,
+          verification: { kind: 'counterparty' },
+          taskType: 'summarise',
+          state: 'submitted',
+        });
+        const task = api.add();
+        api.steps = [api.judge(posted, 'a short text'), api.task(task)];
+        const controller = new AbortController();
+        const generate = vi.fn(async () => {
+          controller.abort();
+          return { text: 'Success.' };
+        });
+        const result = await routine(
+          { generate },
+          { signal: controller.signal },
+        );
+        expect(result.outcome).toBe('aborted');
+        expect(generate).toHaveBeenCalledTimes(1);
+        expect(api.routineCalls.map((c) => c.verdict)).toEqual([
+          undefined,
+          { taskId: posted.id, outcome: 'success' },
+        ]);
+        expect(api.submitted).toEqual([]);
+        expect(api.released).toEqual([task.id]);
+        expect(existsSync(routinePaths().lock)).toBe(false);
+      });
+
+      it('starts no run and takes no lock when the signal is already aborted', async () => {
+        expect(
+          await acquireLock({
+            runId: 'locked',
+            pid: process.pid,
+            deadline: new Date(Date.now() + HOUR).toISOString(),
+          }),
+        ).toBe(true);
+        const generate = vi.fn(async () => ({ text: '1' }));
+        const result = await routine(
+          { generate },
+          { signal: AbortSignal.abort() },
+        );
+        expect(result).toMatchObject({
+          outcome: 'aborted',
+          reason: 'it never started',
+          claimed: 0,
+        });
+        expect(generate).not.toHaveBeenCalled();
+        expect(api.routineCalls).toEqual([]);
+        expect((await readLiveLock())?.runId).toBe('locked');
+        await removeLock('locked');
+      });
     });
 
     it('rejects when no agent is set up here', async () => {

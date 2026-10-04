@@ -36,9 +36,16 @@ export type MastraAgentLike = {
   generate(prompt: string, options: MastraGenerateOptions): Promise<unknown>;
 };
 
+// What routine takes besides the agent. signal stops the run at its next
+// safe point, as its limits do (VOU-620).
+export type RoutineOptions = {
+  signal?: AbortSignal | undefined;
+};
+
 // What one routine run did, its run line in routine.jsonl in short.
-// outcome is done, nothing, stopped, failed or skipped, and failure names
-// what failed. A string, so a value a newer CLI adds still types.
+// outcome is done, nothing, stopped, failed, skipped or aborted, and
+// failure names what failed. A string, so a value a newer CLI adds still
+// types.
 export type RoutineRunResult = {
   runId: string;
   outcome: string;
@@ -55,12 +62,14 @@ export type RoutineRunResult = {
 };
 
 // One routine run with agent, for the agent set up under SEALKEEPER_HOME
-// (default ~/.sealkeeper). Resolves with what the run did, failed runs
-// included. Rejects only when no agent is set up or routine.json does not
-// read. Prints nothing.
+// (default ~/.sealkeeper). Resolves with what the run did, failed and
+// aborted runs included. Rejects only when no agent is set up or
+// routine.json does not read. Prints nothing.
 export async function mastraRoutine(
   agent: MastraAgentLike,
+  options: RoutineOptions = {},
 ): Promise<RoutineRunResult> {
+  const { signal } = options;
   const p = paths();
   const config = await readConfig(p);
   if (config === null) {
@@ -68,10 +77,13 @@ export async function mastraRoutine(
   }
   const routine = await readRoutineConfig(p);
   const entry = await routineRun(
-    { fetch: (...args) => fetch(...args) },
+    { fetch: (...args) => fetch(...args), signal },
     config,
     routine,
-    { runtime: 'mastra', start: () => ({ agent: mastraRuntime(agent) }) },
+    {
+      runtime: 'mastra',
+      start: () => ({ agent: mastraRuntime(agent, signal) }),
+    },
     p,
     randomUUID(),
   );
@@ -91,20 +103,33 @@ export async function mastraRoutine(
   };
 }
 
-// One question is one generate, aborted at what is left of the wall clock.
-// An agent that ignores the abort is no longer waited for.
-export function mastraRuntime(agent: MastraAgentLike): AgentRuntime {
+// One question is one generate, aborted at what is left of the wall clock
+// or when the caller's signal aborts, whichever comes first. An agent that
+// ignores the abort is no longer waited for. A signal already aborted
+// starts no generate.
+export function mastraRuntime(
+  agent: MastraAgentLike,
+  signal?: AbortSignal,
+): AgentRuntime {
   return {
     name: 'mastra',
     async ask(question): Promise<AgentResult> {
+      if (signal?.aborted) return stopped('caller');
       const controller = new AbortController();
-      let timer: NodeJS.Timeout | undefined;
-      const timeout = new Promise<'timeout'>((resolve) => {
-        timer = setTimeout(() => {
-          controller.abort();
-          resolve('timeout');
-        }, question.timeoutMs);
+      let stoppedFor: Stop = 'minutesPerRun';
+      const end = (why: Stop) => {
+        if (controller.signal.aborted) return;
+        stoppedFor = why;
+        controller.abort();
+      };
+      const stop = new Promise<'stop'>((resolve) => {
+        controller.signal.addEventListener('abort', () => resolve('stop'), {
+          once: true,
+        });
       });
+      const timer = setTimeout(() => end('minutesPerRun'), question.timeoutMs);
+      const onAbort = () => end('caller');
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
         const result = await Promise.race([
           agent.generate(question.prompt, {
@@ -113,19 +138,22 @@ export function mastraRuntime(agent: MastraAgentLike): AgentRuntime {
             maxSteps: 1,
             abortSignal: controller.signal,
           }),
-          timeout,
+          stop,
         ]);
-        if (result === 'timeout') return stopped();
+        if (result === 'stop') return stopped(stoppedFor);
         return resultOf(result);
       } catch (error) {
-        if (controller.signal.aborted) return stopped();
+        if (controller.signal.aborted) return stopped(stoppedFor);
         return { ...empty(), exitCode: 1, problem: failureOf(error) };
       } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
       }
     },
   };
 }
+
+type Stop = 'minutesPerRun' | 'caller';
 
 const empty = (): AgentResult => ({
   text: null,
@@ -135,10 +163,10 @@ const empty = (): AgentResult => ({
   costUsd: null,
 });
 
-const stopped = (): AgentResult => ({
+const stopped = (stoppedFor: Stop): AgentResult => ({
   ...empty(),
   exitCode: null,
-  stoppedFor: 'minutesPerRun',
+  stoppedFor,
 });
 
 const record = (value: unknown): Record<string, unknown> | null =>

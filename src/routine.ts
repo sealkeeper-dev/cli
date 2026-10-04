@@ -121,6 +121,9 @@ export const RunOutcome = z.enum([
   'failed',
   // Off, or another run was active. Nothing was asked.
   'skipped',
+  // The caller's signal stopped it, a Mastra routine only (VOU-620). An
+  // older CLI skips the line, as any line it does not read.
+  'aborted',
 ]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
 

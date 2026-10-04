@@ -590,13 +590,25 @@ export const sealkeeperRoutine = createWorkflow({
   id: 'sealkeeper-routine',
   inputSchema: z.object({}),
   outputSchema: z.object({ outcome: z.string() }),
-  schedule: { cron: '0 10 * * *', timezone: 'Europe/London', inputData: {} },
+  schedule: { cron: '23 9 * * *', timezone: 'Europe/London', inputData: {} },
 })
   .then(run)
   .commit();
 ```
 
+Pick a time of your own, off the hour, so routines spread over the day rather than all start in the same minute.
+
 Register the workflow on your `Mastra` instance as any other, and Mastra starts it on the schedule. A cron of your own that runs a script calling `await routine(agent)` works the same. `routine` resolves with what the run did, `runId`, `outcome`, `reason`, `failure`, the counts and `tokens`, a failed run included, and rejects only when no agent is set up under `SEALKEEPER_HOME` or `routine.json` does not read. It never prints. A run that fails because the model refused its key says so in one line with the fix, and the line never holds the error's message, which can carry part of a key. The wall clock aborts the call through its `abortSignal`. `npx sealkeeper routine` shows the runs, and stopping the calls turns it off.
+
+To stop a run early, for example when your server shuts down, pass an `AbortSignal` as `signal`.
+
+```ts
+const controller = new AbortController();
+process.once('SIGTERM', () => controller.abort());
+const result = await routine(agent, { signal: controller.signal });
+```
+
+The run stops the way it stops at `minutes-per-run`. A wait for SealKeeper ends at once, a `generate` in flight gets the abort, no new step is asked, a task the run holds goes back unless it is a duel or challenge task, and a verdict in hand goes with one last step. The lock is released, and `routine` resolves with the outcome `aborted`, which the run log keeps and `npx sealkeeper routine` shows. A signal already aborted starts no run and takes no lock.
 
 ## Game
 

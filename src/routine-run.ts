@@ -63,12 +63,15 @@ import { recordClaims } from './tasks.js';
 
 // What a run needs besides the agent. Tests shorten the wall clock with
 // msPerMinute, pass a sleep that does not wait and a random source for the
-// jitter of a wait (VOU-613).
+// jitter of a wait (VOU-613). signal is the caller's of a Mastra routine,
+// which stops the run as its limits do (VOU-620). sleep ends at once when
+// it aborts.
 export type RunDeps = {
   fetch: typeof fetch;
   msPerMinute?: number;
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
+  signal?: AbortSignal;
 };
 
 // The agent of a run, made at the first question in the run's working
@@ -113,8 +116,23 @@ const STEP_RETRY_MS = 2_000;
 // longer one, or one past the run's wall clock, ends the run as api_later.
 const STEP_WAIT_MAX_MS = 2 * 60_000;
 
-const realSleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
+const realSleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
+    const end = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', end);
+      resolve();
+    };
+    const timer = setTimeout(end, ms);
+    signal?.addEventListener('abort', end, { once: true });
+  });
+
+// What stops a run before SealKeeper answers done, a limit or the caller.
+type StopFor = NonNullable<AgentResult['stoppedFor']>;
 
 /*
  * One routine run, as the job runs it. Logs every step and the run line
@@ -128,9 +146,11 @@ const realSleep = (ms: number) =>
  * task it could not answer back through the release path, unless it is a
  * duel or challenge task, which has no release. judge puts the submission
  * to the agent and keeps its verdict for the next call. Every other action
- * is something the API did. Then step n + 1. The wall clock and the token
- * cap are checked before each call, and the agent gets what is left of
- * both.
+ * is something the API did. Then step n + 1. The wall clock, the token
+ * cap and the caller's signal are checked before each call, and the agent
+ * gets what is left of both limits. An abort stops the run the way a limit
+ * does, and also ends a wait for the API at once with no step asked after
+ * it. A signal aborted before the call starts nothing and takes no lock.
  */
 export async function routineRun(
   deps: RunDeps,
@@ -147,6 +167,7 @@ export async function routineRun(
   const tokenCap = routine.limits.tokensPerRun;
   const sleep = deps.sleep ?? realSleep;
   const random = deps.random ?? Math.random;
+  const aborted = () => deps.signal?.aborted === true;
   let card: CardRefresh | null = null;
   let agentStarted = false;
   let tokens: number | null = null;
@@ -185,6 +206,10 @@ export async function routineRun(
     return entry;
   };
 
+  if (aborted()) {
+    await finish('aborted', 'it never started');
+    return done();
+  }
   if (agent === null) {
     await finish('skipped', 'the routine is off');
     return done();
@@ -271,7 +296,7 @@ export async function routineRun(
         await stop(over);
         return;
       }
-      let answer: RoutineAnswerResponse;
+      let answer: RoutineAnswerResponse | null;
       try {
         answer = await askStep(session, step, verdict);
       } catch (error) {
@@ -285,6 +310,11 @@ export async function routineRun(
             error.status === 404 ? 'old_api' : 'api',
           );
         }
+        return;
+      }
+      if (answer === null) {
+        // The caller aborted while the run waited for the API.
+        await stop('caller');
         return;
       }
       if (verdict !== null) {
@@ -351,12 +381,13 @@ export async function routineRun(
     }
 
     // Asks for one step, again after a busy step or an API it could not
-    // reach, which the API answers as a no-op.
+    // reach, which the API answers as a no-op. null when the caller aborted
+    // during the wait, and then no step is asked again.
     async function askStep(
       s: LiveSession,
       n: number,
       v: { taskId: string; outcome: TaskOutcome } | null,
-    ): Promise<RoutineAnswerResponse> {
+    ): Promise<RoutineAnswerResponse | null> {
       for (let tries = 1; ; tries++) {
         try {
           const request = RoutineNextRequest.parse({
@@ -381,9 +412,10 @@ export async function routineRun(
           );
         } catch (error) {
           if (!(error instanceof ApiError) || !askAgain(error)) throw error;
-          if (tries >= STEP_TRIES || !(await backOff(error, tries))) {
-            throw error;
-          }
+          if (tries >= STEP_TRIES) throw error;
+          const waited = await backOff(error, tries);
+          if (aborted()) return null;
+          if (!waited) throw error;
         }
       }
     }
@@ -397,15 +429,16 @@ export async function routineRun(
     // left of the run's wall clock, so no wait is past the run's own end,
     // also in a Mastra operator's process. Retry-After is read as digits
     // only (api.ts), so a negative or non-numeric one is none, and one too
-    // large to be a number is past every cap.
+    // large to be a number is past every cap. The caller's abort ends the
+    // wait at once, and then it is false.
     async function backOff(error: ApiError, tries: number): Promise<boolean> {
       const asked = (error.retryAfterSec ?? 0) * 1000;
       const base = Math.max(asked, STEP_RETRY_MS * 2 ** (tries - 1));
       const room = Math.min(STEP_WAIT_MAX_MS, deadline - Date.now());
-      if (!(base <= room)) return false;
+      if (!(base <= room) || aborted()) return false;
       const spread = Math.min(Math.max(random(), 0), 1) * (base / 2);
-      await sleep(Math.min(room, Math.floor(base + spread)));
-      return true;
+      await sleep(Math.min(room, Math.floor(base + spread)), deps.signal);
+      return !aborted();
     }
 
     // Ends the run as api_later, the API asked it to come back later. The
@@ -421,14 +454,22 @@ export async function routineRun(
       );
     }
 
-    // The wall clock or the token cap, when the run is past one.
-    function overLimit(): 'minutesPerRun' | 'tokensPerRun' | null {
+    // The caller's abort, the wall clock or the token cap, when the run is
+    // past one.
+    function overLimit(): StopFor | null {
+      if (aborted()) return 'caller';
       if (Date.now() >= deadline) return 'minutesPerRun';
       if (tokens !== null && tokens >= tokenCap) return 'tokensPerRun';
       return null;
     }
 
-    async function stop(limit: 'minutesPerRun' | 'tokensPerRun') {
+    // Ends the run where a limit or the caller stopped it. Only a limit has
+    // a limit line.
+    async function stop(limit: StopFor) {
+      if (limit === 'caller') {
+        await finish('aborted');
+        return;
+      }
       await appendRoutine(
         {
           kind: 'limit',
@@ -515,7 +556,8 @@ export async function routineRun(
       // A submit the API rate limited is sent again after the wait a step
       // takes, since the API refused it before reading it (VOU-613). Past
       // the tries, or when the wait does not fit, it fails as any refused
-      // submit, and a wait that does not fit ends the run.
+      // submit, and a wait that does not fit or that the caller aborts ends
+      // the run.
       for (let tries = 1; ; tries++) {
         try {
           // The model the runtime reported for this answer, else the
@@ -568,7 +610,8 @@ export async function routineRun(
           );
           if (!isGame(task)) await releaseQuietly(s, task.id);
           if (later !== null && tries < STEP_TRIES) {
-            await comeBackLater(later);
+            if (aborted()) await stop('caller');
+            else await comeBackLater(later);
             return 'stop';
           }
           return null;

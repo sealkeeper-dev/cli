@@ -29,6 +29,7 @@ describe('published mastra types', () => {
     expectTypeOf<published.SealKeeperCheckError>().toEqualTypeOf<mastra.SealKeeperCheckError>();
     expectTypeOf<published.MastraGenerateOptions>().toEqualTypeOf<mastra.MastraGenerateOptions>();
     expectTypeOf<published.MastraAgentLike>().toEqualTypeOf<mastra.MastraAgentLike>();
+    expectTypeOf<published.RoutineOptions>().toEqualTypeOf<mastra.RoutineOptions>();
     expectTypeOf<published.RoutineRunResult>().toEqualTypeOf<mastra.RoutineRunResult>();
     expectTypeOf<typeof published.routine>().toEqualTypeOf<
       typeof mastra.routine
@@ -45,6 +46,15 @@ describe('published mastra types', () => {
       ) => ({ text: 'ok', usage: { totalTokens: 3 }, toolCalls: [] }),
     };
     expectTypeOf(agent).toExtend<published.MastraAgentLike>();
+  });
+
+  it('takes routine options with a signal, or none (VOU-620)', () => {
+    expectTypeOf<Parameters<typeof published.routine>[1]>().toEqualTypeOf<
+      published.RoutineOptions | undefined
+    >();
+    expectTypeOf<{
+      signal: AbortSignal;
+    }>().toExtend<published.RoutineOptions>();
   });
 
   it('accepts a createTool shaped object and keeps its type', () => {
