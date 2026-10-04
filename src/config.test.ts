@@ -170,9 +170,11 @@ describe('config', () => {
       },
       allow: [],
       allowSlugs: [],
-      time: '10:00',
       game: false,
     });
+    // No time until one is set or a job is written, so a new routine takes
+    // the time of its setup (VOU-612).
+    expect((await readRoutineConfig(p)).time).toBeUndefined();
     await writeFile(
       p.routine,
       JSON.stringify({ limits: { claimsPerDay: -1 } }),

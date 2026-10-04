@@ -153,6 +153,7 @@ import {
   prepareInstall,
   type RoutineDeps,
   refreshCopy,
+  routineTime,
 } from './routine.js';
 
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
@@ -1210,8 +1211,11 @@ async function offerRoutine(
   }
   try {
     if (
-      typeof (await prepareInstall(routineDeps, current.time, current)) ===
-      'string'
+      typeof (await prepareInstall(
+        routineDeps,
+        routineTime(routineDeps, current),
+        current,
+      )) === 'string'
     ) {
       return;
     }

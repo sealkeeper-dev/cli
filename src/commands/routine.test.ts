@@ -93,11 +93,13 @@ import {
   blockLines,
   FIRST_RUN_QUESTION,
   INSTALL_QUESTION,
+  localTime,
   MASTRA_NOTE,
   NO_SETTINGS_NOTE,
   OPENCLAW_NOTE,
   preview,
   startInProcess,
+  TIME_NOW_LINE,
   WORK_QUESTION,
 } from './routine.js';
 
@@ -399,6 +401,32 @@ const says = (text: string, output = 50) =>
     0,
   );
 
+describe('localTime', () => {
+  it('is HH:MM on a 24 hour clock, from midnight to the last minute', () => {
+    expect(localTime(new Date(2026, 9, 4, 0, 0))).toBe('00:00');
+    expect(localTime(new Date(2026, 9, 4, 0, 7))).toBe('00:07');
+    expect(localTime(new Date(2026, 9, 4, 9, 5))).toBe('09:05');
+    expect(localTime(new Date(2026, 9, 4, 14, 37))).toBe('14:37');
+    expect(localTime(new Date(2026, 9, 4, 23, 59))).toBe('23:59');
+  });
+
+  it('reads the local time zone, as the scheduler does', () => {
+    const instant = new Date(Date.UTC(2026, 9, 4, 22, 5));
+    try {
+      vi.stubEnv('TZ', 'UTC');
+      expect(localTime(instant)).toBe('22:05');
+      vi.stubEnv('TZ', 'Africa/Johannesburg');
+      expect(localTime(instant)).toBe('00:05');
+      vi.stubEnv('TZ', 'America/New_York');
+      expect(localTime(instant)).toBe('18:05');
+      vi.stubEnv('TZ', 'Asia/Kolkata');
+      expect(localTime(instant)).toBe('03:35');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('routine', () => {
   let home: string;
   let userHome: string;
@@ -413,6 +441,8 @@ describe('routine', () => {
   let stdoutTTY: boolean;
   let interrupt: (stop: () => void) => () => void;
   let msPerMinute: number;
+  // The clock a new routine's time comes from, local 14:37.
+  let now: Date;
   let answer: string | null;
   let answers: (string | null)[];
   let calls: { line: string; input?: string }[];
@@ -499,6 +529,7 @@ describe('routine', () => {
         interrupt,
         pollMs: 5,
         sleep: async () => undefined,
+        now: () => now,
       },
     });
     throwOnExit(program);
@@ -580,6 +611,7 @@ describe('routine', () => {
     stdoutTTY = false;
     interrupt = () => () => undefined;
     msPerMinute = 60_000;
+    now = new Date(2026, 9, 4, 14, 37);
     answer = null;
     answers = [];
     calls = [];
@@ -677,8 +709,10 @@ describe('routine', () => {
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.out).toContain(`Agent     Claude Code, ${CLAUDE}\n`);
+      // A new routine's default is the time now, said once.
+      expect(result.out).toContain(`${TIME_NOW_LINE}\n`);
       expect(result.err).toContain(
-        'What time should it run each day, local? [10:00] ',
+        'What time should it run each day, local? [14:37] ',
       );
       expect(result.err).toContain(WORK_QUESTION);
       // The limits come before the install question.
@@ -694,7 +728,7 @@ describe('routine', () => {
       expect(result.out).toContain(
         'Routine on. It runs every day at 09:30. See it with sealkeeper routine, turn it off with sealkeeper routine off.',
       );
-      expect(result.out).toMatch(/It runs (today|tomorrow) at 09:30\.\n$/);
+      expect(result.out).toMatch(/It runs tomorrow at 09:30\.\n$/);
       expect(crontab).toContain(`30 9 * * *`);
       const routine = await readRoutineConfig();
       expect(routine).toMatchObject({ time: '09:30', game: true });
@@ -712,12 +746,43 @@ describe('routine', () => {
       const result = await run('routine');
       expect(result.code).toBe(1);
       expect(result.err).toContain(
-        'Please answer HH:MM, such as 09:30. What time should it run each day, local? [10:00] ',
+        'Please answer HH:MM, such as 09:30. What time should it run each day, local? [14:37] ',
       );
       expect(result.err).toContain(`Please answer t or g. ${WORK_QUESTION}`);
       expect(result.err).toContain('nothing installed');
       expect(crontab).toBeNull();
       expect(api.settings).toEqual([]);
+    });
+
+    it('takes the time now on Enter for a new routine, so routines spread over the day (VOU-612)', async () => {
+      answers = ['', '', '', 'n'];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('Routine on. It runs every day at 14:37.');
+      // The first scheduled run is a day after the setup.
+      expect(result.out).toMatch(/It runs tomorrow at 14:37\.\n$/);
+      expect(crontab).toContain('37 14 * * *');
+      expect(await readRoutineConfig()).toMatchObject({
+        time: '14:37',
+        schedule: { time: '14:37' },
+      });
+    });
+
+    it('offers the time a routine has, with no word about now, and keeps a typed time as typed', async () => {
+      await setRoutine({ time: '07:15' });
+      answers = ['', '', '', 'n'];
+      const kept = await run('routine');
+      expect(kept.code).toBe(0);
+      expect(kept.out).not.toContain(TIME_NOW_LINE);
+      expect(kept.err).toContain(
+        'What time should it run each day, local? [07:15] ',
+      );
+      expect(crontab).toContain('15 7 * * *');
+      await run('routine', 'off', '--yes');
+      answers = ['10:00', '', '', 'n'];
+      expect((await run('routine')).code).toBe(0);
+      expect(crontab).toContain('0 10 * * *');
+      expect((await readRoutineConfig()).time).toBe('10:00');
     });
 
     it('installs on Enter and watches the first run, which solves a task (RS-9)', async () => {
@@ -827,6 +892,28 @@ describe('routine', () => {
       expect(crontab?.match(/BEGIN/g)).toHaveLength(1);
     });
 
+    it('on --yes takes the time now for a new routine, and on after off the time it had (VOU-612)', async () => {
+      expect((await run('routine', 'on', '--yes')).code).toBe(0);
+      expect(crontab).toContain('37 14 * * *');
+      expect((await run('routine', 'off', '--yes')).code).toBe(0);
+      expect((await readRoutineConfig()).time).toBe('14:37');
+      // A later clock never moves a routine that has a time.
+      now = new Date(2026, 9, 5, 8, 3);
+      const on = await run('routine', 'on', '--yes');
+      expect(on.out).toContain('Routine on. It runs every day at 14:37.');
+      expect(crontab).toContain('37 14 * * *');
+      expect((await readRoutineConfig()).schedule?.time).toBe('14:37');
+    });
+
+    it('takes the local time now in the time zone the scheduler reads', async () => {
+      // 22:05 UTC is 00:05 the next day in Johannesburg.
+      vi.stubEnv('TZ', 'Africa/Johannesburg');
+      now = new Date(Date.UTC(2026, 9, 4, 22, 5));
+      const on = await run('routine', 'on', '--yes');
+      expect(on.out).toContain('Routine on. It runs every day at 00:05.');
+      expect(crontab).toContain('5 0 * * *');
+    });
+
     it('on with a job installed writes it again with no question', async () => {
       tty = true;
       answers = ['', 'n'];
@@ -862,14 +949,14 @@ describe('routine', () => {
     it('keeps the full preview for on --json, on stderr, with the copy it makes', async () => {
       const result = await run('routine', 'on', '--yes', '--json');
       expect(result.code).toBe(0);
-      expect(result.err).toContain('Every day at 10:00, cron runs');
+      expect(result.err).toContain('Every day at 14:37, cron runs');
       expect(result.err).toContain(`Copies ${source} to ${copy()}`);
       expect(result.err).toContain(NO_SETTINGS_NOTE);
       expect(result.err).toContain('with no tools');
       expect(result.err).not.toContain(BLOCK_TITLE);
       expect(JSON.parse(result.out)).toMatchObject({
         on: true,
-        time: '10:00',
+        time: '14:37',
         game: false,
         schedule: { scheduler: 'cron' },
       });
@@ -1019,9 +1106,9 @@ describe('routine', () => {
     });
 
     it('shows the same block for every scheduler kind, naming no scheduler or file', async () => {
-      const lines = blockLines('10:00', defaultRoutineConfig().limits);
+      const lines = blockLines('14:37', defaultRoutineConfig().limits);
       expect(lines).toEqual([
-        'Daily routine   10:00, only when there is work',
+        'Daily routine   14:37, only when there is work',
         '',
         '  Claims   Seed tasks and tasks from operators you allow',
         '  Posts    1 task a day when posting is behind',
@@ -1137,8 +1224,8 @@ describe('routine', () => {
       expect(failed.code).toBe(1);
       expect(crontab).toBe(broken);
       let routine = await readRoutineConfig();
-      expect(routine.time).toBe('10:00');
-      expect(routine.schedule?.time).toBe('10:00');
+      expect(routine.time).toBe('14:37');
+      expect(routine.schedule?.time).toBe('14:37');
       expect(routine.limits.claimsPerDay).toBe(10);
 
       crontab = good;
@@ -1192,7 +1279,7 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       const job = (await readRoutineConfig()).schedule?.job ?? '';
       expect(result.out).toMatch(
-        /^Routine {4}on, every day at 10:00 with cron, next run (today|tomorrow) at 10:00$/m,
+        /^Routine {4}on, every day at 14:37 with cron, next run (today|tomorrow) at 14:37$/m,
       );
       expect(result.out).toContain(`Agent      Claude Code, ${CLAUDE}\n`);
       expect(result.out).toContain('Work       tasks only, no game\n');
@@ -1255,7 +1342,7 @@ describe('routine', () => {
       expect(json).toMatchObject({
         installed: true,
         on: true,
-        time: '10:00',
+        time: '14:37',
         game: false,
         running: false,
         lastRun: null,

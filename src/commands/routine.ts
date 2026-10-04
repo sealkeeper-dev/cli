@@ -161,6 +161,8 @@ export type RoutineDeps = {
   pollMs?: number;
   // The wait before a step is asked again, tests pass none.
   sleep?: (ms: number) => Promise<void>;
+  // The clock a new routine's time comes from, tests pass a fixed one.
+  now?: () => Date;
 };
 
 // Starts one routine run to watch, as the first run after a setup.
@@ -500,6 +502,26 @@ export const FIRST_RUN_QUESTION =
   'Run the first one now, so you see it work? [Y/n] ';
 export const timeQuestion = (time: string): string =>
   `What time should it run each day, local? [${time}] `;
+// Said once before the time question of a new routine, whose default is
+// the time now.
+export const TIME_NOW_LINE =
+  'The default is now, so routines spread over the day, and any other time works.';
+
+// A local time of day on a 24 hour clock, HH:MM, the way every scheduler
+// reads the job's time.
+export function localTime(now: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+// The time a routine runs at, the one in routine.json, else for a new
+// routine the local time now, so routines spread over the day rather than
+// all run at one default hour (VOU-612). A routine that has a time keeps
+// it, also after off.
+export function routineTime(deps: RoutineDeps, routine: RoutineConfig): string {
+  return routine.time ?? localTime(deps.now?.() ?? new Date());
+}
+
 export const WORK_QUESTION = 'Tasks only, or tasks and the game? [T/g] ';
 // Asked again after an answer that is not one it takes, up to this many
 // questions in all, and then the default, or no.
@@ -890,7 +912,8 @@ export async function guidedSetup(
   print.line(
     `Agent     ${RUNTIME_LABELS[agent.agent]}, ${tildePath(agent.command)}`,
   );
-  const time = await askTime(input, current.time, print);
+  if (current.time === undefined) print.dim(TIME_NOW_LINE);
+  const time = await askTime(input, routineTime(deps, current), print);
   const game = await askGame(input, print);
   const chosen = { ...current, time, game };
   const installed = await installJob(deps, chosen, input, print, {
@@ -947,9 +970,10 @@ async function installJob(
   print: SetupPrint | null,
   options: { gameOn?: boolean; agent?: ScheduledAgent } = {},
 ): Promise<Installed | string> {
+  const time = routineTime(deps, routine);
   let prepared: PreparedInstall | string;
   try {
-    prepared = await prepareInstall(deps, routine.time, routine, options.agent);
+    prepared = await prepareInstall(deps, time, routine, options.agent);
   } catch (error) {
     if (error instanceof SchedulerError) return error.message;
     throw error;
@@ -957,9 +981,9 @@ async function installJob(
   if (typeof prepared === 'string') return `nothing installed. ${prepared}`;
 
   if (print === null) {
-    for (const line of preview(prepared, routine.time)) stderr(line);
+    for (const line of preview(prepared, time)) stderr(line);
   } else {
-    const lines = blockLines(routine.time, routine.limits);
+    const lines = blockLines(time, routine.limits);
     for (const line of lines.slice(0, -1)) print.line(line);
     print.dim(checkLaterLine());
   }
@@ -973,7 +997,7 @@ async function installJob(
 
   let schedule: RoutineSchedule;
   try {
-    schedule = await finishInstall(prepared, routine.time);
+    schedule = await finishInstall(prepared, time);
   } catch (error) {
     if (error instanceof SchedulerError) return error.message;
     throw error;
@@ -992,14 +1016,14 @@ async function installJob(
 async function offerFirstRun(
   deps: RoutineDeps,
   input: Input,
-  { saved, p }: Installed,
+  { schedule, saved, p }: Installed,
   print: SetupPrint,
 ): Promise<void> {
   const now = await askYes(input, (again) =>
     print.ask(`${again}${FIRST_RUN_QUESTION}`),
   );
   if (!now) {
-    print.line(laterLine(saved.time));
+    print.line(laterLine(schedule.time, deps.now?.()));
     return;
   }
   await firstRun(deps, saved, p, print);
@@ -1030,7 +1054,7 @@ async function install(
     );
     return;
   }
-  print.line(installedLine(routine.time));
+  print.line(installedLine(schedule.time));
   // --yes is for scripts and agents, which never start a run here.
   if (input === undefined) return;
   await offerFirstRun(deps, input, installed, print);
@@ -1241,7 +1265,7 @@ async function setRoutine(
   } else {
     // A new time keeps a pause an earlier CLI left, only on clears it.
     try {
-      await finishInstall(prepared, next.time, {
+      await finishInstall(prepared, routineTime(deps, next), {
         keepPause: true,
       });
     } catch (error) {
@@ -1266,8 +1290,8 @@ async function setRoutine(
   if (options.time !== undefined) {
     lines.push(
       saved.schedule === undefined
-        ? `Time ${saved.time}, from the next ${cli('routine on')}.`
-        : `Time ${saved.time}. It runs ${nextRunText(saved.time)}.`,
+        ? `Time ${options.time}, from the next ${cli('routine on')}.`
+        : `Time ${options.time}. It runs ${nextRunText(options.time)}.`,
     );
   }
   if (options.game !== undefined) {
@@ -1585,7 +1609,7 @@ export async function routineView(
     on: (s !== undefined || mastra) && routine.paused === undefined,
     runtime: s?.agent ?? (mastra ? 'mastra' : null),
     schedule: s ?? null,
-    time: routine.time,
+    time: routine.time ?? null,
     game: routine.game,
     paused: routine.paused ?? null,
     running: active !== null,

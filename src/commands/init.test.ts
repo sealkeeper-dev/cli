@@ -112,6 +112,7 @@ import {
   FIRST_RUN_QUESTION,
   INSTALL_QUESTION,
   startInProcess,
+  TIME_NOW_LINE,
   timeQuestion,
   WORK_QUESTION,
 } from './routine.js';
@@ -459,6 +460,8 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       // Plain output whatever runs the tests, and never the real SIGINT.
       stdoutTTY: () => false,
       interrupt: () => () => undefined,
+      // A fixed clock for a new routine's time, local 09:05.
+      now: () => new Date(2026, 9, 4, 9, 5),
     },
   });
   throwOnExit(program);
@@ -2885,7 +2888,8 @@ describe('sealkeeper init', () => {
       // lines (VOU-603).
       const block = [
         `  Agent     Claude Code, ${CLAUDE}`,
-        `  ${timeQuestion('10:00')}  ${WORK_QUESTION}  Daily routine   10:00, only when there is work`,
+        `  ${TIME_NOW_LINE}`,
+        `  ${timeQuestion('09:05')}  ${WORK_QUESTION}  Daily routine   09:05, only when there is work`,
         '',
         '    Claims   Seed tasks and tasks from operators you allow',
         '    Posts    1 task a day when posting is behind',
@@ -2904,7 +2908,7 @@ describe('sealkeeper init', () => {
       );
       // One question before the install, never the full job file.
       expect(result.all).not.toContain('<?xml');
-      expect(schedule?.time).toBe('10:00');
+      expect(schedule?.time).toBe('09:05');
       expect(schedule?.scheduler).toBe('launchd');
       expect(schedule?.agentCommand).toBe(CLAUDE);
       const [plist = ''] = schedule?.files ?? [];
@@ -2921,12 +2925,12 @@ describe('sealkeeper init', () => {
         `launchctl bootstrap gui/501 ${plist}`,
       ]);
       expect(result.out).toContain(
-        '  Routine on. It runs every day at 10:00. See it with npx sealkeeper routine, turn it off with npx sealkeeper routine off.\n',
+        '  Routine on. It runs every day at 09:05. See it with npx sealkeeper routine, turn it off with npx sealkeeper routine off.\n',
       );
       expect(result.out).not.toContain(ROUTINE_NOT_INSTALLED);
       // The no to the first run.
       expect(result.err).toContain(`  ${FIRST_RUN_QUESTION}`);
-      expect(result.out).toMatch(/\n {2}It runs (today|tomorrow) at 10:00\.\n/);
+      expect(result.out).toContain('\n  It runs tomorrow at 09:05.\n');
       expect(await readRoutine(paths(home))).toEqual([]);
     });
 
@@ -3006,7 +3010,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(0);
-      expect(result.out).toContain(`  ✓ ${routinePresentLine('10:00')}\n`);
+      expect(result.out).toContain(`  ✓ ${routinePresentLine('09:05')}\n`);
       expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
       expect(await copyVersion(paths(home))).toBe(VERSION);

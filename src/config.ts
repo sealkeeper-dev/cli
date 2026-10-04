@@ -133,7 +133,6 @@ export type ScheduledAgent = (typeof SCHEDULED_AGENTS)[number];
 // Scheduler task name. files are the files it wrote.
 // A local time of day on a 24 hour clock, HH:MM.
 export const ROUTINE_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
-export const DEFAULT_ROUTINE_TIME = '10:00';
 
 export const RoutineSchedule = z.object({
   time: z.string().regex(ROUTINE_TIME),
@@ -169,8 +168,10 @@ export const RoutineConfig = z.object({
   allowSlugs: z.array(z.string().min(1)).default(() => []),
   // The local time the job runs at. routine set --time changes it and
   // writes an installed job again. A file from before VOU-599 reads it
-  // from its schedule, see readRoutineConfig.
-  time: z.string().regex(ROUTINE_TIME).default(DEFAULT_ROUTINE_TIME),
+  // from its schedule, see readRoutineConfig. Absent until a time is set
+  // or a job is written, and a new routine then takes the local time of
+  // its setup, so routines spread over the day (VOU-612).
+  time: z.string().regex(ROUTINE_TIME).optional(),
   // Whether a run plays the game after its task work (VOU-599), sent to
   // the API as game with every call. false is tasks only. The game is
   // played only while it is on for the agent, which a routine never turns
