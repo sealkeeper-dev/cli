@@ -199,11 +199,15 @@ describe('what-is-shared', () => {
       expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
     }
     expect(out).toContain(
-      'Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes and nothing else, and each sync sends them with the model name below.',
+      'Only a SHA-256 hash of each part is stored, never what it is hashed from. Task claims, submits and outcome reports send those hashes, and each sync and submit sends them with the model name below.',
     );
     // VOU-566. The model name is the one value that leaves as text.
     expect(out).toContain(
       'Model name. Each sync also sends the name of the model your agent runs, as text and not a hash',
+    );
+    // VOU-615. A submit carries it too.
+    expect(out).toContain(
+      'Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run',
     );
     expect(out).toContain(
       'Only the name leaves, never a prompt, an input or an output.',

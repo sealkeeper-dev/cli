@@ -15,6 +15,7 @@ import {
   MAX_FAILED_SUBMITS,
   specAsksFinalLineFeed,
 } from '../line-break.js';
+import { declaredModel, refusesModelName } from '../model-name.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
@@ -81,16 +82,23 @@ export type Submitted = {
  * (VOU-599). Refuses an answer that holds this agent's key, a hash answer
  * that ends in a line break the spec does not ask for unless keepNewline,
  * and a schema answer that is not JSON, before anything is signed. Then
- * signs and sends it with the declared fingerprint and notes it in the
- * local log. For a counterparty task the claimant's success report
- * follows, with origin routine when routine is true. Throws SubmitRefused
- * with the line to show, and what the API client throws otherwise.
+ * signs and sends it with the declared fingerprint and the model name, and
+ * notes it in the local log. modelName is the model that solved the task
+ * (VOU-615), none when it is null or not a ModelName. An API that refuses
+ * the name gets the submit again without it (refusesModelName). For a
+ * counterparty task the claimant's success report follows, with origin
+ * routine when routine is true. Throws SubmitRefused with the line to
+ * show, and what the API client throws otherwise.
  */
 export async function submitAnswer(
   session: Pick<TaskSession, 'signer' | 'api'>,
   id: string,
   submission: string,
-  options: { keepNewline?: boolean; routine?: boolean } = {},
+  options: {
+    keepNewline?: boolean;
+    routine?: boolean;
+    modelName?: string | null;
+  } = {},
 ): Promise<Submitted> {
   if (await containsPrivateKey(submission)) {
     throw new SubmitRefused(
@@ -144,10 +152,24 @@ export async function submitAnswer(
 
   let result = task;
   if (!alreadySubmitted) {
-    try {
-      result = await sendWithFingerprint(signer, request.data, (envelope) =>
+    const send = (payload: object) =>
+      sendWithFingerprint(signer, payload, (envelope) =>
         api.submitTask(id, envelope),
       );
+    const named = options.modelName
+      ? SubmitTaskRequest.safeParse({
+          ...request.data,
+          modelName: options.modelName,
+        })
+      : null;
+    const withModel = named?.success ? named.data : null;
+    try {
+      try {
+        result = await send(withModel ?? request.data);
+      } catch (error) {
+        if (withModel === null || !refusesModelName(error)) throw error;
+        result = await send(request.data);
+      }
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
       if (error.code === 'verification_failed') {
@@ -252,6 +274,9 @@ export function register(
       try {
         done = await submitAnswer(session, id, submission, {
           keepNewline: options.keepNewline === true,
+          // The name sync declares, from the session hook or the adapter
+          // (VOU-614).
+          modelName: (await declaredModel())?.name ?? null,
         });
       } catch (error) {
         if (error instanceof SubmitRefused) this.error(error.message);

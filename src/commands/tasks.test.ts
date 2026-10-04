@@ -36,6 +36,7 @@ import { paths, writeConfig, writeFileAtomic } from '../config.js';
 import {
   currentFingerprint,
   NOTHING_DECLARED,
+  observeParts,
   recordCapture,
 } from '../fingerprint.js';
 import { createKey } from '../identity.js';
@@ -180,6 +181,9 @@ class FakeApi {
   // True for an API from before VB-3, whose strict payloads refuse a
   // fingerprint.
   refuseFingerprint = false;
+  // True for an API from before VOU-615, whose strict submit payload
+  // refuses a model name.
+  refuseModelName = false;
 
   constructor(readonly agentId: string) {}
 
@@ -323,6 +327,29 @@ class FakeApi {
                 path: [],
                 code: 'unrecognized_keys',
                 message: 'Unrecognized key: "fingerprint"',
+              },
+            ],
+          },
+        },
+        { status: 400 },
+      );
+    }
+    if (
+      this.refuseModelName &&
+      typeof payload === 'object' &&
+      payload !== null &&
+      'modelName' in payload
+    ) {
+      return Response.json(
+        {
+          error: {
+            code: 'validation_failed',
+            message: 'Request validation failed',
+            issues: [
+              {
+                path: [],
+                code: 'unrecognized_keys',
+                message: 'Unrecognized key: "modelName"',
               },
             ],
           },
@@ -2839,6 +2866,81 @@ describe('submit, release and the tasks commands', () => {
         ['taskId'],
       ]);
       expect(api.tasks.get(task.id)?.state).toBe('claimed');
+    });
+  });
+
+  // VOU-615. submit sends the model name sync declares, inside its signed
+  // payload, and once more without it when the API refuses the field.
+  describe('model name', () => {
+    const submits = () => api.posts().filter((r) => r.path.endsWith('/submit'));
+
+    const claimedTask = () =>
+      api.add({
+        claimantAgentId: agentId,
+        state: 'claimed',
+        claimedAt: new Date().toISOString(),
+      });
+
+    it('sends the declared model name with the answer', async () => {
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
+      const task = claimedTask();
+      expect((await run('submit', task.id, '--text', 'the summary')).code).toBe(
+        0,
+      );
+      expect(submits()[0]?.payload).toEqual({
+        taskId: task.id,
+        submission: 'the summary',
+        modelName: 'gpt-4.1',
+      });
+    });
+
+    it('sends none when no adapter read one', async () => {
+      const task = claimedTask();
+      expect((await run('submit', task.id, '--text', 'the summary')).code).toBe(
+        0,
+      );
+      expect(submits()[0]?.payload).toEqual({
+        taskId: task.id,
+        submission: 'the summary',
+      });
+    });
+
+    it('submits without it to an API that refuses the field', async () => {
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
+      api.refuseModelName = true;
+      const task = claimedTask();
+      expect((await run('submit', task.id, '--text', 'the summary')).code).toBe(
+        0,
+      );
+      expect(submits().map((r) => Object.keys(r.payload ?? {}))).toEqual([
+        ['taskId', 'submission', 'modelName'],
+        ['taskId', 'submission'],
+      ]);
+      expect(api.tasks.get(task.id)?.state).toBe('submitted');
+    });
+
+    it('does not retry a refusal that is not about the name', async () => {
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
+      const task = claimedTask();
+      api.submitReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Request validation failed',
+              issues: [
+                {
+                  path: ['submission'],
+                  code: 'too_big',
+                  message: 'submission is too long',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      expect((await run('submit', task.id, '--text', 'x')).code).toBe(1);
+      expect(submits()).toHaveLength(1);
     });
   });
 });

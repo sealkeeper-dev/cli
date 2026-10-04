@@ -36,7 +36,7 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { tildePath } from '../files.js';
-import { readSource } from '../fingerprint.js';
+import { observeParts, readSource } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { MANAGED_MARKER } from '../managed.js';
@@ -1471,6 +1471,8 @@ describe('routine', () => {
         (await declaredModel({ paths: paths(), env: { CLAUDECODE: '1' } }))
           ?.name,
       ).toBe('claude-opus-5');
+      // The submit names the model that answered (VOU-615).
+      expect(api.submitted[0]?.modelName).toBe('claude-opus-5');
 
       api.steps = [api.task(api.add())];
       nextAgents = [
@@ -1488,6 +1490,31 @@ describe('routine', () => {
       expect(
         (await readSource('claude-code', paths()))?.model_name,
       ).toBeUndefined();
+      // Nor does the submit name one.
+      expect(api.submitted[1]).not.toHaveProperty('modelName');
+    });
+
+    // VOU-615. An answer whose runtime named no model is submitted with
+    // the model sync declares.
+    it('submits with the declared model when claude -p names none', async () => {
+      await observeParts(
+        'claude-code',
+        { model_name: 'claude-sonnet-5' },
+        paths(),
+      );
+      const config = await readConfig();
+      if (config === null) throw new Error('no config');
+      await writeConfig({ ...config, runtime: 'claude-code' });
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [{ type: 'result', result: 'a\nb', total_cost_usd: 0.01 }],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.submitted[0]?.modelName).toBe('claude-sonnet-5');
     });
 
     it('starts no agent when the API has nothing to do, and says why', async () => {
@@ -2194,6 +2221,7 @@ describe('routine', () => {
         model_name: 'gpt-x',
         model_reported: true,
       });
+      expect(api.submitted[0]?.modelName).toBe('gpt-x');
     });
 
     it('a hostile spec cannot make OpenClaw run anything, and an answer from a turn that reports a tool call is dropped', async () => {
@@ -2366,6 +2394,7 @@ describe('routine', () => {
       expect((await runs())[0]).toMatchObject({ runtime: 'mastra' });
       // The result's model id goes to the Mastra source (VOU-614).
       expect((await readSource('mastra', paths()))?.model_name).toBe('gpt-4.1');
+      expect(api.submitted[0]?.modelName).toBe('gpt-4.1');
 
       // No job, so routine shows the screen, never the setup.
       tty = true;

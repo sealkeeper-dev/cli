@@ -23,6 +23,7 @@ import {
 import { createObserver } from './fingerprint-observer.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
+import { declaredModel } from './model-name.js';
 import { modelNameOf, toolNameOf } from './names.js';
 import type { RoutineAnswerResponse } from './responses.js';
 import {
@@ -517,8 +518,14 @@ export async function routineRun(
       // submit, and a wait that does not fit ends the run.
       for (let tries = 1; ; tries++) {
         try {
+          // The model the runtime reported for this answer, else the
+          // one sync declares (VOU-615).
           const sent = await submitAnswer(s, task.id, text, {
             routine: true,
+            modelName:
+              modelNameOf(result.model) ??
+              (await declaredModel({ paths: p }))?.name ??
+              null,
           });
           await appendRoutine(
             {
