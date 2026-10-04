@@ -111,3 +111,47 @@ export declare function assertTrusted(
   thresholds?: CheckThresholds,
   options?: CheckOptions,
 ): Promise<CheckResponse>;
+
+// What routine passes to agent.generate. toolChoice none turns tool use
+// off, with no active tool and one step.
+export type MastraGenerateOptions = {
+  toolChoice: 'none';
+  activeTools: string[];
+  maxSteps: number;
+  abortSignal: AbortSignal;
+};
+
+// Anything with a generate that takes a prompt and options. A Mastra Agent
+// fits. The result is read loosely, text, usage and toolCalls.
+export type MastraAgentLike = {
+  generate(prompt: string, options: MastraGenerateOptions): Promise<unknown>;
+};
+
+// What one routine run did. outcome is done, nothing, stopped, failed or
+// skipped, and failure names what failed. Typed as text so a value a
+// newer CLI adds still reads.
+export type RoutineRunResult = {
+  runId: string;
+  outcome: string;
+  reason: string | null;
+  failure: string | null;
+  claimed: number;
+  submitted: number;
+  verified: number;
+  posted: number;
+  confirmed: number;
+  duels: number;
+  challenge: number;
+  tokens: number | null;
+};
+
+// One daily routine run with agent, for the agent set up under
+// SEALKEEPER_HOME (default ~/.sealkeeper), the same loop as sealkeeper
+// routine run. Call it from a Mastra scheduled workflow or your own cron.
+// SealKeeper decides every step, and agent answers each task through one
+// generate call with no tools. Resolves with what the run did, a failed
+// run included. Rejects only when no agent is set up here or routine.json
+// does not read. It never prints.
+export declare function routine(
+  agent: MastraAgentLike,
+): Promise<RoutineRunResult>;

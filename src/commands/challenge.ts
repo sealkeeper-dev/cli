@@ -20,13 +20,14 @@ import {
   defaultTasksDeps,
   fieldLines,
   openTaskSession,
+  recordClaims,
   sendWithFingerprint,
   type TaskSession,
   type TasksDeps,
   utc,
 } from '../tasks.js';
 import { timeLeft } from './duel.js';
-import { actionLine, agentAnswer, recordClaims } from './run.js';
+import { actionLine, agentAnswer } from './run.js';
 import { challengeLine } from './status.js';
 
 /*

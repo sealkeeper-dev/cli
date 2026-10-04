@@ -209,9 +209,9 @@ export const NEXT_ROUTINE = `${ROUTINE_STEP} with ${cli('routine --yes')}, only 
 // Said when stdin closes at a question, so init ends rather than waits
 // (D6).
 export const INPUT_CLOSED = `init stopped, stdin closed before an answer. There is no terminal to ask, so run ${cli('init')} again in a terminal.`;
-// The daily routine, offered after the hooks when claude is on PATH, as
-// one block the routine setup shows too, with yes as the default (RS-1). The
-// limits are on the screen before the question.
+// The daily routine, offered after the hooks when claude or openclaw is on
+// PATH, as one block the routine setup shows too, with yes as the default
+// (RS-1). The limits are on the screen before the question.
 export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine')} to set it up later.`;
 export const routinePresentLine = (time: string): string =>
   `Daily routine at ${time}`;
@@ -864,7 +864,7 @@ async function init(
   printShared(ui.err);
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
-  await offerRoutine(hooks, deps, routineDeps, ui, p);
+  await offerRoutine(deps, routineDeps, ui, p);
   printNext(
     ui.out,
     hooks,
@@ -1001,7 +1001,7 @@ async function initRegistered(
   });
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
-  await offerRoutine(hooks, deps, routineDeps, ui, p);
+  await offerRoutine(deps, routineDeps, ui, p);
   printNext(
     ui.out,
     hooks,
@@ -1168,23 +1168,22 @@ async function offerNudge(
   say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
 }
 
-// Offers the daily routine when Claude Code is set up here and a person
-// can answer, through the same guided setup as sealkeeper routine (RS-1),
+// Offers the daily routine when a person can answer, after the Claude
+// Code section, through the same guided setup as sealkeeper routine (RS-1),
 // so the agent, the time, tasks only or the game, the block with the
 // limits, the install and one run now are asked the same way. One with a
 // job installed already is named, its copy of the CLI refreshed when its
 // version is not this one (RS-2), and nothing is asked. No is not stored,
 // so a repeat init asks again the way it asks about the hooks. A machine
-// where the routine cannot be installed, no claude on PATH or a scheduler
-// that cannot be read, hears nothing, since init has nothing to offer it.
+// where the routine cannot be installed, neither claude nor openclaw on
+// PATH or a scheduler that cannot be read, hears nothing, since init has
+// nothing to offer it.
 async function offerRoutine(
-  hooks: HooksResult,
   deps: InitDeps,
   routineDeps: RoutineDeps,
   ui: Ui,
   p: Paths,
 ): Promise<void> {
-  if (hooks === 'none') return;
   const input = deps.stdin?.();
   if (input === undefined || !input.isTTY) return;
   const e = ui.err;

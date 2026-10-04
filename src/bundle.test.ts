@@ -287,6 +287,51 @@ describe('cli bundle', () => {
     expect(mastra).toContain('kickBackgroundSync');
     expect(mastra).toMatch(/export\s*\{[^}]*\bwithSealKeeper\b/);
     expect(mastra).toMatch(/export\s*\{[^}]*\bsealKeeperSession\b/);
+    expect(mastra).toMatch(/export\s*\{[^}]*\broutine\b/);
+  });
+
+  // routine(agent) carries the routine's loop (VOU-601), never the code
+  // that installs a job, copies the CLI, installs Claude Code files or
+  // starts a process. The OpenClaw plugin entry carries no routine at all.
+  // The nudge carries the skill's text (VOU-602), so the modules that hold
+  // that text are in the bundles, and only their install functions are
+  // checked to be left out.
+  it('keeps the install code and child processes out of the library bundles', () => {
+    const INSTALL = [
+      'commands/routine',
+      'routine-scheduler',
+      'routine-copy',
+      'routine-agent',
+      'routine-openclaw',
+      'claude-code-install',
+    ];
+    const INSTALL_FUNCTIONS = [
+      'installHooks',
+      'uninstallHooks',
+      'installCommands',
+      'installManagedFile',
+      'refreshCommands',
+      'uninstallCommands',
+      'installSkill',
+      'uninstallSkill',
+    ];
+    const sources = (code: string) =>
+      new Set([...code.matchAll(/^\/\/ src\/(\S+)\.ts$/gm)].map((m) => m[1]));
+    for (const [name, code] of Object.entries({ lib, mastra, openclaw })) {
+      const found = sources(code);
+      for (const file of INSTALL) {
+        expect(found.has(file), `${name}.js has ${file}`).toBe(false);
+      }
+      for (const fn of INSTALL_FUNCTIONS) {
+        expect(code, `${name}.js has ${fn}`).not.toMatch(
+          new RegExp(`function ${fn}\\d*\\(`),
+        );
+      }
+      expect(specifiersOf(code), name).not.toContain('child_process');
+      expect(specifiersOf(code), name).not.toContain('node:child_process');
+    }
+    expect(sources(mastra).has('routine-run')).toBe(true);
+    expect(sources(openclaw).has('routine-run')).toBe(false);
   });
 
   it('the built adapter passes a tool through and records a session', async () => {

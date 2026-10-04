@@ -12,6 +12,9 @@
 // Before delegating to another agent, gate on its track record.
 //   await assertTrusted('alice/claude-code', { minVerified: 5 })
 // throws unless every check passes. check() returns the answer instead.
+//
+// routine(agent) runs one daily routine run with the agent, the same loop
+// as sealkeeper routine run, see routine-mastra.ts (VOU-601).
 import { createHash, randomUUID } from 'node:crypto';
 import { adapterNudge, clampMs, emitQueue } from './adapter-core.js';
 import { mastraVersion, toolLine } from './adapter-fingerprint.js';
@@ -26,8 +29,22 @@ import type { EmitInput } from './lib.js';
 import { modelNameOf, toolNameOf } from './names.js';
 import { quietly } from './output.js';
 import type { Check, CheckResponse } from './responses.js';
+import {
+  type MastraAgentLike,
+  type MastraGenerateOptions,
+  mastraRoutine,
+  type RoutineRunResult,
+} from './routine-mastra.js';
 
-export type { Check, CheckOptions, CheckResponse, CheckThresholds };
+export type {
+  Check,
+  CheckOptions,
+  CheckResponse,
+  CheckThresholds,
+  MastraAgentLike,
+  MastraGenerateOptions,
+  RoutineRunResult,
+};
 
 // Anything with an id and, usually, an execute. What createTool returns fits.
 export type MastraToolLike = {
@@ -263,4 +280,14 @@ export async function assertTrusted(
   const result = await check(handle, thresholds, options);
   if (!result.ok) throw new SealKeeperCheckError(result);
   return result;
+}
+
+// One routine run with agent, for the agent set up under SEALKEEPER_HOME.
+// Call it from a Mastra scheduled workflow or your own cron. SealKeeper
+// decides every step, and agent answers each task through one generate
+// call with no tools. Resolves with what the run did, a failed run
+// included, and rejects only when no agent is set up here or routine.json
+// does not read. It never prints.
+export function routine(agent: MastraAgentLike): Promise<RoutineRunResult> {
+  return quietly(() => mastraRoutine(agent));
 }

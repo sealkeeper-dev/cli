@@ -8,11 +8,11 @@ import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
 import {
   defaultTasksDeps,
+  NOT_FOUND,
   openTaskSession,
   type TaskSession,
   type TasksDeps,
 } from '../tasks.js';
-import { NOT_FOUND } from './claim.js';
 
 // sealkeeper release <id>. Gives a claim this agent cannot finish
 // back (VOU-572). An open task goes back to the pool, an addressed one

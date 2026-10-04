@@ -43,12 +43,11 @@ import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { readRoutine } from '../routine.js';
-import { GAME_SPEC_AT_CLAIM } from '../tasks.js';
+import { GAME_SPEC_AT_CLAIM, NOT_FOUND } from '../tasks.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
   NOT_ASSIGNEE,
-  NOT_FOUND,
   OWN_TASK,
   SAME_OPERATOR,
   UNTRUSTED,

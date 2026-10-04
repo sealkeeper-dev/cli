@@ -25,7 +25,9 @@ import { readEnv } from './env.js';
 // as a question with no tools, answers by text, and the CLI submits that
 // text or sends it back as a verdict. No command the agent could run takes
 // part, so the CLI keeps no routine rules of its own. The API holds the run
-// to the limits and the allowlist routine.json sends with every call.
+// to the limits and the allowlist routine.json sends with every call. The
+// loop is in routine-run.ts, and a Mastra routine (VOU-601) runs the same
+// loop in the operator's process with the same files.
 //
 // routine-run.json holds the run id, its pid and a deadline. It is created
 // exclusively at the start of a run, so two runs never overlap.
@@ -129,9 +131,13 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     kind: z.literal('run'),
     at: At,
     runId: z.string(),
+    // The runtime the run put its questions to, claude-code, openclaw or
+    // mastra, a string so a value a newer CLI writes still reads. Absent on
+    // a run that was off and on lines written before VOU-601.
+    runtime: z.string().optional(),
     outcome: RunOutcome,
     reason: z.string().optional(),
-    // What failed, a key of RUN_FAILURES in commands/routine.ts, so the
+    // What failed, a RunFailure of routine-run.ts, so the
     // screen says the fix. A string, so a value a newer CLI writes still
     // reads. Absent when nothing failed and on lines written before it.
     failure: z.string().optional(),

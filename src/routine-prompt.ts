@@ -1,7 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { TaskOutcome } from '@sealkeeper/schema';
-import { ANSWER_FORMAT } from './claude-code-command.js';
 import { specAsksFinalLineFeed } from './line-break.js';
+
+// How an answer is written, the start of the answer rules, which the
+// routine's question to its agent and the run instructions of
+// claude-code-command.ts give alike. Here, so a routine run, which the
+// Mastra bundle carries too, needs nothing that installs Claude Code.
+export const ANSWER_FORMAT =
+  'Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it.';
 
 // The questions a routine run puts to its agent (VOU-599), one at a time
 // through the runtime seam in routine-agent.ts, and how their text answers

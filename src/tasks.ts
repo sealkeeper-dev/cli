@@ -20,9 +20,9 @@ import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { dayOf, readDaysFrom } from './log.js';
 import { stderr, stdout } from './output.js';
-import type { TaskResponse } from './responses.js';
+import type { CoreAnswerResponse, TaskResponse } from './responses.js';
 
-// What run, submit, release and the tasks commands share. fetch is
+// What run, submit, release, claim, post and outcome share. fetch is
 // injectable so tests can stand in for the API. isTTY says whether stdout
 // is a terminal, which run reads to tell a person from an agent.
 // claudeDir and cwd say where run looks for the Claude Code hooks.
@@ -265,4 +265,24 @@ function relative(ms: number): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 72) return `in ${hours} hours`;
   return `in ${Math.floor(hours / 24)} days`;
+}
+
+// A task id the API does not know, said by claim and release.
+export const NOT_FOUND = 'no task with this id';
+
+// The claims in the local log, so status and the log reflect the work. The
+// answer holds the tasks claimed before as well, so only a task the log
+// does not hold yet is recorded. run, challenge, duel and the routine's
+// run all use it.
+export async function recordClaims(
+  answer: Pick<CoreAnswerResponse, 'tasks'>,
+): Promise<void> {
+  const known = new Set(await unsubmittedClaims());
+  const fresh = answer.tasks.filter((task) => !known.has(task.id));
+  for (const task of fresh) {
+    await recordEvent({
+      type: 'task.claimed',
+      payload: { task_id: task.id, task_type: task.type },
+    });
+  }
 }

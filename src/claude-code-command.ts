@@ -5,6 +5,7 @@ import { SettingsError } from './claude-code-settings.js';
 import { writeFileAtomic } from './config.js';
 import { readIfExists } from './files.js';
 import { isManaged, MANAGED_MARKER } from './managed.js';
+import { ANSWER_FORMAT } from './routine-prompt.js';
 import { CHALLENGE_SUBMITS, DUEL_SUBMITS } from './tasks.js';
 
 // The slash commands for Claude Code (VOU-602), /sealkeeper-run,
@@ -30,11 +31,6 @@ export function shellFunction(invocation: string): string {
     invocation === 'sealkeeper' ? 'command sealkeeper' : invocation;
   return `sealkeeper() { SEALKEEPER_INVOCATION=sealkeeper ${target} "$@"; }`;
 }
-
-// How an answer is written, the start of the answer rules. The routine's
-// question to its agent (routine-prompt.ts) gives the same text.
-export const ANSWER_FORMAT =
-  'Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it.';
 
 // The answer rules. sk is how the text spells the CLI. A task the agent
 // leaves after a second failed submit is released (VOU-572), so it costs

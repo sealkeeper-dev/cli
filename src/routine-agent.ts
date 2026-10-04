@@ -3,20 +3,24 @@ import { spawn } from 'node:child_process';
 import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import type { ScheduledAgent } from './config.js';
 
-// The agent of a routine run (VOU-136, VOU-599). The routine puts one
-// question to one agent and takes its answer back as text, a task's spec
-// to solve or a submission to judge, see routine-prompt.ts. The agent has
-// no tools, so whatever a spec written by another operator says, it can
-// run nothing, read nothing and write nothing. The CLI writes and submits
-// the text it answers.
+// The agent of a routine run (VOU-136, VOU-599, VOU-601). The routine puts
+// one question to one agent and takes its answer back as text, a task's
+// spec to solve or a submission to judge, see routine-prompt.ts. The agent
+// has no tools, so whatever a spec written by another operator says, it
+// can run nothing, read nothing and write nothing. The CLI writes and
+// submits the text it answers.
 //
-// AgentRuntime is that one question, the seam every runtime the routine
-// starts fills (VOU-601 adds OpenClaw and Mastra). For Claude Code it is
-// claude -p with the question on stdin, no tools and stream-json output,
-// so the run can count tokens as they are reported and stop the agent at
-// the token cap or the wall clock, whichever comes first. None of the
-// operator's own Claude Code settings apply, see claudeArgs.
+// AgentRuntime is that one question, the one seam every runtime fills. It
+// holds no routine rules, the API decides every step (routine-run.ts).
+// For Claude Code it is claude -p with the question on stdin, no tools and
+// stream-json output, so the run can count tokens as they are reported and
+// stop the agent at the token cap or the wall clock, whichever comes
+// first. None of the operator's own Claude Code settings apply, see
+// claudeArgs. OpenClaw is in routine-openclaw.ts and Mastra, which runs in
+// the operator's own process, in routine-mastra.ts.
 
 // One question. timeoutMs and tokenCap are what the run has left.
 export type AgentQuestion = {
@@ -25,9 +29,10 @@ export type AgentQuestion = {
   tokenCap: number;
 };
 
-// The runtimes the routine can start, by the name routine.json keeps.
-export const ROUTINE_RUNTIMES = ['claude-code'] as const;
-export type RoutineRuntimeName = (typeof ROUTINE_RUNTIMES)[number];
+// The runtimes a routine run can put its questions to, by the name its run
+// line keeps. The CLI's own job starts one of SCHEDULED_AGENTS (config.ts),
+// and a Mastra routine runs in the operator's own process.
+export type RoutineRuntimeName = ScheduledAgent | 'mastra';
 
 export type AgentRuntime = {
   name: RoutineRuntimeName;
@@ -57,6 +62,7 @@ export function claudeCodeRuntime(o: {
           timeoutMs: question.timeoutMs,
           tokenCap: question.tokenCap,
           transcript: o.transcript ?? null,
+          reader: new UsageCounter(),
         },
         o.spawner ?? spawnAgent,
       ),
@@ -71,8 +77,33 @@ export type AgentSpec = {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   tokenCap: number;
-  // Where the agent's stream-json goes as received (RS-10). Never printed.
+  // Where the agent's output goes as received (RS-10). Never printed.
   transcript?: Transcript | null;
+  // Reads what the agent prints on stdout. Claude Code's stream-json when
+  // not given.
+  reader?: StdoutReader;
+};
+
+// What a runtime reads from the agent's stdout, the answer, the tokens and
+// the cost it reported, whether it says it ran out of time, and a problem
+// that fails the run. end is called once, with the exit code.
+export type StdoutReader = {
+  write(chunk: string): void;
+  end(code: number | null): void;
+  readonly tokens: number | null;
+  readonly costUsd: number | null;
+  readonly text: string | null;
+  readonly timedOut?: boolean;
+  readonly problem?: AgentProblem;
+};
+
+// Why an agent that ran gave no usable answer, in one line that holds no
+// spec, answer or credential. auth is a provider credential missing or
+// refused, tools a tool call the routine never allows, failed anything
+// else.
+export type AgentProblem = {
+  kind: 'auth' | 'tools' | 'failed';
+  reason: string;
 };
 
 export type AgentResult = {
@@ -87,6 +118,8 @@ export type AgentResult = {
   costUsd: number | null;
   // Why it could not start.
   error?: string;
+  // Why it ran but gave no usable answer, which fails the run.
+  problem?: AgentProblem;
 };
 
 // The parts of a child process the run uses, so tests can pass their own.
@@ -174,7 +207,7 @@ export function runAgent(
       resolve(notStarted((error as Error).message));
       return;
     }
-    const usage = new UsageCounter();
+    const reader: StdoutReader = spec.reader ?? new UsageCounter();
     const transcript = spec.transcript ?? null;
     let stoppedFor: AgentResult['stoppedFor'] = null;
     let settled = false;
@@ -189,17 +222,13 @@ export function runAgent(
     };
     const clock = setTimeout(() => stop('minutesPerRun'), spec.timeoutMs);
 
-    let buffer = '';
+    // A character whose bytes come in two chunks is decoded whole, so a
+    // long answer is never cut inside one.
+    const decoder = new StringDecoder('utf8');
     child.stdout?.on('data', (chunk: Buffer | string) => {
       transcript?.write(chunk);
-      buffer += String(chunk);
-      let newline = buffer.indexOf('\n');
-      while (newline !== -1) {
-        usage.read(buffer.slice(0, newline));
-        buffer = buffer.slice(newline + 1);
-        newline = buffer.indexOf('\n');
-      }
-      if (usage.tokens !== null && usage.tokens > spec.tokenCap) {
+      reader.write(typeof chunk === 'string' ? chunk : decoder.write(chunk));
+      if (reader.tokens !== null && reader.tokens > spec.tokenCap) {
         stop('tokensPerRun');
       }
     });
@@ -213,13 +242,20 @@ export function runAgent(
     };
     child.on('error', (error) => finish(notStarted(error.message)));
     child.on('close', (code) => {
-      if (buffer !== '') usage.read(buffer);
+      const rest = decoder.end();
+      if (rest !== '') reader.write(rest);
+      reader.end(code);
+      // An agent that says it ran out of time stopped at the wall clock,
+      // the same as one this run stopped.
+      const stopped = stoppedFor ?? (reader.timedOut ? 'minutesPerRun' : null);
+      const problem = stopped === null ? reader.problem : undefined;
       finish({
-        text: stoppedFor === null && code === 0 ? usage.text : null,
-        exitCode: stoppedFor === null ? code : null,
-        stoppedFor,
-        tokens: usage.tokens,
-        costUsd: usage.costUsd,
+        text: stopped === null && code === 0 ? reader.text : null,
+        exitCode: stopped === null ? code : null,
+        stoppedFor: stopped,
+        tokens: reader.tokens,
+        costUsd: reader.costUsd,
+        ...(problem === undefined ? {} : { problem }),
       });
     });
     child.stdin?.on('error', () => undefined);
@@ -328,8 +364,9 @@ type Usage = {
 // usage, once per message id, and the result line has the answer, the
 // total cost and the final usage, which wins when present. A result line
 // that says it is an error gives no answer.
-export class UsageCounter {
+export class UsageCounter implements StdoutReader {
   private readonly seen = new Map<string, number>();
+  private buffer = '';
   private final: number | null = null;
   costUsd: number | null = null;
   text: string | null = null;
@@ -340,6 +377,22 @@ export class UsageCounter {
     let sum = 0;
     for (const n of this.seen.values()) sum += n;
     return sum;
+  }
+
+  // A chunk of stdout, read a whole line at a time.
+  write(chunk: string): void {
+    this.buffer += chunk;
+    let newline = this.buffer.indexOf('\n');
+    while (newline !== -1) {
+      this.read(this.buffer.slice(0, newline));
+      this.buffer = this.buffer.slice(newline + 1);
+      newline = this.buffer.indexOf('\n');
+    }
+  }
+
+  end(): void {
+    if (this.buffer !== '') this.read(this.buffer);
+    this.buffer = '';
   }
 
   read(line: string): void {

@@ -1,24 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import {
-  GameCap,
-  OperatorSlug,
-  RoutineNextRequest,
-  type TaskOutcome,
-} from '@sealkeeper/schema';
+import { GameCap, OperatorSlug, RUNTIME_LABELS } from '@sealkeeper/schema';
 import type { Command } from 'commander';
-import {
-  type ApiClient,
-  ApiError,
-  createApiClient,
-  resolveApiUrl,
-} from '../api.js';
+import { ApiError } from '../api.js';
 import { cleanAnswer, type Input, readYesNo, streamInput } from '../ask.js';
-import { type CardRefresh, readCardRecord, refreshCard } from '../card.js';
+import { type CardRefresh, readCardRecord } from '../card.js';
 import { cliInvocation, cliProgram } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
@@ -34,14 +23,14 @@ import {
   type RoutineSchedule,
   readConfig,
   readRoutineConfig,
+  SCHEDULED_AGENTS,
+  type ScheduledAgent,
   sealkeeperRoot,
-  writeFileAtomic,
   writeRoutineConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
 import { BAD_CAP, changeGame, gameRefusal, readGameStatus } from '../game.js';
-import { KeyError, loadSigner, type Signer } from '../identity.js';
 import { cli, printedInvocation } from '../invocation.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import {
@@ -53,25 +42,16 @@ import {
   wantsJson,
 } from '../output.js';
 import { gameOnHint } from '../refusal.js';
-import type { RoutineAnswerResponse } from '../responses.js';
 import {
-  acquireLock,
   allowedNames,
-  appendRoutine,
-  ensureWorkDir,
   normalLogin,
-  type RoutineEntry,
   type RunEntry,
   type RunOutcome,
   readLiveLock,
   readRoutine,
-  removeLock,
-  routineAllow,
   routinePaths,
 } from '../routine.js';
 import {
-  type AgentResult,
-  type AgentRuntime,
   claudeCodeRuntime,
   findOnPath,
   type Spawner,
@@ -85,14 +65,13 @@ import {
   runsCopy,
   writeCopy,
 } from '../routine-copy.js';
+import { openclawRuntime } from '../routine-openclaw.js';
 import {
-  answerOf,
-  judgePrompt,
-  type RoutineJudgeItem,
-  type RoutineTask,
-  taskPrompt,
-  verdictOf,
-} from '../routine-prompt.js';
+  openSession,
+  type RunAgent,
+  type RunFailure,
+  routineRun,
+} from '../routine-run.js';
 import {
   applyPlan,
   commandLine,
@@ -121,17 +100,14 @@ import {
 } from '../routine-watch.js';
 import { createStyle } from '../style.js';
 import { VERSION } from '../version.js';
-import { releaseClaim } from './release.js';
-import { recordClaims } from './run.js';
-import { SubmitRefused, submitAnswer } from './submit.js';
 
 /*
- * sealkeeper routine (VOU-136, VOU-138, VOU-599), the routine verb of the
+ * sealkeeper routine (VOU-136, VOU-138, VOU-599, VOU-601), the routine verb of the
  * core commands. An opt-in daily run that works toward the next level
  * unattended.
  *
  *   routine      Not set up, the guided setup in a terminal: the agent
- *                found on this machine, the time, tasks only or tasks and
+ *                found on this machine, Claude Code or OpenClaw, the time, tasks only or tasks and
  *                the game, the limits, then the job with the operator's
  *                own scheduler and one run now, watched (RS-9). Set up, the
  *                routine screen. --files prints the job in full.
@@ -156,7 +132,9 @@ import { SubmitRefused, submitAnswer } from './submit.js';
  * the outcome path. It stops when the API says done, at the wall clock or
  * at the token cap, whichever comes first. The agent never runs a command,
  * so a spec cannot make it run one. sealkeeper status shows the last run in
- * short (routineView).
+ * short (routineView). The loop is routineRun in routine-run.ts. A Mastra
+ * routine runs it from the operator's own code and has no job, and the
+ * screen shows it from its runs.
  */
 
 export type RoutineDeps = {
@@ -195,7 +173,15 @@ export const startInProcess: RunStarter = (spec, deps) => {
     ended: (async () => {
       const config = await readConfig(p);
       if (config === null) return 'no agent is set up';
-      await routineRun(deps, config, await readRoutineConfig(p), p, spec.runId);
+      const routine = await readRoutineConfig(p);
+      await routineRun(
+        deps,
+        config,
+        routine,
+        scheduledAgent(deps, routine.schedule, p),
+        p,
+        spec.runId,
+      );
       return null;
     })().catch((error: Error) => error.message),
   };
@@ -208,11 +194,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const defaultRoutineDeps: RoutineDeps = {
   fetch: (...args) => fetch(...args),
-};
-
-// The runtimes the routine can start, by name, with how people read it.
-const RUNTIME_NAME: Record<RoutineSchedule['agent'], string> = {
-  'claude-code': 'Claude Code',
 };
 
 export function register(
@@ -343,6 +324,7 @@ function yesOrTerminal(
 // SchedulerError.
 type PreparedInstall = {
   plan: Plan;
+  agent: ScheduledAgent;
   agentCommand: string;
   current: RoutineConfig;
   env: SchedulerEnv;
@@ -354,29 +336,55 @@ type PreparedInstall = {
   program: string[];
 };
 
-export const NO_CLAUDE =
-  'claude was not found on PATH. Install Claude Code first, the routine asks it each task as claude -p';
+const NO_AGENT =
+  'neither claude nor openclaw was found on PATH. Install Claude Code or OpenClaw first, the routine asks one of them each task. A Mastra agent runs the routine from your own code, see the Mastra section of the README';
 
-// The agent the routine starts, from what is found on this machine. Claude
-// Code today, OpenClaw and Mastra later (VOU-601).
-async function findRuntime(deps: RoutineDeps): Promise<string | null> {
-  return (deps.findAgent ?? ((n) => findOnPath(n)))('claude');
+// The program each agent the job can start is found by on PATH.
+const AGENT_PROGRAM: Record<ScheduledAgent, string> = {
+  'claude-code': 'claude',
+  openclaw: 'openclaw',
+};
+
+type FoundAgent = { agent: ScheduledAgent; command: string };
+
+// The agents found on this machine, in the order of SCHEDULED_AGENTS.
+async function findAgents(deps: RoutineDeps): Promise<FoundAgent[]> {
+  const find = deps.findAgent ?? ((name) => findOnPath(name));
+  const found: FoundAgent[] = [];
+  for (const agent of SCHEDULED_AGENTS) {
+    const command = await find(AGENT_PROGRAM[agent]);
+    if (command !== null) found.push({ agent, command });
+  }
+  return found;
 }
 
+// agent is the one the setup chose. Without it the job keeps the agent it
+// has while that is found, else starts the first found.
 export async function prepareInstall(
   deps: RoutineDeps,
   time: string,
   current?: RoutineConfig,
+  agent?: ScheduledAgent,
 ): Promise<PreparedInstall | string> {
   const run = deps.run ?? execRunner;
   const env = schedulerEnv(deps);
-  const agentCommand = await findRuntime(deps);
-  if (agentCommand === null) return NO_CLAUDE;
+  const routine = current ?? (await readRoutineConfig());
+  const found = await findAgents(deps);
+  const find = (wanted: ScheduledAgent | undefined) =>
+    found.find((f) => f.agent === wanted);
+  const picked =
+    agent !== undefined
+      ? find(agent)
+      : (find(routine.schedule?.agent) ?? found[0]);
+  if (picked === undefined) {
+    return agent === undefined
+      ? NO_AGENT
+      : `${AGENT_PROGRAM[agent]} was not found on PATH`;
+  }
   const [node, source] = cliOf(deps).program;
   if (node === undefined || source === undefined) {
     return 'Run this from the sealkeeper CLI';
   }
-  const routine = current ?? (await readRoutineConfig());
   const p = paths();
   // The job runs the copy, never the script that runs now, which may sit
   // in the npx cache (RS-2).
@@ -402,7 +410,8 @@ export async function prepareInstall(
       : { ...planned, note: scheduler.note };
   return {
     plan,
-    agentCommand,
+    agent: picked.agent,
+    agentCommand: picked.command,
     current: routine,
     env,
     run,
@@ -439,7 +448,7 @@ async function finishInstall(
   const schedule: RoutineSchedule = {
     time,
     scheduler: plan.scheduler,
-    agent: 'claude-code',
+    agent: prepared.agent,
     agentCommand: prepared.agentCommand,
     job: plan.job,
     files: plan.files.map((f) => f.path),
@@ -667,6 +676,26 @@ const homeEnv = (p: Paths): string | undefined =>
 export const NO_SETTINGS_NOTE =
   "The routine's Claude Code runs without your Claude Code settings, so a login from an apiKeyHelper or an env block in settings.json does not reach it.";
 
+// Said on the routine screen of an OpenClaw routine, see routine-openclaw.ts.
+export const OPENCLAW_NOTE =
+  "The routine's OpenClaw runs on a config of its own that denies every tool, so your OpenClaw config, its default model and its tools do not apply. It uses the provider key OpenClaw stored with openclaw models auth paste-api-key.";
+
+// Said on the routine screen of a Mastra routine, which has no job.
+export const MASTRA_NOTE =
+  'A Mastra routine runs when your code calls routine(agent) from sealkeeper/mastra, from a Mastra scheduled workflow or your own cron. Stop calling it to turn it off.';
+
+// The note of each agent the job can start.
+const AGENT_NOTE: Record<ScheduledAgent, string> = {
+  'claude-code': NO_SETTINGS_NOTE,
+  openclaw: OPENCLAW_NOTE,
+};
+
+// How the job puts a question to each agent, for the preview.
+const AGENT_ASKS: Record<ScheduledAgent, (command: string) => string> = {
+  'claude-code': (command) => `${command} -p`,
+  openclaw: (command) => `${command} agent exec`,
+};
+
 // The one block init and the setup show before they ask (RS-1). A header
 // with the time, four short rows with the limits from routine.json, then
 // where to check it later. The scheduler and the job file are on the
@@ -719,13 +748,13 @@ export function limitsText(limits: RoutineLimits): string {
 // Everything an install writes and runs, in full, for on --json on stderr
 // and for tests. A person reads the block instead.
 export function preview(prepared: PreparedInstall, time: string): string[] {
-  const { plan, agentCommand, current: routine } = prepared;
+  const { plan, agent, agentCommand, current: routine } = prepared;
   const lines = [
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
-    `It asks SealKeeper for the next step until there is none, and gives ${agentCommand} -p each task and each submission to judge as a question, with no tools. When there is nothing to do it starts nothing.`,
+    `It asks SealKeeper for the next step until there is none, and gives ${AGENT_ASKS[agent](agentCommand)} each task and each submission to judge as a question, with no tools. When there is nothing to do it starts nothing.`,
     '',
     'SealKeeper picks every step within the limits and the allowlist below. Runs claim only seed tasks, tasks addressed to this agent by operators on the allowlist and template tasks of other operators SealKeeper checks, and judge only submissions from operators on the allowlist. They post only when the goal says posting is behind. Everything else waits for you in status.',
-    NO_SETTINGS_NOTE,
+    AGENT_NOTE[agent],
     ...(plan.note === undefined ? [] : [plan.note]),
     `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('routine set --allow <operator>')}.`,
     '',
@@ -805,7 +834,8 @@ async function routineCommand(
     await printFiles(cmd, deps, current);
     return;
   }
-  if (current.schedule !== undefined) {
+  // A Mastra routine has no job, and its runs say it is there.
+  if (current.schedule !== undefined || (await runsFromMastra())) {
     await printScreen(cmd, deps);
     return;
   }
@@ -849,19 +879,50 @@ export async function guidedSetup(
   input: Input,
   print: SetupPrint,
 ): Promise<string | null> {
-  const agent = await findRuntime(deps);
-  if (agent === null) return `nothing installed. ${NO_CLAUDE}`;
-  print.line(`Agent     ${RUNTIME_NAME['claude-code']}, ${tildePath(agent)}`);
+  const found = await findAgents(deps);
+  if (found.length === 0) return `nothing installed. ${NO_AGENT}`;
+  const agent =
+    found.length === 1 ? found[0] : await askAgent(input, found, print);
+  if (agent === undefined) return NOTHING_INSTALLED;
+  print.line(
+    `Agent     ${RUNTIME_LABELS[agent.agent]}, ${tildePath(agent.command)}`,
+  );
   const time = await askTime(input, current.time, print);
   const game = await askGame(input, print);
   const chosen = { ...current, time, game };
   const installed = await installJob(deps, chosen, input, print, {
     gameOn: game,
+    agent: agent.agent,
   });
   if (typeof installed === 'string') return installed;
   print.line(installedLine(time));
   await offerFirstRun(deps, input, installed, print);
   return null;
+}
+
+const agentQuestion = (found: FoundAgent[]): string =>
+  `Which agent runs it? ${found.map((f, i) => `${i + 1} ${RUNTIME_LABELS[f.agent]}`).join('  ')} [1] `;
+
+// Asks which of the agents found runs the routine, the first on an empty
+// answer, a closed input or no clear answer.
+async function askAgent(
+  input: Input,
+  found: FoundAgent[],
+  print: SetupPrint,
+): Promise<FoundAgent | undefined> {
+  for (let asked = 0; asked < MAX_ASKS; asked++) {
+    print.ask(
+      `${asked === 0 ? '' : `Please answer a number from 1 to ${found.length}. `}${agentQuestion(found)}`,
+    );
+    const line = await input.readLine();
+    if (line === null) return found[0];
+    const answer = cleanAnswer(line).trim();
+    if (answer === '') return found[0];
+    if (/^\d+$/.test(answer) && found[Number(answer) - 1] !== undefined) {
+      return found[Number(answer) - 1];
+    }
+  }
+  return found[0];
 }
 
 // Why a setup installed nothing when the person said no.
@@ -881,11 +942,11 @@ async function installJob(
   routine: RoutineConfig,
   input: Input | undefined,
   print: SetupPrint | null,
-  options: { gameOn?: boolean } = {},
+  options: { gameOn?: boolean; agent?: ScheduledAgent } = {},
 ): Promise<Installed | string> {
   let prepared: PreparedInstall | string;
   try {
-    prepared = await prepareInstall(deps, routine.time, routine);
+    prepared = await prepareInstall(deps, routine.time, routine, options.agent);
   } catch (error) {
     if (error instanceof SchedulerError) return error.message;
     throw error;
@@ -1283,7 +1344,14 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   const p = paths();
   // By hand in a terminal, the run's events as they happen (RS-9). Ctrl-C
   // stops the run itself here, as it always has.
-  const running = routineRun(deps, config, routine, p, runId);
+  const running = routineRun(
+    deps,
+    config,
+    routine,
+    scheduledAgent(deps, routine.schedule, p),
+    p,
+    runId,
+  );
   if (!json && stdoutIsTTY(deps)) {
     await watchRun({
       runId,
@@ -1307,519 +1375,34 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (entry.outcome === 'failed') process.exitCode = 1;
 }
 
-// What went wrong in a failed run, by the failure its run line names, and
-// the fix said beside it.
-export const RUN_FAILURES: Record<string, () => string> = {
-  key: () => `Run ${cli('init')} to set this agent up again.`,
-  api: () => 'Check the network. The next run tries again.',
-  old_api: () =>
-    'This SealKeeper API has no routine route yet. The next run tries again.',
-  workdir: () => 'Fix the folder named above, then the next run tries again.',
-  agent_missing: () =>
-    `Install Claude Code, then run ${cli('routine on')} so the job finds claude.`,
-  agent_failed: () =>
-    `Check that claude -p answers in a terminal. ${NO_SETTINGS_NOTE}`,
-};
-
-// The run line, and the fix when the run failed.
-export function reportLines(entry: Omit<RunEntry, 'at'>): string[] {
-  const fix =
-    entry.failure === undefined ? undefined : RUN_FAILURES[entry.failure];
-  return [runLine(entry), ...(fix === undefined ? [] : [`Fix: ${fix()}`])];
-}
-
-// How long past the wall clock limit the run lock lasts, for the card and
-// the last call. A lock whose process is gone is stale sooner.
-const LOCK_MARGIN_MS = 10 * 60_000;
-
-// How often a step is asked again after the API said it is busy or could
-// not be reached, and the wait between. A step asked again is a no-op on
-// the server, so this is safe.
-const STEP_TRIES = 3;
-const STEP_RETRY_MS = 2_000;
-
-const realSleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-/*
- * One routine run, as the job runs it. Logs every step and the run line
- * and returns the run line. Prints nothing. runId is the id its lines
- * carry, a new one unless a watcher chose it (RS-9).
- *
- * The loop. Ask the routine route for step n with the run id, the limits,
- * the allowlist, the game choice and the verdict of the step before, if
- * any. Log the step. done ends the run. task puts the task to the agent
- * and submits the text it answers through the submit path, and gives a
- * task it could not answer back through the release path, unless it is a
- * duel or challenge task, which has no release. judge puts the submission
- * to the agent and keeps its verdict for the next call. Every other action
- * is something the API did. Then step n + 1. The wall clock and the token
- * cap are checked before each call, and the agent gets what is left of
- * both.
- */
-export async function routineRun(
+// The agent the job starts, by the schedule routine on wrote. null while
+// the routine is off. Every question of a run goes to one transcript,
+// which a run that asks nothing leaves as it was (RS-10).
+function scheduledAgent(
   deps: RoutineDeps,
-  config: Config,
-  routine: RoutineConfig,
-  p: Paths = paths(),
-  runId: string = randomUUID(),
-): Promise<Omit<RunEntry, 'at'>> {
-  const schedule = routine.schedule;
-  const startedAt = new Date();
-  const minutes = routine.limits.minutesPerRun;
-  const timeoutMs = minutes * (deps.msPerMinute ?? 60_000);
-  const deadline = startedAt.getTime() + timeoutMs;
-  const tokenCap = routine.limits.tokensPerRun;
-  const sleep = deps.sleep ?? realSleep;
-  let card: CardRefresh | null = null;
-  let agentStarted = false;
-  let tokens: number | null = null;
-  let costUsd: number | null = null;
-  let entry: Omit<RunEntry, 'at'> | null = null;
-
-  const finish = async (
-    outcome: RunOutcome,
-    reason?: string,
-    failure?: keyof typeof RUN_FAILURES,
-  ): Promise<void> => {
-    entry = {
-      kind: 'run',
-      runId,
-      outcome,
-      ...(reason === undefined ? {} : { reason }),
-      ...(failure === undefined ? {} : { failure }),
-      startedAt: startedAt.toISOString(),
-      agentStarted,
-      ...tally(await readRoutine(p), runId),
-      tokens,
-      costUsd,
-      ...(card === null ? {} : { card }),
-    };
-    await appendRoutine(entry, p);
-  };
-  const done = (): Omit<RunEntry, 'at'> => {
-    if (entry === null) throw new Error('the routine run ended with no line');
-    return entry;
-  };
-
-  if (schedule === undefined) {
-    await finish('skipped', 'the routine is off');
-    return done();
-  }
-  if (routine.paused) {
-    await finish(
-      'skipped',
-      `paused by an earlier CLI, ${routine.paused.reason}. Run ${cli('routine on')} to run it again`,
-    );
-    return done();
-  }
-  // Taken exclusively before anything is read, so two runs started at once
-  // never both go on. Released when the run ends.
-  const locked = await acquireLock(
-    {
-      runId,
-      pid: process.pid,
-      deadline: new Date(deadline + LOCK_MARGIN_MS).toISOString(),
+  schedule: RoutineSchedule | undefined,
+  p: Paths,
+): RunAgent | null {
+  if (schedule === undefined) return null;
+  return {
+    runtime: schedule.agent,
+    start(workDir) {
+      const transcript = Transcript.open(copyPaths(p).transcript);
+      const o = {
+        command: schedule.agentCommand,
+        env: agentEnv(),
+        spawner: deps.spawner,
+        transcript,
+      };
+      return {
+        agent:
+          schedule.agent === 'openclaw'
+            ? openclawRuntime(o)
+            : claudeCodeRuntime({ ...o, cwd: workDir }),
+        close: () => transcript?.close(),
+      };
     },
-    p,
-  );
-  if (!locked) {
-    await finish('skipped', 'another routine run is still going');
-    return done();
-  }
-  try {
-    await lockedRun();
-  } finally {
-    await removeLock(runId, p);
-  }
-  return done();
-
-  // The rest of the run, while this run holds the lock.
-  async function lockedRun(): Promise<void> {
-    // The card first, so a run with nothing to do still refreshes it
-    // (VOU-383). In this process, never by the agent, and it takes no
-    // step. It never fails the run.
-    card = await refreshCard(config, { fetch: deps.fetch }, p);
-    const session = await openSession(deps, p, config);
-    if ('error' in session) {
-      await finish('failed', session.error, session.failure);
-      return;
-    }
-    let workDir: string;
-    try {
-      workDir = await ensureWorkDir(p);
-    } catch (error) {
-      await finish(
-        'failed',
-        `no working directory: ${(error as Error).message}`,
-        'workdir',
-      );
-      return;
-    }
-    // The agent, made at the first question, and every question of the
-    // run goes to one transcript, which a run that asks nothing leaves as
-    // it was (RS-10).
-    let transcript: Transcript | null = null;
-    let made: AgentRuntime | null = null;
-    const runtime = (): AgentRuntime => {
-      if (made === null) {
-        transcript = Transcript.open(copyPaths(p).transcript);
-        made = claudeCodeRuntime({
-          command: (schedule as RoutineSchedule).agentCommand,
-          cwd: workDir,
-          env: agentEnv(),
-          spawner: deps.spawner,
-          transcript,
-        });
-      }
-      return made;
-    };
-    try {
-      await loop(session, runtime, workDir);
-    } finally {
-      (transcript as Transcript | null)?.close();
-    }
-  }
-
-  // The steps of the run, until done, a limit or a failure.
-  async function loop(
-    session: LiveSession,
-    runtime: () => AgentRuntime,
-    workDir: string,
-  ): Promise<void> {
-    let step = 0;
-    let verdict: { taskId: string; outcome: TaskOutcome; type: string } | null =
-      null;
-    let worked = false;
-    for (;;) {
-      // A verdict still held at a limit goes with one more call, so the
-      // agent's judgement is never dropped. That call only delivers it.
-      const over = overLimit();
-      if (over !== null && verdict === null) {
-        await stop(over);
-        return;
-      }
-      let answer: RoutineAnswerResponse;
-      try {
-        answer = await askStep(session, step, verdict);
-      } catch (error) {
-        if (!(error instanceof ApiError)) throw error;
-        await finish(
-          'failed',
-          `could not read the API: ${error.message}`,
-          error.status === 404 ? 'old_api' : 'api',
-        );
-        return;
-      }
-      if (verdict !== null) {
-        await appendRoutine(
-          {
-            kind: 'confirm',
-            runId,
-            taskId: verdict.taskId,
-            taskType: verdict.type,
-            outcome: verdict.outcome,
-          },
-          p,
-        );
-        verdict = null;
-      }
-      const r = answer.routine;
-      const task = r.action === 'task' ? answer.tasks[0] : undefined;
-      await appendRoutine(
-        {
-          kind: 'step',
-          runId,
-          step: r.step,
-          action: r.action,
-          ...(r.taskId ? { taskId: r.taskId } : {}),
-          ...(task
-            ? { taskId: task.id, taskType: task.type, taskKind: task.kind }
-            : {}),
-          ...(r.judge ? { taskType: r.judge.type } : {}),
-          ...(answer.next.length > 0
-            ? { label: answer.next.map((a) => a.label).join(' ') }
-            : {}),
-        },
-        p,
-      );
-      if (r.action === 'done') {
-        await finish(
-          worked ? 'done' : 'nothing',
-          doneReason(r.reason, answer.limited?.message ?? null, worked),
-        );
-        return;
-      }
-      if (over !== null) {
-        // A task this last call handed over goes back, unless it is a game
-        // task, which a later run is handed again.
-        if (task !== undefined) {
-          await recordClaims(answer);
-          await giveUp(session, task, 'the run stopped before an answer');
-        }
-        await stop(over);
-        return;
-      }
-      worked = true;
-      if (task !== undefined) {
-        await recordClaims(answer);
-        if ((await solve(session, task)) === 'stop') return;
-      } else if (r.action === 'judge' && r.judge !== null) {
-        const outcome = await judge(r.judge);
-        if (outcome === 'stop') return;
-        if (outcome !== null) {
-          verdict = { taskId: r.judge.taskId, outcome, type: r.judge.type };
-        }
-      }
-      step = r.step + 1;
-    }
-
-    // Asks for one step, again after a busy step or an API it could not
-    // reach, which the API answers as a no-op.
-    async function askStep(
-      s: LiveSession,
-      n: number,
-      v: { taskId: string; outcome: TaskOutcome } | null,
-    ): Promise<RoutineAnswerResponse> {
-      for (let tries = 1; ; tries++) {
-        try {
-          const request = RoutineNextRequest.parse({
-            runId,
-            step: n,
-            limits: {
-              claimsPerDay: routine.limits.claimsPerDay,
-              networkClaimsPerDay: routine.limits.networkClaimsPerDay,
-              confirmsPerDay: routine.limits.confirmsPerDay,
-              postsPerDay: routine.limits.postsPerDay,
-            },
-            allow: routineAllow(routine),
-            game: routine.game,
-            ...(v === null
-              ? {}
-              : { verdict: { taskId: v.taskId, outcome: v.outcome } }),
-            issuedAt: new Date().toISOString(),
-          });
-          return await s.api.routineNext(
-            s.signer.agentId,
-            await s.signer.sign(request),
-          );
-        } catch (error) {
-          const again =
-            error instanceof ApiError &&
-            (error.code === 'routine_step_busy' ||
-              error.status === 0 ||
-              error.status >= 500);
-          if (!again || tries >= STEP_TRIES) throw error;
-          await sleep(STEP_RETRY_MS);
-        }
-      }
-    }
-
-    // The wall clock or the token cap, when the run is past one.
-    function overLimit(): 'minutesPerRun' | 'tokensPerRun' | null {
-      if (Date.now() >= deadline) return 'minutesPerRun';
-      if (tokens !== null && tokens >= tokenCap) return 'tokensPerRun';
-      return null;
-    }
-
-    async function stop(limit: 'minutesPerRun' | 'tokensPerRun') {
-      await appendRoutine(
-        {
-          kind: 'limit',
-          runId,
-          limit,
-          used: limit === 'minutesPerRun' ? minutes : tokens,
-          cap: limit === 'minutesPerRun' ? minutes : tokenCap,
-        },
-        p,
-      );
-      await finish(
-        'stopped',
-        limit === 'minutesPerRun'
-          ? `stopped after ${minutes} minutes`
-          : `stopped at the limit of ${tokenCap} tokens`,
-      );
-    }
-
-    // One question to the agent with what is left of the wall clock and the
-    // token cap. Ends the run and answers stop when the agent was stopped,
-    // did not start or failed.
-    async function ask(prompt: string): Promise<AgentResult | 'stop'> {
-      agentStarted = true;
-      const result = await runtime().ask({
-        prompt,
-        timeoutMs: Math.max(1, deadline - Date.now()),
-        tokenCap: Math.max(1, tokenCap - (tokens ?? 0)),
-      });
-      if (result.tokens !== null) tokens = (tokens ?? 0) + result.tokens;
-      if (result.costUsd !== null) costUsd = (costUsd ?? 0) + result.costUsd;
-      if (result.stoppedFor !== null) {
-        await stop(result.stoppedFor);
-        return 'stop';
-      }
-      if (result.error !== undefined) {
-        await finish(
-          'failed',
-          `the agent did not start: ${result.error}`,
-          'agent_missing',
-        );
-        return 'stop';
-      }
-      if (result.exitCode !== 0) {
-        await finish(
-          'failed',
-          `the agent exited with ${result.exitCode}`,
-          'agent_failed',
-        );
-        return 'stop';
-      }
-      return result;
-    }
-
-    // A task to solve. The text the agent answers is kept in the working
-    // folder and submitted. A task it gave no answer for, or whose answer
-    // was refused, is given back unless it is a game task.
-    async function solve(
-      s: LiveSession,
-      task: RoutineTask & { kind: string },
-    ): Promise<'stop' | null> {
-      const result = await ask(taskPrompt(task));
-      if (result === 'stop') {
-        await giveUp(s, task, 'the run stopped before an answer');
-        return 'stop';
-      }
-      const text = answerOf(result.text, task.spec);
-      if (text === null) {
-        await giveUp(s, task, 'the agent gave no answer');
-        return null;
-      }
-      await keepAnswer(workDir, task.id, text);
-      try {
-        const sent = await submitAnswer(s, task.id, text, { routine: true });
-        await appendRoutine(
-          {
-            kind: 'submit',
-            runId,
-            taskId: task.id,
-            taskType: task.type,
-            state: sent.result.state,
-          },
-          p,
-        );
-      } catch (error) {
-        if (!(error instanceof SubmitRefused || error instanceof ApiError)) {
-          throw error;
-        }
-        await appendRoutine(
-          {
-            kind: 'submit_failed',
-            runId,
-            taskId: task.id,
-            taskType: task.type,
-            reason:
-              error instanceof SubmitRefused
-                ? (error.verification ?? error.code)
-                : error.code,
-          },
-          p,
-        );
-        if (!isGame(task)) await releaseQuietly(s, task.id);
-      }
-      return null;
-    }
-
-    async function giveUp(
-      s: LiveSession,
-      task: RoutineTask & { kind: string },
-      reason: string,
-    ): Promise<void> {
-      const released = !isGame(task) && (await releaseQuietly(s, task.id));
-      await appendRoutine(
-        {
-          kind: 'unanswered',
-          runId,
-          taskId: task.id,
-          taskType: task.type,
-          reason,
-          released,
-        },
-        p,
-      );
-    }
-
-    // A submission to judge. The verdict, or null when the agent could not
-    // tell, and then a person judges it.
-    async function judge(
-      item: RoutineJudgeItem,
-    ): Promise<TaskOutcome | null | 'stop'> {
-      const result = await ask(judgePrompt(item));
-      if (result === 'stop') return 'stop';
-      const outcome = verdictOf(result.text);
-      if (outcome === null) {
-        await appendRoutine(
-          {
-            kind: 'unanswered',
-            runId,
-            taskId: item.taskId,
-            taskType: item.type,
-            reason: 'the agent could not tell, a person judges it',
-            released: false,
-          },
-          p,
-        );
-      }
-      return outcome;
-    }
-  }
-}
-
-const isGame = (task: { kind: string }) =>
-  task.kind === 'duel' || task.kind === 'challenge';
-
-// Gives a claim back, true when it went. A release that fails leaves the
-// claim, which a later run hands over again.
-async function releaseQuietly(
-  s: LiveSession,
-  taskId: string,
-): Promise<boolean> {
-  try {
-    await releaseClaim(s, taskId);
-    return true;
-  } catch (error) {
-    if (error instanceof ApiError) return false;
-    throw error;
-  }
-}
-
-// Keeps the answer the agent gave under .sealkeeper-answers in the working
-// folder, mode 600, for the operator to read. Never fails the run.
-async function keepAnswer(
-  workDir: string,
-  taskId: string,
-  text: string,
-): Promise<void> {
-  try {
-    const dir = join(workDir, '.sealkeeper-answers');
-    await mkdir(dir, { recursive: true, mode: 0o700 });
-    await writeFileAtomic(join(dir, `${taskId}.txt`), text);
-  } catch {
-    // Not kept.
-  }
-}
-
-// Why a run is done, in words, from the API's reason and what limited it.
-function doneReason(
-  reason: string | null,
-  limited: string | null,
-  worked: boolean,
-): string {
-  if (reason === 'step_limit')
-    return 'the run took the most steps one run takes';
-  if (reason === 'day_limit') return "today's most routine steps are taken";
-  if (limited !== null) return limited.replace(/\.$/, '');
-  return worked
-    ? 'nothing more to do within the limits'
-    : 'nothing to do within the limits';
+  };
 }
 
 // The agent's environment, the job's own, without the watcher's run id.
@@ -1829,83 +1412,62 @@ function agentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return rest;
 }
 
-// The API client and the agent key of a run, or why they could not be had.
-type LiveSession = { api: ApiClient; signer: Signer };
-type Session = LiveSession | { error: string; failure: 'key' | 'api' };
-
-// The key is loaded here rather than through openTaskSession, which ends
-// the command on a missing or broken key. That exit would skip the finally
-// that removes the run lock and leave no run line (cli-adapters-tasks-5).
-async function openSession(
-  deps: RoutineDeps,
-  p: Paths,
-  given?: Config,
-): Promise<Session> {
-  try {
-    const config = given ?? (await readConfig(p));
-    if (config === null) {
-      return { error: 'no agent is set up', failure: 'key' };
-    }
-    const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
-      fetch: deps.fetch,
-    });
-    return { api, signer: await loadSigner(api.apiUrl, p) };
-  } catch (error) {
-    if (error instanceof KeyError) {
-      return {
-        error: `the agent key could not be loaded: ${error.message}`,
-        failure: 'key',
-      };
-    }
-    if (error instanceof ApiError) {
-      return {
-        error: `could not read the API: ${error.message}`,
-        failure: 'api',
-      };
-    }
-    throw error;
-  }
+// Whether the last run came from a Mastra routine, which has no job.
+async function runsFromMastra(p: Paths = paths()): Promise<boolean> {
+  return (await lastRunOf(p))?.runtime === 'mastra';
 }
 
-type RunTally = Pick<
-  RunEntry,
-  | 'claimed'
-  | 'submitted'
-  | 'confirmed'
-  | 'posted'
-  | 'verified'
-  | 'duels'
-  | 'challenge'
->;
+async function lastRunOf(p: Paths): Promise<RunEntry | null> {
+  return (
+    (await readRoutine(p))
+      .filter((e): e is RunEntry => e.kind === 'run')
+      .at(-1) ?? null
+  );
+}
 
-// What a run did, from its lines. claimed counts the tasks handed over that
-// are not game tasks, submitted every answer sent, right or wrong, posted
-// the post steps that posted a task.
-export function tally(entries: RoutineEntry[], runId: string): RunTally {
-  const mine = entries.filter((e) => 'runId' in e && e.runId === runId);
-  const tasks = (kinds: string[]) =>
-    mine.filter(
-      (e) =>
-        e.kind === 'step' &&
-        e.action === 'task' &&
-        e.taskKind !== undefined &&
-        kinds.includes(e.taskKind),
-    ).length;
-  return {
-    claimed: tasks(['seed', 'addressed', 'exchange']),
-    submitted: mine.filter(
-      (e) => e.kind === 'submit' || e.kind === 'submit_failed',
-    ).length,
-    verified: mine.filter((e) => e.kind === 'submit' && e.state === 'verified')
-      .length,
-    confirmed: mine.filter((e) => e.kind === 'confirm').length,
-    posted: mine.filter(
-      (e) => e.kind === 'step' && e.action === 'post' && e.taskId !== undefined,
-    ).length,
-    duels: tasks(['duel']),
-    challenge: tasks(['challenge']),
-  };
+// What went wrong in a failed run, by the failure its run line names and
+// the runtime it ran, and the fix said beside it. A run line from before
+// VOU-601 names no runtime, and was Claude Code.
+export const RUN_FAILURES: Record<
+  RunFailure,
+  (runtime: string | undefined) => string
+> = {
+  key: () => `Run ${cli('init')} to set this agent up again.`,
+  api: () => 'Check the network. The next run tries again.',
+  old_api: () =>
+    'This SealKeeper API has no routine route yet. The next run tries again.',
+  workdir: () => 'Fix the folder named above, then the next run tries again.',
+  agent_missing: (runtime) =>
+    runtime === 'openclaw'
+      ? `Install OpenClaw, then run ${cli('routine on')} so the job finds openclaw.`
+      : `Install Claude Code, then run ${cli('routine on')} so the job finds claude.`,
+  agent_failed: (runtime) =>
+    runtime === 'openclaw'
+      ? 'Check that openclaw agent exec --json answers in a terminal.'
+      : runtime === 'mastra'
+        ? 'Check that agent.generate answers in your Mastra code.'
+        : `Check that claude -p answers in a terminal. ${NO_SETTINGS_NOTE}`,
+  agent_auth: (runtime) =>
+    runtime === 'mastra'
+      ? "Check the provider key of your Mastra agent's model. The next run tries again."
+      : 'Store a provider key with openclaw models auth paste-api-key. The next run tries again.',
+  agent_tools: (runtime) =>
+    runtime === 'mastra'
+      ? 'Check your Mastra agent. The routine asks it with toolChoice none, and an agent that still calls a tool gets no task.'
+      : "Update OpenClaw. The routine's config denies every tool, and an OpenClaw that still calls one gets no task.",
+};
+
+// The run line, and the fix when the run failed. A failure a newer CLI
+// wrote has no fix here.
+export function reportLines(entry: Omit<RunEntry, 'at'>): string[] {
+  const fix =
+    entry.failure !== undefined && Object.hasOwn(RUN_FAILURES, entry.failure)
+      ? RUN_FAILURES[entry.failure as RunFailure]
+      : undefined;
+  return [
+    runLine(entry),
+    ...(fix === undefined ? [] : [`Fix: ${fix(entry.runtime)}`]),
+  ];
 }
 
 export function runLine(entry: Omit<RunEntry, 'at'>): string {
@@ -1996,9 +1558,7 @@ export async function routineView(
     return { json: { error: why }, lines: [why], screen: [why], warnings: [] };
   }
   const config = await readConfig(p).catch(() => null);
-  const entries = await readRoutine(p);
-  const lastRun =
-    entries.filter((e): e is RunEntry => e.kind === 'run').at(-1) ?? null;
+  const lastRun = await lastRunOf(p);
   const active = await readLiveLock(p);
   const warnings = await routineJobWarnings(p);
   const transcript = existsSync(copyPaths(p).transcript)
@@ -2007,6 +1567,8 @@ export async function routineView(
   const cardRecord =
     config === null ? null : await readCardRecord(config.agentId, p);
   const s = routine.schedule;
+  // A Mastra routine, run from the operator's code with no job.
+  const mastra = s === undefined && lastRun?.runtime === 'mastra';
   // The time the job was written with, which routine set keeps in step.
   const nextRun =
     s === undefined || routine.paused ? null : nextRunText(s.time, now);
@@ -2017,7 +1579,8 @@ export async function routineView(
 
   const json = {
     installed: s !== undefined,
-    on: s !== undefined && routine.paused === undefined,
+    on: (s !== undefined || mastra) && routine.paused === undefined,
+    runtime: s?.agent ?? (mastra ? 'mastra' : null),
     schedule: s ?? null,
     time: routine.time,
     game: routine.game,
@@ -2038,13 +1601,24 @@ export async function routineView(
       version: await copyVersion(p),
       cliVersion: VERSION,
     },
-    notes: [NO_SETTINGS_NOTE, ...(linger ? [LINGER_NOTE] : [])],
+    notes: [
+      s !== undefined
+        ? AGENT_NOTE[s.agent]
+        : mastra
+          ? MASTRA_NOTE
+          : NO_SETTINGS_NOTE,
+      ...(linger ? [LINGER_NOTE] : []),
+    ],
     warnings,
   };
 
   const state =
     s === undefined
-      ? 'off'
+      ? mastra
+        ? routine.paused
+          ? `off, paused by an earlier CLI, ${routine.paused.reason}. ${cli('routine on')} runs it again`
+          : 'run from your Mastra code, routine(agent)'
+        : 'off'
       : routine.paused
         ? `off, paused by an earlier CLI, ${routine.paused.reason}. ${cli('routine on')} runs it again`
         : `on, every day at ${s.time} with ${s.scheduler}, next run ${nextRun}`;
@@ -2057,7 +1631,7 @@ export async function routineView(
   }
 
   const lines = [
-    s === undefined ? `off. ${cli('routine')} sets it up` : state,
+    s === undefined && !mastra ? `off. ${cli('routine')} sets it up` : state,
     ...(active !== null ? ['a run is going now'] : []),
     ...last,
     ...(linger ? [LINGER_NOTE] : []),
@@ -2068,11 +1642,13 @@ export async function routineView(
   const screen = [
     row('Routine', state),
     ...(s === undefined
-      ? []
+      ? mastra
+        ? [row('Agent', `${RUNTIME_LABELS.mastra}, ${MASTRA_NOTE}`)]
+        : []
       : [
           row(
             'Agent',
-            `${RUNTIME_NAME[s.agent]}, ${tildePath(s.agentCommand)}`,
+            `${RUNTIME_LABELS[s.agent]}, ${tildePath(s.agentCommand)}`,
           ),
         ]),
     row(
@@ -2106,9 +1682,11 @@ export async function routineView(
         ]),
     ...(linger ? ['', LINGER_NOTE] : []),
     '',
-    s === undefined
-      ? `Set it up with ${cli('routine')} in a terminal, or ${cli('routine --yes')} after the user's clear yes. Change the settings first with ${cli('routine set')}.`
-      : `Change it with ${cli('routine set')}, turn it off with ${cli('routine off')}. ${cli('routine --files')} prints the job.`,
+    mastra
+      ? `Change it with ${cli('routine set')}. ${cli('routine on')} writes a daily job as well.`
+      : s === undefined
+        ? `Set it up with ${cli('routine')} in a terminal, or ${cli('routine --yes')} after the user's clear yes. Change the settings first with ${cli('routine set')}.`
+        : `Change it with ${cli('routine set')}, turn it off with ${cli('routine off')}. ${cli('routine --files')} prints the job.`,
   ];
   return { json, lines, screen, warnings };
 }

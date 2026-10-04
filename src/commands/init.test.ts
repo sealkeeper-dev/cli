@@ -129,6 +129,7 @@ const RUN_COMMAND_TEXT = commandText(RUN, invocationOf(HOOK_COMMAND));
 const API_URL = 'https://api.test';
 // Where the routine offer finds claude, when a test puts it on PATH.
 const CLAUDE = '/usr/local/bin/claude';
+const OPENCLAW = '/usr/local/bin/openclaw';
 const PROGRAM = ['/usr/local/bin/node', '/opt/sealkeeper/dist/index.js'];
 const NPX_PROGRAM = ['/usr/local/bin/node', STALE_SCRIPT];
 // What a bundle the routine tests copy holds (RS-2).
@@ -197,9 +198,10 @@ type World = {
   runtime?: string;
   // Every signed PATCH that set a runtime.
   runtimeChanges?: Record<string, unknown>[];
-  // Whether claude is on PATH, for the routine offer. Off when not set,
-  // so the machine running the tests never counts.
+  // Whether claude and openclaw are on PATH, for the routine offer. Off
+  // when not set, so the machine running the tests never counts.
   claude?: boolean;
+  openclaw?: boolean;
   // Every scheduler command the routine offer ran, as file and args
   // joined. The fake scheduler is launchd and answers every call with 0.
   scheduler: string[];
@@ -432,7 +434,12 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       homedir: () => process.env.SEALKEEPER_HOME ?? '',
       uid: () => 501,
       stdin: world.stdin ? () => world.stdin as Input : undefined,
-      findAgent: async () => (world.claude ? CLAUDE : null),
+      findAgent: async (name) =>
+        name === 'claude' && world.claude
+          ? CLAUDE
+          : name === 'openclaw' && world.openclaw
+            ? OPENCLAW
+            : null,
       cli: () => {
         const program =
           world.bundle === undefined
@@ -3083,15 +3090,37 @@ describe('sealkeeper init', () => {
       expect(world.scheduler).toEqual([]);
     });
 
-    it('says nothing about the routine without a Claude Code dir', async () => {
+    it('offers the routine without a Claude Code dir when only openclaw is on PATH (VOU-601)', async () => {
       await withBundle();
-      world.claude = true;
-      const stdin = answering('y');
+      world.openclaw = true;
+      // The runtime, the game and its cap, no hooks and no nudge, then the
+      // time, tasks or the game, the install and the first run.
+      const stdin = answeringEach(['', '', '', '', '', '', 'n']);
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(result.all).not.toContain('Daily routine');
-      expect(world.scheduler).toEqual([]);
+      expect(stdin.reads).toBe(7);
+      expect(result.all).toContain(`  Agent     OpenClaw, ${OPENCLAW}`);
+      expect(result.err).not.toContain('Which agent runs it?');
+      const schedule = (await readRoutineConfig()).schedule;
+      expect(schedule?.agent).toBe('openclaw');
+      expect(schedule?.agentCommand).toBe(OPENCLAW);
+    });
+
+    it('asks which agent runs it when claude and openclaw are both on PATH (VOU-601)', async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.claude = true;
+      world.openclaw = true;
+      const stdin = answersThen('2', '', '', '', 'n');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(10);
+      expect(result.err).toContain(
+        '  Which agent runs it? 1 Claude Code  2 OpenClaw [1] ',
+      );
+      expect((await readRoutineConfig()).schedule?.agent).toBe('openclaw');
     });
 
     it('asks nothing and installs nothing with --json or without a terminal', async () => {

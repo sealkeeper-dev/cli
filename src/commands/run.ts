@@ -32,11 +32,10 @@ import {
   defaultTasksDeps,
   isGameTask,
   openTaskSession,
-  recordEvent,
+  recordClaims,
   sendWithFingerprint,
   submitCommand,
   type TasksDeps,
-  unsubmittedClaims,
 } from '../tasks.js';
 import { dailyCeilingReached, todayLine, todayOf } from '../today.js';
 
@@ -311,23 +310,6 @@ export function coreTaskOf(task: TaskResponse) {
       task.verification.kind === 'schema' ? task.verification.jsonSchema : null,
     expiresAt: task.expiresAt,
   };
-}
-
-// The claims in the local log, so status and the log reflect the work. The
-// answer holds the tasks claimed before as well, so only a task the log
-// does not hold yet is recorded. run, challenge, duel and the routine's
-// run all use it.
-export async function recordClaims(
-  answer: Pick<CoreAnswerResponse, 'tasks'>,
-): Promise<void> {
-  const known = new Set(await unsubmittedClaims());
-  const fresh = answer.tasks.filter((task) => !known.has(task.id));
-  for (const task of fresh) {
-    await recordEvent({
-      type: 'task.claimed',
-      payload: { task_id: task.id, task_type: task.type },
-    });
-  }
 }
 
 // The flags of a claim a terminal run was asked for, so the hand-off line

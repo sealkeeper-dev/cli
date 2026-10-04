@@ -18,11 +18,12 @@ import { durationText } from '../sync.js';
 import {
   defaultTasksDeps,
   openTaskSession,
+  recordClaims,
   sendWithFingerprint,
   type TasksDeps,
   utc,
 } from '../tasks.js';
-import { actionCommand, actionLine, agentAnswer, recordClaims } from './run.js';
+import { actionCommand, actionLine, agentAnswer } from './run.js';
 
 /*
  * sealkeeper duel (VOU-598), the duel verb of the core commands. The API

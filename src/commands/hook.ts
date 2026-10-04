@@ -5,7 +5,7 @@ import type { NudgeDeps } from '../nudge.js';
 import { defaultSyncDeps, type SyncDeps } from './sync.js';
 
 // Hook entry points that agent frameworks call. Hidden from help, since
-// people run `sealkeeper adapter ... install` and never these directly.
+// people run `sealkeeper init` and never these directly.
 
 // Claude Code writes the payload and closes stdin at once. Past this, or past
 // MAX_STDIN_BYTES, the hook gives up and does nothing.

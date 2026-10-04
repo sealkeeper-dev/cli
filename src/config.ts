@@ -122,6 +122,12 @@ export type RoutineLimits = z.infer<typeof RoutineLimits>;
 export const SCHEDULERS = ['launchd', 'systemd', 'cron', 'schtasks'] as const;
 export type SchedulerKind = (typeof SCHEDULERS)[number];
 
+// The agents the routine's job can start, found on PATH as claude and
+// openclaw (VOU-601). A Mastra routine runs in the operator's own process
+// and has no job.
+export const SCHEDULED_AGENTS = ['claude-code', 'openclaw'] as const;
+export type ScheduledAgent = (typeof SCHEDULED_AGENTS)[number];
+
 // What routine on wrote, so off takes out exactly that. job is the
 // launchd label, the systemd unit name, the cron block id or the Task
 // Scheduler task name. files are the files it wrote.
@@ -132,7 +138,8 @@ export const DEFAULT_ROUTINE_TIME = '10:00';
 export const RoutineSchedule = z.object({
   time: z.string().regex(ROUTINE_TIME),
   scheduler: z.enum(SCHEDULERS),
-  agent: z.literal('claude-code'),
+  // A CLI from before VOU-601 reads only claude-code here.
+  agent: z.enum(SCHEDULED_AGENTS),
   agentCommand: z.string().min(1),
   job: z.string().min(1),
   files: z.array(z.string()),

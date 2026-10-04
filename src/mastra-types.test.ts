@@ -27,6 +27,24 @@ describe('published mastra types', () => {
       typeof mastra.assertTrusted
     >();
     expectTypeOf<published.SealKeeperCheckError>().toEqualTypeOf<mastra.SealKeeperCheckError>();
+    expectTypeOf<published.MastraGenerateOptions>().toEqualTypeOf<mastra.MastraGenerateOptions>();
+    expectTypeOf<published.MastraAgentLike>().toEqualTypeOf<mastra.MastraAgentLike>();
+    expectTypeOf<published.RoutineRunResult>().toEqualTypeOf<mastra.RoutineRunResult>();
+    expectTypeOf<typeof published.routine>().toEqualTypeOf<
+      typeof mastra.routine
+    >();
+  });
+
+  it('accepts an agent with a Mastra shaped generate', () => {
+    // As Mastra types it, a prompt or messages, options of its own and a
+    // result with text, usage and more.
+    const agent = {
+      generate: async (
+        _messages: string | string[],
+        _options?: { toolChoice?: 'auto' | 'none'; maxSteps?: number },
+      ) => ({ text: 'ok', usage: { totalTokens: 3 }, toolCalls: [] }),
+    };
+    expectTypeOf(agent).toExtend<published.MastraAgentLike>();
   });
 
   it('accepts a createTool shaped object and keeps its type', () => {
