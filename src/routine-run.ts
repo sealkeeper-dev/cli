@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RoutineNextRequest, type TaskOutcome } from '@sealkeeper/schema';
 import { clampMs } from './adapter-core.js';
@@ -646,23 +646,34 @@ export async function routineRun(
     }
 
     // A task to solve. The text the agent answers is kept in the working
-    // folder and submitted. A task it gave no answer for, or whose answer
-    // was refused, is given back unless it is a game task.
+    // folder and submitted, checked against the spec the step handed over,
+    // since a game task's public read shows {} (VOU-635). A task it gave no
+    // answer for, or whose answer was refused, is given back unless it is a
+    // game task. A game task has no release, so every later run is handed
+    // it again until it is submitted or its duel or challenge ends. One an
+    // earlier run already answered gets the answer that run kept, and the
+    // agent is not asked again.
     async function solve(
       s: LiveSession,
       task: RoutineTask & { kind: string },
     ): Promise<'stop' | null> {
-      const result = await ask(taskPrompt(task));
-      if (result === 'stop') {
-        await giveUp(s, task, 'the run stopped before an answer');
-        return 'stop';
-      }
-      const text = answerOf(result.text, task.spec);
+      const kept = isGame(task) ? await keptAnswer(workDir, task.id) : null;
+      let text = kept;
+      let solvedBy: string | null = null;
       if (text === null) {
-        await giveUp(s, task, 'the agent gave no answer');
-        return null;
+        const result = await ask(taskPrompt(task));
+        if (result === 'stop') {
+          await giveUp(s, task, 'the run stopped before an answer');
+          return 'stop';
+        }
+        text = answerOf(result.text, task.spec);
+        if (text === null) {
+          await giveUp(s, task, 'the agent gave no answer');
+          return null;
+        }
+        solvedBy = modelNameOf(result.model);
+        await keepAnswer(workDir, task.id, text);
       }
-      await keepAnswer(workDir, task.id, text);
       // A submit the API rate limited is sent again after the wait a step
       // takes, since the API refused it before reading it (VOU-613). Past
       // the tries, or when the wait does not fit, it fails as any refused
@@ -674,10 +685,9 @@ export async function routineRun(
           // one sync declares (VOU-615).
           const sent = await submitAnswer(s, task.id, text, {
             routine: true,
+            spec: task.spec,
             modelName:
-              modelNameOf(result.model) ??
-              (await declaredModel({ paths: p }))?.name ??
-              null,
+              solvedBy ?? (await declaredModel({ paths: p }))?.name ?? null,
           });
           await appendRoutine(
             {
@@ -822,6 +832,23 @@ async function keepAnswer(
     await writeFileAtomic(join(dir, `${taskId}.txt`), text);
   } catch {
     // Not kept.
+  }
+}
+
+// The answer an earlier run kept for this task, null when none is kept or
+// it does not read.
+async function keptAnswer(
+  workDir: string,
+  taskId: string,
+): Promise<string | null> {
+  try {
+    const text = await readFile(
+      join(workDir, '.sealkeeper-answers', `${taskId}.txt`),
+      'utf8',
+    );
+    return text === '' ? null : text;
+  } catch {
+    return null;
   }
 }
 

@@ -312,6 +312,9 @@ export type Paths = {
   // The part hashes the Mastra and OpenClaw adapters observed in the
   // agent's process, for the next capture, see fingerprint.ts.
   fingerprintSources: string;
+  // Whether the spec of each duel or challenge task handed over asks for a
+  // final line feed, for submit, see handed.ts.
+  handed: string;
   logFile(day: string): string;
 };
 
@@ -633,6 +636,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     operatorSlug: join(home, 'operator-slug.json'),
     fingerprint: join(home, 'fingerprint.json'),
     fingerprintSources: join(home, 'fingerprint-sources.json'),
+    handed: join(home, 'handed-tasks.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

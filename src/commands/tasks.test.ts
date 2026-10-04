@@ -46,7 +46,7 @@ import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { readRoutine } from '../routine.js';
-import { GAME_SPEC_AT_CLAIM, NOT_FOUND } from '../tasks.js';
+import { GAME_SPEC_AT_CLAIM, NOT_FOUND, recordClaims } from '../tasks.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -949,6 +949,45 @@ describe('submit, release and the tasks commands', () => {
       });
     }
 
+    // A duel or challenge task this agent holds, handed over with its spec
+    // as run, duel, challenge and a routine step hand one over, where the
+    // public read shows {}.
+    async function handedGame(
+      origin: 'duel' | 'challenge',
+      spec: Record<string, unknown>,
+      answer: string,
+    ): Promise<TaskResponse> {
+      const task = api.add({
+        origin,
+        taskType: 'text_dedupe',
+        spec,
+        verification: { kind: 'hash', sha256: sha256(answer) },
+        state: 'claimed',
+        claimantAgentId: agentId,
+        claimedAt: new Date().toISOString(),
+      });
+      await recordClaims({
+        tasks: [
+          {
+            id: task.id,
+            kind: origin,
+            type: task.taskType,
+            spec,
+            schema: null,
+            submits: 1,
+            expiresAt: task.expiresAt,
+          },
+        ],
+      });
+      return task;
+    }
+
+    const FINAL_LINE_FEED = {
+      instruction: 'Remove duplicate lines.',
+      input: 'a\na\nb',
+      output: 'Return the lines, and end with exactly one line feed.',
+    };
+
     it('leaves a hash answer to the server, which it never sees the digest of', async () => {
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
       const { code, err } = await run('submit', task.id, '--text', 'wrong');
@@ -1011,19 +1050,84 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('names the one submit of a duel side when it refuses a line break', async () => {
-      const task = api.add({
-        origin: 'duel',
-        verification: { kind: 'hash', sha256: sha256('Oslo') },
-        state: 'claimed',
-        claimantAgentId: agentId,
-        claimedAt: new Date().toISOString(),
-      });
+      const task = await handedGame('duel', { words: 100 }, 'Oslo');
       const { code, err } = await run('submit', task.id, '--text', 'Oslo\n');
       expect(code).toBe(1);
       expect(err).toContain(
-        'and a duel side has one submit. Nothing was sent.',
+        'and a duel side has one submit. Nothing was sent. Remove the line break',
       );
       expect(api.posts()).toEqual([]);
+    });
+
+    it('submits a duel or challenge answer that ends in the line feed its handed over spec asks for (VOU-635)', async () => {
+      for (const origin of ['duel', 'challenge'] as const) {
+        const task = await handedGame(origin, FINAL_LINE_FEED, 'a\nb\n');
+        const file = `${home}-answer.txt`;
+        await writeFile(file, 'a\nb\n');
+        const { code, out, err } = await run(
+          'submit',
+          task.id,
+          '--file',
+          file,
+        ).finally(() => rm(file, { force: true }));
+        expect(err).toBe('');
+        expect(code).toBe(0);
+        expect(out).toContain('state  verified');
+        expect(api.posts().at(-1)?.payload).toEqual({
+          taskId: task.id,
+          submission: 'a\nb\n',
+        });
+      }
+    });
+
+    it('submits the final line feed of a challenge task claimed with claim (VOU-635)', async () => {
+      const task = api.add({
+        origin: 'challenge',
+        taskType: 'line_sort',
+        spec: FINAL_LINE_FEED,
+        verification: { kind: 'hash', sha256: sha256('a\nb\n') },
+      });
+      expect((await run('claim', task.id)).code).toBe(0);
+      const { code, out } = await run('submit', task.id, '--text', 'a\nb\n');
+      expect(code).toBe(0);
+      expect(out).toContain('state  verified');
+    });
+
+    it('never says to remove the line break when the spec of a game task cannot be seen here (VOU-635)', async () => {
+      for (const origin of ['duel', 'challenge'] as const) {
+        // Handed over by an older CLI, so nothing of its spec is kept.
+        const task = api.add({
+          origin,
+          taskType: 'text_dedupe',
+          spec: FINAL_LINE_FEED,
+          verification: { kind: 'hash', sha256: sha256('a\nb\n') },
+          state: 'claimed',
+          claimantAgentId: agentId,
+          claimedAt: new Date().toISOString(),
+        });
+        const refused = await run('submit', task.id, '--text', 'a\nb\n');
+        expect(refused.code).toBe(1);
+        expect(refused.err).toContain('the answer ends in a line break');
+        expect(refused.err).toContain(
+          'is not kept on this machine, so submit cannot tell whether the spec asks for one. Nothing was sent. If that spec asks the answer to end in a line feed, add --keep-newline to send it as is',
+        );
+        expect(refused.err).not.toMatch(/remove/i);
+        expect(api.posts()).toEqual([]);
+        // --keep-newline sends it as the file holds it.
+        const sent = await run(
+          'submit',
+          task.id,
+          '--text',
+          'a\nb\n',
+          '--keep-newline',
+        );
+        expect(sent.code).toBe(0);
+        expect(api.posts().at(-1)?.payload).toEqual({
+          taskId: task.id,
+          submission: 'a\nb\n',
+        });
+        api.requests = [];
+      }
     });
 
     it("prints the duel's line for a submit after its window", async () => {
@@ -1047,13 +1151,7 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('names the one submit of a challenge task when it refuses a line break', async () => {
-      const task = api.add({
-        origin: 'challenge',
-        verification: { kind: 'hash', sha256: sha256('Oslo') },
-        state: 'claimed',
-        claimantAgentId: agentId,
-        claimedAt: new Date().toISOString(),
-      });
+      const task = await handedGame('challenge', { words: 100 }, 'Oslo');
       const { code, err } = await run('submit', task.id, '--text', 'Oslo\n');
       expect(code).toBe(1);
       expect(err).toContain(

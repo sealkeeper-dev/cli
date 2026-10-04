@@ -13,6 +13,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
+import { handedFinalLineFeed } from '../handed.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
@@ -345,6 +346,8 @@ describe('sealkeeper challenge', () => {
       // A retry answers the held task, which is not recorded again.
       await run('challenge', '--json');
       expect(await claimedInLog()).toEqual([task.id]);
+      // What submit needs of its spec is kept (VOU-635).
+      expect(await handedFinalLineFeed(task.id)).toBe(false);
     });
 
     it('never prints a command the API sent, and makes none for a challenge with arguments', async () => {

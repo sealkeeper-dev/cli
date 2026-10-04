@@ -17,6 +17,7 @@ import {
   refusesFingerprint,
 } from './declared-fingerprint.js';
 import { type EmitInput, emit } from './emit.js';
+import { keepHanded } from './handed.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import { dayOf, readDaysFrom } from './log.js';
@@ -162,6 +163,9 @@ export function utc(iso: string): string {
 export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
   (GAME_TASK_ORIGINS as readonly string[]).includes(task.origin ?? '');
 
+// The kinds a handed over task of a duel or a challenge has, its origin.
+const GAME_KINDS: ReadonlySet<string> = new Set(GAME_TASK_ORIGINS);
+
 // What a repeated claim prints for the spec of a game task, which
 // every read but its first claim shows as {}.
 export const GAME_SPEC_AT_CLAIM =
@@ -293,10 +297,12 @@ export const NOT_FOUND = 'no task with this id';
 // The claims in the local log, so status and the log reflect the work. The
 // answer holds the tasks claimed before as well, so only a task the log
 // does not hold yet is recorded. run, challenge, duel and the routine's
-// run all use it.
+// run all use it. What submit needs of the spec of each duel or challenge
+// task is kept too, since only this answer shows that spec (keepHanded).
 export async function recordClaims(
   answer: Pick<CoreAnswerResponse, 'tasks'>,
 ): Promise<void> {
+  await keepHanded(answer.tasks.filter((task) => GAME_KINDS.has(task.kind)));
   const known = new Set(await unsubmittedClaims());
   const fresh = answer.tasks.filter((task) => !known.has(task.id));
   for (const task of fresh) {

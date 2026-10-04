@@ -330,7 +330,16 @@ class FakeApi {
     );
     const task = this.tasks.get(match?.[1] ?? '');
     if (!match || !task) return error(404, 'not_found');
-    if (method === 'GET' && !match[2]) return Response.json(task);
+    // The public read. A game task's spec reaches its claimant only in the
+    // answer that hands it over, and reads {} here, as specShown in the API
+    // has it.
+    if (method === 'GET' && !match[2]) {
+      return Response.json(
+        task.origin === 'duel' || task.origin === 'challenge'
+          ? { ...task, spec: {} }
+          : task,
+      );
+    }
     const p = await this.payload(init);
     if (match[2] === '/submit') {
       this.submitted.push(p);
@@ -1887,6 +1896,79 @@ describe('routine', () => {
         verified: 0,
         duels: 1,
       });
+    });
+
+    it('submits a duel or challenge answer with the final line feed its handed over spec asks for (VOU-635)', async () => {
+      const spec = {
+        instruction: 'Remove duplicate lines.',
+        input: 'a\na\nb',
+        output: 'End with exactly one line feed.',
+      };
+      const duel = api.add({ origin: 'duel', taskType: 'text_dedupe', spec });
+      const challenge = api.add({
+        origin: 'challenge',
+        taskType: 'line_sort',
+        spec,
+      });
+      // A spec that does not ask for one keeps the answer without it.
+      const plain = api.add({ origin: 'duel', taskType: 'json_extract' });
+      api.steps = [
+        api.task(duel, 'duel'),
+        api.task(challenge, 'challenge'),
+        api.task(plain, 'duel'),
+      ];
+      nextAgents = [
+        () => says('a\nb'),
+        () => says('a\nb\n'),
+        () => says('1\n'),
+      ];
+      const result = await run('routine', 'run');
+      expect(result.code).toBe(0);
+      expect(api.submitted.map((p) => [p.taskId, p.submission])).toEqual([
+        [duel.id, 'a\nb\n'],
+        [challenge.id, 'a\nb\n'],
+        [plain.id, '1'],
+      ]);
+      const entries = await readRoutine();
+      expect(entries.some((e) => e.kind === 'submit_failed')).toBe(false);
+      expect(api.released).toEqual([]);
+    });
+
+    it('submits the answer an earlier run kept for a game task it could not submit, and asks the agent nothing (VOU-635)', async () => {
+      const duel = api.add({
+        origin: 'duel',
+        verification: { kind: 'schema', jsonSchema: { type: 'object' } },
+      });
+      api.steps = [api.task(duel, 'duel')];
+      nextAgents = [() => says('not json')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.submitted).toEqual([]);
+      expect(api.released).toEqual([]);
+      expect(await readRoutine()).toContainEqual(
+        expect.objectContaining({
+          kind: 'submit_failed',
+          taskId: duel.id,
+          reason: 'not_json',
+        }),
+      );
+      expect(spawned).toHaveLength(1);
+
+      // The next run is handed the same task, still claimed. The kept answer
+      // is checked again and the agent is not asked.
+      api.steps = [api.task(duel, 'duel')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(api.submitted).toEqual([]);
+
+      // An answer the operator fixed in the kept file goes through.
+      await writeFile(
+        join(routinePaths().work, '.sealkeeper-answers', `${duel.id}.txt`),
+        '{"a":1}',
+      );
+      api.steps = [api.task(duel, 'duel')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned).toHaveLength(1);
+      expect(api.submitted.map((p) => p.submission)).toEqual(['{"a":1}']);
     });
 
     it('puts a submission to judge to the agent and sends its verdict with the next call, none when it cannot tell', async () => {

@@ -190,7 +190,14 @@ async function removeSession(
     p.goal,
     p.operatorSlug,
     ...(deleteKey
-      ? [p.cursor, p.cursorOffset, p.log, p.fingerprint, p.fingerprintSources]
+      ? [
+          p.cursor,
+          p.cursorOffset,
+          p.log,
+          p.fingerprint,
+          p.fingerprintSources,
+          p.handed,
+        ]
       : []),
   ];
   const removed: string[] = [];

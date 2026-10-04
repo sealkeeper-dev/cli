@@ -8,6 +8,7 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
 import { readGuardedFile } from '../file-guard.js';
+import { handedFinalLineFeed } from '../handed.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey } from '../key-guard.js';
 import {
@@ -25,6 +26,7 @@ import {
   DUEL_SUBMITS,
   defaultTasksDeps,
   failOnApiError,
+  isGameTask,
   openTaskSession,
   printFields,
   recordEvent,
@@ -43,6 +45,27 @@ function submitsLeft(origin: string | undefined): string {
     return `a challenge task has ${CHALLENGE_SUBMITS}`;
   }
   return `a claim allows ${MAX_FAILED_SUBMITS} failed submits`;
+}
+
+/*
+ * Whether the task's spec asks the answer to end in a line feed, null when
+ * no spec of it can be seen here (VOU-635). From the spec the caller was
+ * handed with the task when it gives one, as the routine does, else from
+ * the public read. A duel or challenge task's public read shows {}, since
+ * its spec reaches its claimant only in the answer that handed it over, so
+ * for one of those it is what this machine kept from that answer
+ * (handed.ts), null for a task handed over by an older CLI or on another
+ * machine.
+ */
+async function asksFinalLineFeed(
+  task: TaskResponse,
+  handed: Record<string, unknown> | undefined,
+): Promise<boolean | null> {
+  if (handed !== undefined) return specAsksFinalLineFeed(handed);
+  if (!isGameTask(task) || Object.keys(task.spec).length > 0) {
+    return specAsksFinalLineFeed(task.spec);
+  }
+  return handedFinalLineFeed(task.id);
 }
 
 type SubmitOptions = {
@@ -81,8 +104,11 @@ export type Submitted = {
 /*
  * One answer submitted, the path submit and the routine's run share
  * (VOU-599). Refuses an answer that holds this agent's key, a hash answer
- * that ends in a line break the spec does not ask for unless keepNewline,
- * and a schema answer that is not JSON, before anything is signed. Then
+ * that ends in a line break the spec does not ask for, or whose spec cannot
+ * be seen here, unless keepNewline, and a schema answer that is not JSON,
+ * before anything is signed. spec is the spec the caller was handed with
+ * the task, which the routine passes, since a game task's public read
+ * shows {} (asksFinalLineFeed). Then
  * signs and sends it with the declared fingerprint and the model name, and
  * notes it in the local log. modelName is the model that solved the task
  * (VOU-615), none when it is null or not a ModelName. An API that refuses
@@ -99,6 +125,7 @@ export async function submitAnswer(
     keepNewline?: boolean;
     routine?: boolean;
     modelName?: string | null;
+    spec?: Record<string, unknown>;
   } = {},
 ): Promise<Submitted> {
   if (await containsPrivateKey(submission)) {
@@ -120,18 +147,28 @@ export async function submitAnswer(
   // 422. Each failed submit costs one of the tries a claim allows, the
   // one submit of a duel side or a challenge task ends it, so a hash answer
   // with the line break most editors add is refused here unless the spec
-  // asks for one or keepNewline says to send it.
+  // asks for one or keepNewline says to send it. A spec that cannot be seen
+  // here is never read as one that does not ask, so the refusal then never
+  // says to remove the line break.
   const { verification } = task;
   if (
     verification.kind === 'hash' &&
     options.keepNewline !== true &&
-    endsInLineBreak(submission) &&
-    !specAsksFinalLineFeed(task.spec)
+    endsInLineBreak(submission)
   ) {
-    throw new SubmitRefused(
-      `the answer ends in a line break, which almost always fails a hash task, and ${submitsLeft(task.origin)}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
-      'line_break',
-    );
+    const asks = await asksFinalLineFeed(task, options.spec);
+    if (asks === false) {
+      throw new SubmitRefused(
+        `the answer ends in a line break, which almost always fails a hash task, and ${submitsLeft(task.origin)}. Nothing was sent. Remove the line break, or add --keep-newline to send it as is`,
+        'line_break',
+      );
+    }
+    if (asks === null) {
+      throw new SubmitRefused(
+        `the answer ends in a line break, and ${submitsLeft(task.origin)}. This task's spec shows only in the answer that handed it over, and it is not kept on this machine, so submit cannot tell whether the spec asks for one. Nothing was sent. If that spec asks the answer to end in a line feed, add --keep-newline to send it as is`,
+        'line_break',
+      );
+    }
   }
   if (verification.kind === 'schema') {
     try {

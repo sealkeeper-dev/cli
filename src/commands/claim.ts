@@ -3,6 +3,7 @@ import { ClaimTaskRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from '../api.js';
+import { keepHanded } from '../handed.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import {
@@ -14,6 +15,7 @@ import {
 import {
   afterTaskWork,
   defaultTasksDeps,
+  isGameTask,
   NOT_FOUND,
   openTaskSession,
   recordEvent,
@@ -88,6 +90,9 @@ export function register(
           type: 'task.claimed',
           payload: { task_id: task.id, task_type: task.taskType },
         });
+        // A game task's spec shows only in this answer, so what submit
+        // needs of it is kept (keepHanded).
+        if (isGameTask(task)) await keepHanded([task]);
       }
 
       // Synced and the goal refreshed while the task prints.

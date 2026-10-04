@@ -13,6 +13,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, writeConfig } from '../config.js';
+import { handedFinalLineFeed } from '../handed.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
@@ -416,6 +417,17 @@ describe('duel', () => {
       await run('duel', '--json');
       await run('duel', '--json');
       expect(await claimedInLog()).toEqual([task.id]);
+    });
+
+    it('keeps whether the spec it hands over asks for a final line feed, for submit (VOU-635)', async () => {
+      const asks = duelTask({
+        spec: { input: 'b\na', output: 'End with exactly one line feed.' },
+      });
+      const plain = duelTask();
+      api.answer = answerOf({ tasks: [asks, plain] });
+      await run('duel', '--json');
+      expect(await handedFinalLineFeed(asks.id)).toBe(true);
+      expect(await handedFinalLineFeed(plain.id)).toBe(false);
     });
 
     it('says one line when the API has no duel route yet', async () => {
