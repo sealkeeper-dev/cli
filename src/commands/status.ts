@@ -258,6 +258,8 @@ export function screenLines(
   lines.push('');
 
   if (answer !== null) lines.push(...standingSection(answer), '');
+  const scores = scoresSection(answer);
+  if (scores.length > 0) lines.push(...scores, '');
   lines.push(...todaySection(answer, local, who.now), '');
   if (answer !== null) {
     lines.push(...waitingSection(answer), '');
@@ -299,6 +301,36 @@ function standingSection(answer: StatusAnswerResponse): string[] {
     for (const action of answer.next) lines.push(`  ${actionLine(action)}`);
   }
   return lines;
+}
+
+// The score per dimension, in the order the API sent them, each
+// competence category with its task types indented under it, the values in
+// one column. A dimension or type without signal says so, never a number
+// made up for it. Nothing when the answer has no scores, as from an API
+// before them.
+function scoresSection(answer: StatusAnswerResponse | null): string[] {
+  const rows = (answer?.status.scores ?? []).flatMap((s) => [
+    { name: s.dimension, value: s.value },
+    ...(s.types ?? []).map((t) => ({
+      name: `  ${t.taskType}`,
+      value: t.value,
+    })),
+  ]);
+  const width = Math.max(0, ...rows.map((r) => r.name.length)) + 1;
+  return section(
+    'Scores',
+    rows.map((r) =>
+      r.name
+        .padEnd(width)
+        .concat(r.value === null ? NO_SIGNAL : formatScore(r.value)),
+    ),
+  );
+}
+
+export const NO_SIGNAL = 'no signal yet';
+
+function formatScore(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
 // The SEAL's state as the API sent it, the reason or the dormant days in

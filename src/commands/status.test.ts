@@ -37,6 +37,7 @@ import {
   HOOKS_MISSING,
   minutesToNextScoring,
   NO_ADAPTER,
+  NO_SIGNAL,
   NOTHING_WAITS,
   sealText,
   TOOL_HOOKS_LEFT,
@@ -60,6 +61,19 @@ function error(status: number, code: string): Response {
     { error: { code, message: `failed with ${code}` } },
     { status },
   );
+}
+
+// One score of the status answer, as the score route has it.
+function score(dimension: string, value: number | null) {
+  const at = value === null ? null : '2026-10-02T10:15:00.000Z';
+  return {
+    version: '1.0.0',
+    dimension,
+    value,
+    windowStart: at,
+    windowEnd: at,
+    computedAt: at,
+  };
 }
 
 // A status answer as the status route sends it, at bronze toward silver.
@@ -149,6 +163,18 @@ function statusAnswer(agentId: string, over: Record<string, unknown> = {}) {
           { taskId: randomUUID(), state: 'unclaimed', correct: null },
         ],
       },
+      scores: [
+        score('reliability', 0.8125),
+        score('cost_latency', null),
+        score('provenance', 1),
+        {
+          ...score('competence:data', 0.5),
+          types: [
+            { taskType: 'json_extract', value: 0.6 },
+            { taskType: 'text_dedupe', value: 0.25 },
+          ],
+        },
+      ],
     },
     ...over,
   };
@@ -366,9 +392,24 @@ describe('status', () => {
       expect(result.out).toContain(
         'As of the scoring run at 2026-10-02T10:15:00.000Z.\n',
       );
+      // Each dimension on its own, never one number, no signal as such,
+      // and the task types under their category, as the API sent them.
+      expect(result.out).toContain(
+        [
+          'Scores     reliability     0.81',
+          `           cost_latency    ${NO_SIGNAL}`,
+          '           provenance      1',
+          '           competence:data 0.50',
+          '             json_extract  0.60',
+          '             text_dedupe   0.25',
+        ].join('\n'),
+      );
+      // The API decides what is shown, and it sent no safety.
+      expect(result.out).not.toMatch(/^ +safety /m);
       // Top to bottom.
       const order = [
         'Level bronze',
+        'Scores',
         'Today ',
         'Waiting',
         'Duels',
@@ -451,6 +492,68 @@ describe('status', () => {
       );
       expect(out).toContain('Duels      none running\n');
       expect(out).not.toContain('Challenge');
+    });
+
+    it('leaves the scores out of an answer from an API before them', async () => {
+      const base = statusAnswer(agentId);
+      const { scores: _scores, ...before } = base.status;
+      api.answer = { ...base, status: before };
+      const result = await run('status');
+      expect(result.code).toBe(0);
+      expect(result.out).not.toContain('Scores');
+      expect(result.out).toContain('Level bronze. Next silver. SEAL issued.');
+    });
+
+    it('leaves out scores it cannot read and still prints the screen', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        status: { ...base.status, scores: [score('reliability', 7)] },
+      };
+      const result = await run('status');
+      expect(result.code).toBe(0);
+      expect(result.out).not.toContain('Scores');
+      expect(result.out).toContain('Level bronze. Next silver. SEAL issued.');
+    });
+
+    it('prints the categories alone from an API before the task types', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        status: {
+          ...base.status,
+          scores: [score('reliability', 0.5), score('competence:data', 0.5)],
+        },
+      };
+      const result = await run('status');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(
+        [
+          'Scores     reliability     0.50',
+          '           competence:data 0.50',
+          '',
+        ].join('\n'),
+      );
+    });
+
+    it('leaves out a breakdown it cannot read and keeps the category', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        status: {
+          ...base.status,
+          scores: [
+            {
+              ...score('competence:data', 0.5),
+              types: [{ taskType: 'json_extract', value: 7 }],
+            },
+          ],
+        },
+      };
+      const result = await run('status');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('Scores     competence:data 0.50\n\n');
+      expect(result.out).not.toContain('json_extract');
     });
 
     it('escapes what the API sent before it reaches the terminal', async () => {
@@ -571,6 +674,7 @@ describe('status', () => {
       expect(parsed.standing).toEqual(sent.standing);
       expect(parsed.status.agent).toEqual(sent.status.agent);
       expect(parsed.status.challenge).toEqual(sent.status.challenge);
+      expect(parsed.status.scores).toEqual(sent.status.scores);
       expect(parsed.next).toEqual([
         {
           ...sent.next[0],
@@ -658,6 +762,7 @@ describe('status', () => {
         `SealKeeper did not answer, could not reach the SealKeeper API at ${API_URL}: fetch failed. The numbers are cached from ${kept.fetchedAt}.\n`,
       );
       expect(result.out).toContain('Level bronze. Next silver. SEAL issued.');
+      expect(result.out).toContain('Scores     reliability     0.81\n');
       const parsed = await json();
       expect(parsed.source).toMatchObject({
         from: 'cache',

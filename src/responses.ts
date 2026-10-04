@@ -694,6 +694,25 @@ const StatusRecentDuel = z.looseObject({
   decidedAt: Timestamp,
 });
 
+// One score of the status answer (VOU-607), a ScoreEntry in
+// @sealkeeper/schema. dimension is any name, so a dimension this CLI does
+// not know yet is still shown. value is null with no signal. types is the
+// task types under a competence category, a CompetenceTypeScore each, any
+// type name, and a breakdown this CLI cannot read is left out on its own.
+const StatusScore = z.looseObject({
+  dimension: z.string(),
+  value: z.number().min(0).max(1).nullable(),
+  types: z
+    .array(
+      z.looseObject({
+        taskType: z.string(),
+        value: z.number().min(0).max(1).nullable(),
+      }),
+    )
+    .optional()
+    .catch(undefined),
+});
+
 export const StatusAnswerResponse = z.looseObject({
   ...CoreAnswerResponse.shape,
   status: z.looseObject({
@@ -718,6 +737,7 @@ export const StatusAnswerResponse = z.looseObject({
       .optional()
       .catch(undefined),
     challenge: CurrentChallengeResponse.nullable().optional().catch(undefined),
+    scores: z.array(StatusScore).optional().catch(undefined),
   }),
 });
 export type StatusAnswerResponse = z.infer<typeof StatusAnswerResponse>;
