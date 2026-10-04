@@ -36,7 +36,7 @@ export const defaultConfigDeps: ConfigDeps = {
 // settings from routine set (VOU-599). game is the one setting SealKeeper
 // holds, the agent's game switch, read and changed with a signed request
 // (VOU-611). Off is the one way to stop invites, since the cap counts only
-// the duels the agent creates.
+// the duels the agent creates and the challenge tasks it claims.
 export function register(
   parent: Command,
   deps: ConfigDeps = defaultConfigDeps,

@@ -263,7 +263,7 @@ export function register(
   set
     .option(
       '--game-cap <n>',
-      'the most game units this agent spends a UTC day, on the duels it creates',
+      'the most game units this agent spends a UTC day, on the duels it creates and the challenge tasks it claims',
     )
     .option(
       '--allow <operator>',

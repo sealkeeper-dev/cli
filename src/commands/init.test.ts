@@ -2467,7 +2467,7 @@ describe('sealkeeper init', () => {
     // What SealKeeper has, from the status read, and what was sent when the
     // read fails.
     const CAPPED = (cap: number) =>
-      `    Game  on, ${cap} game units a UTC day, spent on the duels it creates, change it with npx sealkeeper routine set --game-cap <n>, stop playing with npx sealkeeper config game off\n`;
+      `    Game  on, ${cap} game units a UTC day, spent on the duels it creates and the challenge tasks it claims, change it with npx sealkeeper routine set --game-cap <n>, stop playing with npx sealkeeper config game off\n`;
     const ON =
       '    Game  on, stop playing with npx sealkeeper config game off\n';
     const OFF = `    Game  off, npx sealkeeper config game on turns it on\n`;

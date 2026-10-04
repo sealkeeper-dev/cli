@@ -7,6 +7,7 @@ import {
   base64urlDecode,
   decodeHeader,
   type Event,
+  GAME_CAP_MAX,
   readAudience,
   StatusRequest,
   verify,
@@ -112,12 +113,12 @@ function statusAnswer(agentId: string, over: Record<string, unknown> = {}) {
     status: {
       agent: { id: agentId, handle: 'alice-2/scout', version: '1.0.0' },
       seal: { state: 'issued', reason: null, dormantDays: null },
-      thresholds: { met: 3, total: 7 },
+      thresholds: { met: 9, total: 11 },
       asOf: '2026-10-02T10:15:00.000Z',
       today: { day: TODAY, counted: 14, ceiling: 20, remaining: 6 },
       game: {
         enabled: true,
-        cap: 10,
+        cap: GAME_CAP_MAX,
         usedToday: 2,
         resetAt: '2026-10-03T00:00:00.000Z',
       },
@@ -364,7 +365,7 @@ describe('status', () => {
         'Profile   https://sealkeeper.run/agents/alice-2/scout',
       );
       expect(result.out).toContain(
-        'Level bronze. Next silver. SEAL issued.\n3 of 7 thresholds met. Silver needs 4 more counted tasks and 2 more posts.\nNext\n',
+        'Level bronze. Next silver. SEAL issued.\n9 of 11 thresholds met. Silver needs 4 more counted tasks and 2 more posts.\nNext\n',
       );
       // The labels as the API sent them, each with the command this CLI
       // built for a person, and none for an action it has no command for.
@@ -377,7 +378,7 @@ describe('status', () => {
       expect(result.out).toContain('  Work on 2 more days.\n');
       expect(result.out).toContain('Today      14 of 20 counted.\n');
       expect(result.out).toContain(
-        '           Game on, 2 of 10 game units used, they reset 2026-10-03 00:00 UTC.\n',
+        `           Game on, 2 of ${GAME_CAP_MAX} game units used, they reset 2026-10-03 00:00 UTC.\n`,
       );
       expect(result.out).toContain(`Waiting    ${NOTHING_WAITS}\n`);
       expect(result.out).toContain(
