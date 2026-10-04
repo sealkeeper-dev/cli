@@ -27,9 +27,11 @@ import {
   type Credential,
   CredentialError,
   getCredential,
+  readCache,
 } from './credential.js';
-import { readIfExists } from './files.js';
+import { readIfExists, tildePath } from './files.js';
 import { makeHandshakeQuietly } from './handshake.js';
+import { cli } from './invocation.js';
 import { sha256Hex } from './tasks.js';
 
 // init and the routine build the same card, and the seal commands read the
@@ -222,6 +224,73 @@ export type CardRefresh =
   | 'changed'
   | 'unwritable'
   | 'failed';
+
+/*
+ * The card's state on this machine (VOU-619), which status and the routine
+ * screen show in one line with the same words. Local only, it reads
+ * card-write.json, the card file and the cached SEAL, and calls nothing.
+ * current holds the SEAL the CLI holds now, stale does not, unsealed holds
+ * none while the CLI holds none either. gone, changed and unreadable are a
+ * file the routine would not refresh, as refreshCard says them. none is an
+ * agent init wrote no card for. Never throws, so it never fails status.
+ */
+export type CardState =
+  | 'current'
+  | 'stale'
+  | 'unsealed'
+  | 'gone'
+  | 'changed'
+  | 'unreadable';
+
+export type CardView =
+  | { state: 'none' }
+  | { state: CardState; path: string; writtenAt: string };
+
+export async function readCardView(
+  agentId: string,
+  p: Paths = paths(),
+): Promise<CardView> {
+  const record = await readCardRecord(agentId, p);
+  if (record === null) return { state: 'none' };
+  const at = { path: record.path, writtenAt: record.writtenAt };
+  let text: string | null;
+  try {
+    text = await readIfExists(record.path);
+  } catch {
+    return { state: 'unreadable', ...at };
+  }
+  if (text === null) return { state: 'gone', ...at };
+  if (sha256Hex(text) !== record.sha256) return { state: 'changed', ...at };
+  const held = await readCache(p, agentId).catch(() => null);
+  const onCard = sealOnCard(text);
+  if (held === null && onCard === null) return { state: 'unsealed', ...at };
+  return {
+    state: held?.credential === onCard ? 'current' : 'stale',
+    ...at,
+  };
+}
+
+// The card's state in one line, without the Card label the screens put
+// before it.
+export function cardLine(view: CardView): string {
+  if (view.state === 'none') return `none written, ${cli('init')} writes it`;
+  const where = tildePath(view.path);
+  const written = `last written ${view.writtenAt}`;
+  switch (view.state) {
+    case 'current':
+      return `${where}, holds the SEAL the CLI holds now, ${written}`;
+    case 'stale':
+      return `${where}, does not hold the SEAL the CLI holds now, ${written}`;
+    case 'unsealed':
+      return `${where}, holds no SEAL yet, ${written}`;
+    case 'gone':
+      return `${where}, the file is gone`;
+    case 'changed':
+      return `${where}, the file holds another card`;
+    case 'unreadable':
+      return `${where}, the file could not be read`;
+  }
+}
 
 const CardSeal = z.object({
   capabilities: z.object({

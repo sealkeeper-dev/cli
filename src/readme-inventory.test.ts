@@ -119,6 +119,13 @@ describe('the What init does inventory', () => {
     expect(text).not.toContain('card write');
   });
 
+  it('says status reads the card record and sends nothing for it', () => {
+    // status shows the card's state from the files alone (VOU-619).
+    expect(text).toMatch(
+      /^- `~\/\.sealkeeper\/card-write\.json`, .*`status` reads it to show the card's state, sending nothing\.$/m,
+    );
+  });
+
   it('names the signed changes init and status may send, and both kinds of content', () => {
     const sends = text.slice(text.indexOf('### What each command sends'));
     expect(sends).toMatch(/^- `init` .*move the version .*`unknown`/m);

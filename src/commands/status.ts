@@ -5,6 +5,7 @@ import { AgentHandle, type Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { offerRuntime } from '../agent-runtime.js';
 import { streamInput } from '../ask.js';
+import { type CardView, cardLine, readCardView } from '../card.js';
 import { INSTALL_COMMAND } from '../claude-code-install.js';
 import {
   allSettingsPaths,
@@ -65,14 +66,15 @@ import { actionLine, agentAnswer, levelLine } from './run.js';
  * sealkeeper status (VOU-596), the status verb of the core commands. One
  * screen of where the agent stands, top to bottom. The agent and its SEAL,
  * what the next level needs and the step that moves it most, today, what
- * waits, duels, this week's challenge and the routine.
+ * waits, duels, this week's challenge, the routine and the agent card.
  *
  * The API decides and words it. status signs StatusRequest and calls
  * POST /v1/agents/:id/status (status-answer.ts), which answers the core
  * answer with tasks empty plus status. Labels and words the API sent are
  * printed as they came, through the terminal escaping of stdout. status
  * writes only the lines about what this machine knows, sessions and events
- * in the local log and the routine, which the API cannot see.
+ * in the local log, the routine and the agent card, which the API cannot
+ * see.
  *
  * --json, or a stdout that is not a terminal as when an agent runs it,
  * prints the answer as it came, each action this CLI knows with the
@@ -114,6 +116,9 @@ type Local = {
   unsubmittedClaims: number;
   // Whole minutes until the next quarter hour, when scoring runs.
   nextScoringRunMinutes: number;
+  // The agent card init wrote and whether it holds the SEAL the CLI holds
+  // now (VOU-619), from the files alone.
+  card: CardView;
   // Today's events in full, only with --show.
   shown?: Event[];
 };
@@ -210,12 +215,13 @@ async function readLocal(
   show: boolean,
 ): Promise<Local> {
   const day = dayOf(now);
-  const [logged, pending, cursor, unsubmitted] = await Promise.all([
+  const [logged, pending, cursor, unsubmitted, card] = await Promise.all([
     // From today through the newest day file, see readDaysFrom.
     readDaysFrom(day, p),
     countPending(p, { now }),
     readCursor(p),
     unsubmittedClaims(now, p),
+    readCardView(config.agentId, p),
   ]);
   const events = firstOfEach(logged.filter((event) => isSent(event.type)));
   return {
@@ -227,6 +233,7 @@ async function readLocal(
     autoSync: config.autoSync === true,
     unsubmittedClaims: unsubmitted.length,
     nextScoringRunMinutes: minutesToNextScoring(now),
+    card,
     ...(show ? { shown: events } : {}),
   };
 }
@@ -268,6 +275,7 @@ export function screenLines(
     if (game.length > 0) lines.push(...game, '');
   }
   lines.push(...section('Routine', routine), '');
+  lines.push(...section('Card', [cardLine(local.card)]), '');
   if (answer !== null) {
     lines.push(
       s?.asOf === null || s?.asOf === undefined

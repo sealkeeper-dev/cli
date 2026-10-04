@@ -222,8 +222,9 @@ function unreachable(error: unknown): boolean {
 // null when there is no cache, it does not parse, it belongs to another
 // agent id (after init --force) or its version is not one this CLI
 // understands, such as a SEAL without ver from before version 1. The next
-// fetch rewrites it.
-async function readCache(
+// fetch rewrites it. The card's state reads it too, to compare the SEAL on
+// the card with the one the CLI holds, without a network call.
+export async function readCache(
   p: Paths,
   agentId: string,
 ): Promise<Credential | null> {

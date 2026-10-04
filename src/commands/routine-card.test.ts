@@ -1,5 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -297,15 +304,21 @@ describe('the routine refreshes the card', () => {
     });
     expect(result.out).toBe(`${NOTHING} Card refreshed.\n`);
 
+    // The routine screen and status say it in the same words (VOU-619).
+    const line = `Card       ${cardFile}, holds the SEAL the CLI holds now, last written 2026-09-29T10:01:00.000Z\n`;
     const screen = await run(fetchFn, 'routine');
-    expect(screen.out).toContain(
-      `Card       ${cardFile}, last written 2026-09-29T10:01:00.000Z\n`,
-    );
+    expect(screen.out).toContain(line);
+    const status = await run(fetchFn, 'status');
+    expect(status.code).toBe(0);
+    expect(status.out).toContain(line);
     const json = await run(fetchFn, 'status', '--json');
-    expect(JSON.parse(json.out).local.routine.card).toEqual({
+    const view = {
+      state: 'current',
       path: cardFile,
       writtenAt: '2026-09-29T10:01:00.000Z',
-    });
+    };
+    expect(JSON.parse(json.out).local.card).toEqual(view);
+    expect(JSON.parse(json.out).local.routine.card).toEqual(view);
   });
 
   it('leaves a card whose SEAL is fresh alone, byte for byte', async () => {
@@ -338,6 +351,15 @@ describe('the routine refreshes the card', () => {
     expect(result.out).not.toContain('Card');
     const screen = await run(fetchFn, 'routine');
     expect(screen.out).not.toContain('Card ');
+    // status says it in one line, and --json carries it locally.
+    const status = await run(fetchFn, 'status');
+    expect(status.code).toBe(0);
+    expect(status.out).toContain(
+      'Card       none written, sealkeeper init writes it\n',
+    );
+    const json = await run(fetchFn, 'status', '--json');
+    expect(JSON.parse(json.out).local.card).toEqual({ state: 'none' });
+    expect(JSON.parse(json.out).local.routine.card).toBeNull();
   });
 
   it("never writes over a card another agent's init recorded", async () => {
@@ -419,6 +441,72 @@ describe('the routine refreshes the card', () => {
       'Card kept, no SEAL is issued for this agent now.',
     );
     expect(await readFile(cardFile, 'utf8')).toBe(before);
+  });
+
+  // status shows the card from the files alone (VOU-619), offline too, and
+  // a card it cannot use is one line, never a failed status.
+  describe('status shows the card', () => {
+    // The card line of status, offline, with what --json carries.
+    async function statusCard(): Promise<{ line: string; json: unknown }> {
+      requests = [];
+      const screen = await run(unreachable, 'status');
+      expect(screen.code).toBe(0);
+      const json = await run(unreachable, 'status', '--json');
+      expect(json.code).toBe(0);
+      const line = screen.out.split('\n').find((l) => l.startsWith('Card '));
+      return { line: line ?? '', json: JSON.parse(json.out).local.card };
+    }
+
+    it('says when the card does not hold the SEAL the CLI holds now', async () => {
+      await writeCard();
+      // The CLI holds another SEAL than the card, as after seal show. The
+      // card's lasts 24 hours from now, so one of 23 differs.
+      const newer = await credentialFor(23 * HOUR);
+      const payload = JSON.parse(
+        Buffer.from(newer.split('.')[1] ?? '', 'base64url').toString(),
+      );
+      await writeFile(
+        paths().credential,
+        JSON.stringify({ v: 1, seal: newer, credential: newer, payload }),
+      );
+      const { line, json } = await statusCard();
+      expect(line).toBe(
+        `Card       ${cardFile}, does not hold the SEAL the CLI holds now, last written ${NOW.toISOString()}`,
+      );
+      expect(json).toMatchObject({ state: 'stale', path: cardFile });
+    });
+
+    it('says when the card holds no SEAL yet', async () => {
+      seal = withheld;
+      await writeCard();
+      const { line, json } = await statusCard();
+      expect(line).toBe(
+        `Card       ${cardFile}, holds no SEAL yet, last written ${NOW.toISOString()}`,
+      );
+      expect(json).toMatchObject({ state: 'unsealed' });
+    });
+
+    it('says when the card file is gone, edited or unreadable', async () => {
+      const before = await writeCard();
+      await rm(cardFile);
+      expect((await statusCard()).line).toBe(
+        `Card       ${cardFile}, the file is gone`,
+      );
+      await writeFile(cardFile, before.replace('"scout"', '"scout, edited"'));
+      expect(await statusCard()).toMatchObject({
+        line: `Card       ${cardFile}, the file holds another card`,
+        json: { state: 'changed' },
+      });
+      // A directory where the card was, which no read gets through.
+      await rm(cardFile);
+      await mkdir(cardFile);
+      expect(await statusCard()).toMatchObject({
+        line: `Card       ${cardFile}, the file could not be read`,
+        json: { state: 'unreadable' },
+      });
+      // Nothing was sent for the card.
+      expect(requests.filter((url) => url.endsWith('/seal'))).toEqual([]);
+    });
   });
 
   it('takes no step of the run', async () => {

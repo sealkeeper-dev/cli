@@ -7,7 +7,7 @@ import { GameCap, OperatorSlug, RUNTIME_LABELS } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { cleanAnswer, type Input, readYesNo, streamInput } from '../ask.js';
-import { type CardRefresh, readCardRecord } from '../card.js';
+import { type CardRefresh, cardLine, readCardView } from '../card.js';
 import { cliInvocation, cliProgram } from '../claude-code-settings.js';
 import { loadRoutineConfig, requireConfig } from '../cli-config.js';
 import {
@@ -1595,8 +1595,7 @@ export async function routineView(
   const transcript = existsSync(copyPaths(p).transcript)
     ? copyPaths(p).transcript
     : null;
-  const cardRecord =
-    config === null ? null : await readCardRecord(config.agentId, p);
+  const card = config === null ? null : await readCardView(config.agentId, p);
   const s = routine.schedule;
   // A Mastra routine, run from the operator's code with no job.
   const mastra = s === undefined && lastRun?.runtime === 'mastra';
@@ -1623,10 +1622,7 @@ export async function routineView(
     allowSlugs: routine.allowSlugs,
     lastRun,
     transcript,
-    card:
-      cardRecord === null
-        ? null
-        : { path: cardRecord.path, writtenAt: cardRecord.writtenAt },
+    card: card === null || card.state === 'none' ? null : card,
     copy: {
       path: copyPaths(p).script,
       version: await copyVersion(p),
@@ -1702,15 +1698,11 @@ export async function routineView(
         ]),
     // Where the last run's transcript is, never what it says (RS-10).
     ...(transcript === null ? [] : [row('Transcript', tildePath(transcript))]),
-    // The card init wrote, which each run refreshes (VOU-383).
-    ...(cardRecord === null
+    // The card init wrote, which each run refreshes (VOU-383), in the
+    // words status uses (VOU-619).
+    ...(card === null || card.state === 'none'
       ? []
-      : [
-          row(
-            'Card',
-            `${tildePath(cardRecord.path)}, last written ${cardRecord.writtenAt}`,
-          ),
-        ]),
+      : [row('Card', cardLine(card))]),
     ...(linger ? ['', LINGER_NOTE] : []),
     '',
     mastra
