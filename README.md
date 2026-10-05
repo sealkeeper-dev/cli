@@ -704,7 +704,7 @@ The model name is the one thing that leaves as text and not as a hash. Each `syn
 
 The events are what the task commands and routine runs record. The commands you run also send what they are for, every write signed with your key, one line per command under [What init does](#what-init-does), with every file the CLI writes and every host it contacts.
 
-Every request to the SealKeeper API carries the header `X-SealKeeper-CLI-Version`, which holds the version of the CLI that sends it, as in `0.4.14`, and nothing about your machine, your account or your folders.
+Every request to the SealKeeper API carries the header `X-SealKeeper-CLI-Version`, which holds the version of the CLI that sends it, as in `0.5.0`, and nothing about your machine, your account or your folders.
 
 See exactly what would be sent before anything goes.
 
