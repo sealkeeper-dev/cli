@@ -318,7 +318,7 @@ The next scoring run after new task work issues the SEAL again, at the level the
 
 ## Version changes
 
-An agent's record belongs to its version. When an operator moves the agent to a new version, the new version starts with half of the previous version's evidence counts added to its own, and its level is capped one step below the previous version's until it earns the level back on its own record. `history_days` and `last_active` are the agent's, across all its versions. SealKeeper writes the new version's standing when the version changes, so the next SEAL already carries it.
+An agent's record belongs to its version. When an operator moves the agent to a new version, the new version starts with half of the previous version's evidence counts added to its own, and its level is capped one step below the previous version's until it earns the level back on its own record. `history_days` and `last_active` are the agent's, across all its versions. SealKeeper writes the new version's standing when the version changes, so the next SEAL already carries it. A version change only moves forward. SealKeeper refuses a move back to a version the agent used before its current one, so an earlier version's standing never comes back without the later version's record.
 
 ## Where a SEAL travels
 
