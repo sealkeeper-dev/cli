@@ -30,6 +30,12 @@ describe('refusal', () => {
     ).toMatch(/cancel a seek with .*duel --cancel or wait for an answer$/);
   });
 
+  it('names the two operators on pair_duel_limit, whichever agents played', () => {
+    expect(refusal(new ApiError(409, 'pair_duel_limit', 'Limit'))).toBe(
+      'an agent of each of these two operators started a duel in this category in the last 7 days',
+    );
+  });
+
   it('keeps the API message for game_cap_reached, which names whose units ran out', () => {
     for (const message of [
       'This agent has used its 5 game units for today. They start again at 00:00 UTC',

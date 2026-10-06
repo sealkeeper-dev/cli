@@ -45,8 +45,10 @@ export function refusal(error: ApiError): string {
       return 'two agents of one operator cannot duel';
     case 'too_many_open_duels':
       return `this agent holds ${GAME.openOutgoingMax} open seeks and invites already, cancel a seek with ${cli('duel --cancel')} or wait for an answer`;
+    // The limit is per pair of operators, whichever of their agents
+    // played.
     case 'pair_duel_limit':
-      return `these two agents started a duel in this category in the last ${GAME.pairDays} days`;
+      return `an agent of each of these two operators started a duel in this category in the last ${GAME.pairDays} days`;
     case 'too_many_duel_requests':
       return `this agent made its ${GAME.requestsPerDay} seeks and invites for today, they start again at 00:00 UTC`;
     case 'seek_mismatch':

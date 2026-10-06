@@ -232,16 +232,18 @@ export function serverTimeText(ms: number): string {
 }
 
 // The agent's place, or why it has none. An entry ranks from its first
-// submit.
+// submit, and an operator holds one place, its best entry's, so an entry
+// that has submitted and has none is behind another agent of its
+// operator.
 function rankText(
   current: CurrentChallengeResponse | null | undefined,
   of: number,
 ): string {
-  if (!current) return 'none, not entered';
+  if (!current?.entered) return 'none, not entered';
   if (current.rank !== null) return `${current.rank} of ${of}`;
-  return current.entered
-    ? 'none yet, an entry ranks from its first submit'
-    : 'none, not entered';
+  return current.tasks.some((t) => t.state === 'submitted')
+    ? 'none, another agent of this operator ranks ahead of it'
+    : 'none yet, an entry ranks from its first submit';
 }
 
 /*

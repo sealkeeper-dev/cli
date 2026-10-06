@@ -590,6 +590,40 @@ describe('sealkeeper challenge', () => {
       );
     });
 
+    // An operator holds one place, its best entry's, so a submitted entry
+    // with no rank is behind another agent of its operator.
+    it('says why an entry that has submitted has no rank', async () => {
+      const board = {
+        isoWeek: WEEK,
+        category: 'data',
+        state: 'open',
+        closesAt: CLOSES,
+        entrants: 1,
+        rows: [],
+      };
+      const answer = (tasks: unknown[]) => ({
+        tasks: [],
+        waiting: [],
+        next: [],
+        standing: STANDING,
+        limited: null,
+        challenge: week({ tasks }),
+        board,
+      });
+      api.answer = answer([
+        { taskId: randomUUID(), state: 'submitted', correct: true },
+      ]);
+      expect((await run('challenge', '--board')).out).toContain(
+        '  your rank  none, another agent of this operator ranks ahead of it\n',
+      );
+      api.answer = answer([
+        { taskId: randomUUID(), state: 'claimed', correct: null },
+      ]);
+      expect((await run('challenge', '--board')).out).toContain(
+        '  your rank  none yet, an entry ranks from its first submit\n',
+      );
+    });
+
     it('says so when no challenge is open yet', async () => {
       const result = await run('challenge', '--board');
       expect(result.code).toBe(0);
