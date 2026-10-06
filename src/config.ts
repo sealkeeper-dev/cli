@@ -163,6 +163,10 @@ export const RoutineSchedule = z.object({
   // A CLI from before VOU-601 reads only claude-code here.
   agent: z.enum(SCHEDULED_AGENTS),
   agentCommand: z.string().min(1),
+  // true when routine on --agent-path named agentCommand (VOU-647), so a
+  // later routine on or routine set --time keeps it while it is there, and
+  // never looks for another on PATH. A CLI from before drops it.
+  agentGiven: z.boolean().optional(),
   job: z.string().min(1),
   files: z.array(z.string()),
   installedAt: z.iso.datetime({ offset: true }),

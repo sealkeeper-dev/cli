@@ -7,8 +7,10 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -63,6 +65,7 @@ import {
   type AgentProcess,
   claudeArgs,
   escapeCmdArgument,
+  findOnPath,
   runAgent,
   type Spawner,
   spawnCall,
@@ -106,6 +109,7 @@ import {
   NO_SETTINGS_NOTE,
   OPENCLAW_NOTE,
   preview,
+  type RoutineDeps,
   startInProcess,
   TIME_NOW_LINE,
   WORK_QUESTION,
@@ -503,6 +507,10 @@ describe('routine', () => {
   let nextAgents: (() => FakeAgent)[];
   // The programs found on PATH, by name.
   let onPath: Record<string, string>;
+  // How the agent is looked for, onPath unless a test reads a real PATH,
+  // and the folder the command runs in (VOU-647).
+  let finder: RoutineDeps['findAgent'];
+  let cwd: string;
   let spawned: {
     command: string;
     args: string[];
@@ -568,7 +576,8 @@ describe('routine', () => {
         homedir: () => userHome,
         uid: () => 501,
         stdin: () => input,
-        findAgent: async (name) => onPath[name] ?? null,
+        findAgent: finder,
+        cwd: () => cwd,
         cli: () => ({ program: jobProgram, invocation: INVOCATION }),
         msPerMinute,
         startRun: startInProcess,
@@ -676,8 +685,14 @@ describe('routine', () => {
     source = join(home, 'dist', 'index.js');
     await mkdir(dirname(source), { recursive: true });
     await writeFile(source, BUNDLE);
-    // A node that exists, so the screen never finds the job's node gone.
-    jobProgram = [process.execPath, source];
+    // A node that exists, so the screen never finds the job's node gone,
+    // at a fixed place, so the project rule never reads where the runner's
+    // own node lives (VOU-647). No test spawns it.
+    const node = join(home, 'bin', 'node');
+    await mkdir(dirname(node));
+    await writeFile(node, '#!/bin/sh\nexit 0\n');
+    await chmod(node, 0o755);
+    jobProgram = [node, source];
     tty = false;
     stdoutTTY = false;
     interrupt = () => () => undefined;
@@ -698,6 +713,9 @@ describe('routine', () => {
     nextAgents = [];
     spawned = [];
     onPath = { claude: CLAUDE };
+    finder = async (name) => onPath[name] ?? null;
+    // A folder that is no project, never the runner's own.
+    cwd = home;
     ({ agentId } = await createKey());
     await writeConfig({
       agentId,
@@ -1200,6 +1218,380 @@ describe('routine', () => {
         expect(result.out.split('\n').slice(0, 8), kind).toEqual(lines);
         await run('routine', 'off', '--yes');
       }
+    });
+  });
+
+  // npx sealkeeper init from a cloned project puts npx's cache and the
+  // project's node_modules/.bin first on PATH, so a dependency's bin named
+  // claude, openclaw or node would be what an unattended job runs every
+  // day. The job never stores one, and its PATH has none of those folders
+  // (VOU-647). These read a real PATH with findOnPath over real files.
+  describe("a project's own programs (VOU-647)", () => {
+    let base: string;
+    // The cloned project the setup runs in, under the user's home.
+    let project: string;
+    let projectBin: string;
+    // npx's cache folder for sealkeeper itself.
+    let npxBin: string;
+    // A global install, outside the project and the home.
+    let globalBin: string;
+
+    // An executable file at dir/name.
+    async function program(dir: string, name: string): Promise<string> {
+      await mkdir(dir, { recursive: true });
+      const file = join(dir, name);
+      await writeFile(file, '#!/bin/sh\nexit 0\n');
+      await chmod(file, 0o755);
+      return file;
+    }
+
+    // The schedule installed() writes.
+    async function installedSchedule() {
+      await installed();
+      const schedule = (await readRoutineConfig()).schedule;
+      if (schedule === undefined) throw new Error('no schedule');
+      return schedule;
+    }
+
+    // PATH as npx sets it, then the rest.
+    const npxPath = (...rest: string[]) =>
+      [npxBin, projectBin, ...rest].join(':');
+
+    beforeEach(async () => {
+      base = await realpath(home);
+      project = join(base, 'user', 'proj');
+      projectBin = join(project, 'node_modules', '.bin');
+      npxBin = join(base, 'npm', '_npx', 'a1b2', 'node_modules', '.bin');
+      globalBin = join(base, 'global', 'bin');
+      // As npm installs a dependency's bin, a link in node_modules/.bin.
+      await program(join(project, 'node_modules', 'evil'), 'claude.js');
+      await mkdir(projectBin, { recursive: true });
+      await symlink(
+        join(project, 'node_modules', 'evil', 'claude.js'),
+        join(projectBin, 'claude'),
+      );
+      // A package.json makes the setup's folder a project.
+      await writeFile(join(project, 'package.json'), '{}\n');
+      finder = (name, env) => findOnPath(name, env);
+      cwd = project;
+    });
+
+    it('passes over the project claude npx put first on PATH and takes the global one, and the job PATH drops the project folders', async () => {
+      const global = await program(globalBin, 'claude');
+      vi.stubEnv('PATH', npxPath(globalBin, '/usr/bin'));
+      const result = await run('routine', 'on', '--yes');
+      expect(result.code).toBe(0);
+      const schedule = (await readRoutineConfig()).schedule;
+      expect(schedule?.agentCommand).toBe(global);
+      expect(schedule?.agentGiven).toBeUndefined();
+      expect(crontab).toContain(`PATH='${globalBin}:/usr/bin' `);
+      expect(crontab).not.toContain('node_modules');
+      expect(crontab).not.toContain('_npx');
+    });
+
+    it('refuses a claude found only in the project, in one line that names it, and installs nothing', async () => {
+      vi.stubEnv('PATH', npxPath('/usr/bin'));
+      const result = await run('routine', 'on', '--yes');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        `nothing installed. claude at ${tildePath(join(projectBin, 'claude'))} is inside a project or the npx cache, so the daily job will not run it. Install Claude Code globally, or name its path with sealkeeper routine on --agent-path <path>`,
+      );
+      expect(crontab).toBeNull();
+      expect((await readRoutineConfig()).schedule).toBeUndefined();
+    });
+
+    it('says the same in the guided setup', async () => {
+      tty = true;
+      vi.stubEnv('PATH', npxPath('/usr/bin'));
+      const result = await run('routine');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        `nothing installed. claude at ${tildePath(join(projectBin, 'claude'))} is inside a project or the npx cache`,
+      );
+      expect(crontab).toBeNull();
+    });
+
+    it('refuses a claude in a global folder that links into the project, and takes one that links into a global node_modules', async () => {
+      await mkdir(globalBin, { recursive: true });
+      await symlink(
+        join(project, 'node_modules', 'evil', 'claude.js'),
+        join(globalBin, 'claude'),
+      );
+      vi.stubEnv('PATH', [globalBin, '/usr/bin'].join(':'));
+      const refused = await run('routine', 'on', '--yes');
+      expect(refused.code).toBe(1);
+      expect(refused.err).toContain(
+        `claude at ${tildePath(join(globalBin, 'claude'))} is inside a project or the npx cache`,
+      );
+
+      // As npm installs globally, a link in the prefix's bin to a file in
+      // the prefix's lib/node_modules.
+      const npmGlobal = join(base, 'prefix');
+      const cli = await program(
+        join(npmGlobal, 'lib', 'node_modules', '@anthropic-ai', 'claude-code'),
+        'cli.js',
+      );
+      await mkdir(join(npmGlobal, 'bin'), { recursive: true });
+      await symlink(cli, join(npmGlobal, 'bin', 'claude'));
+      vi.stubEnv('PATH', [join(npmGlobal, 'bin'), '/usr/bin'].join(':'));
+      expect((await run('routine', 'on', '--yes')).code).toBe(0);
+      // The link is stored, not the file it resolves to, so an update that
+      // moves the file keeps working.
+      expect((await readRoutineConfig()).schedule?.agentCommand).toBe(
+        join(npmGlobal, 'bin', 'claude'),
+      );
+    });
+
+    it('refuses a claude that resolves into the node_modules of a folder above the current one, as npx run from a subfolder finds it', async () => {
+      await mkdir(globalBin, { recursive: true });
+      await symlink(join(projectBin, 'claude'), join(globalBin, 'claude'));
+      cwd = join(project, 'sub');
+      await mkdir(cwd);
+      vi.stubEnv('PATH', [globalBin, '/usr/bin'].join(':'));
+      const result = await run('routine', 'on', '--yes');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('is inside a project or the npx cache');
+    });
+
+    it('refuses a node inside the project for the job', async () => {
+      await program(globalBin, 'claude');
+      jobProgram = [await program(projectBin, 'node'), source];
+      vi.stubEnv('PATH', npxPath(globalBin, '/usr/bin'));
+      const result = await run('routine', 'on', '--yes');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(
+        `nothing installed. node at ${tildePath(join(projectBin, 'node'))} is inside a project or the npx cache, so the daily job will not run it. Run this with a node installed globally`,
+      );
+      expect(crontab).toBeNull();
+    });
+
+    describe('the job PATH, without relative entries and the project folders, in each scheduler', () => {
+      const kept = () => `${globalBin}:/usr/bin`;
+
+      beforeEach(async () => {
+        await program(globalBin, 'claude');
+        vi.stubEnv(
+          'PATH',
+          npxPath(
+            'bin',
+            '',
+            '.',
+            join(project, 'tools'),
+            globalBin,
+            '/usr/bin',
+          ),
+        );
+      });
+
+      it('launchd', async () => {
+        platform = 'darwin';
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        const file = (await readRoutineConfig()).schedule?.files[0] ?? '';
+        expect(await readFile(file, 'utf8')).toContain(
+          `    <key>PATH</key>\n    <string>${kept()}</string>\n`,
+        );
+      });
+
+      it('systemd', async () => {
+        systemdUp = true;
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        const schedule = (await readRoutineConfig()).schedule;
+        expect(schedule?.scheduler).toBe('systemd');
+        expect(await readFile(schedule?.files[0] ?? '', 'utf8')).toContain(
+          `\nEnvironment="PATH=${kept()}"\n`,
+        );
+      });
+
+      it('cron', async () => {
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        expect(crontab).toContain(` PATH='${kept()}' `);
+      });
+
+      it('keeps the folders of a setup folder with no package.json or .git, as ~/.local, /opt or /usr, and drops them under a .git', async () => {
+        const tools = join(userHome, '.local');
+        const local = await program(join(tools, 'bin'), 'claude');
+        vi.stubEnv('PATH', npxPath(join(tools, 'bin'), '/usr/bin'));
+        cwd = tools;
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        expect((await readRoutineConfig()).schedule?.agentCommand).toBe(local);
+        expect(crontab).toContain(` PATH='${join(tools, 'bin')}:/usr/bin' `);
+
+        await mkdir(join(tools, '.git'));
+        vi.stubEnv('PATH', [join(tools, 'bin'), '/usr/bin'].join(':'));
+        const result = await run('routine', 'on', '--yes');
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(
+          `claude at ${tildePath(local)} is inside a project or the npx cache`,
+        );
+      });
+
+      it('keeps folders under the home when the setup runs from the home itself', async () => {
+        const local = join(userHome, '.local', 'bin');
+        vi.stubEnv('PATH', [local, globalBin, '/usr/bin'].join(':'));
+        cwd = userHome;
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        expect(crontab).toContain(` PATH='${local}:${kept()}' `);
+      });
+    });
+
+    describe('a path named with --agent-path', () => {
+      it('starts a claude inside the project because the person named it, says so, and keeps it on the next on and a new time', async () => {
+        await program(globalBin, 'claude');
+        vi.stubEnv('PATH', npxPath(globalBin, '/usr/bin'));
+        const named = join(projectBin, 'claude');
+        const result = await run(
+          'routine',
+          'on',
+          '--agent-path',
+          'node_modules/.bin/claude',
+          '--yes',
+        );
+        expect(result.code).toBe(0);
+        expect(result.out).toContain(
+          `${tildePath(named)} is inside a project or the npx cache. The daily job runs it since you named it with --agent-path.\n`,
+        );
+        const schedule = (await readRoutineConfig()).schedule;
+        expect(schedule).toMatchObject({
+          agent: 'claude-code',
+          agentCommand: named,
+          agentGiven: true,
+        });
+        // The job PATH still has no project folder.
+        expect(crontab).toContain(` PATH='${globalBin}:/usr/bin' `);
+
+        cwd = base;
+        expect((await run('routine', 'on')).code).toBe(0);
+        expect((await readRoutineConfig()).schedule?.agentCommand).toBe(named);
+        expect(
+          (await run('routine', 'set', '--time', '09:30', '--yes')).code,
+        ).toBe(0);
+        expect((await readRoutineConfig()).schedule).toMatchObject({
+          time: '09:30',
+          agentCommand: named,
+          agentGiven: true,
+        });
+      });
+
+      it('names a global claude with no line about a project', async () => {
+        const global = await program(globalBin, 'claude');
+        const result = await run(
+          'routine',
+          'on',
+          '--agent-path',
+          global,
+          '--yes',
+        );
+        expect(result.code).toBe(0);
+        expect(result.out).not.toContain('inside a project');
+        expect((await readRoutineConfig()).schedule?.agentCommand).toBe(global);
+      });
+
+      it('waits for a yes before it changes the agent of a job that is on', async () => {
+        await installed();
+        const result = await run(
+          'routine',
+          'on',
+          '--agent-path',
+          join(projectBin, 'claude'),
+        );
+        expect(result.code).toBe(1);
+        expect(result.err).toContain(
+          'nothing changed. There is no terminal to ask, so run sealkeeper routine on --yes',
+        );
+        expect((await readRoutineConfig()).schedule?.agentCommand).toBe(CLAUDE);
+      });
+
+      it('refuses a path that is not claude or openclaw, or that does not run', async () => {
+        const tool = await program(project, 'tool');
+        const other = await run('routine', 'on', '--agent-path', tool, '--yes');
+        expect(other.code).toBe(1);
+        expect(other.err).toContain(
+          `nothing installed. --agent-path takes the path of claude or openclaw, got ${tool}`,
+        );
+        const gone = await run(
+          'routine',
+          'on',
+          '--agent-path',
+          'bin/claude',
+          '--yes',
+        );
+        expect(gone.code).toBe(1);
+        expect(gone.err).toContain(
+          `nothing installed. --agent-path names no program you can run, ${join(project, 'bin', 'claude')}`,
+        );
+        // A folder passes the execute check, as the native installer's
+        // ~/.local/share/claude would.
+        const folder = join(userHome, '.local', 'share', 'claude');
+        await mkdir(folder, { recursive: true });
+        const dir = await run('routine', 'on', '--agent-path', folder, '--yes');
+        expect(dir.code).toBe(1);
+        expect(dir.err).toContain(
+          `nothing installed. --agent-path names no program you can run, ${folder}`,
+        );
+        expect(crontab).toBeNull();
+      });
+
+      it('looks on PATH again once a named path is a folder', async () => {
+        const global = await program(globalBin, 'claude');
+        vi.stubEnv('PATH', npxPath(globalBin, '/usr/bin'));
+        const folder = join(base, 'share', 'claude');
+        await mkdir(folder, { recursive: true });
+        await installed({
+          schedule: {
+            ...(await installedSchedule()),
+            agentCommand: folder,
+            agentGiven: true,
+          },
+        });
+        expect((await run('routine', 'on')).code).toBe(0);
+        const schedule = (await readRoutineConfig()).schedule;
+        expect(schedule?.agentCommand).toBe(global);
+        expect(schedule?.agentGiven).toBeUndefined();
+      });
+
+      it('passes over a folder named claude on PATH', async () => {
+        await mkdir(join(base, 'early', 'claude'), { recursive: true });
+        const global = await program(globalBin, 'claude');
+        vi.stubEnv(
+          'PATH',
+          [join(base, 'early'), globalBin, '/usr/bin'].join(':'),
+        );
+        expect((await run('routine', 'on', '--yes')).code).toBe(0);
+        expect((await readRoutineConfig()).schedule?.agentCommand).toBe(global);
+      });
+    });
+
+    it('warns on the screen while a job an earlier CLI wrote starts a project claude, and not for one named with --agent-path', async () => {
+      const stored = join(projectBin, 'claude');
+      await installed({
+        schedule: {
+          ...(await installedSchedule()),
+          agentCommand: stored,
+        },
+      });
+      const warned = await run('routine');
+      expect(warned.err).toContain(
+        `The daily routine job starts ${tildePath(stored)}, a project's own program or one in the npx cache. Run sealkeeper routine on again so it starts one installed globally.`,
+      );
+      expect((await routineJson()).warnings).toHaveLength(1);
+      await installed({
+        schedule: {
+          ...(await installedSchedule()),
+          agentCommand: stored,
+          agentGiven: true,
+        },
+      });
+      expect((await run('routine')).err).not.toContain('a project');
+    });
+
+    it("gives the run's agent a PATH without npx's and node_modules folders, also under a job an earlier CLI wrote", async () => {
+      await installed();
+      vi.stubEnv('PATH', npxPath(globalBin, '/usr/bin'));
+      const task = api.add({ taskType: 'text_dedupe' });
+      api.steps = [api.task(task)];
+      nextAgents = [() => says('a\nb\n')];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(spawned[0]?.env.PATH).toBe(`${globalBin}:/usr/bin`);
     });
   });
 

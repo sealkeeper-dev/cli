@@ -126,6 +126,7 @@ import {
 } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { GameStatusResponse } from '../responses.js';
+import { projectAgentWarning } from '../routine-copy.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
 import {
@@ -148,6 +149,7 @@ import {
   BLOCK_TITLE,
   defaultRoutineDeps,
   guidedSetup,
+  IN_PROJECT,
   MAX_ASKS,
   NOTHING_INSTALLED,
   prepareInstall,
@@ -1181,11 +1183,13 @@ async function offerNudge(
 // so the agent, the time, tasks only or the game, the block with the
 // limits, the install and one run now are asked the same way. One with a
 // job installed already is named, its copy of the CLI refreshed when its
-// version is not this one (RS-2), and nothing is asked. No is not stored,
+// version is not this one (RS-2), a stored agent inside a project named
+// in one line, and nothing is asked. No is not stored,
 // so a repeat init asks again the way it asks about the hooks. A machine
 // where the routine cannot be installed, neither claude nor openclaw on
 // PATH or a scheduler that cannot be read, hears nothing, since init has
-// nothing to offer it.
+// nothing to offer it. One whose only agent is inside a project hears why,
+// in one line (VOU-647).
 async function offerRoutine(
   deps: InitDeps,
   routineDeps: RoutineDeps,
@@ -1211,16 +1215,26 @@ async function offerRoutine(
     } else {
       await refreshCopy(current.schedule, routineDeps, p);
     }
+    // The refreshed copy keeps the agent the job starts, so one an earlier
+    // CLI stored from a project under npx is named here (VOU-647).
+    const warning = await projectAgentWarning(current.schedule);
+    if (warning !== undefined) note(e.line`${warning}`);
     return;
   }
   try {
-    if (
-      typeof (await prepareInstall(
-        routineDeps,
-        routineTime(routineDeps, current),
-        current,
-      )) === 'string'
-    ) {
+    const planned = await prepareInstall(
+      routineDeps,
+      routineTime(routineDeps, current),
+      current,
+    );
+    if (typeof planned === 'string') {
+      // An agent only a project has is named, so the person knows why no
+      // routine is offered (VOU-647). Anything else stays as quiet as no
+      // agent at all.
+      if (planned.includes(IN_PROJECT)) {
+        note(e.line`${planned}`);
+        say(o.line`${ROUTINE_NOT_INSTALLED}`);
+      }
       return;
     }
   } catch (error) {

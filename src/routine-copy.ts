@@ -6,11 +6,13 @@ import { z } from 'zod';
 import {
   type Paths,
   paths,
+  type RoutineSchedule,
   readRoutineConfig,
   writeFileAtomic,
 } from './config.js';
-import { exists, readIfExists } from './files.js';
+import { exists, readIfExists, tildePath } from './files.js';
 import { cli } from './invocation.js';
+import { projectProgram, RUN_WHERE } from './routine-agent.js';
 import { VERSION } from './version.js';
 
 // The copy of this CLI the daily job runs (RS-2). routine on copies the
@@ -136,18 +138,49 @@ export const copyOutdatedLine = (copy: string, running: string): string =>
 export const jobMissingLine = (): string =>
   `The daily routine job points at a sealkeeper that is no longer there. Run ${cli('routine on')} again.`;
 
+// Said while the job starts an agent in a node_modules or an _npx folder,
+// as one an earlier CLI stored from a setup under npx can (VOU-647).
+export const projectAgentLine = (command: string): string =>
+  `The daily routine job starts ${tildePath(command)}, a project's own program or one in the npx cache. Run ${cli('routine on')} again so it starts one installed globally.`;
+
 // The warnings about the installed job's command, none when no job is
-// installed, an earlier CLI installed it or routine.json does not read.
+// installed or routine.json does not read. The checks of the copy are
+// none for a job an earlier CLI installed.
 export async function routineJobWarnings(
   p: Paths = paths(),
   running: string = VERSION,
 ): Promise<string[]> {
-  let program: string[] | undefined;
+  let schedule: RoutineSchedule | undefined;
   try {
-    program = (await readRoutineConfig(p)).schedule?.program;
+    schedule = (await readRoutineConfig(p)).schedule;
   } catch {
     return [];
   }
+  if (schedule === undefined) return [];
+  const agent = await projectAgentWarning(schedule);
+  return [
+    ...(agent === undefined ? [] : [agent]),
+    ...(await copyWarnings(schedule.program, p, running)),
+  ];
+}
+
+// projectAgentLine while the job starts a project's agent that
+// --agent-path did not name, else undefined. status, the routine screen
+// and a repeat init say it, since a refreshed copy keeps the agent.
+export async function projectAgentWarning(
+  schedule: RoutineSchedule,
+): Promise<string | undefined> {
+  return schedule.agentGiven !== true &&
+    (await projectProgram(schedule.agentCommand, RUN_WHERE))
+    ? projectAgentLine(schedule.agentCommand)
+    : undefined;
+}
+
+async function copyWarnings(
+  program: string[] | undefined,
+  p: Paths,
+  running: string,
+): Promise<string[]> {
   if (program === undefined) return [];
   const [node, script] = program;
   if (

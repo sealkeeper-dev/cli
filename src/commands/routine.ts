@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { GameCap, OperatorSlug, RUNTIME_LABELS } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
@@ -56,6 +56,11 @@ import {
 import {
   claudeCodeRuntime,
   findOnPath,
+  jobPath,
+  type ProjectWhere,
+  projectProgram,
+  RUN_WHERE,
+  runnable,
   type Spawner,
   Transcript,
 } from '../routine-agent.js';
@@ -151,7 +156,10 @@ export type RoutineDeps = {
   homedir?: () => string;
   uid?: () => number;
   stdin?: () => Input;
-  findAgent?: (name: string) => Promise<string | null>;
+  // A program on the PATH in env, as findOnPath finds it.
+  findAgent?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
+  // The folder the command runs in, process.cwd() by default.
+  cwd?: () => string;
   // The CLI's node and script paths, and the same quoted for a shell.
   cli?: () => { program: string[]; invocation: string };
   // Tests shorten the wall clock with this.
@@ -234,10 +242,14 @@ export function register(
   routine
     .command('on')
     .description('Write the daily job, or write it again')
+    .option(
+      '--agent-path <path>',
+      'the claude or openclaw the job starts, in place of the one on PATH',
+    )
     .option('--yes', "write it without asking, only after the user's clear yes")
     .action(async function (
       this: Command,
-      options: { yes?: boolean },
+      options: { agentPath?: string; yes?: boolean },
     ): Promise<void> {
       await on(this, deps, options);
     });
@@ -354,6 +366,10 @@ type PreparedInstall = {
   source: string;
   // What the job runs, node, the copy and routine run.
   program: string[];
+  // Whether --agent-path named agentCommand, now or at an earlier install.
+  agentGiven?: boolean;
+  // Said before the block, for a named agent inside a project.
+  agentNote?: string;
 };
 
 const NO_AGENT =
@@ -367,43 +383,121 @@ const AGENT_PROGRAM: Record<ScheduledAgent, string> = {
 
 type FoundAgent = { agent: ScheduledAgent; command: string };
 
-// The agents found on this machine, in the order of SCHEDULED_AGENTS.
-async function findAgents(deps: RoutineDeps): Promise<FoundAgent[]> {
-  const find = deps.findAgent ?? ((name) => findOnPath(name));
+// The agents found on this machine, in the order of SCHEDULED_AGENTS, and
+// those on PATH the job never runs, a project's own (VOU-647). Each is
+// looked for on the PATH the job gets, so npx's folders are passed over
+// and a global install further down PATH is found. One found there that
+// resolves into a project, or one found only on the full PATH, is refused.
+type AgentsFound = { found: FoundAgent[]; refused: FoundAgent[] };
+
+async function findAgents(deps: RoutineDeps): Promise<AgentsFound> {
+  const find = deps.findAgent ?? findOnPath;
+  const where = setupWhere(deps);
+  const full = process.env.PATH ?? '';
+  const job = { PATH: jobPath(full, where) };
   const found: FoundAgent[] = [];
+  const refused: FoundAgent[] = [];
   for (const agent of SCHEDULED_AGENTS) {
-    const command = await find(AGENT_PROGRAM[agent]);
-    if (command !== null) found.push({ agent, command });
+    const name = AGENT_PROGRAM[agent];
+    const command = await find(name, job);
+    if (command !== null && !(await projectProgram(command, where))) {
+      found.push({ agent, command });
+      continue;
+    }
+    const any = command ?? (await find(name, { PATH: full }));
+    if (any !== null) refused.push({ agent, command: any });
   }
-  return found;
+  return { found, refused };
+}
+
+// The words for a program inside a project, kept in one place so init can
+// tell this refusal from the others.
+export const IN_PROJECT = 'is inside a project or the npx cache';
+
+// Why the job will not start an agent found inside a project.
+const refusedLine = ({ agent, command }: FoundAgent): string =>
+  `${AGENT_PROGRAM[agent]} at ${tildePath(command)} ${IN_PROJECT}, so the daily job will not run it. Install ${RUNTIME_LABELS[agent]} globally, or name its path with ${cli('routine on --agent-path <path>')}`;
+
+// The agent a path names, by its file name, claude or openclaw, with .exe
+// or .cmd on Windows.
+function agentOfPath(path: string): ScheduledAgent | undefined {
+  const name = basename(path)
+    .toLowerCase()
+    .replace(/\.(exe|cmd)$/, '');
+  return SCHEDULED_AGENTS.find((agent) => AGENT_PROGRAM[agent] === name);
+}
+
+// The agent at a path the person named with --agent-path, resolved from
+// the current folder, or why it is not one.
+async function givenAgent(
+  deps: RoutineDeps,
+  path: string,
+): Promise<FoundAgent | string> {
+  const command = resolve(cwdOf(deps), path);
+  const agent = agentOfPath(command);
+  if (agent === undefined) {
+    return `--agent-path takes the path of claude or openclaw, got ${path}`;
+  }
+  if (!(await runnable(command))) {
+    return `--agent-path names no program you can run, ${command}`;
+  }
+  return { agent, command };
 }
 
 // agent is the one the setup chose. Without it the job keeps the agent it
-// has while that is found, else starts the first found.
+// has while that is found, else starts the first found. agentPath is the
+// one routine on --agent-path names, and an agent named that way at an
+// earlier install is kept while it is there, so the job starts it even
+// inside a project, with a line that says so. node, which the job runs the
+// copy with, is refused inside a project as an agent is.
 export async function prepareInstall(
   deps: RoutineDeps,
   time: string,
   current?: RoutineConfig,
   agent?: ScheduledAgent,
+  agentPath?: string,
 ): Promise<PreparedInstall | string> {
   const run = deps.run ?? execRunner;
   const env = schedulerEnv(deps);
   const routine = current ?? (await readRoutineConfig());
-  const found = await findAgents(deps);
-  const find = (wanted: ScheduledAgent | undefined) =>
-    found.find((f) => f.agent === wanted);
-  const picked =
-    agent !== undefined
-      ? find(agent)
-      : (find(routine.schedule?.agent) ?? found[0]);
-  if (picked === undefined) {
-    return agent === undefined
-      ? NO_AGENT
-      : `${AGENT_PROGRAM[agent]} was not found on PATH`;
+  const where = setupWhere(deps);
+  const kept = routine.schedule;
+  let picked: FoundAgent | undefined;
+  let agentNote: string | undefined;
+  const given =
+    agentPath ??
+    (kept?.agentGiven === true && (await runnable(kept.agentCommand))
+      ? kept.agentCommand
+      : undefined);
+  if (given !== undefined) {
+    const named = await givenAgent(deps, given);
+    if (typeof named === 'string') return named;
+    picked = named;
+    if (await projectProgram(named.command, where)) {
+      agentNote = `${tildePath(named.command)} ${IN_PROJECT}. The daily job runs it since you named it with --agent-path.`;
+    }
+  } else {
+    const { found, refused } = await findAgents(deps);
+    const find = (list: FoundAgent[], wanted: ScheduledAgent | undefined) =>
+      list.find((f) => f.agent === wanted);
+    picked =
+      agent !== undefined
+        ? find(found, agent)
+        : (find(found, routine.schedule?.agent) ?? found[0]);
+    if (picked === undefined) {
+      const out = agent !== undefined ? find(refused, agent) : refused[0];
+      if (out !== undefined) return refusedLine(out);
+      return agent === undefined
+        ? NO_AGENT
+        : `${AGENT_PROGRAM[agent]} was not found on PATH`;
+    }
   }
   const [node, source] = cliOf(deps).program;
   if (node === undefined || source === undefined) {
     return 'Run this from the sealkeeper CLI';
+  }
+  if (await projectProgram(node, where)) {
+    return `node at ${tildePath(node)} ${IN_PROJECT}, so the daily job will not run it. Run this with a node installed globally`;
   }
   const p = paths();
   // The job runs the copy, never the script that runs now, which may sit
@@ -417,7 +511,7 @@ export async function prepareInstall(
     {
       time,
       program,
-      env: jobEnv(p),
+      env: jobEnv(p, where),
       home: p.home,
       outFile: routinePaths(p).out,
     },
@@ -438,6 +532,8 @@ export async function prepareInstall(
     p,
     source,
     program,
+    agentGiven: given !== undefined,
+    ...(agentNote === undefined ? {} : { agentNote }),
   };
 }
 
@@ -470,6 +566,7 @@ async function finishInstall(
     scheduler: plan.scheduler,
     agent: prepared.agent,
     agentCommand: prepared.agentCommand,
+    ...(prepared.agentGiven === true ? { agentGiven: true } : {}),
     job: plan.job,
     files: plan.files.map((f) => f.path),
     installedAt: new Date().toISOString(),
@@ -643,8 +740,9 @@ async function firstRun(
     {
       runId,
       program,
+      // PATH as the job has it, so the first run starts no project's node.
       env: {
-        ...process.env,
+        ...agentEnv(setupWhere(deps)),
         [RUN_ID_ENV]: runId,
         // What it prints names the CLI as this one does.
         SEALKEEPER_INVOCATION: printedInvocation(),
@@ -693,10 +791,11 @@ const defaultJob = (p: Paths, env: SchedulerEnv): string =>
 // PATH so the agent's launcher finds node under a scheduler's bare
 // environment, and SEALKEEPER_HOME for any home but the root. The job does
 // not start in the folder that picked the agent, so for a named home or a
-// SEALKEEPER_HOME elsewhere it must say which one.
-function jobEnv(p: Paths): Record<string, string> {
+// SEALKEEPER_HOME elsewhere it must say which one. PATH is the one of the
+// install without a project's own folders, see jobPath (VOU-647).
+function jobEnv(p: Paths, where: ProjectWhere): Record<string, string> {
   const env: Record<string, string> = {};
-  const path = process.env.PATH;
+  const path = jobPath(process.env.PATH ?? '', where);
   if (path) env.PATH = path;
   const home = homeEnv(p);
   if (home !== undefined) env.SEALKEEPER_HOME = home;
@@ -706,6 +805,15 @@ function jobEnv(p: Paths): Record<string, string> {
   if (cache) env.XDG_CACHE_HOME = cache;
   return env;
 }
+
+const cwdOf = (deps: RoutineDeps): string =>
+  (deps.cwd ?? (() => process.cwd()))();
+
+// Where a setup runs, for the project rule of jobPath and projectProgram.
+const setupWhere = (deps: RoutineDeps): ProjectWhere => ({
+  cwd: cwdOf(deps),
+  home: (deps.homedir ?? homedir)(),
+});
 
 // SEALKEEPER_HOME for a home that is not the root, else undefined.
 const homeEnv = (p: Paths): string | undefined =>
@@ -919,8 +1027,11 @@ export async function guidedSetup(
   input: Input,
   print: SetupPrint,
 ): Promise<string | null> {
-  const found = await findAgents(deps);
-  if (found.length === 0) return `nothing installed. ${NO_AGENT}`;
+  const { found, refused } = await findAgents(deps);
+  if (found.length === 0) {
+    const out = refused[0];
+    return `nothing installed. ${out === undefined ? NO_AGENT : refusedLine(out)}`;
+  }
   const agent =
     found.length === 1 ? found[0] : await askAgent(input, found, print);
   if (agent === undefined) return NOTHING_INSTALLED;
@@ -934,7 +1045,7 @@ export async function guidedSetup(
       current.model ??
         (await openclawDefaultModel({
           command: agent.command,
-          env: agentEnv(),
+          env: agentEnv(setupWhere(deps)),
           spawner: deps.spawner,
         })),
       print,
@@ -1032,23 +1143,36 @@ async function installJob(
   routine: RoutineConfig,
   input: Input | undefined,
   print: SetupPrint | null,
-  options: { gameOn?: boolean; agent?: ScheduledAgent } = {},
+  options: {
+    gameOn?: boolean;
+    agent?: ScheduledAgent;
+    agentPath?: string;
+  } = {},
 ): Promise<Installed | string> {
   const time = routineTime(deps, routine);
   let prepared: PreparedInstall | string;
   try {
-    prepared = await prepareInstall(deps, time, routine, options.agent);
+    prepared = await prepareInstall(
+      deps,
+      time,
+      routine,
+      options.agent,
+      options.agentPath,
+    );
   } catch (error) {
     if (error instanceof SchedulerError) return error.message;
     throw error;
   }
   if (typeof prepared === 'string') return `nothing installed. ${prepared}`;
+  if (prepared.agentNote !== undefined) {
+    (print?.line ?? stderr)(prepared.agentNote);
+  }
   // An OpenClaw routine with no model takes the operator's OpenClaw
   // default, as routine on and --yes ask nothing (VOU-623).
   if (prepared.agent === 'openclaw' && prepared.current.model === undefined) {
     const model = await openclawDefaultModel({
       command: prepared.agentCommand,
-      env: agentEnv(),
+      env: agentEnv(setupWhere(deps)),
       spawner: deps.spawner,
     });
     if (model === null) return `nothing installed. ${noModelLine()}`;
@@ -1112,10 +1236,13 @@ async function install(
   deps: RoutineDeps,
   routine: RoutineConfig,
   input: Input | undefined,
+  agentPath?: string,
 ): Promise<void> {
   const json = wantsJson(cmd);
   const print = json ? null : plainPrint();
-  const installed = await installJob(deps, routine, input, print);
+  const installed = await installJob(deps, routine, input, print, {
+    agentPath,
+  });
   if (typeof installed === 'string') cmd.error(installed);
   const { schedule, saved } = installed;
   if (print === null) {
@@ -1159,16 +1286,17 @@ async function gameOn(deps: RoutineDeps, p: Paths): Promise<void> {
 async function on(
   cmd: Command,
   deps: RoutineDeps,
-  options: { yes?: boolean },
+  options: { agentPath?: string; yes?: boolean },
 ): Promise<void> {
   await requireConfig(cmd);
   const current = await loadRoutineConfig(cmd);
-  // A job that is on is written again with no question.
+  // A job that is on is written again with no question, unless
+  // --agent-path changes the program it starts, which waits for a yes.
   const input =
-    current.schedule === undefined
+    current.schedule === undefined || options.agentPath !== undefined
       ? yesOrTerminal(cmd, deps, options.yes, 'routine on')
       : undefined;
-  await install(cmd, deps, current, input);
+  await install(cmd, deps, current, input, options.agentPath);
 }
 
 // off
@@ -1331,6 +1459,7 @@ async function setRoutine(
     }
   }
   const lines: string[] = [];
+  if (prepared?.agentNote !== undefined) stderr(prepared.agentNote);
   let game: Awaited<ReturnType<typeof changeGame>> | undefined;
   if (gameCap !== undefined) {
     const session = await openSession(deps, paths());
@@ -1513,7 +1642,7 @@ function scheduledAgent(
       const transcript = Transcript.open(copyPaths(p).transcript);
       const o = {
         command: schedule.agentCommand,
-        env: agentEnv(),
+        env: agentEnv(RUN_WHERE),
         spawner: deps.spawner,
         transcript,
       };
@@ -1530,10 +1659,20 @@ function scheduledAgent(
 }
 
 // The agent's environment, the job's own, without the watcher's run id.
-// The agent has no tools, so nothing in it reaches a command.
-function agentEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+// The agent has no tools, so nothing in it reaches a command. PATH goes
+// through jobPath, so the agent's #!/usr/bin/env node never finds a
+// project's node, also under a job an earlier CLI wrote (VOU-647). where
+// is the setup's folder, for the model question and the first run.
+function agentEnv(
+  where: ProjectWhere,
+  env: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const { [RUN_ID_ENV]: _, ...rest } = env;
-  return rest;
+  // Windows names it Path.
+  const key = Object.keys(rest).find((name) => name.toUpperCase() === 'PATH');
+  const path = key === undefined ? undefined : rest[key];
+  if (key === undefined || path === undefined) return rest;
+  return { ...rest, [key]: jobPath(path, where) };
 }
 
 // Whether the last run came from a Mastra routine, which has no job.

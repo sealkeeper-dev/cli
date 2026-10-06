@@ -1,8 +1,24 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { spawn } from 'node:child_process';
-import { closeSync, fchmodSync, mkdirSync, openSync, writeSync } from 'node:fs';
-import { access, constants } from 'node:fs/promises';
-import { delimiter, dirname, join } from 'node:path';
+import {
+  closeSync,
+  existsSync,
+  fchmodSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  writeSync,
+} from 'node:fs';
+import { access, constants, realpath, stat } from 'node:fs/promises';
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  sep,
+} from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ScheduledAgent } from './config.js';
 
@@ -545,16 +561,143 @@ export async function findOnPath(
   for (const dir of dirs) {
     for (const candidate of names) {
       const path = join(dir, candidate);
-      try {
-        await access(
-          path,
-          platform === 'win32' ? constants.F_OK : constants.X_OK,
-        );
-        return path;
-      } catch {
-        // Not here.
-      }
+      if (await runnable(path, platform)) return path;
     }
   }
   return null;
+}
+
+// Whether path is a file this user may run. Windows has no execute bit.
+// A folder passes the execute check, so it must be a file first, else a
+// folder named claude, such as the native installer's ~/.local/share/claude,
+// would be stored as the agent and every run would fail to start it.
+export async function runnable(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  try {
+    if (!(await stat(path)).isFile()) return false;
+    await access(path, platform === 'win32' ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// A project's own programs, which the daily job never runs (VOU-647).
+// npx puts its cache's node_modules/.bin first on PATH, then node_modules/.bin
+// of the current folder and of every folder above it, and the documented
+// install is npx sealkeeper init from a project folder. So a dependency of
+// a cloned project could ship a bin named claude or openclaw, or node, which
+// both launchers start through #!/usr/bin/env node, and an unattended job
+// would run it every day. cwd is the folder the setup runs in, null in a run,
+// which runs in the job's own folder. home is the user's home folder.
+export type ProjectWhere = { cwd: string | null; home: string };
+
+// A run, in the job's own folder, where no folder is the setup's project.
+export const RUN_WHERE: ProjectWhere = { cwd: null, home: '' };
+
+// Whether child is parent or inside it.
+function inside(child: string, parent: string): boolean {
+  const rel = relative(parent, child);
+  return (
+    rel === '' ||
+    (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  );
+}
+
+// path as written and as the file system resolves it, so a symlink in a
+// folder name compares either way.
+function bothForms(path: string): string[] {
+  try {
+    const real = realpathSync(path);
+    return real === path ? [path] : [path, real];
+  } catch {
+    return [path];
+  }
+}
+
+const PACKAGE_FOLDERS = new Set(['node_modules', '_npx']);
+
+// What makes the setup's folder a project, a package or a clone.
+const PROJECT_MARKS = ['package.json', '.git'];
+
+// The setup's folder as a project, in both forms, or none. It is one when
+// it holds a package.json or a .git, so a setup from a tool or system
+// folder, such as ~/.local, /opt or /usr, keeps the global folders in it.
+// npx's own folders are node_modules and _npx, which the job drops from
+// any folder. The home folder and the folders above it hold every global
+// install, so a setup from there drops none of them, even with a .git.
+function projectFolders(where: ProjectWhere): string[] {
+  const folder = where.cwd;
+  if (folder === null) return [];
+  const cwds = bothForms(folder);
+  const homes = bothForms(where.home);
+  if (cwds.some((cwd) => homes.some((home) => inside(home, cwd)))) return [];
+  return PROJECT_MARKS.some((mark) => existsSync(join(folder, mark)))
+    ? cwds
+    : [];
+}
+
+// Whether the job drops dir from its PATH. A relative entry, which reads
+// from whatever folder the job is in, an entry inside a node_modules or an
+// _npx folder, and an entry inside the setup's folder when it is a project,
+// given as projects.
+function dropped(dir: string, projects: string[]): boolean {
+  if (!isAbsolute(dir)) return true;
+  if (dir.split(/[\\/]+/).some((part) => PACKAGE_FOLDERS.has(part))) {
+    return true;
+  }
+  return projects.some((project) => inside(dir, project));
+}
+
+// PATH for the daily job and the agent it starts, the install time PATH
+// without the entries it drops, in the same order.
+export function jobPath(
+  path: string,
+  where: ProjectWhere,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const separator = platform === 'win32' ? ';' : delimiter;
+  const projects = projectFolders(where);
+  return path
+    .split(separator)
+    .filter((dir) => dir.length > 0 && !dropped(dir, projects))
+    .join(separator);
+}
+
+// Whether command is a project's own program. The folder it was found in
+// is checked as a PATH entry, then the file it resolves to, so a link from
+// a global folder into a project counts as the project. The file counts
+// when it is inside the setup's folder when that is a project, see
+// projectFolders, inside an _npx folder, or inside
+// the node_modules of the setup's folder or a folder above it, where npx
+// looks. A global npm install resolves into a node_modules elsewhere, such
+// as /opt/homebrew/lib/node_modules, and is allowed. A file that is not
+// there runs nothing, and a run says it is gone.
+export async function projectProgram(
+  command: string,
+  where: ProjectWhere,
+): Promise<boolean> {
+  const projects = projectFolders(where);
+  if (dropped(dirname(command), projects)) return true;
+  let real = command;
+  try {
+    real = await realpath(command);
+  } catch {
+    // Not there.
+  }
+  if (real.split(/[\\/]+/).includes('_npx')) return true;
+  if (projects.some((project) => inside(real, project))) return true;
+  if (where.cwd === null) return false;
+  const cwds = bothForms(where.cwd);
+  for (let dir = dirname(real); dirname(dir) !== dir; dir = dirname(dir)) {
+    if (
+      basename(dir) === 'node_modules' &&
+      cwds.some((cwd) => inside(cwd, dirname(dir)))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

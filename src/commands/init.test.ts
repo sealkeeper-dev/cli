@@ -61,7 +61,7 @@ import { nudgeLines } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { readRoutine } from '../routine.js';
-import { copyPaths, copyVersion } from '../routine-copy.js';
+import { copyPaths, copyVersion, projectAgentLine } from '../routine-copy.js';
 import type { Runner } from '../routine-scheduler.js';
 import { stripStyle } from '../style.js';
 import { describeTaxonomy, isSent, NEVER_LEAVES } from '../taxonomy.js';
@@ -132,6 +132,7 @@ const API_URL = 'https://api.test';
 // Where the routine offer finds claude, when a test puts it on PATH.
 const CLAUDE = '/usr/local/bin/claude';
 const OPENCLAW = '/usr/local/bin/openclaw';
+const PROJECT_CLAUDE = '/srv/proj/node_modules/.bin/claude';
 const PROGRAM = ['/usr/local/bin/node', '/opt/sealkeeper/dist/index.js'];
 const NPX_PROGRAM = ['/usr/local/bin/node', STALE_SCRIPT];
 // What a bundle the routine tests copy holds (RS-2).
@@ -207,6 +208,9 @@ type World = {
   // when not set, so the machine running the tests never counts.
   claude?: boolean;
   openclaw?: boolean;
+  // claude only in a project's node_modules/.bin, as npx puts it first on
+  // PATH (VOU-647).
+  projectClaude?: boolean;
   // Every scheduler command the routine offer ran, as file and args
   // joined. The fake scheduler is launchd and answers every call with 0.
   scheduler: string[];
@@ -449,9 +453,11 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       findAgent: async (name) =>
         name === 'claude' && world.claude
           ? CLAUDE
-          : name === 'openclaw' && world.openclaw
-            ? OPENCLAW
-            : null,
+          : name === 'claude' && world.projectClaude
+            ? PROJECT_CLAUDE
+            : name === 'openclaw' && world.openclaw
+              ? OPENCLAW
+              : null,
       cli: () => {
         const program =
           world.bundle === undefined
@@ -3033,6 +3039,33 @@ describe('sealkeeper init', () => {
       expect(world.scheduler).toEqual([]);
       expect(await copyVersion(paths(home))).toBe(VERSION);
       expect(await readFile(c.script, 'utf8')).toBe(BUNDLE);
+      expect(result.err).not.toContain(projectAgentLine(CLAUDE));
+    });
+
+    it("names a project's claude an earlier CLI stored as the job's agent on a repeat init (VOU-647)", async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.claude = true;
+      world.stdin = answersThen('', '', 'y', 'n');
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      const routine = await readRoutineConfig();
+      if (routine.schedule === undefined) throw new Error('no schedule');
+      await writeFile(
+        paths(home).routine,
+        `${JSON.stringify({
+          ...routine,
+          schedule: { ...routine.schedule, agentCommand: PROJECT_CLAUDE },
+        })}\n`,
+      );
+      world = newWorld();
+      await withBundle();
+      world.claude = true;
+      world.stdin = answering('');
+      const result = await run(world, 'init');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`  ✓ ${routinePresentLine('09:05')}\n`);
+      expect(result.err).toContain(projectAgentLine(PROJECT_CLAUDE));
+      expect(world.scheduler).toEqual([]);
     });
 
     it('says how to move a job an earlier CLI installed onto a copy', async () => {
@@ -3109,6 +3142,23 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(5);
       expect(result.all).not.toContain('Daily routine');
+      expect(result.err).not.toContain(INSTALL_QUESTION);
+      expect(world.scheduler).toEqual([]);
+    });
+
+    it('says in one line why there is no routine when the only claude is inside a project (VOU-647)', async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.projectClaude = true;
+      const stdin = answersThen('y', 'y');
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(5);
+      expect(result.err).toContain(
+        `claude at ${PROJECT_CLAUDE} is inside a project or the npx cache, so the daily job will not run it. Install Claude Code globally, or name its path with npx sealkeeper routine on --agent-path <path>`,
+      );
+      expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
     });
