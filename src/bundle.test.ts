@@ -171,16 +171,21 @@ describe('bundle scanners', () => {
       '// ../schema/src/index.ts',
       '// src/routine-run.ts',
     ].join('\n');
+    // A build two folders up, the repo root in the monorepo. The comments
+    // are written relative to that folder from this package's real place,
+    // so the case holds in the mirror too, where the package is the repo
+    // and two folders up is wherever the mirror was unpacked (VOU-651).
+    const root = resolve(packageDir, '..', '..');
+    const fromThere = (file: string) =>
+      `// ${relative(root, join(packageDir, file)).split(sep).join('/')}`;
     const fromRoot = [
-      '// packages/cli/src/commands/routine.ts',
-      '// packages/schema/src/index.ts',
-      '// packages/cli/src/routine-run.ts',
+      fromThere('src/commands/routine.ts'),
+      fromThere('../schema/src/index.ts'),
+      fromThere('src/routine-run.ts'),
     ].join('\n');
     const expected = ['commands/routine', 'routine-run'];
     expect([...cliSources(fromPackage, packageDir)].sort()).toEqual(expected);
-    expect(
-      [...cliSources(fromRoot, resolve(packageDir, '..', '..'))].sort(),
-    ).toEqual(expected);
+    expect([...cliSources(fromRoot, root)].sort()).toEqual(expected);
   });
 });
 
