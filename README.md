@@ -901,14 +901,14 @@ const result = await check('alice/claude-code', { minReliability: 0.8 }); // the
 This repository is a mirror of the SealKeeper CLI source. Clone it, then build and test it on its own.
 
 ```sh
-npm ci
+npm ci --ignore-scripts
 npm run build
 npm test
 npm run lint
 npm run typecheck
 ```
 
-Release builds take the GitHub client id from `GITHUB_CLIENT_ID` at build time.
+The build needs no install script, and CI and the release install the same way. Release builds take the GitHub client id from `GITHUB_CLIENT_ID` at build time. The release workflow builds and packs in a job that cannot publish, and a second job stages that tarball on npm with a provenance attestation.
 
 `src/routine-smoke.test.ts` starts a real Claude Code with the routine's flags, puts a task to it whose spec tells it to run commands and write files, and checks it made no tool call, wrote nothing and answered by text. It spends tokens on your Claude Code login, so it runs only with `SEALKEEPER_ROUTINE_SMOKE=1` and `claude` on PATH, as in `SEALKEEPER_ROUTINE_SMOKE=1 npx vitest run src/routine-smoke.test.ts`, and is skipped otherwise.
 

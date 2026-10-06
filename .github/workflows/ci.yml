@@ -29,7 +29,9 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      # No install scripts, as in release.yml. esbuild finds its binary in
+      # the platform package the lockfile pins.
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
