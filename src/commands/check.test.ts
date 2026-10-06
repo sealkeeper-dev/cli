@@ -409,6 +409,38 @@ describe('sealkeeper check', () => {
     expect(r.err).toContain(`not trusting alice/claude-code, ${why}`);
   });
 
+  // VOU-645. An API that says ok is held to the SEAL it sent. minLevel,
+  // minVerified and maxIncidents are worked out again from the verified
+  // payload, which has level bronze, 7 verified tasks and no incident.
+  it.each([
+    [
+      ['--min-level', 'silver'],
+      'its SEAL has level bronze, the check needs silver',
+    ],
+    [
+      ['--min-verified', '10'],
+      'its SEAL has 7 verified tasks, the check needs 10',
+    ],
+  ])('does not take the API at its word for %j, exit 2', async (flags, why) => {
+    reply = () => Response.json(passing);
+    const r = await run('check', 'alice/claude-code', ...flags);
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('');
+    expect(r.err).toContain(`not trusting alice/claude-code, ${why}`);
+    // What the SEAL bears out still passes.
+    const ok = await run(
+      'check',
+      'alice/claude-code',
+      '--min-level',
+      'bronze',
+      '--min-verified',
+      '7',
+      '--max-incidents',
+      '0',
+    );
+    expect(ok.code).toBe(0);
+  });
+
   it('--json prints the CheckResponse and keeps the exit code', async () => {
     reply = () => Response.json(failing);
     const r = await run('check', 'alice/claude-code', '--json');

@@ -12,6 +12,7 @@ import {
   SEAL_EXTENSION_URIS,
   sign,
   verifyHandshake,
+  WELL_KNOWN_URL,
 } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCardRecord, writeCard } from './card.js';
@@ -23,8 +24,10 @@ const API_URL = 'https://api.test';
 const KID = 'sealkeeper-test-1';
 const HOUR = 3600;
 
-// Stands in for GET /v1/agents/:id/seal and GET
-// /.well-known/seal.json. credential decides what the API hands out.
+// Stands in for GET /v1/agents/:id/seal and GET /.well-known/seal.json, on
+// the API and on the issuer's domain, where the keys for a production SEAL
+// are read whichever API the CLI points at (VOU-645). credential decides
+// what the API hands out.
 type Server = {
   requests: string[];
   credential: () => Promise<string>;
@@ -38,7 +41,7 @@ function fakeFetch(
   return (async (input: string | URL | Request) => {
     const url = String(input);
     server.requests.push(url);
-    if (url === `${API_URL}/.well-known/seal.json`) {
+    if (url === `${API_URL}/.well-known/seal.json` || url === WELL_KNOWN_URL) {
       return Response.json(wellKnown());
     }
     if (url === `${API_URL}/v1/agents/${agentId}/seal`) {
@@ -238,7 +241,8 @@ describe('the card init writes', () => {
     expect(decodeHeader(firstSeal ?? '').kid).toBe(KID);
 
     // The issuer drops the key and signs with a new one. Once the cached
-    // keys are a day old they are fetched again and no longer list it.
+    // keys are past their five minute max-age they are fetched again and no
+    // longer list it.
     serverKey = await generateKeypair();
     kid = 'sealkeeper-test-2';
     const keys = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
@@ -262,6 +266,8 @@ describe('the card init writes', () => {
     server.requests = [];
 
     const second = await written();
+    // The card's API is not the production one, so the cached SEAL is
+    // checked against that API's own keys, never the issuer's (VOU-645).
     expect(server.requests).toEqual([`${API_URL}/.well-known/seal.json`]);
     expect(second.card).toBe(first.card);
   });

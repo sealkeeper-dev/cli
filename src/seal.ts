@@ -8,6 +8,7 @@ import {
   type SealBrokenReason,
   utf8Decode,
   verifySeal,
+  WELL_KNOWN_MAX_AGE_SECONDS,
   WELL_KNOWN_PATH,
   WELL_KNOWN_URL,
 } from '@sealkeeper/schema';
@@ -29,20 +30,23 @@ import { SealClaims, WellKnown } from './responses.js';
 
 // The path the keys are served at, from the schema, so the CLI, the API and
 // the web never name different ones.
-// Cached keys are fetched again once they are older than this, or sooner
-// when a SEAL names a kid they do not have.
-export const KEYS_MAX_AGE_MS = 24 * 3600 * 1000;
-// When the keys cannot be fetched, or seal verify runs with --offline,
-// cached keys stand in until they are this old. A key SealKeeper has since
-// withdrawn is trusted at most this long offline.
+// Cached keys are fetched again once they are older than the keys
+// document's own max-age, five minutes, or sooner when a SEAL names a kid
+// they do not have. So a key SealKeeper withdraws from the list after a
+// compromise stops verifying within five minutes (VOU-645). A failed fetch
+// never falls back to the cache.
+export const KEYS_MAX_AGE_MS = WELL_KNOWN_MAX_AGE_SECONDS * 1000;
+// Only seal verify --offline reads cached keys past KEYS_MAX_AGE_MS, until
+// they are this old, and says how old they are. A key SealKeeper has since
+// withdrawn is trusted at most this long, and only offline.
 export const KEYS_OFFLINE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 const KEYS_TIMEOUT_MS = 10_000;
 
 export type SealCheck = {
   valid: boolean;
   // null when valid. Otherwise bad signature, unknown kid, wrong issuer,
-  // unsupported version, expired N minutes ago, not yet valid or
-  // malformed.
+  // unsupported version, expired N minutes ago, not yet valid, wrong agent
+  // or malformed.
   reason: string | null;
   // The payload as signed. null unless the signature checked out, so an
   // unverified claim is never shown.
@@ -81,6 +85,7 @@ const WORDS: Record<SealBrokenReason, string> = {
   unsupported_version: 'unsupported version',
   expired: 'expired',
   not_yet_valid: 'not yet valid',
+  wrong_agent: 'wrong agent',
 };
 
 // Checks a SEAL with verifySeal from @sealkeeper/schema, the steps of the
@@ -89,14 +94,16 @@ const WORDS: Record<SealBrokenReason, string> = {
 // shape, expiry and iat. Verify first, parse second. The API's POST
 // /v1/seal/verify and the web's checkSeal call the same function, and the
 // SEAL conformance cases in @sealkeeper/schema hold all three to the same
-// answers. This adds how long ago an expired SEAL ran out, and keeps the
-// signed payload of a broken SEAL for what it prints.
+// answers. agent is the agent the caller expected, so a valid SEAL for
+// another agent is wrong agent. This adds how long ago an expired SEAL ran
+// out, and keeps the signed payload of a broken SEAL for what it prints.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
   nowMs: number,
+  agent?: string,
 ): Promise<SealCheck> {
-  const r = await verifySeal(wellKnown.keys, jws, nowMs / 1000);
+  const r = await verifySeal(wellKnown.keys, jws, nowMs / 1000, agent);
   if (r.ok) {
     return {
       valid: true,
@@ -307,27 +314,49 @@ type LoadKeysOptions = {
   // Cached keys only, never the network. Throws KeysError when the cache
   // has no usable copy.
   offline?: boolean;
+  // Where a line about the copy used offline goes. stderr by default.
+  note?: (line: string) => void;
 };
 
 // The origin of the issuer's documented keys URL, WELL_KNOWN_URL without its
 // path.
 export const ISSUER_ORIGIN = new URL(WELL_KNOWN_URL).origin;
 
+// True when iss is the production issuer, or its name before the rename.
+export const isProductionIssuer = (iss: string | null): boolean =>
+  iss === CREDENTIAL_ISSUER ||
+  (LEGACY_ISSUERS as readonly (string | null)[]).includes(iss);
+
+// True when apiUrl is the production API.
+export const isProductionApi = (apiUrl: string): boolean =>
+  originOf(apiUrl) === originOf(DEFAULT_API_URL);
+
 // The base URL the keys for a SEAL are fetched from, WELL_KNOWN_PATH
-// appended. A SEAL from the production issuer,
-// checked by a CLI that points at the production API, gets its keys from
+// appended. A SEAL from the production issuer gets its keys from
 // WELL_KNOWN_URL on the issuer's own domain, the URL the standard
-// documents. Any other API, a local or staging one, signs its SEALs with
-// its own key under the same iss, so its keys come from that API. So do the
-// keys for a SEAL of any other issuer, which verifySeal then names a wrong
-// issuer.
+// documents, wherever the CLI points (VOU-645). A local or staging API
+// signs its SEALs with its own key under the same iss, so its keys never
+// check a production SEAL here. To check a SEAL such an API signed, pass a
+// saved copy of its keys with --keys. The keys for a SEAL of any other
+// issuer come from the API the CLI points at, and verifySeal then names it
+// a wrong issuer.
 export function keysBaseUrl(apiUrl: string, iss: string | null): string {
-  const production =
-    iss === CREDENTIAL_ISSUER ||
-    (LEGACY_ISSUERS as readonly (string | null)[]).includes(iss);
-  return production && originOf(apiUrl) === originOf(DEFAULT_API_URL)
-    ? ISSUER_ORIGIN
-    : apiUrl;
+  return isProductionIssuer(iss) ? ISSUER_ORIGIN : apiUrl;
+}
+
+// The line seal verify prints on every result while the CLI points at an
+// API other than the production one and the keys were fetched, not read
+// from --keys, so the reader knows where they came from. null on the
+// production API.
+export function keysSourceNote(
+  apiUrl: string,
+  iss: string | null,
+): string | null {
+  if (isProductionApi(apiUrl)) return null;
+  const origin = keysOrigin(apiUrl, iss);
+  return origin === ISSUER_ORIGIN
+    ? `the keys came from ${ISSUER_ORIGIN}, the issuer's domain, not from ${originOf(apiUrl)}, the API this CLI points at. To check a SEAL that API signed, pass its ${WELL_KNOWN_PATH} with --keys`
+    : `the keys came from ${origin}, the API this CLI points at`;
 }
 
 // The origin keysBaseUrl picks, the one the keys are cached under.
@@ -352,13 +381,25 @@ export function recordApiUrl(
 
 const DAYS = (ms: number) => ms / (24 * 3600 * 1000);
 
-// The cached keys while they came from the same origin, are under a day old
-// and know the kid. Otherwise fetches them from keysBaseUrl and caches them
-// with its origin. When the fetch fails it falls back to cached keys from
-// the same origin that know the kid and are under KEYS_OFFLINE_MAX_AGE_MS
-// old, with one line on stderr. With offline it never fetches and uses that
-// same fallback, silently. A copy dated later than now is never used.
-// Throws KeysError when there are no usable keys at all.
+// How old a copy is, in whole minutes, hours or days.
+function ageText(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  const unit = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`;
+  if (minutes < 60) return unit(minutes, 'minute');
+  if (minutes < 48 * 60) return unit(Math.floor(minutes / 60), 'hour');
+  return unit(Math.floor(minutes / (24 * 60)), 'day');
+}
+
+// The cached keys while they came from the same origin, are younger than
+// KEYS_MAX_AGE_MS, the keys document's max-age, and know the kid.
+// Otherwise fetches them from keysBaseUrl and caches them with its origin.
+// When the fetch fails it throws KeysError, never falling back to an older
+// copy, so a key withdrawn from the list is not trusted on a copy kept
+// through an outage (VOU-645). With offline it never fetches and uses
+// cached keys from the same origin that know the kid and are under
+// KEYS_OFFLINE_MAX_AGE_MS old, with one line naming how old they are. A
+// copy dated later than now is never used. Throws KeysError when there are
+// no usable keys.
 export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   const base = keysBaseUrl(options.apiUrl, options.iss);
   const origin = keysOrigin(options.apiUrl, options.iss);
@@ -386,7 +427,12 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
       : `the copy fetched at ${cached.fetchedAt} is more than ${DAYS(KEYS_OFFLINE_MAX_AGE_MS)} days old`;
 
   if (options.offline) {
-    if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) return cached.wellKnown;
+    if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) {
+      (options.note ?? stderr)(
+        `offline, using the SealKeeper keys from ${origin} fetched at ${cached.fetchedAt}, ${ageText(age)} old`,
+      );
+      return cached.wellKnown;
+    }
     const fix = `run ${cli('seal verify')} once without --offline, or pass --keys`;
     // A file that does not parse counts as none, as it does for a fetch.
     throw new KeysError(
@@ -411,14 +457,8 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   try {
     fresh = await api.getWellKnown();
   } catch (error) {
-    if (cached && age < KEYS_OFFLINE_MAX_AGE_MS) {
-      stderr(
-        `warning: could not fetch the SealKeeper keys, using the copy fetched at ${cached.fetchedAt}`,
-      );
-      return cached.wellKnown;
-    }
     throw new KeysError(
-      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}${staleText ? `, and ${staleText}` : ''}`,
+      `could not load the SealKeeper keys from ${api.apiUrl}${WELL_KNOWN_PATH}: ${(error as Error).message}${cached ? `, and a cached copy is used only with ${cli('seal verify')} --offline` : ''}`,
     );
   }
 
@@ -428,7 +468,7 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
 
 // The origin of an API URL, or the URL itself when it does not parse, in
 // which case the fetch fails anyway.
-function originOf(apiUrl: string): string {
+export function originOf(apiUrl: string): string {
   try {
     return new URL(apiUrl).origin;
   } catch {

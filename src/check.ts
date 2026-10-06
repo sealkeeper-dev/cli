@@ -5,8 +5,10 @@
 import {
   AgentName,
   CheckQuery,
+  LEVEL_RANK,
   type Level,
   OperatorSlug,
+  type SealPayload,
 } from '@sealkeeper/schema';
 import { ApiError, apiErrorOf, createApiClient, resolveApiUrl } from './api.js';
 import { paths } from './config.js';
@@ -59,7 +61,8 @@ function parseHandle(handle: string): { slug: string; name: string } {
   return { slug: slug as string, name: name as string };
 }
 
-// The query string for the thresholds that are set. Each value goes through
+// The query string for the thresholds that are set, and the thresholds as
+// the API reads them, defaults filled in. Each value goes through
 // CheckQuery, the same schema the API uses, so a bad one fails here with
 // code invalid_threshold instead of reaching the network. The CLI passes
 // its flags as the text that was typed, so an empty flag is refused rather
@@ -68,7 +71,10 @@ type RawThresholds = {
   [K in keyof CheckThresholds]?: string | undefined;
 };
 
-function checkSearch(thresholds: CheckThresholds | RawThresholds): string {
+function checkSearch(thresholds: CheckThresholds | RawThresholds): {
+  search: string;
+  query: CheckQuery;
+} {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(thresholds)) {
     if (value !== undefined) search.set(key, String(value));
@@ -84,7 +90,7 @@ function checkSearch(thresholds: CheckThresholds | RawThresholds): string {
     );
   }
   const text = search.toString();
-  return text ? `?${text}` : '';
+  return { search: text ? `?${text}` : '', query: parsed.data };
 }
 
 // Fetches the check and parses the answer. Throws ApiError for anything but
@@ -97,7 +103,7 @@ export async function fetchCheck(
   options: CheckOptions = {},
 ): Promise<CheckResponse> {
   const { slug, name } = parseHandle(handle);
-  const search = checkSearch(thresholds);
+  const { search, query } = checkSearch(thresholds);
   const fetchFn = options.fetch ?? fetch;
   const api = createApiClient({
     apiUrl: options.apiUrl?.trim() || resolveApiUrl({}),
@@ -114,7 +120,13 @@ export async function fetchCheck(
   if (status === 200) {
     const parsed = CheckResponse.safeParse(json);
     if (parsed.success) {
-      await trustedPass(parsed.data, `${slug}/${name}`, api.apiUrl, fetchFn);
+      await trustedPass(
+        parsed.data,
+        `${slug}/${name}`,
+        query,
+        api.apiUrl,
+        fetchFn,
+      );
       return parsed.data;
     }
   }
@@ -170,14 +182,51 @@ export async function fetchWithheld(
 export const sealIsWithheld = (result: CheckResponse): boolean =>
   result.checks.some((c) => c.name === 'seal' && c.actual === 'withheld');
 
+// The checks a verified SEAL can answer for itself, the same comparisons
+// as the API's runChecks. minVerified reads counts.verified_tasks,
+// maxIncidents counts.safety_incidents_90d and minLevel level by rank. One
+// line per check that fails, empty when all three pass.
+export function sealChecksFailing(
+  payload: SealPayload,
+  query: CheckQuery,
+): string[] {
+  const failing: string[] = [];
+  const verified = payload.counts.verified_tasks;
+  if (verified < query.minVerified) {
+    failing.push(
+      `its SEAL has ${verified} verified tasks, the check needs ${query.minVerified}`,
+    );
+  }
+  const incidents = payload.counts.safety_incidents_90d;
+  if (incidents > query.maxIncidents) {
+    failing.push(
+      `its SEAL has ${incidents} incidents in 90 days, the check allows ${query.maxIncidents}`,
+    );
+  }
+  if (LEVEL_RANK[payload.level] < LEVEL_RANK[query.minLevel]) {
+    failing.push(
+      `its SEAL has level ${payload.level}, the check needs ${query.minLevel}`,
+    );
+  }
+  return failing;
+}
+
 // A pass that callers act on, as assertTrusted does, needs more than the
 // API's ok. The answer must be about the handle asked for, and its SEAL
-// must verify against the SealKeeper keys, be current and name that agent.
-// Throws ApiError with code seal_invalid when any of that fails. A failing
-// answer needs no proof and is returned as it is.
+// must verify against the SealKeeper keys, be current and name the agent
+// the API found for that handle. Then minVerified, maxIncidents and
+// minLevel are worked out again from the verified SEAL, never taken on the
+// API's word (VOU-645). The handle to id mapping is the API's. A SEAL
+// carries no handle, so the mapping cannot be checked offline, and an API
+// that lied about it could hand over another real agent's SEAL. Only the
+// API the CLI points at is trusted for it. minReliability and minSafety read the API's
+// scores, which the SEAL does not carry the same way, so they stay the
+// API's word. Throws ApiError with code seal_invalid when any of that
+// fails. A failing answer needs no proof and is returned as it is.
 async function trustedPass(
   result: CheckResponse,
   handle: string,
+  query: CheckQuery,
   apiUrl: string,
   fetchFn: typeof fetch,
 ): Promise<void> {
@@ -202,11 +251,16 @@ async function trustedPass(
   } catch (error) {
     throw invalid((error as Error).message);
   }
-  const seal = await checkSeal(jws, keys, nowMs);
-  if (!seal.valid) throw invalid(`its SEAL is ${seal.reason}`);
-  if ((seal.payload as { sub?: unknown }).sub !== result.id) {
-    throw invalid('its SEAL names another agent');
+  const seal = await checkSeal(jws, keys, nowMs, result.id);
+  if (!seal.valid) {
+    throw invalid(
+      seal.reason === 'wrong agent'
+        ? 'its SEAL names another agent'
+        : `its SEAL is ${seal.reason}`,
+    );
   }
+  const failing = sealChecksFailing(seal.payload as SealPayload, query);
+  if (failing.length > 0) throw invalid(failing.join(', '));
 }
 
 // One line per check, in plain words. "ok" or "FAIL" first. A check this

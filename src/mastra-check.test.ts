@@ -97,6 +97,23 @@ describe('mastra check', () => {
     ).resolves.toEqual(answer(true));
   });
 
+  // VOU-645. The API says ok, the SEAL it sent has 7 verified tasks, so a
+  // caller asking for 10 is not let through on the API's word.
+  it('assertTrusted rejects an ok the verified SEAL does not bear out', async () => {
+    const { fn } = fakeFetch(() => Response.json(answer(true)));
+    await expect(
+      assertTrusted(
+        'alice/claude-code',
+        { minVerified: 10 },
+        { apiUrl: 'https://api.test', fetch: fn },
+      ),
+    ).rejects.toMatchObject({
+      code: 'seal_invalid',
+      message:
+        'not trusting alice/claude-code, its SEAL has 7 verified tasks, the check needs 10',
+    });
+  });
+
   it('assertTrusted throws with the failing checks listed', async () => {
     const { fn } = fakeFetch(() => Response.json(answer(false)));
     const error = await assertTrusted(

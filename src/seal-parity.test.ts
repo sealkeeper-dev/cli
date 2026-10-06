@@ -238,6 +238,7 @@ const API_NAME: Record<string, SealBrokenReason> = {
   'wrong issuer': 'wrong_issuer',
   'unsupported version': 'unsupported_version',
   'not yet valid': 'not_yet_valid',
+  'wrong agent': 'wrong_agent',
 };
 const apiName = (reason: string) =>
   reason.startsWith('expired ') ? 'expired' : API_NAME[reason];
@@ -255,6 +256,7 @@ describe('seal verify against the SEAL conformance cases', () => {
           c.jws,
           suite.wellKnown as never,
           (c.nowSeconds ?? suite.nowSeconds) * 1000,
+          c.agent,
         );
         return [c.name, r.valid ? 'valid' : apiName(r.reason ?? '')];
       }),
@@ -347,6 +349,7 @@ describe('seal verify --handshake against the handshake conformance cases', () =
           seal: seal.payload as SealPayload,
           nowMs,
           ...(c.nonce === undefined ? {} : { nonce: c.nonce }),
+          ...(c.aud === undefined ? {} : { aud: c.aud }),
           record: async () => {
             throw new Error('read the record for a version 3 SEAL');
           },

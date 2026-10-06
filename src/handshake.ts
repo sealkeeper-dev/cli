@@ -3,6 +3,7 @@ import {
   checkHandshake,
   HANDSHAKE_RECORD_NOTE,
   type HandshakeCheck,
+  type HandshakeProof,
   type HandshakeRefusal,
   type SealPayload,
   signHandshake,
@@ -25,11 +26,12 @@ const RECORD_TIMEOUT_MS = 10_000;
 
 // A signed handshake over the fingerprint sync or run last wrote to
 // fingerprint.json, or null when there is none or its hash is not the hash
-// of its parts. Never recomputes the fingerprint. Throws KeyError when the
-// key file is not a key, and returns null when there is no key file.
+// of its parts. nonce is the one a verifier gave, aud the verifier's name.
+// Never recomputes the fingerprint. Throws KeyError when the key file is
+// not a key, and returns null when there is no key file.
 export async function makeHandshake(
   nowMs: number,
-  nonce?: string,
+  options: { nonce?: string; aud?: string } = {},
   p: Paths = paths(),
 ): Promise<string | null> {
   const { fingerprint } = await declaredFingerprint(p);
@@ -41,7 +43,8 @@ export async function makeHandshake(
     key.agentId,
     fingerprint,
     Math.floor(nowMs / 1000),
-    nonce,
+    options.nonce,
+    options.aud,
   );
 }
 
@@ -52,7 +55,7 @@ export async function makeHandshakeQuietly(
   p: Paths = paths(),
 ): Promise<string | null> {
   try {
-    return await makeHandshake(nowMs, undefined, p);
+    return await makeHandshake(nowMs, {}, p);
   } catch {
     return null;
   }
@@ -96,12 +99,21 @@ const REFUSAL_WORDS: Record<HandshakeRefusal, string> = {
   stale:
     'signed outside its window, 5 minutes with a nonce and 24 hours without',
   nonce_mismatch: 'wrong nonce',
+  wrong_verifier: 'made for another verifier',
+};
+
+// What a handshake that verified shows, one line, from its proof.
+const PROOF_WORDS: Record<HandshakeProof, string> = {
+  none: 'no nonce of yours, so it does not show the presenter holds the key, a copy replays for 24 hours',
+  nonce:
+    'it shows key possession to whoever holds your nonce, no more, pass --for with your own name to refuse one relayed from another verifier',
+  verifier: 'made for you over your nonce, so the key holder answered you',
 };
 
 export type HandshakeLine = {
   // The answer for --json, as the API's handshake field has it.
   json:
-    | { valid: true; result: string; against: string }
+    | { valid: true; result: string; against: string; proof: HandshakeProof }
     | { valid: false; reason: HandshakeRefusal };
   // What seal verify prints, one or two lines.
   lines: string[];
@@ -113,6 +125,7 @@ export async function checkHandshakeLine(options: {
   seal: SealPayload;
   nowMs: number;
   nonce?: string;
+  aud?: string;
   record: (sub: string) => Promise<string | null>;
 }): Promise<{ check: HandshakeCheck; out: HandshakeLine }> {
   const check = await checkHandshake({
@@ -120,6 +133,7 @@ export async function checkHandshakeLine(options: {
     seal: options.seal,
     nowSeconds: options.nowMs / 1000,
     ...(options.nonce === undefined ? {} : { nonce: options.nonce }),
+    ...(options.aud === undefined ? {} : { aud: options.aud }),
     record: options.record,
   });
   if (!check.ok) {
@@ -141,10 +155,16 @@ export async function checkHandshakeLine(options: {
   if (check.against === 'record') {
     lines.push(HANDSHAKE_RECORD_NOTE);
   }
+  lines.push(PROOF_WORDS[check.proof]);
   return {
     check,
     out: {
-      json: { valid: true, result: check.result, against: check.against },
+      json: {
+        valid: true,
+        result: check.result,
+        against: check.against,
+        proof: check.proof,
+      },
       lines,
     },
   };
