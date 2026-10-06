@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AdoptTaskRequest,
   AgentRef,
+  cleanTemplateInput,
   DIFFICULTY_CONFIRM_MIN,
   MAX_TASK_SPEC_BYTES,
   PostTaskRequest,
@@ -15,8 +16,9 @@ import {
   TASK_SIZES,
   TaskCategory,
   TaskDifficulty,
-  type TaskOrigin,
   TaskSize,
+  TemplateInputError,
+  TemplatePostRequest,
   type VerificationSpec,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
@@ -38,13 +40,7 @@ import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
 import { createStyle } from '../style.js';
-import {
-  TEMPLATES,
-  type Template,
-  TemplateInputError,
-  type TemplateTask,
-  templateById,
-} from '../task-templates.js';
+import { TEMPLATES, type Template, templateById } from '../task-templates.js';
 import {
   defaultTasksDeps,
   isJsonObject,
@@ -58,10 +54,12 @@ import {
 // --type, --spec and --verify post exactly what they say, as before, for
 // scripts.
 //
-// --template <id> builds the task from a ready made template, with --input
-// when the template takes one, and posts it only with --yes or after a yes
-// in a terminal. Without a terminal and without --yes it refuses before
-// anything is read or sent.
+// --template <id> posts a ready made template, with --input when the
+// template takes one, only with --yes or after a yes in a terminal.
+// Without a terminal and without --yes it refuses before anything is read
+// or sent. SealKeeper makes the task from the template and the input and
+// works out its answer (VOU-640), so this CLI sends the template and the
+// input and prints the task that comes back.
 //
 // --adopt <category> adopts a ready made task in that category, one
 // SealKeeper made and knows the answer to, and posts it as this agent's own
@@ -69,9 +67,9 @@ import {
 // --template. SealKeeper picks the task and checks the answer.
 //
 // No options at all in a terminal walks the operator through it. Pick a
-// template, give its input, optionally name one agent, read the task, then
-// post it only on a yes. Without a terminal, no options is an error and
-// nothing is sent.
+// template, give its input, optionally name one agent, read what will be
+// posted, then post it only on a yes and read the task SealKeeper made.
+// Without a terminal, no options is an error and nothing is sent.
 
 const MAX_EXPIRES_HOURS = TASK_MAX_TTL_DAYS * 24;
 // How many times the guided flow asks one question before it gives up.
@@ -105,6 +103,12 @@ export const KEY_IN_TASK =
   "refusing to post, the task contains this agent's private key";
 export const templateNeedsYes = (id: string): string =>
   `nothing posted. There is no terminal to ask, so run ${cli(`post --template ${id}`)} again with --yes to post it`;
+// SealKeeper's refusal of an input it made no task from, such as lines
+// with nothing to remove or sort, which takes the solver to know.
+export const inputMisfit = (id: string, message: string): string =>
+  `nothing posted. The input does not fit ${id}, ${message}`;
+export const API_TOO_OLD_FOR_TEMPLATE =
+  'nothing posted. This API is older than this CLI and does not make template tasks yet';
 
 // The refusals of an addressed post, one line each. ref is what --for gave.
 export const noAssignee = (ref: string): string =>
@@ -382,9 +386,6 @@ type Draft = {
   verification: VerificationSpec;
   expiresHours?: string;
   assignee?: string;
-  // template for a task built from a template (VOU-134). Left out for a
-  // plain post, which the API reads as manual.
-  origin?: TaskOrigin;
   // Left out when not given, and the API derives the category from the
   // task type and takes size s.
   category?: TaskCategory;
@@ -393,28 +394,37 @@ type Draft = {
   difficulty?: TaskDifficulty;
 };
 
-// The request for a draft, validated as the API will validate it. Ends the
-// command on anything the API would refuse at the edge.
-function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
+// The expiry and the assignee of a post, as the API will validate them.
+// Ends the command on a bad one.
+function whenAndWho(
+  cmd: Command,
+  expiresHours: string | undefined,
+  given: string | undefined,
+): { expiresAt?: string; assignee?: string } {
   const expiresAt =
-    draft.expiresHours === undefined
-      ? undefined
-      : expiresAtFrom(cmd, draft.expiresHours);
-  const assignee = draft.assignee?.trim();
+    expiresHours === undefined ? undefined : expiresAtFrom(cmd, expiresHours);
+  const assignee = given?.trim();
   if (assignee !== undefined && !AgentRef.safeParse(assignee).success) {
     cmd.error(
       `--for must be a handle operator/name or an agent id, got ${assignee}`,
     );
   }
+  return {
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+    ...(assignee === undefined ? {} : { assignee }),
+  };
+}
+
+// The request for a draft, validated as the API will validate it. Ends the
+// command on anything the API would refuse at the edge.
+function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
   // The id is ours, so a retried post returns the same task.
   const request = PostTaskRequest.safeParse({
     taskId: randomUUID(),
     taskType: draft.taskType,
     spec: draft.spec,
     verification: draft.verification,
-    ...(expiresAt === undefined ? {} : { expiresAt }),
-    ...(assignee === undefined ? {} : { assignee }),
-    ...(draft.origin === undefined ? {} : { origin: draft.origin }),
+    ...whenAndWho(cmd, draft.expiresHours, draft.assignee),
     ...(draft.category === undefined ? {} : { category: draft.category }),
     ...(draft.size === undefined ? {} : { size: draft.size }),
     ...(draft.difficulty === undefined ? {} : { difficulty: draft.difficulty }),
@@ -423,12 +433,34 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
   return request.data;
 }
 
+// The request of a template post (VOU-640), validated as the API will
+// validate it. input is what cleanTemplateInput gave. Every template post,
+// guided or --template, carries origin template (VOU-134).
+function templateRequestOf(
+  cmd: Command,
+  template: Template,
+  input: string | undefined,
+  options: Pick<PostOptions, 'expiresHours' | 'for'>,
+): TemplatePostRequest {
+  // The id is ours, so a retried post returns the same task.
+  const request = TemplatePostRequest.safeParse({
+    taskId: randomUUID(),
+    template: template.id,
+    ...(input === undefined ? {} : { input }),
+    ...whenAndWho(cmd, options.expiresHours, options.for),
+    origin: 'template',
+  });
+  if (!request.success) cmd.error(z.prettifyError(request.error));
+  return request.data;
+}
+
 // Signs and sends the request, then prints the task. Every way in posts
-// through here.
+// through here. A template post also prints the task SealKeeper made.
 async function postAndPrint(
   cmd: Command,
   deps: TasksDeps,
-  request: PostTaskRequest,
+  request: PostTaskRequest | TemplatePostRequest,
+  template?: Template,
 ): Promise<void> {
   const assignee = request.assignee;
   // Every way in ends here, so no spec, schema or input carries the key.
@@ -445,7 +477,9 @@ async function postAndPrint(
   try {
     task = await api.postTask(await signer.sign(request, 'task.post'));
   } catch (error) {
-    if (error instanceof ApiError) cmd.error(postRefusal(error, assignee));
+    if (error instanceof ApiError) {
+      cmd.error(postRefusal(error, assignee, template?.id));
+    }
     throw error;
   }
 
@@ -461,6 +495,10 @@ async function postAndPrint(
           expiresAt: task.expiresAt,
           // The assignee's handle. Left out for an open task.
           ...(task.assignee ? { assignee: task.assignee.handle } : {}),
+          // The task SealKeeper made, for a template post.
+          ...(template === undefined
+            ? {}
+            : { taskType: task.taskType, spec: task.spec }),
         }),
       );
       return;
@@ -471,14 +509,28 @@ async function postAndPrint(
     printFields([
       ['id', task.id],
       ['state', task.state],
+      ...(template === undefined
+        ? []
+        : [['type', task.taskType] as [string, string]]),
       ...(handle === undefined ? [] : [['for', handle] as [string, string]]),
       ['expires', task.expiresAt],
     ]);
+    if (template !== undefined) {
+      for (const line of specLines(task.spec)) stdout(line);
+    }
     for (const line of postLines(task, handle)) stdout(line);
   } finally {
     await settled;
   }
 }
+
+// A spec in full under a heading, as the operator reads it.
+const specLines = (spec: Record<string, unknown>): string[] => [
+  'spec',
+  ...JSON.stringify(spec, null, 2)
+    .split('\n')
+    .map((line) => `  ${line}`),
+];
 
 // --adopt. SealKeeper picks a ready made task in the category and posts it
 // as this agent's own, on --yes or on a yes in a terminal.
@@ -596,8 +648,9 @@ export function adoptRefusal(error: ApiError, category: string): string {
   return refusal(error);
 }
 
-// --template. The template's task with --input, posted on --yes or on a yes
-// in a terminal.
+// --template. The template and --input, posted on --yes or on a yes in a
+// terminal. The input is checked against the template's rules here, before
+// anything is signed, and SealKeeper makes the task.
 async function templatePost(
   cmd: Command,
   deps: TasksDeps,
@@ -629,30 +682,25 @@ async function templatePost(
     if ('error' in read) cmd.error(read.error);
     text = read.text;
   }
-  let task: TemplateTask;
+  let clean: string | undefined;
   try {
-    task = template.make(text);
+    clean = cleanTemplateInput(template.id, text);
   } catch (error) {
     if (error instanceof TemplateInputError) {
       cmd.error(`--input does not fit ${id}, ${error.message}`);
     }
     throw error;
   }
-  const request = requestOf(cmd, {
-    ...draftOf(task),
-    expiresHours: options.expiresHours,
-    assignee: options.for,
-    origin: 'template',
-  });
+  const request = templateRequestOf(cmd, template, clean, options);
   if (input !== null) {
     // The input was checked for the key as it was read, and postAndPrint
-    // checks the whole task again before signing.
+    // checks the whole request again before signing.
     // Under --json, stdout holds only the posted task.
     const say = wantsJson(cmd) ? stderr : stdout;
-    for (const line of previewLines(template, task, request)) say(line);
+    for (const line of previewLines(template, request)) say(line);
     if ((await askYesNo(input, 'Post it?')) !== 'yes') cmd.error(NOT_POSTED);
   }
-  await postAndPrint(cmd, deps, request);
+  await postAndPrint(cmd, deps, request, template);
 }
 
 // Ends the command when value is @file for a file inside the SealKeeper
@@ -667,19 +715,10 @@ async function refuseHomeFile(cmd: Command, value: string): Promise<void> {
 // Ends the command when anything in the request holds the private key.
 async function refuseKeyInTask(
   cmd: Command,
-  request: PostTaskRequest,
+  request: PostTaskRequest | TemplatePostRequest,
 ): Promise<void> {
   if (await holdsPrivateKey(request)) cmd.error(KEY_IN_TASK);
 }
-
-const draftOf = (task: TemplateTask): Draft => ({
-  taskType: task.taskType,
-  spec: { ...task.spec },
-  verification: task.verification,
-  category: task.category,
-  size: task.size,
-  difficulty: task.difficulty,
-});
 
 // A JSON argument given inline or as @path to a file, for --spec and
 // --verify schema:. The file must pass the rules in file-guard.ts, as
@@ -790,32 +829,30 @@ async function guidedPost(
   stdout('');
 
   const template = await askTemplate(input);
-  const task =
+  const chosen =
     template === null
       ? null
-      : await askTask(input, template, options.allowOutsideCwd);
+      : await askInput(input, template, options.allowOutsideCwd);
   const assignee =
-    task === null
+    chosen === null
       ? null
       : given !== undefined
         ? given
         : await askAssignee(input, own);
-  if (template === null || task === null || assignee === null) {
+  if (template === null || chosen === null || assignee === null) {
     stdout(NOTHING_POSTED);
     return;
   }
-  const request = requestOf(cmd, {
-    ...draftOf(task),
+  const request = templateRequestOf(cmd, template, chosen.input, {
     expiresHours: options.expiresHours,
-    ...(assignee === '' ? {} : { assignee }),
-    origin: 'template',
+    ...(assignee === '' ? {} : { for: assignee }),
   });
-  for (const line of previewLines(template, task, request)) stdout(line);
+  for (const line of previewLines(template, request)) stdout(line);
   if ((await askYesNo(input, 'Post it?')) !== 'yes') {
     stdout(NOTHING_POSTED);
     return;
   }
-  await postAndPrint(cmd, deps, request);
+  await postAndPrint(cmd, deps, request, template);
 }
 
 // The template by number or id. null on Enter, a closed input or
@@ -835,14 +872,15 @@ async function askTemplate(input: Input): Promise<Template | null> {
   return null;
 }
 
-// The template's task, with the operator's input when it takes one. null
-// when the operator stops or no input fits after MAX_ASKS tries.
-async function askTask(
+// The operator's input when the template takes one, as cleanTemplateInput
+// gives it, and undefined when SealKeeper draws it. null when the operator
+// stops or no input fits after MAX_ASKS tries.
+async function askInput(
   input: Input,
   template: Template,
   allowOutsideCwd = false,
-): Promise<TemplateTask | null> {
-  if (template.input === 'none') return template.make(undefined);
+): Promise<{ input: string | undefined } | null> {
+  if (template.input === 'none') return { input: undefined };
   const hint = template.inputHint ?? 'the input';
   for (let asked = 0; asked < MAX_ASKS; asked++) {
     ask(
@@ -854,7 +892,7 @@ async function askTask(
     if (answer === null) return null;
     const value = answer.trim();
     if (value === '') {
-      return template.input === 'optional' ? template.make(undefined) : null;
+      return template.input === 'optional' ? { input: undefined } : null;
     }
     const read = await readTextArg(value, allowOutsideCwd);
     if ('error' in read) {
@@ -862,7 +900,7 @@ async function askTask(
       continue;
     }
     try {
-      return template.make(read.text);
+      return { input: cleanTemplateInput(template.id, read.text) };
     } catch (error) {
       if (!(error instanceof TemplateInputError)) throw error;
       stdout(`That input does not fit, ${error.message}.`);
@@ -905,11 +943,12 @@ const CHECKS: Record<Template['kind'], string> = {
 };
 
 // What will be posted, for the operator to read before saying yes. The
-// spec in full, who can claim it, when it expires and who checks it.
+// template, its input in full, who can claim it, when it expires and who
+// checks it. SealKeeper makes the spec (VOU-640), so the task in full
+// prints once it is posted.
 export function previewLines(
   template: Template,
-  task: TemplateTask,
-  request: PostTaskRequest,
+  request: TemplatePostRequest,
   now: number = Date.now(),
 ): string[] {
   const hours =
@@ -918,22 +957,22 @@ export function previewLines(
       : Math.round((Date.parse(request.expiresAt) - now) / 3_600_000);
   const lines = [
     '',
-    `type     ${task.taskType}`,
-    `category ${task.category}`,
-    `size     ${task.size}, difficulty ${task.difficulty}, ${TASK_DIFFICULTY_GUIDE[task.difficulty]}`,
+    `type     ${template.id}`,
+    `category ${template.category}`,
+    `size     ${template.size}, difficulty ${template.difficulty}, ${TASK_DIFFICULTY_GUIDE[template.difficulty]}`,
     `check    ${CHECKS[template.kind]}`,
     `for      ${request.assignee ?? 'any agent of another operator'}`,
     `expires  in ${hours} hour${hours === 1 ? '' : 's'}`,
-    'spec',
-    ...JSON.stringify(task.spec, null, 2)
-      .split('\n')
-      .map((line) => `  ${line}`),
+    ...(request.input === undefined
+      ? ['input    SealKeeper makes one']
+      : ['input', ...request.input.split('\n').map((line) => `  ${line}`)]),
+    'SealKeeper makes the task from this and shows it once it is posted.',
   ];
-  if (task.verification.kind === 'hash') {
+  if (template.kind === 'hash') {
     lines.push(
-      'The sha256 of the right answer was computed here from this input. The answer itself is never sent.',
+      'SealKeeper keeps the sha256 of the right answer. The answer itself is never shown.',
     );
-  } else if (task.verification.kind === 'schema') {
+  } else if (template.kind === 'schema') {
     lines.push(
       'The schema pins every value. Other agents see it without the values.',
     );
@@ -1011,14 +1050,35 @@ function namesNewFields(error: ApiError): boolean {
   );
 }
 
+// True when an API from before VOU-640 read a template post as an
+// adoption and refused the template as a key it does not know.
+function apiTooOldForTemplate(error: ApiError): boolean {
+  return (
+    error.code === 'validation_failed' &&
+    error.issues.some(
+      (issue) =>
+        issue.code === 'unrecognized_keys' && /"template"/.test(issue.message),
+    )
+  );
+}
+
 // One line per refusal of the post route. The assignee codes name what
-// --for gave. An API that does not take category, size or difficulty says
-// so.
+// --for gave. For a template post, template names the template, an input
+// SealKeeper made no task from says why and an API that does not make
+// template tasks says so. An API that does not take category, size or
+// difficulty says so.
 // Everything else is the shared refusal.
 export function postRefusal(
   error: ApiError,
   assignee: string | undefined,
+  template?: string,
 ): string {
+  if (template !== undefined) {
+    if (error.code === 'template_input') {
+      return inputMisfit(template, error.message);
+    }
+    if (apiTooOldForTemplate(error)) return API_TOO_OLD_FOR_TEMPLATE;
+  }
   if (namesNewFields(error)) return API_TOO_OLD_FOR_FIELDS;
   if (assignee !== undefined) {
     switch (error.code) {

@@ -1,57 +1,26 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { createHash, randomInt } from 'node:crypto';
 import {
   SUMMARISE_MIN_INPUT_WORDS,
-  solveTemplate,
   TASK_TEMPLATES,
   type TaskCategory,
   type TaskDifficulty,
   type TaskSize,
   type TaskTemplateId,
-  TEMPLATE_MAX_INPUT_CHARS,
-  type TemplateDraft,
-  type TemplateDraw,
   type TemplateInput,
-  TemplateInputError,
   type TemplateKind,
-  type TemplateSpec,
 } from '@sealkeeper/schema';
 
-// Ready made tasks for post, so an operator can post one for other
-// agents without writing a spec. The templates and their answers live in
-// @sealkeeper/schema, where the server's taker solves the same tasks, so
-// the answer hashed here and the answer the server computes are the same
-// bytes. This module adds what the operator reads, the random draw and the
-// sha256 of what solveTemplate returns. The answer is never sent.
+// Ready made tasks for post, so an operator can post one for other agents
+// without writing a spec. What is public about each template lives in
+// @sealkeeper/schema, and SealKeeper makes the task, works out its answer
+// and stores the check when the post names the template (VOU-640), so this
+// CLI holds no generator and no solver. This module adds what the operator
+// reads.
 
-export type { TemplateInput, TemplateKind, TemplateSpec };
-export { TemplateInputError };
-
-export type TemplateVerification =
-  | { kind: 'hash'; sha256: string }
-  | { kind: 'schema'; jsonSchema: Record<string, unknown> }
-  | { kind: 'counterparty' };
-
-export type TemplateTask = {
-  taskType: string;
-  spec: TemplateSpec;
-  verification: TemplateVerification;
-  // The template's category, size and difficulty, which its post carries
-  // (RT-2, D-TS-3).
-  category: TaskCategory;
-  size: TaskSize;
-  difficulty: TaskDifficulty;
-  // The answer that passes, for hash and schema tasks. For tests and the
-  // poster's own preview only, never part of the task.
-  answer?: string;
-};
-
-// A whole number from lo to hi, both included. Tests pass their own.
-export type Draw = TemplateDraw;
-export const cryptoDraw: Draw = (lo, hi) => randomInt(lo, hi + 1);
+export type { TemplateInput, TemplateKind };
 
 export type Template = {
-  id: string;
+  id: TaskTemplateId;
   kind: TemplateKind;
   category: TaskCategory;
   size: TaskSize;
@@ -61,14 +30,7 @@ export type Template = {
   input: TemplateInput;
   // What the operator's input is, for the prompt and --help.
   inputHint?: string;
-  make(input?: string, draw?: Draw): TemplateTask;
 };
-
-// Operator input is at most this many characters, well inside the spec cap.
-export const MAX_INPUT_CHARS = TEMPLATE_MAX_INPUT_CHARS;
-
-const sha256 = (text: string) =>
-  createHash('sha256').update(text, 'utf8').digest('hex');
 
 const LINES_HINT = 'text with one item per line, @file for more than one line';
 
@@ -96,46 +58,13 @@ const WORDING: Record<TaskTemplateId, { about: string; inputHint?: string }> = {
   },
 };
 
-// The made task with its answer, and for a hash task the sha256 of that
-// answer, both from solveTemplate.
-function withAnswer(
-  draft: TemplateDraft,
-  fields: Pick<TemplateTask, 'category' | 'size' | 'difficulty'>,
-): TemplateTask {
-  const { taskType, spec, verification } = draft;
-  if (verification.kind === 'counterparty') {
-    return { taskType, spec, verification, ...fields };
-  }
-  const answer = solveTemplate(taskType, spec);
-  return {
-    taskType,
-    spec,
-    ...fields,
-    verification:
-      verification.kind === 'hash'
-        ? { kind: 'hash', sha256: sha256(answer) }
-        : verification,
-    answer,
-  };
-}
-
 export const TEMPLATES: readonly Template[] = TASK_TEMPLATES.map(
   (t): Template => {
     const { about, inputHint } = WORDING[t.id];
-    const fields = {
-      category: t.category,
-      size: t.size,
-      difficulty: t.difficulty,
-    };
     return {
-      id: t.id,
-      kind: t.kind,
-      ...fields,
+      ...t,
       about,
-      input: t.input,
       ...(inputHint === undefined ? {} : { inputHint }),
-      make: (input, draw = cryptoDraw) =>
-        withAnswer(t.make(input, draw), fields),
     };
   },
 );

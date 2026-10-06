@@ -257,6 +257,21 @@ describe('cli bundle', () => {
     }
   });
 
+  // The template solver and generators stay on the server (VOU-640), so
+  // the public package hands nobody a script that solves a template task.
+  // solveTemplate is the solver's own name, the rule is the wording only a
+  // generator writes into a spec, and kestrel is in a generator's word list.
+  it('ships no template solver or generator', () => {
+    for (const code of [bundle, lib, mastra, openclaw]) {
+      expect(code).not.toContain('solveTemplate');
+      expect(code).not.toContain('templateJsonSchema');
+      expect(code).not.toContain(
+        'Remove duplicate lines from the text in input.',
+      );
+      expect(code).not.toContain('kestrel');
+    }
+  });
+
   it('builds the entries the package points at', () => {
     expect(options.entry).toEqual({
       index: 'src/index.ts',

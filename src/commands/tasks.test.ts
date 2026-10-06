@@ -25,6 +25,8 @@ import {
   PostTaskRequest,
   publicVerification,
   readAudience,
+  TemplatePostRequest,
+  taskTemplateById,
   type VerificationSpec,
   verify,
 } from '@sealkeeper/schema';
@@ -76,6 +78,7 @@ import {
   ADOPT_PREVIEW_CHECK,
   ADOPTED_CHECK,
   API_TOO_OLD_FOR_FIELDS,
+  API_TOO_OLD_FOR_TEMPLATE,
   adoptPreviewLines,
   assigneeCap,
   assigneeOperatorCap,
@@ -84,6 +87,7 @@ import {
   badSize,
   DIFFICULTY_HELP,
   difficultyNeedsConfirm,
+  inputMisfit,
   KEY_IN_TASK,
   MAX_INPUT_FILE_BYTES,
   NO_OPTIONS_JSON,
@@ -395,6 +399,38 @@ class FakeApi {
 
     if (url.pathname === '/v1/tasks') {
       if (this.postReply) return this.postReply();
+      // A template post (VOU-640). The API makes the task, which the fake
+      // stands in for with a spec that carries the input and a check of the
+      // template's kind.
+      if (
+        typeof payload === 'object' &&
+        payload !== null &&
+        'template' in payload
+      ) {
+        const parsed = TemplatePostRequest.parse(payload);
+        const template = taskTemplateById(parsed.template);
+        const task = this.add({
+          id: parsed.taskId,
+          posterAgentId: this.agentId,
+          taskType: parsed.template,
+          spec: {
+            instruction: `The ${parsed.template} rule.`,
+            input: parsed.input ?? 'drawn by the API',
+            output: 'The answer.',
+          },
+          verification:
+            template?.kind === 'hash'
+              ? { kind: 'hash', sha256: sha256('made answer') }
+              : template?.kind === 'schema'
+                ? { kind: 'schema', jsonSchema: { type: 'object' } }
+                : { kind: 'counterparty' },
+          ...(parsed.expiresAt ? { expiresAt: parsed.expiresAt } : {}),
+          assignee: parsed.assignee
+            ? { id: OTHER_AGENT, handle: 'bob/writer' }
+            : null,
+        });
+        return Response.json(task, { status: 201 });
+      }
       const parsed = PostTaskRequest.parse(payload);
       const task = this.add({
         id: parsed.taskId,
@@ -2131,8 +2167,12 @@ describe('submit, release and the tasks commands', () => {
       ],
       [['--template', 'summarise', '--yes'], 'summarise needs --input'],
       [
-        ['--template', 'text_dedupe', '--input', 'a', '--yes'],
-        '--input does not fit text_dedupe, no line repeats',
+        ['--template', 'text_dedupe', '--input', 'a\n\nb', '--yes'],
+        '--input does not fit text_dedupe, the input has an empty line',
+      ],
+      [
+        ['--template', 'answer_question', '--input', 'Why?', '--yes'],
+        '--input does not fit answer_question, the question has fewer than 3 words',
       ],
       [
         ['--template', 'summarise', '--input', '@/no/such/file', '--yes'],
@@ -2283,7 +2323,9 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('posts a drawn hash template with --yes and the sha256 of its answer', async () => {
+    // VOU-640. The CLI names the template and SealKeeper makes the task, so
+    // the post carries no spec, check or digest of the CLI's own.
+    it('posts a drawn hash template with --yes as the template alone, and prints the task made', async () => {
       const { code, out } = await run(
         'post',
         '--template',
@@ -2292,28 +2334,108 @@ describe('submit, release and the tasks commands', () => {
         '--json',
       );
       expect(code).toBe(0);
-      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
-      expect(payload.taskType).toBe('text_dedupe');
+      const sent = api.posts()[0]?.payload;
+      const payload = TemplatePostRequest.parse(sent);
       // A template post says so, for the gold rule (VOU-134).
-      expect(payload.origin).toBe('template');
-      // And carries the template's category, size and difficulty (RT-2,
-      // D-TS-3).
-      expect(payload).toMatchObject({
-        category: 'data',
-        size: 's',
-        difficulty: 1,
+      expect(sent).toEqual({
+        taskId: payload.taskId,
+        template: 'text_dedupe',
+        origin: 'template',
       });
-      const input = String(payload.spec.input);
-      const answer = `${[...new Set(input.split('\n'))].join('\n')}\n`;
-      expect(payload.verification).toEqual({
-        kind: 'hash',
-        sha256: sha256(answer),
+      // The task SealKeeper made comes back and is printed.
+      expect(JSON.parse(out)).toEqual({
+        id: payload.taskId,
+        state: 'open',
+        expiresAt: expect.any(String),
+        taskType: 'text_dedupe',
+        spec: {
+          instruction: 'The text_dedupe rule.',
+          input: 'drawn by the API',
+          output: 'The answer.',
+        },
       });
-      // The answer itself never leaves the machine.
-      expect(JSON.stringify(api.posts()[0]?.payload)).not.toContain(
-        JSON.stringify(answer),
+    });
+
+    it('sends the input as the template cleans it and leaves to SealKeeper what takes the solver', async () => {
+      const { code } = await run(
+        'post',
+        '--template',
+        'text_dedupe',
+        '--input',
+        '\uFEFFa\r\nb\r\n',
+        '--yes',
       );
-      expect(JSON.parse(out)).toMatchObject({ id: payload.taskId });
+      expect(code).toBe(0);
+      // No line repeats, which only SealKeeper's template says.
+      expect(TemplatePostRequest.parse(api.posts()[0]?.payload).input).toBe(
+        'a\nb',
+      );
+    });
+
+    it('says why when SealKeeper makes no task from the input', async () => {
+      api.postReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'template_input',
+              message: 'no line repeats, so there is nothing to remove',
+              issues: [
+                {
+                  path: ['input'],
+                  code: 'template_input',
+                  message: 'no line repeats, so there is nothing to remove',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      const { code, err } = await run(
+        'post',
+        '--template',
+        'text_dedupe',
+        '--input',
+        'a\nb',
+        '--yes',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(
+        `${inputMisfit('text_dedupe', 'no line repeats, so there is nothing to remove')}\n`,
+      );
+    });
+
+    it('says so when the API is older than template posts', async () => {
+      // An API before VOU-640 reads the post as an adoption.
+      api.postReply = () =>
+        Response.json(
+          {
+            error: {
+              code: 'validation_failed',
+              message: 'Invalid payload',
+              issues: [
+                {
+                  path: ['category'],
+                  code: 'invalid_value',
+                  message: 'Invalid option',
+                },
+                {
+                  path: [],
+                  code: 'unrecognized_keys',
+                  message: 'Unrecognized key: "template"',
+                },
+              ],
+            },
+          },
+          { status: 400 },
+        );
+      const { code, err } = await run(
+        'post',
+        '--template',
+        'json_shape',
+        '--yes',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${API_TOO_OLD_FOR_TEMPLATE}\n`);
     });
 
     it('posts a counterparty template from an input file, addressed with --for', async () => {
@@ -2332,14 +2454,17 @@ describe('submit, release and the tasks commands', () => {
         '--yes',
       );
       expect(code).toBe(0);
-      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
+      const payload = TemplatePostRequest.parse(api.posts()[0]?.payload);
       expect(payload).toMatchObject({
-        taskType: 'summarise',
-        verification: { kind: 'counterparty' },
+        template: 'summarise',
         assignee: 'bob/writer',
+        origin: 'template',
       });
-      expect(payload.spec.input).toBe(text);
+      // The final line feed of the file is dropped, as the template drops it.
+      expect(payload.input).toBe(text);
+      expect(out).toContain('type     summarise');
       expect(out).toContain('for      bob/writer');
+      expect(out).toContain(`"input": "${text}"`);
       expect(out).toContain('You judge the result.');
     });
 
@@ -2374,11 +2499,18 @@ describe('submit, release and the tasks commands', () => {
       );
       expect(err).toContain('Pick a task, 1 to 5, or press Enter to stop: ');
       expect(err).toContain('Post it? [y/N] ');
-      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
-      expect(payload.taskType).toBe('line_sort');
+      // Before the yes, what will be posted. After it, the task made.
+      expect(out).toContain('input    SealKeeper makes one');
+      expect(out).toContain(
+        'SealKeeper keeps the sha256 of the right answer. The answer itself is never shown.',
+      );
+      const payload = TemplatePostRequest.parse(api.posts()[0]?.payload);
+      expect(payload.template).toBe('line_sort');
+      expect(payload.input).toBeUndefined();
       expect(payload.assignee).toBe('bob/writer');
       expect(out).toContain('for      bob/writer');
       expect(out).toContain('state    open');
+      expect(out).toContain('"instruction": "The line_sort rule."');
     });
 
     it('takes a template by id and its input as text, asking again after a misfit', async () => {
@@ -2399,16 +2531,14 @@ describe('submit, release and the tasks commands', () => {
       expect(out).toContain(
         'alice/other is an agent of your own operator, and tasks between your own agents never count.',
       );
-      const payload = PostTaskRequest.parse(api.posts()[0]?.payload);
-      expect(payload.spec.input).toBe('What is the capital of Norway?');
+      const payload = TemplatePostRequest.parse(api.posts()[0]?.payload);
+      expect(payload.input).toBe('What is the capital of Norway?');
       expect(payload.origin).toBe('template');
-      // The guided walk sends the template's category, size and difficulty
-      // (RT-2, D-TS-3). answer_question is in writing since D-UI-12.
-      expect(payload).toMatchObject({
-        category: 'writing',
-        size: 's',
-        difficulty: 2,
-      });
+      // The template sets its category, size and difficulty (RT-2,
+      // D-TS-3), shown before the yes. answer_question is in writing since
+      // D-UI-12.
+      expect(out).toContain('category writing');
+      expect(out).toContain('size     s, difficulty 2');
       expect(payload).not.toHaveProperty('assignee');
     });
 
