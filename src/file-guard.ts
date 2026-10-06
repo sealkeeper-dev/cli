@@ -2,7 +2,7 @@
 import { constants } from 'node:fs';
 import { open, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 
@@ -13,6 +13,9 @@ import { insideHome } from './key-guard.js';
 // Every path is resolved with realpath first, so a symlink is judged by
 // where it points, and a symlink out of the answers folder is refused like
 // the file it points to. Then, in order
+// - nothing whose name, as given or as resolved, matches
+//   SECRET_FILE_NAMES, in any folder, the answers folder included, and
+//   whatever the flags (VOU-649)
 // - nothing inside the SealKeeper home, which holds the private key
 // - nothing inside the SealKeeper root, ~/.sealkeeper, which holds the
 //   homes of every other agent on this machine, so no agent's key is read
@@ -32,6 +35,24 @@ import { insideHome } from './key-guard.js';
 
 // The folder the run instructions write answer files to.
 export const ANSWERS_DIR = '.sealkeeper-answers';
+
+// The names of files that hold a project's secrets, matched without case
+// on the file name alone. Env files, private keys and certificates,
+// credential files and the token files of package managers and git. This
+// list is the one place the rule lives.
+export const SECRET_FILE_NAMES: readonly RegExp[] = [
+  /^\.env/i,
+  /\.(pem|key|p12|pfx|jks|keystore)$/i,
+  /^credentials/i,
+  /^id_(rsa|dsa|ecdsa|ed25519)/i,
+  /^secrets?(\.|$)/i,
+  /^\.(npmrc|netrc|pgpass|pypirc|git-credentials)$/i,
+];
+export const SECRET_FILE_REFUSAL =
+  'its name marks a file that holds secrets, such as .env, a private key or credentials, and none of those is ever sent';
+
+const secretName = (path: string): boolean =>
+  SECRET_FILE_NAMES.some((name) => name.test(basename(path)));
 
 export type FileRules = {
   // The most bytes the file may hold.
@@ -106,6 +127,10 @@ export async function readGuardedFile(
     return {
       error: `could not read ${what} ${file}, ${(error as Error).message}`,
     };
+  }
+
+  if (secretName(file) || secretName(target)) {
+    return refuse(SECRET_FILE_REFUSAL);
   }
 
   const home = await insideHome(target);

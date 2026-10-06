@@ -16,7 +16,7 @@ import { createServer } from 'node:http';
 import { isBuiltin } from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CLI_VERSION_HEADER } from '@sealkeeper/schema';
 import { build } from 'tsup';
@@ -103,6 +103,25 @@ function bundledPackages(code: string): Map<string, Set<string>> {
   return packages;
 }
 
+// The CLI source files inlined into a bundle, as paths under src without
+// .ts, such as commands/routine, read from the same source path comments.
+// esbuild writes those paths relative to the working directory, src/x.ts
+// from packages/cli and packages/cli/src/x.ts from the repo root, so each
+// is resolved against cwd and kept only when it is under this package's
+// src (VOU-651).
+function cliSources(code: string, cwd = process.cwd()): Set<string> {
+  const src = join(packageDir, 'src');
+  const found = new Set<string>();
+  for (const [, path] of code.matchAll(/^\/\/ (\S+)\.ts$/gm)) {
+    if (!path) continue;
+    const file = relative(src, resolve(cwd, path));
+    if (!file.startsWith('..') && !isAbsolute(file)) {
+      found.add(file.split(sep).join('/'));
+    }
+  }
+  return found;
+}
+
 // The three packages that were runtime dependencies up to CLI 0.4.7.
 const BUNDLED = ['@noble/ed25519', 'commander', 'zod'];
 
@@ -144,6 +163,24 @@ describe('bundle scanners', () => {
     expect([...found.keys()].sort()).toEqual(['@noble/ed25519', 'zod']);
     expect(found.get('zod')?.size).toBe(2);
     expect(found.get('@noble/ed25519')?.size).toBe(1);
+  });
+
+  it('find the CLI source files whether the build ran in the package or at the repo root', () => {
+    const fromPackage = [
+      '// src/commands/routine.ts',
+      '// ../schema/src/index.ts',
+      '// src/routine-run.ts',
+    ].join('\n');
+    const fromRoot = [
+      '// packages/cli/src/commands/routine.ts',
+      '// packages/schema/src/index.ts',
+      '// packages/cli/src/routine-run.ts',
+    ].join('\n');
+    const expected = ['commands/routine', 'routine-run'];
+    expect([...cliSources(fromPackage, packageDir)].sort()).toEqual(expected);
+    expect(
+      [...cliSources(fromRoot, resolve(packageDir, '..', '..'))].sort(),
+    ).toEqual(expected);
   });
 });
 
@@ -333,10 +370,8 @@ describe('cli bundle', () => {
       'installSkill',
       'uninstallSkill',
     ];
-    const sources = (code: string) =>
-      new Set([...code.matchAll(/^\/\/ src\/(\S+)\.ts$/gm)].map((m) => m[1]));
     for (const [name, code] of Object.entries({ lib, mastra, openclaw })) {
-      const found = sources(code);
+      const found = cliSources(code);
       for (const file of INSTALL) {
         expect(found.has(file), `${name}.js has ${file}`).toBe(false);
       }
@@ -348,8 +383,8 @@ describe('cli bundle', () => {
       expect(specifiersOf(code), name).not.toContain('child_process');
       expect(specifiersOf(code), name).not.toContain('node:child_process');
     }
-    expect(sources(mastra).has('routine-run')).toBe(true);
-    expect(sources(openclaw).has('routine-run')).toBe(false);
+    expect(cliSources(mastra).has('routine-run')).toBe(true);
+    expect(cliSources(openclaw).has('routine-run')).toBe(false);
   });
 
   // VOU-627. The adapter writes no event, only a routine run does.

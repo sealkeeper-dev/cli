@@ -36,6 +36,7 @@ import { ApiError } from '../api.js';
 import type { Input } from '../ask.js';
 import { resetBackgroundSyncThrottle, STAMP_FILE } from '../background-sync.js';
 import { paths, writeConfig, writeFileAtomic, writeNudge } from '../config.js';
+import { SECRET_FILE_REFUSAL } from '../file-guard.js';
 import {
   currentFingerprint,
   NOTHING_DECLARED,
@@ -1416,7 +1417,8 @@ describe('submit, release and the tasks commands', () => {
           'hosts.yml',
           'oauth_token: gho_x',
         );
-        const ssh = await fileIn(join(userHome, '.ssh'), 'id_ed25519', 'key');
+        // A name off the secret list, so the hidden folder rule refuses it.
+        const ssh = await fileIn(join(userHome, '.ssh'), 'known_hosts', 'key');
         for (const file of [token, ssh, '.config/gh/hosts.yml']) {
           for (const extra of [[], ['--allow-outside-cwd']]) {
             const { code, err } = await run(
@@ -1428,6 +1430,34 @@ describe('submit, release and the tasks commands', () => {
             );
             expect(code, file).toBe(1);
             expect(err).toContain('a hidden file or folder in your home');
+          }
+        }
+        expect(api.posts()).toEqual([]);
+      });
+
+      // VOU-649. A spec can ask an agent with tools to submit a project's
+      // .env, which sits inside the current directory.
+      it('refuses a file whose name marks secrets, in the current directory or the answers folder', async () => {
+        cwd = join(dir, 'work');
+        const task = claimed({ kind: 'counterparty' });
+        const env = await fileIn(cwd, '.env', 'API_KEY=sk_live_x');
+        const pem = await fileIn(
+          join(cwd, '.sealkeeper-answers'),
+          'server.pem',
+          '-----BEGIN PRIVATE KEY-----',
+        );
+        for (const file of [env, pem, '.env']) {
+          for (const extra of [[], ['--allow-outside-cwd']]) {
+            const { code, err } = await run(
+              'submit',
+              task.id,
+              '--file',
+              file,
+              ...extra,
+            );
+            expect(code, file).toBe(1);
+            expect(err).toContain(`refusing to submit ${file}`);
+            expect(err).toContain(SECRET_FILE_REFUSAL);
           }
         }
         expect(api.posts()).toEqual([]);
@@ -2196,7 +2226,7 @@ describe('submit, release and the tasks commands', () => {
         cwd = join(dir, 'work');
         await mkdir(cwd, { recursive: true });
         await mkdir(join(userHome, '.aws'), { recursive: true });
-        const hidden = join(userHome, '.aws', 'credentials');
+        const hidden = join(userHome, '.aws', 'config');
         await writeFile(hidden, 'aws_secret_access_key = x');
         const outside = join(dir, 'text.txt');
         await writeFile(outside, 'The harbor opens at dawn. '.repeat(10));

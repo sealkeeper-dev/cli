@@ -38,12 +38,19 @@ import {
   streamInput,
 } from '../ask.js';
 import { writeCard } from '../card.js';
-import { commandPaths, refreshCommands } from '../claude-code-command.js';
+import {
+  commandPaths,
+  hasCommands,
+  installCommands,
+  refreshCommands,
+  uninstallCommands,
+} from '../claude-code-command.js';
 import {
   askNudge,
   type ClaudeCodeInstall,
   INSTALL_COMMAND,
   installClaudeCode,
+  installedPaths,
   installLines,
 } from '../claude-code-install.js';
 import {
@@ -59,7 +66,11 @@ import {
   sharedProjectSettingsPath,
   uninstallHooks,
 } from '../claude-code-settings.js';
-import { installSkill, skillPath } from '../claude-code-skill.js';
+import {
+  installSkill,
+  skillPath,
+  uninstallSkill,
+} from '../claude-code-skill.js';
 import {
   bindFolder,
   boundHome,
@@ -70,6 +81,7 @@ import {
   handleOf,
   handleUrl,
   INSECURE_API_URL,
+  isLoopbackUrl,
   listMachineAgents,
   type MachineAgent,
   namedHome,
@@ -178,6 +190,29 @@ export function otherApiLine(apiUrl: string): string {
   return `This sign in sends your GitHub token to the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
 }
 
+// A URL from SEALKEEPER_API_URL alone, with no --api-url, can come from a
+// project's .claude/settings.json, whose env block Claude Code passes to
+// every shell and hook once the folder is trusted. So can SEALKEEPER_HOME,
+// and with it the config.json the URL of --force is read from. So when the
+// URL comes from either and is neither SealKeeper's nor on this machine,
+// init asks for a yes before anything is created, with no as the default,
+// and refuses without a terminal. --api-url is the say so, since it is
+// typed on the command line where a person sees it. The refusal names no
+// flag, since without a terminal its reader is usually the agent, and the
+// person should see the question (VOU-649). Those project settings can run
+// code once trusted anyway, so this is defense in depth.
+export type ApiSource = 'SEALKEEPER_API_URL' | 'SEALKEEPER_HOME';
+const sourceText = (source: ApiSource): string =>
+  source === 'SEALKEEPER_API_URL'
+    ? source
+    : 'the config.json under SEALKEEPER_HOME';
+export const envApiQuestion = (apiUrl: string, source: ApiSource): string =>
+  `${source === 'SEALKEEPER_API_URL' ? source : 'The config.json under SEALKEEPER_HOME'} points this sign in at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}, and your GitHub token would go there. Use it? [y/N] `;
+export const envApiRefused = (apiUrl: string, source: ApiSource): string =>
+  `init stopped before the sign in. The API ${new URL(apiUrl).origin} comes only from ${sourceText(source)}, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run ${cli('init')} in a terminal.`;
+export const envApiDeclined = (source: ApiSource): string =>
+  `init stopped before the sign in, nothing was sent. Unset ${source} to sign in with ${DEFAULT_API_URL}.`;
+
 // The human output. The welcome box, then the name, the runtime and the
 // game, the terms and the sign in, the registration and the card, what
 // leaves this machine, the Claude Code hooks, the skill and the slash
@@ -258,6 +293,10 @@ export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code ses
 // are verified tasks, and as what comes after them before that.
 export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('post')}`;
 export const POST_STEP = `Post a task for other agents with ${cli('post')}, every level needs posted tasks other agents completed`;
+// Said when init moved the slash commands and the skill of an earlier
+// install out of a project's .claude (VOU-649).
+export const movedOutLine = (dir: string): string =>
+  `Moved the slash commands and the skill out of ${dir} to your user scope, since they hold absolute paths on this machine and a repo commits that folder`;
 export const NEXT_NPX =
   'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper init.';
 
@@ -316,7 +355,9 @@ export const nameQuestion = (suggestion: string | null): string =>
 // Asked again after an answer that is not a valid name, up to this many
 // questions in all.
 export const NAME_MAX_ASKS = 3;
-export const NO_NAME = `neither the git remote nor the directory name makes an agent name, pass --name with ${NAME_RULES}`;
+// The name is public, so without a terminal nobody picks it for the
+// operator, not even from the git remote or the folder (VOU-649).
+export const NAME_REQUIRED = `there is no terminal to ask the agent name, which is public, so pass --name with ${NAME_RULES}`;
 // Said once, in the question, for a name on the soft list of runtime names.
 // Keeping it is allowed.
 export const runtimeNameNudge = (name: string): string =>
@@ -396,7 +437,7 @@ export function register(
     )
     .option(
       '--name <name>',
-      'agent name (default: the git repository name, then the directory name)',
+      'agent name, needed without a terminal (in one the question suggests the git repository name, then the directory name)',
     )
     .option(
       '--runtime <runtime>',
@@ -496,9 +537,11 @@ async function chooseHome(
 
 // The choice, for an unbound folder on a machine with agents. The name
 // comes from --name, from the question, or without a terminal from the
-// suggestion. A name one of the agents has binds the folder to it, which
-// is how a worktree of a project picks up the project's agent on Enter. A
-// new name registers another agent in its own home under agents/.
+// suggestion only when one of the agents has it, and a new agent without
+// a terminal needs --name (VOU-649). A name one of the agents has binds
+// the folder to it, which is how a worktree of a project picks up the
+// project's agent on Enter. A new name registers another agent in its own
+// home under agents/.
 async function choose(
   cmd: Command,
   options: InitOptions,
@@ -541,10 +584,15 @@ async function choose(
       note(ui.err.line`${machineAgentsLine(handles)}`);
       name = await askName(cmd, stdin, suggestion, ui, known);
       asked = name;
-    } else if (suggestion === null) {
-      cmd.error(NO_NAME);
-    } else {
+    } else if (
+      suggestion !== null &&
+      agents.some((agent) => agent.config.name === suggestion)
+    ) {
+      // Binds the folder to an agent this machine has, which publishes
+      // nothing, as a worktree picks up the project's agent.
       name = suggestion;
+    } else {
+      cmd.error(NAME_REQUIRED);
     }
   }
   const chosen = agents.find((agent) => agent.config.name === name);
@@ -591,9 +639,10 @@ async function init(
 
   // An explicit --name must already be a valid name. The suggestion, the
   // repository name of the git remote and then the directory name, is only
-  // a default, so it is made into one. Nobody to ask and no suggestion ends
-  // the command here, before anything is created. terminal is where a
-  // person answers, undefined when nobody can.
+  // the default of the question, so it is made into one. Nobody to ask and
+  // no --name ends the command here, before anything is created, since the
+  // name is public (VOU-649). terminal is where a person answers, undefined
+  // when nobody can.
   const stdin = ui === null ? undefined : deps.stdin?.();
   const terminal = stdin?.isTTY ? stdin : undefined;
   if (
@@ -602,18 +651,17 @@ async function init(
   ) {
     cmd.error(`invalid agent name ${options.name}, use ${NAME_RULES}`);
   }
+  if (
+    options.name === undefined &&
+    target.name === undefined &&
+    terminal === undefined
+  ) {
+    cmd.error(NAME_REQUIRED);
+  }
   const suggestion =
     options.name === undefined && target.name === undefined
       ? await suggestName(deps)
       : null;
-  if (
-    options.name === undefined &&
-    target.name === undefined &&
-    suggestion === null &&
-    terminal === undefined
-  ) {
-    cmd.error(NO_NAME);
-  }
   let runtime: Runtime | undefined;
   if (options.runtime !== undefined) {
     const parsed = parseRuntime(options.runtime);
@@ -636,6 +684,19 @@ async function init(
   // still names a bad flag first.
   const clientId = githubClientId();
   if (clientId === null) cmd.error(MISSING_CLIENT_ID);
+  // Before the key and the old config are touched, so a no changes nothing.
+  let welcomed = target.welcomed;
+  const source = envApiSource(options, apiUrl, previous);
+  if (source !== null) {
+    if (terminal === undefined || ui === null) {
+      cmd.error(envApiRefused(apiUrl, source));
+    }
+    if (!welcomed) welcome(ui);
+    welcomed = true;
+    note();
+    promptStyled(indent(ui.err.line`${envApiQuestion(apiUrl, source)}`));
+    if (!isYes(await terminal.readLine())) cmd.error(envApiDeclined(source));
+  }
   // A URL from SEALKEEPER_API_URL alone is used for this run and never
   // saved, so config.json keeps the old URL or the default, and a variable
   // left set in one shell does not bind the agent to that API for good.
@@ -680,7 +741,7 @@ async function init(
   let prompt: ((url: string, code: string) => void) | undefined;
   if (ui !== null) {
     const s = ui.err;
-    if (!target.welcomed) welcome(ui);
+    if (!welcomed) welcome(ui);
     if (backup !== undefined) {
       note();
       note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
@@ -697,18 +758,17 @@ async function init(
   let name: string;
   if (target.name !== undefined) {
     name = target.name;
-  } else if (
-    options.name === undefined &&
-    terminal !== undefined &&
-    ui !== null
-  ) {
-    name = await askName(cmd, terminal, suggestion, ui);
-  } else {
-    name = (options.name ?? suggestion) as string;
+  } else if (options.name !== undefined) {
+    name = options.name;
     if (isRuntimeName(name)) {
       if (ui === null) stderr(runtimeNameLine(name));
       else note(ui.err.line`${runtimeNameLine(name)}`);
     }
+  } else if (terminal !== undefined && ui !== null) {
+    name = await askName(cmd, terminal, suggestion, ui);
+  } else {
+    // Refused above already, before anything was created.
+    cmd.error(NAME_REQUIRED);
   }
   let askedRuntime = false;
   if (runtime === undefined && terminal !== undefined && ui !== null) {
@@ -1070,6 +1130,33 @@ async function routineStepFirst(
   } catch {
     return false;
   }
+}
+
+// Where the API of this registration came from when that is the
+// environment and not a choice the operator made another way, see
+// envApiQuestion, else null. SealKeeper's and one on this machine, where
+// the token never leaves it, are not asked about. Neither is the URL an
+// earlier registration saved in the operator's own home, which --force
+// reads, when SEALKEEPER_API_URL names the same one. Under SEALKEEPER_HOME
+// that config is no more the operator's than the variable, so its URL is
+// asked about too.
+function envApiSource(
+  options: InitOptions,
+  apiUrl: string,
+  previous: Config | null,
+): ApiSource | null {
+  if (options.apiUrl?.trim()) return null;
+  const origin = new URL(apiUrl).origin;
+  if (origin === DEFAULT_API_URL || isLoopbackUrl(apiUrl)) return null;
+  const fromHome = readEnv('SEALKEEPER_HOME') !== undefined;
+  if (readEnv(API_URL_ENV) === undefined) {
+    return fromHome ? 'SEALKEEPER_HOME' : null;
+  }
+  const saved =
+    !fromHome &&
+    previous?.apiUrl !== undefined &&
+    new URL(previous.apiUrl).origin === origin;
+  return saved ? null : 'SEALKEEPER_API_URL';
 }
 
 // The suggested name. The repository name of the origin remote, then the
@@ -1451,8 +1538,10 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // the hooks, the slash commands and the skill.
 // Hooks already there, in the user or the project settings, count as
 // installed and nothing is asked. Current hooks in the shared project
-// settings.json move to settings.local.json on the way. A --json run, ui
-// null, never asks, and prints any install lines on stderr.
+// settings.json move to settings.local.json on the way. The slash commands
+// and the skill always go in the user scope, and ours in the project's
+// .claude move there (VOU-649). A --json run, ui null, never asks, and
+// prints any install lines on stderr.
 async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   if (!(await isDirectory(dir))) return 'none';
@@ -1481,7 +1570,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
     // Current hooks in the shared settings.json, which a repo commits, hold
     // this machine's absolute paths. They were installed already, so they
     // move to the local file without a question.
-    await moveFromShared(shared, project, dirs.cwd, hook, ui);
+    await moveFromShared(shared, project, user, dirs.cwd, hook, ui);
     return 'present';
   }
   if (found !== null) {
@@ -1490,7 +1579,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       say(s.line`${s.tick()} Hooks in ${tildePath(found)}`);
     }
     await dropRetired(found, !inUser, dirs.cwd, hook, ui);
-    await refreshCommand(found, !inUser, dirs.cwd, hook, ui);
+    await refreshCommand(user, inUser ? null : found, dirs.cwd, hook, ui);
     return 'present';
   }
   // Hooks of ours in the project settings, with an older path, are
@@ -1516,19 +1605,18 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
   if (file === project) {
+    // Every project path this install writes or removes, the skill
+    // included (VOU-649).
     try {
-      await refuseOutsideProject(dirs.cwd, [
-        file,
-        shared,
-        ...commandPaths(file),
-      ]);
+      await refuseOutsideProject(dirs.cwd, [...installedPaths(file), shared]);
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
       warn(error.message);
       return 'not-installed';
     }
   }
-  if (!(await installAt(file, hook, ui))) return 'not-installed';
+  const installed = await installAt(file, user, hook, ui);
+  if (installed === null) return 'not-installed';
   if (file === project) {
     try {
       await uninstallHooks(shared, hook);
@@ -1536,6 +1624,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       if (!(error instanceof SettingsError)) throw error;
       warn(error.message);
     }
+    if (inUserScope(installed)) await leaveProject(project, dirs.cwd, ui);
   }
   if (driven) warn(HOOKS_BY_CLAUDE);
   return 'installed';
@@ -1548,6 +1637,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
 async function moveFromShared(
   shared: string,
   project: string,
+  user: string,
   cwd: string,
   hook: string,
   ui: Ui | null,
@@ -1555,12 +1645,7 @@ async function moveFromShared(
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
   try {
-    await refuseOutsideProject(cwd, [
-      project,
-      shared,
-      ...commandPaths(project),
-      skillPath(project),
-    ]);
+    await refuseOutsideProject(cwd, [...installedPaths(project), shared]);
   } catch (error) {
     if (!(error instanceof SettingsError)) throw error;
     warn(error.message);
@@ -1570,7 +1655,9 @@ async function moveFromShared(
     }
     return;
   }
-  if (!(await installAt(project, hook, ui))) return;
+  const installed = await installAt(project, user, hook, ui);
+  if (installed === null) return;
+  if (inUserScope(installed)) await leaveProject(project, cwd, ui);
   let removed: number;
   try {
     removed = await uninstallHooks(shared, hook);
@@ -1584,6 +1671,44 @@ async function moveFromShared(
   if (ui === null) stderr(moved);
   else say(ui.out.line`${moved}`);
 }
+
+// Takes the slash commands and the skill of ours out of the project's
+// .claude, where an install before VOU-649 wrote them beside
+// settings.local.json. They hold this machine's absolute paths and a repo
+// commits .claude/commands and .claude/skills, so they live in the user
+// scope now, as the hooks moved out of the shared settings.json. Callers
+// run it only once the user scope copies are written, so a failed write
+// never leaves the commands in neither scope. A path outside the project,
+// or a file that cannot be removed, is left as it is with a warning.
+async function leaveProject(
+  project: string,
+  cwd: string,
+  ui: Ui | null,
+): Promise<void> {
+  let commands: string[];
+  let skill: boolean;
+  try {
+    await refuseOutsideProject(cwd, installedPaths(project));
+    commands = await uninstallCommands(project);
+    skill = await uninstallSkill(skillPath(project));
+  } catch (error) {
+    if (!(error instanceof SettingsError)) throw error;
+    if (ui === null) stderr(error.message);
+    else note(ui.err.line`${error.message}`);
+    return;
+  }
+  if (commands.length > 0 || skill) {
+    const line = movedOutLine(tildePath(dirname(project)));
+    if (ui === null) stderr(line);
+    else say(ui.out.line`${line}`);
+  }
+}
+
+// Whether an install wrote, or found, the slash commands and the skill in
+// the user scope, so the project copies can go. null in either means the
+// write failed, see installClaudeCode.
+const inUserScope = (installed: ClaudeCodeInstall): boolean =>
+  installed.commands !== null && installed.skill !== null;
 
 // Takes the tool call hooks an older CLI installed out of a settings file
 // that holds the current hooks, as installHooks does. A
@@ -1630,29 +1755,39 @@ async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
 // Brings the slash commands up to date on a run that finds the hooks
 // already in, so a newer CLI's commands reach Claude Code without a
 // reinstall, see refreshCommands. Only a file of ours that differs is
-// written. Anything that goes wrong leaves the files as they were.
+// written. They live beside the user settings, user. When the hooks are in
+// the project's settings.local.json, project, the commands and the skill
+// an install before VOU-649 wrote beside them are written in the user
+// scope first and then taken out of the project, see leaveProject. A write
+// that fails leaves the project copies where they are.
 async function refreshCommand(
-  file: string,
-  project: boolean,
+  user: string,
+  project: string | null,
   cwd: string,
   hook: string,
   ui: Ui | null,
 ): Promise<void> {
-  const commandFiles = commandPaths(file);
-  const skillFile = skillPath(file);
+  const commandFiles = commandPaths(user);
+  const skillFile = skillPath(user);
+  const invocation = invocationOf(hook);
   try {
-    if (project) await refuseOutsideProject(cwd, [...commandFiles, skillFile]);
-    if (await refreshCommands(file, invocationOf(hook))) {
+    const wrote =
+      project !== null && (await hasCommands(project))
+        ? (await installCommands(user, invocation)).some(
+            (c) => c.result === 'written',
+          )
+        : await refreshCommands(user, invocation);
+    if (wrote) {
       if (ui !== null) {
         const s = ui.out;
         say(
-          s.line`${s.tick()} Slash commands updated in ${tildePath(dirname(commandFiles[0] ?? file))}`,
+          s.line`${s.tick()} Slash commands updated in ${tildePath(dirname(commandFiles[0] ?? user))}`,
         );
       }
     }
     // The skill came with the nudge, so a copy of ours is brought up to
     // date and one that is missing is added, like on install.
-    const skill = await installSkill(skillFile, invocationOf(hook));
+    const skill = await installSkill(skillFile, invocation);
     if (skill === 'written' && ui !== null) {
       const s = ui.out;
       say(
@@ -1661,35 +1796,39 @@ async function refreshCommand(
     }
   } catch (error) {
     if (!(error instanceof SettingsError)) throw error;
+    return;
   }
+  if (project !== null) await leaveProject(project, cwd, ui);
 }
 
-// The install of the hooks, the slash commands and the skill into one
-// settings file, see installClaudeCode. false when the settings file could
-// not be changed. A --json run, ui null, prints what it did on stderr, so
-// the --json output stays one object.
+// The install of the hooks into one settings file, and of the slash
+// commands and the skill beside the user settings, see installClaudeCode.
+// null when the settings file could not be changed. A --json run, ui
+// null, prints what it did on stderr, so the --json output stays one
+// object.
 async function installAt(
   file: string,
+  user: string,
   hook: string,
   ui: Ui | null,
-): Promise<boolean> {
+): Promise<ClaudeCodeInstall | null> {
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
   let result: ClaudeCodeInstall;
   try {
-    result = await installClaudeCode(file, hook, warn);
+    result = await installClaudeCode(file, user, hook, warn);
   } catch (error) {
     // Registration already worked, so a settings file we will not touch
     // only means the hooks wait for a later install.
     if (error instanceof SettingsError) {
       warn(error.message);
-      return false;
+      return null;
     }
     throw error;
   }
   if (ui === null) {
-    for (const text of installLines(result, file)) stderr(text);
-    return true;
+    for (const text of installLines(result, file, user)) stderr(text);
+    return result;
   }
   const s = ui.out;
   say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
@@ -1703,14 +1842,14 @@ async function installAt(
     say(s.line`${s.tick()} Slash commands in ${tildePath(dirname(ours.path))}`);
   }
   if (result.skill !== null) {
-    const skillFile = skillPath(file);
+    const skillFile = skillPath(user);
     say(
       result.skill === 'kept'
         ? s.line`Left ${tildePath(skillFile)} alone, SealKeeper did not write it`
         : s.line`${s.tick()} sealkeeper skill in ${tildePath(dirname(skillFile))}`,
     );
   }
-  return true;
+  return result;
 }
 
 // Enter or y or yes is yes, after escape sequences such as arrow keys are

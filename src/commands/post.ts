@@ -754,8 +754,9 @@ async function readJsonArg(
 export const MAX_INPUT_FILE_BYTES = 2 * MAX_TASK_SPEC_BYTES;
 
 // Text given inline, or @path for a file's contents. The file must pass
-// the rules in file-guard.ts, the same as submit --file, so nothing
-// in the SealKeeper home or a hidden folder of the user's home is read,
+// the rules in file-guard.ts, the same as submit --file, so no file named
+// like one that holds secrets, such as .env, and nothing in the SealKeeper
+// home or a hidden folder of the user's home is read,
 // nothing outside the current directory without --allow-outside-cwd and
 // nothing larger than MAX_INPUT_FILE_BYTES. Text holding the private key
 // is refused, since the text becomes a public spec.

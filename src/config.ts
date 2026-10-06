@@ -48,6 +48,16 @@ export function isSecureApiUrl(url: string): boolean {
   );
 }
 
+// Whether the URL names this machine, the hosts above, whatever the
+// scheme. A token sent there never leaves the machine.
+export function isLoopbackUrl(url: string): boolean {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export const INSECURE_API_URL =
   'expected an https URL, or http only to localhost';
 

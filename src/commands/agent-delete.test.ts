@@ -596,7 +596,10 @@ describe('sealkeeper agent delete', () => {
         file,
         JSON.stringify({ hooks: { Stop: [{ hooks: [FOREIGN] }] } }),
       );
-      await installClaudeCode(file, HOOK, () => {});
+      // The commands and the skill beside file too, as an install before
+      // VOU-649 wrote them in the project, so delete is seen taking those
+      // out as well.
+      await installClaudeCode(file, file, HOOK, () => {});
     }
 
     it('go with the last agent, hooks, slash commands and skill, and a foreign hook stays', async () => {

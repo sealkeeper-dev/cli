@@ -57,6 +57,9 @@ process.stdin.on('end', () => {
   const config = JSON.parse(fs.readFileSync(args[args.indexOf('--config') + 1], 'utf8'));
   fs.writeFileSync(process.env.FAKE_RECORD, JSON.stringify({
     args, cwd: process.cwd(), files: fs.readdirSync(process.cwd()), config, input,
+    configPath: process.env.OPENCLAW_CONFIG_PATH ?? null,
+    includeRoots: process.env.OPENCLAW_INCLUDE_ROOTS ?? null,
+    stateDir: process.env.OPENCLAW_STATE_DIR ?? null,
   }));
   if (process.env.FAKE_MODE === 'hang') { setInterval(() => {}, 1000); return; }
   console.error('[openclaw] a log line');
@@ -129,6 +132,31 @@ describe.skipIf(process.platform === 'win32')('a fake openclaw', () => {
     expect(seen.args[seen.args.indexOf('--model') + 1]).toBe(MODEL);
     // The folder and its config are gone after the question.
     expect(await readdir(tmp)).toEqual([]);
+  });
+
+  // VOU-649. An operator's OPENCLAW_CONFIG_PATH names their own config,
+  // with its tools, so the question never carries it.
+  it('points OPENCLAW_CONFIG_PATH at the pinned config and keeps where the credentials are', async () => {
+    const result = await openclawRuntime({
+      command,
+      model: MODEL,
+      env: {
+        ...process.env,
+        FAKE_RECORD: record,
+        FAKE_MODE: 'answer',
+        OPENCLAW_CONFIG_PATH: join(dir, 'operator-openclaw.json'),
+        OPENCLAW_INCLUDE_ROOTS: dir,
+        OPENCLAW_STATE_DIR: join(dir, 'state'),
+      },
+      tmp,
+    }).ask({ prompt: HOSTILE, timeoutMs: 10_000, tokenCap: 1_000 });
+    expect(result.text).toBe('the answer');
+    const seen = JSON.parse(await readFile(record, 'utf8'));
+    expect(seen.configPath).toBe(seen.args[seen.args.indexOf('--config') + 1]);
+    expect(seen.configPath.endsWith('/openclaw.json')).toBe(true);
+    expect(seen.configPath).not.toContain('operator');
+    expect(seen.includeRoots).toBeNull();
+    expect(seen.stateDir).toBe(join(dir, 'state'));
   });
 
   it('kills it at the wall clock and removes its folder', async () => {

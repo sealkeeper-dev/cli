@@ -42,12 +42,18 @@ export type ClaudeCodeInstall = {
   skill: CommandResult | null;
 };
 
-// The hooks, the slash commands and the skill for one settings file.
-// Throws a SettingsError when the settings file cannot be changed. The
-// hooks are in once that worked, so a command or skill file that cannot be
-// written only goes to warn.
+// The hooks in one settings file, and the slash commands and the skill
+// beside the user settings, userFile. Like the hooks in a project's shared
+// settings.json, the commands and the skill hold this machine's absolute
+// paths, and a repo commits .claude/commands and .claude/skills, which have
+// no local file of their own. So the project scope writes only the hooks,
+// to settings.local.json, and the commands and the skill always go in the
+// user scope (VOU-649). Throws a SettingsError when the settings file
+// cannot be changed. The hooks are in once that worked, so a command or
+// skill file that cannot be written only goes to warn.
 export async function installClaudeCode(
   file: string,
+  userFile: string,
   hook: string,
   warn: (message: string) => void,
 ): Promise<ClaudeCodeInstall> {
@@ -62,10 +68,10 @@ export async function installClaudeCode(
     }
   };
   const commands = await quietly(() =>
-    installCommands(file, invocationOf(hook)),
+    installCommands(userFile, invocationOf(hook)),
   );
   const skill = await quietly(() =>
-    installSkill(skillPath(file), invocationOf(hook)),
+    installSkill(skillPath(userFile), invocationOf(hook)),
   );
   return { hooks, commands, skill };
 }
@@ -81,8 +87,9 @@ export type ClaudeCodeUninstall = {
 };
 
 // Takes every hook of ours out of file and out of the shared settings an
-// older install wrote, then the slash commands and the skill of ours. A
-// file without the marker stays. Throws a SettingsError when a file cannot
+// older install wrote, then the slash commands and the skill of ours
+// beside file, which for the project scope are the ones an install before
+// VOU-649 wrote there. A file without the marker stays. Throws a SettingsError when a file cannot
 // be read or changed.
 export async function uninstallClaudeCode(
   file: string,
@@ -118,8 +125,10 @@ export function uninstallLines(
   return lines;
 }
 
-// Every file install writes beside one settings file, for the guard that
-// refuses a project folder that links outside the project.
+// Every file of ours beside one settings file, the settings file, the
+// slash commands and the skill, for the guard that refuses a project
+// folder that links outside the project. Every project path init or agent
+// delete writes or removes goes through it (VOU-649).
 export const installedPaths = (file: string): string[] => [
   file,
   ...commandPaths(file),
@@ -128,17 +137,20 @@ export const installedPaths = (file: string): string[] => [
 
 const SKILL = 'the sealkeeper skill';
 
-// The lines init prints with --json for one install, on stderr.
+// The lines init prints with --json for one install, on stderr. file is
+// the settings file of the hooks and userFile the one the commands and the
+// skill sit beside, see installClaudeCode.
 export function installLines(
   result: ClaudeCodeInstall,
   file: string,
+  userFile: string,
 ): string[] {
   return [
     ...hooksLines(result.hooks, file),
     ...(result.commands ?? []).map((c) => commandLine(c.result, c.path)),
     ...(result.skill === null
       ? []
-      : [skillLine(result.skill, skillPath(file))]),
+      : [skillLine(result.skill, skillPath(userFile))]),
   ];
 }
 

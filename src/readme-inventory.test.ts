@@ -101,13 +101,21 @@ describe('the What init does inventory', () => {
     expect(text).toContain('`CLAUDE_CONFIG_DIR`');
   });
 
-  it('lists the files project scope writes, and the shared settings it rewrites', () => {
+  // VOU-649. The project scope writes only the hooks. The commands and the
+  // skill an earlier install wrote there move to the user scope.
+  it('lists the files project scope writes, the ones it moves out and the shared settings it rewrites', () => {
     const cwd = '/c';
     const inProject = (path: string) => path.slice(`${cwd}/`.length);
     const project = settingsPath('project', { home: HOME, cwd });
     const scope = text.slice(text.indexOf('into the project instead'));
     expect(scope).toContain(
-      `the hooks to \`${inProject(project)}\`, the slash commands to \`${inProject(dirname(commandPaths(project)[0] ?? ''))}\` and the skill to \`${inProject(skillPath(project))}\``,
+      `into the project instead, to \`${inProject(project)}\`.`,
+    );
+    expect(scope).toContain(
+      'The slash commands and the skill still go to `~/.claude` as above',
+    );
+    expect(scope).toContain(
+      `Slash commands of ours that an earlier install wrote to \`${inProject(dirname(commandPaths(project)[0] ?? ''))}\` and the skill it wrote to \`${inProject(skillPath(project))}\` are taken out of the project`,
     );
     expect(scope).toContain(
       `rewrites the project's \`${inProject(sharedProjectSettingsPath(cwd))}\``,

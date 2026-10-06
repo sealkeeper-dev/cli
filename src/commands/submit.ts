@@ -360,9 +360,10 @@ function printSubmitted(cmd: Command, done: Submitted): void {
 // Task specs come from other agents and an agent may follow what one says.
 // A spec that asks for the key file, a token or the key pasted into an
 // answer must never get it. The file must pass the rules in file-guard.ts,
-// which refuse the SealKeeper home, hidden folders of the user's home, a
-// file outside the current directory without --allow-outside-cwd and a
-// file too large to send. submitAnswer then refuses any submission that
+// which refuse a file named like one that holds secrets, such as .env, the
+// SealKeeper home, hidden folders of the user's home, a file outside the
+// current directory without --allow-outside-cwd and a file too large to
+// send. submitAnswer then refuses any submission that
 // contains the key.
 async function readSubmission(
   cmd: Command,

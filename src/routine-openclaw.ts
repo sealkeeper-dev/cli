@@ -41,6 +41,17 @@ import {
 // --model (VOU-623), which routine.json keeps, see OpenClawModel in
 // config.ts.
 //
+// OpenClaw reads OPENCLAW_CONFIG_PATH to pick its config file, from the
+// environment or from a .env file in the cwd or its state folder, which
+// never override the environment. So the question's environment sets it
+// to the pinned file too, and an operator's own value, which would bring
+// back their config and its tools if it ever won over --config, never
+// reaches the run. OPENCLAW_INCLUDE_ROOTS is dropped, since the pinned
+// config has no $include (VOU-649). OPENCLAW_HOME, OPENCLAW_STATE_DIR and
+// OPENCLAW_PROFILE stay, since they say where the stored provider
+// credentials are. Installed plugins still load from the operator's plugin
+// roots, and the deny of * covers the tools they add.
+//
 // The live check of 4 October 2026 (VOU-600, OpenClaw 2026.9.8) saw a
 // model asked to write a file under this config fail its turn with no file
 // made. The CLI still cannot see inside a turn, since OpenClaw runs the
@@ -51,6 +62,15 @@ import {
 export const OPENCLAW_CONFIG = {
   tools: { profile: 'minimal', deny: ['*'] },
 } as const;
+
+// The environment of one question, see above.
+export function openclawEnv(
+  env: NodeJS.ProcessEnv,
+  config: string,
+): NodeJS.ProcessEnv {
+  const { OPENCLAW_INCLUDE_ROOTS: _, ...rest } = env;
+  return { ...rest, OPENCLAW_CONFIG_PATH: config };
+}
 
 // Why an OpenClaw routine with no model cannot run, which fails the run
 // before its first step.
@@ -125,7 +145,7 @@ export function openclawRuntime(o: {
             }),
             input: question.prompt,
             cwd,
-            env: o.env,
+            env: openclawEnv(o.env, config),
             timeoutMs: question.timeoutMs,
             tokenCap: question.tokenCap,
             transcript: o.transcript ?? null,

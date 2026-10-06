@@ -130,7 +130,7 @@ describe('the Claude Code install and uninstall', () => {
         ]);
       }
       if (verb === 'install') {
-        const result = await installClaudeCode(file, command, warn);
+        const result = await installClaudeCode(file, userFile(), command, warn);
         const out = json
           ? JSON.stringify({
               path: file,
@@ -140,7 +140,7 @@ describe('the Claude Code install and uninstall', () => {
                 result,
               })),
             })
-          : installLines(result, file)
+          : installLines(result, file, userFile())
               .map((line) => `${line}\n`)
               .join('');
         return { code: 0, out, err };
@@ -494,10 +494,13 @@ describe('the Claude Code install and uninstall', () => {
       );
     });
 
-    it('--scope project writes it under the working directory', async () => {
+    // VOU-649. They hold this machine's paths, and a repo commits
+    // .claude/commands, so the project scope writes them for the user.
+    it('--scope project writes it in the user scope, never under the working directory', async () => {
       await run('install', '--scope', 'project');
-      expect(await readFile(commandIn(project, 'run'), 'utf8')).toBe(
-        RUN_COMMAND_TEXT,
+      expect(await readFile(userCommand(), 'utf8')).toBe(RUN_COMMAND_TEXT);
+      await expect(stat(join(project, '.claude', 'commands'))).rejects.toThrow(
+        'ENOENT',
       );
     });
 
@@ -747,14 +750,12 @@ describe('the Claude Code install and uninstall', () => {
       }
     });
 
-    it('--scope project writes it under the working directory', async () => {
+    it('--scope project writes it in the user scope, never under the working directory (VOU-649)', async () => {
       await run('install', '--scope', 'project');
-      expect(
-        await readFile(
-          join(project, '.claude', 'skills', 'sealkeeper', 'SKILL.md'),
-          'utf8',
-        ),
-      ).toBe(SKILL_TEXT());
+      expect(await readFile(userSkill(), 'utf8')).toBe(SKILL_TEXT());
+      await expect(stat(join(project, '.claude', 'skills'))).rejects.toThrow(
+        'ENOENT',
+      );
     });
 
     it('is idempotent, and brings an old copy of ours up to date', async () => {

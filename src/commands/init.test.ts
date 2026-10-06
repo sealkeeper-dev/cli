@@ -8,6 +8,7 @@ import {
   realpath,
   rm,
   stat,
+  symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -73,6 +74,9 @@ import {
   BRONZE,
   bronzeLine,
   CONSENT,
+  envApiDeclined,
+  envApiQuestion,
+  envApiRefused,
   folderLine,
   GAME_CAP_AGAIN,
   GAME_QUESTION,
@@ -88,13 +92,14 @@ import {
   leftBehindLine,
   MACHINE_AGENTS_SHOWN,
   machineAgentsLine,
+  movedOutLine,
+  NAME_REQUIRED,
   NEXT_HOOKS,
   NEXT_NPX,
   NEXT_POST,
   NEXT_ROUTINE,
   NEXT_RUN,
   NEXT_WHAT_IS_SHARED,
-  NO_NAME,
   NOTHING_SENT,
   NUDGE_INTRO,
   NUDGE_NOT_ON,
@@ -128,7 +133,11 @@ const STALE_SCRIPT = '/old/.npm/_npx/abc/node_modules/sealkeeper/dist/index.js';
 const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
 const [RUN] = SLASH_COMMANDS;
 const RUN_COMMAND_TEXT = commandText(RUN, invocationOf(HOOK_COMMAND));
-const API_URL = 'https://api.test';
+// A local API, so a URL from SEALKEEPER_API_URL alone signs in without the
+// question a remote one gets (VOU-649), which the tests of that question
+// set up with REMOTE_API_URL.
+const API_URL = 'http://127.0.0.1:8080';
+const REMOTE_API_URL = 'https://api.example.org';
 // Where the routine offer finds claude, when a test puts it on PATH.
 const CLAUDE = '/usr/local/bin/claude';
 const OPENCLAW = '/usr/local/bin/openclaw';
@@ -350,7 +359,9 @@ function fakeFetch(world: World): typeof fetch {
       });
     }
     const goalRoute =
-      /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})\/goal$/.exec(url);
+      /^http:\/\/127\.0\.0\.1:8080\/v1\/agents\/([A-Za-z0-9_-]{43})\/goal$/.exec(
+        url,
+      );
     if (goalRoute && world.goal !== undefined) {
       return Response.json({
         ...world.goal,
@@ -359,7 +370,7 @@ function fakeFetch(world: World): typeof fetch {
       });
     }
     const agentRoute =
-      /^https:\/\/api\.test\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
+      /^http:\/\/127\.0\.0\.1:8080\/v1\/agents\/([A-Za-z0-9_-]{43})$/.exec(url);
     if (
       agentRoute &&
       world.agentMovedTo !== undefined &&
@@ -704,10 +715,15 @@ describe('sealkeeper init', () => {
     expect(result.err).toContain(NEVER_LEAVES);
   });
 
-  it('defaults the name to the current directory and takes --version', async () => {
-    vi.spyOn(process, 'cwd').mockReturnValue('/work/my-agent');
-    const result = await run(world, 'init', '--version', '2.3.4');
-    vi.mocked(process.cwd).mockRestore();
+  it('takes --version', async () => {
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'my-agent',
+      '--version',
+      '2.3.4',
+    );
     expect(result.code).toBe(0);
     expect(world.registrations[0]).toMatchObject({
       name: 'my-agent',
@@ -717,34 +733,267 @@ describe('sealkeeper init', () => {
 
   it('--api-url wins over SEALKEEPER_API_URL', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', 'https://unreachable.test');
-    const result = await run(world, 'init', '--api-url', API_URL);
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--api-url',
+      API_URL,
+    );
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
   });
 
   it('uses SEALKEEPER_API_URL for the run but never saves it (cli-core-3)', async () => {
-    const result = await run(world, 'init', '--json');
+    const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(world.fetchUrls).toContain(`${API_URL}/v1/agents`);
     expect(JSON.parse(result.out)).toMatchObject({ apiUrl: API_URL });
     expect((await readConfig(paths(home)))?.apiUrl).toBe(DEFAULT_API_URL);
   });
 
+  // VOU-649. A project's .claude/settings.json can set SEALKEEPER_API_URL
+  // for every shell Claude Code starts, and the GitHub token goes to it.
+  describe('an API from SEALKEEPER_API_URL alone', () => {
+    beforeEach(() => {
+      vi.stubEnv('SEALKEEPER_API_URL', REMOTE_API_URL);
+    });
+
+    it.each([
+      ['--json', ['--json'], undefined, {}],
+      ['a pipe', [], answering('y', false), {}],
+      ['Claude Code', [], answering(null, false), { CLAUDECODE: '1' }],
+    ] as const)(
+      'refuses without a terminal, with %s, before anything is created',
+      async (_, flags, stdin, env) => {
+        if (stdin !== undefined) world.stdin = stdin;
+        world.env = env;
+        const result = await run(world, 'init', '--name', 'scout', ...flags);
+        expect(result.code).toBe(1);
+        expect(result.err).toBe(
+          `${envApiRefused(REMOTE_API_URL, 'SEALKEEPER_API_URL')}\n`,
+        );
+        expect(envApiRefused(REMOTE_API_URL, 'SEALKEEPER_API_URL')).toBe(
+          "init stopped before the sign in. The API https://api.example.org comes only from SEALKEEPER_API_URL, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
+        );
+        expect(world.fetchUrls).toEqual([]);
+        expect(await readIfExists(paths(home).key)).toBe('');
+        expect(stdin?.reads ?? 0).toBe(0);
+      },
+    );
+
+    it('asks in a terminal before anything is created, and anything but yes stops', async () => {
+      for (const answer of ['n', '', 'maybe']) {
+        world = newWorld();
+        const stdin = answeringEach([answer, '', '', '']);
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code, answer).toBe(1);
+        expect(result.err).toContain(
+          `  ${envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL')}`,
+        );
+        expect(
+          result.err.endsWith(`${envApiDeclined('SEALKEEPER_API_URL')}\n`),
+        ).toBe(true);
+        expect(stdin.reads).toBe(1);
+        expect(world.fetchUrls).toEqual([]);
+        expect(await readIfExists(paths(home).key)).toBe('');
+      }
+      expect(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL')).toBe(
+        'SEALKEEPER_API_URL points this sign in at https://api.example.org, not https://api.sealkeeper.run, and your GitHub token would go there. Use it? [y/N] ',
+      );
+    });
+
+    it('signs in there after a yes in a terminal, still naming the API before the device code', async () => {
+      world.stdin = answeringEach(['y', '', '', '']);
+      const result = await run(world, 'init', '--name', 'scout');
+      // The fake world answers only the local API, so the registration
+      // fails after the device flow, at the API the operator said yes to.
+      expect(result.code).toBe(1);
+      expect(world.fetchUrls).toContain(DEVICE_CODE_URL);
+      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+      const lines = result.err.split('\n');
+      const asked = lines.findIndex((l) =>
+        l.includes(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL')),
+      );
+      const warned = lines.indexOf(`  ${otherApiLine(REMOTE_API_URL)}`);
+      const device = lines.findIndex((l) =>
+        l.includes('Open https://github.com/login/device'),
+      );
+      expect(asked).toBeGreaterThanOrEqual(0);
+      expect(warned).toBeGreaterThan(asked);
+      expect(device).toBeGreaterThan(warned);
+      // One welcome box, before the question.
+      expect(result.err.split(TAGLINE[0] as string)).toHaveLength(2);
+      expect(result.err.indexOf(TAGLINE[0] as string)).toBeLessThan(
+        result.err.indexOf(
+          envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL'),
+        ),
+      );
+    });
+
+    it('asks nothing when --api-url names it, since a person typed it', async () => {
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--json',
+        '--api-url',
+        REMOTE_API_URL,
+      );
+      expect(result.err).not.toContain('comes only from SEALKEEPER_API_URL');
+      expect(result.err).toContain(otherApiLine(REMOTE_API_URL));
+      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+    });
+
+    it.each([
+      ['SealKeeper', DEFAULT_API_URL],
+      ['this machine', 'http://localhost:9999'],
+      ['this machine by address', 'http://[::1]:9999'],
+    ])('asks nothing when it is %s', async (_, url) => {
+      vi.stubEnv('SEALKEEPER_API_URL', url);
+      const result = await run(world, 'init', '--name', 'scout', '--json');
+      expect(result.err).not.toContain('comes only from SEALKEEPER_API_URL');
+      expect(world.fetchUrls).toContain(DEVICE_CODE_URL);
+    });
+
+    // The config an earlier registration saved, which --force reads.
+    const registered = (p = paths(home)) =>
+      writeConfig(
+        {
+          agentId: 'A'.repeat(43),
+          operatorLogin: 'alice',
+          name: 'scout',
+          version: '0.1.0',
+          apiUrl: REMOTE_API_URL,
+          registeredAt: '2026-09-23T10:00:00.000Z',
+        },
+        p,
+      );
+
+    it('asks nothing under --force when it is the API the agent in the root was registered with', async () => {
+      // No SEALKEEPER_HOME, so the old config is the operator's own.
+      vi.stubEnv('SEALKEEPER_HOME', '');
+      const root = join(await realpath(home), 'root');
+      vi.stubEnv('SEALKEEPER_ROOT', root);
+      world.cwd = home;
+      await registered(paths(root));
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--force',
+        '--json',
+      );
+      expect(result.err).not.toContain('comes only from');
+      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+
+      // Another API than the saved one is asked about, and the config of
+      // the agent stays as it was.
+      await registered(paths(root));
+      vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example.org');
+      world = newWorld();
+      world.cwd = home;
+      const other = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--force',
+        '--json',
+      );
+      expect(other.code).toBe(1);
+      expect(other.err).toBe(
+        `${envApiRefused('https://other.example.org', 'SEALKEEPER_API_URL')}\n`,
+      );
+      expect((await readConfig(paths(root)))?.apiUrl).toBe(REMOTE_API_URL);
+    });
+
+    it('asks under --force about the saved API too when SEALKEEPER_HOME is set, since a project can set that', async () => {
+      await registered();
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--force',
+        '--json',
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(
+        `${envApiRefused(REMOTE_API_URL, 'SEALKEEPER_API_URL')}\n`,
+      );
+      expect(world.fetchUrls).toEqual([]);
+    });
+
+    it('refuses an API from the config under SEALKEEPER_HOME alone without a terminal, and asks in one', async () => {
+      vi.stubEnv('SEALKEEPER_API_URL', '');
+      await registered();
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--force',
+        '--json',
+      );
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(
+        `${envApiRefused(REMOTE_API_URL, 'SEALKEEPER_HOME')}\n`,
+      );
+      expect(envApiRefused(REMOTE_API_URL, 'SEALKEEPER_HOME')).toBe(
+        "init stopped before the sign in. The API https://api.example.org comes only from the config.json under SEALKEEPER_HOME, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
+      );
+      expect(world.fetchUrls).toEqual([]);
+      expect((await readConfig(paths(home)))?.apiUrl).toBe(REMOTE_API_URL);
+
+      world = newWorld();
+      const stdin = answeringEach(['n', '', '', '']);
+      world.stdin = stdin;
+      const asked = await run(world, 'init', '--name', 'scout', '--force');
+      expect(asked.code).toBe(1);
+      expect(asked.err).toContain(
+        `  ${envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_HOME')}`,
+      );
+      expect(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_HOME')).toBe(
+        'The config.json under SEALKEEPER_HOME points this sign in at https://api.example.org, not https://api.sealkeeper.run, and your GitHub token would go there. Use it? [y/N] ',
+      );
+      expect(asked.err.endsWith(`${envApiDeclined('SEALKEEPER_HOME')}\n`)).toBe(
+        true,
+      );
+      expect(world.fetchUrls).toEqual([]);
+    });
+  });
+
   it('keeps the old URL under --force when SEALKEEPER_API_URL is set', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', '');
-    expect((await run(world, 'init', '--api-url', API_URL)).code).toBe(0);
+    expect(
+      (await run(world, 'init', '--name', 'scout', '--api-url', API_URL)).code,
+    ).toBe(0);
     vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     world = newWorld();
-    expect((await run(world, 'init', '--force')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout', '--force')).code).toBe(
+      0,
+    );
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
   });
 
   it('names the API origin on stderr before the device code when it is not SealKeeper', async () => {
-    const result = await run(world, 'init', '--api-url', API_URL);
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--api-url',
+      API_URL,
+    );
     expect(result.code).toBe(0);
     const line = otherApiLine(API_URL);
     expect(line).toBe(
-      'This sign in sends your GitHub token to the API at https://api.test, not https://api.sealkeeper.run.',
+      'This sign in sends your GitHub token to the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.',
     );
     const lines = result.err.split('\n');
     const warned = lines.indexOf(`  ${line}`);
@@ -757,7 +1006,7 @@ describe('sealkeeper init', () => {
 
     world = newWorld();
     await rm(paths(home).config, { force: true });
-    const json = await run(world, 'init', '--json');
+    const json = await run(world, 'init', '--name', 'scout', '--json');
     const jsonLines = json.err.split('\n');
     expect(jsonLines.indexOf(line)).toBeGreaterThanOrEqual(0);
     expect(jsonLines.indexOf(line)).toBeLessThan(jsonLines.indexOf(CONSENT));
@@ -765,16 +1014,23 @@ describe('sealkeeper init', () => {
 
   it('says nothing about the API when it is SealKeeper', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', '');
-    // The fake world answers only api.test, so the registration fails after
+    // The fake world answers only the local API, so the registration fails after
     // the device flow. The sign in is what this test looks at.
-    const result = await run(world, 'init', '--json');
+    const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.err).toContain(CONSENT);
     expect(result.err).not.toContain('This sign in sends your GitHub token');
   });
 
   it('signs the registration for the origin of --api-url', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', 'https://unreachable.test');
-    const result = await run(world, 'init', '--api-url', `${API_URL}/`);
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--api-url',
+      `${API_URL}/`,
+    );
     expect(result.code).toBe(0);
     expect(world.registrations).toHaveLength(1);
     expect(auds).toEqual([API_URL]);
@@ -797,14 +1053,14 @@ describe('sealkeeper init', () => {
       { error: 'authorization_pending' },
       { access_token: TOKEN },
     ];
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
     expect(world.sleeps).toEqual([5000, 10000, 10000]);
   });
 
   it('exits 1 with a message when the GitHub code expires', async () => {
     world.tokenResponses = [{ error: 'expired_token' }];
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(1);
     expect(result.err.endsWith(`${CODE_EXPIRED}\n`)).toBe(true);
     expect(result.out).toBe('');
@@ -850,7 +1106,7 @@ describe('sealkeeper init', () => {
     ],
   ])('API %# prints one line and writes no config', async (reply, message) => {
     world.api = () => reply;
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(1);
     expect(result.out).toBe('');
     expect(result.err.endsWith(`\n${message}\n`)).toBe(true);
@@ -868,9 +1124,10 @@ describe('sealkeeper init', () => {
     expect(await readConfig(paths(home))).toBeNull();
   });
 
-  it('makes a valid name from the directory name when --name is not given', async () => {
+  it('makes a valid name from the directory name, which Enter takes on a terminal', async () => {
     const dir = join(home, 'My Project_v2');
     await mkdir(dir);
+    world.stdin = answeringEach(['', '', '', '']);
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(dir);
     const result = await run(world, 'init').finally(() => cwd.mockRestore());
     expect(result.code).toBe(0);
@@ -879,7 +1136,14 @@ describe('sealkeeper init', () => {
   });
 
   it('reports a network error on one line', async () => {
-    const result = await run(world, 'init', '--api-url', 'https://down.test');
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--api-url',
+      'https://down.test',
+    );
     expect(result.code).toBe(1);
     expect(result.err).toMatch(
       /\ncould not reach the SealKeeper API at https:\/\/down\.test: fetch failed\n$/,
@@ -889,11 +1153,11 @@ describe('sealkeeper init', () => {
 
   it('keeps the key after a failed registration and reuses it next time', async () => {
     world.api = () => apiError(403, 'account_too_new', 'too new');
-    expect((await run(world, 'init')).code).toBe(1);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(1);
     const first = await readFile(paths(home).key, 'utf8');
 
     world = newWorld();
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     expect(await readFile(paths(home).key, 'utf8')).toBe(first);
   });
 
@@ -903,7 +1167,7 @@ describe('sealkeeper init', () => {
     const keyStat = await stat(paths(home).key);
 
     world = newWorld();
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
     expect(result.out).toContain('  ✓ Already set up as alice/scout\n');
     expect(result.out).toContain(
@@ -920,11 +1184,11 @@ describe('sealkeeper init', () => {
   });
 
   it('--force regenerates the key and registers again', async () => {
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     const before = await loadKey(paths(home));
 
     world = newWorld();
-    const result = await run(world, 'init', '--force');
+    const result = await run(world, 'init', '--name', 'scout', '--force');
     expect(result.code).toBe(0);
     const after = await loadKey(paths(home));
     expect(after?.agentId).not.toBe(before?.agentId);
@@ -937,7 +1201,7 @@ describe('sealkeeper init', () => {
   });
 
   it('--force starts the cursor at the end of the log (cli-core-6)', async () => {
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     const logged = (n: number) => ({
       event_id: randomUUID(),
       type: 'session.end' as const,
@@ -950,7 +1214,7 @@ describe('sealkeeper init', () => {
     expect(await countPending(paths(home))).toBe(2);
 
     world = newWorld();
-    const result = await run(world, 'init', '--force');
+    const result = await run(world, 'init', '--name', 'scout', '--force');
     expect(result.code).toBe(0);
     expect(result.err).toContain(`  ${leftBehindLine(2)}\n`);
     expect(leftBehindLine(2)).toBe(
@@ -962,7 +1226,14 @@ describe('sealkeeper init', () => {
     expect(await countPending(paths(home))).toBe(1);
 
     world = newWorld();
-    const again = await run(world, 'init', '--force', '--json');
+    const again = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--force',
+      '--json',
+    );
     expect(again.code).toBe(0);
     expect(again.err).toContain(`${leftBehindLine(1)}\n`);
     expect(await countPending(paths(home))).toBe(0);
@@ -984,7 +1255,7 @@ describe('sealkeeper init', () => {
     expect(await loadKey(paths(home))).toBeNull();
     expect(await countPending(paths(home))).toBe(2);
 
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
     expect(result.err).toContain(`  ${leftBehindLine(2)}\n`);
     expect(await countPending(paths(home))).toBe(0);
@@ -996,7 +1267,7 @@ describe('sealkeeper init', () => {
     // leaves the cursor alone.
     await rm(paths(home).config, { force: true });
     world = newWorld();
-    const again = await run(world, 'init', '--json');
+    const again = await run(world, 'init', '--name', 'scout', '--json');
     expect(again.code).toBe(0);
     expect(again.err).not.toContain('unsent event');
     expect(await countPending(paths(home))).toBe(1);
@@ -1013,7 +1284,7 @@ describe('sealkeeper init', () => {
       },
       paths(home),
     );
-    const result = await run(world, 'init', '--json');
+    const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(result.err).toContain(`${leftBehindLine(1)}\n`);
     expect(result.out).not.toContain('unsent event');
@@ -1021,21 +1292,30 @@ describe('sealkeeper init', () => {
   });
 
   it('--force with --json names the kept key on stderr as before', async () => {
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     world = newWorld();
-    const result = await run(world, 'init', '--force', '--json');
+    const result = await run(
+      world,
+      'init',
+      '--name',
+      'scout',
+      '--force',
+      '--json',
+    );
     expect(result.code).toBe(0);
     expect(result.err).toMatch(/^the old key is kept at .*\.bak$/m);
     expect(JSON.parse(result.out)).toMatchObject({ name: expect.any(String) });
   });
 
   it('--force re-registers against the API URL in the existing config', async () => {
-    expect((await run(world, 'init', '--api-url', API_URL)).code).toBe(0);
+    expect(
+      (await run(world, 'init', '--name', 'scout', '--api-url', API_URL)).code,
+    ).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
 
     vi.stubEnv('SEALKEEPER_API_URL', '');
     world = newWorld();
-    const result = await run(world, 'init', '--force');
+    const result = await run(world, 'init', '--name', 'scout', '--force');
     expect(result.code).toBe(0);
     expect(world.fetchUrls).toContain(`${API_URL}/v1/agents`);
     expect(world.registrations).toHaveLength(1);
@@ -1043,11 +1323,11 @@ describe('sealkeeper init', () => {
   });
 
   it('--force goes ahead when the existing config is broken', async () => {
-    expect((await run(world, 'init')).code).toBe(0);
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     await writeFile(paths(home).config, 'not json');
 
     world = newWorld();
-    const result = await run(world, 'init', '--force');
+    const result = await run(world, 'init', '--name', 'scout', '--force');
     expect(result.code).toBe(0);
     expect(world.registrations).toHaveLength(1);
     // SEALKEEPER_API_URL was used and not saved, and there was no old URL.
@@ -1056,7 +1336,7 @@ describe('sealkeeper init', () => {
 
   it('exits 1 naming the env var when there is no client id', async () => {
     vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
-    const result = await run(world, 'init');
+    const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(1);
     expect(result.err).toBe(`${MISSING_CLIENT_ID}\n`);
     expect(result.err).toContain('SEALKEEPER_GITHUB_CLIENT_ID');
@@ -1486,6 +1766,181 @@ describe('sealkeeper init', () => {
       // The shared file a repo commits keeps no machine paths of ours.
       expect(await readFile(sharedFile, 'utf8')).toBe('{}');
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
+    });
+
+    // VOU-649. The slash commands and the skill hold this machine's absolute
+    // paths, and a repo commits .claude/commands and .claude/skills, so the
+    // project scope writes only the hooks, to settings.local.json.
+    describe('the slash commands and the skill of a project install', () => {
+      let project: string;
+      let projectFile: string;
+      const userRun = () => join(claudeDir(), 'commands', 'sealkeeper-run.md');
+      const userSkill = () =>
+        join(claudeDir(), 'skills', 'sealkeeper', 'SKILL.md');
+      const projectRun = () =>
+        join(project, '.claude', 'commands', 'sealkeeper-run.md');
+      const projectSkill = () =>
+        join(project, '.claude', 'skills', 'sealkeeper', 'SKILL.md');
+      const ours = (path: string) =>
+        `---\ndescription: old\n${'managed-by: sealkeeper'}\n---\nold ${path}\n`;
+
+      beforeEach(async () => {
+        await withClaudeCode();
+        project = join(home, 'project');
+        world.cwd = project;
+        projectFile = join(project, '.claude', 'settings.local.json');
+        await mkdir(dirname(projectFile), { recursive: true });
+      });
+
+      async function staleProjectHooks(): Promise<void> {
+        await writeFile(
+          projectFile,
+          JSON.stringify({
+            hooks: {
+              Stop: [{ hooks: [{ type: 'command', command: STALE_HOOK }] }],
+            },
+          }),
+        );
+      }
+
+      it('go to the user scope, and none under the project', async () => {
+        await staleProjectHooks();
+        world.stdin = answering('');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
+        expect(hooksIn(await readFile(projectFile, 'utf8'))).toContain(
+          'SessionEnd',
+        );
+        expect(await readFile(userRun(), 'utf8')).toBe(RUN_COMMAND_TEXT);
+        expect(isManaged(await readFile(userSkill(), 'utf8'))).toBe(true);
+        expect(result.out).toContain(
+          `  ✓ Slash commands in ${dirname(userRun())}\n`,
+        );
+        expect(await readIfExists(projectRun())).toBe('');
+        expect(await readIfExists(projectSkill())).toBe('');
+      });
+
+      it('of an earlier install move out of the project on a repeat init, and a file of the operator stays', async () => {
+        await writeFile(
+          projectFile,
+          JSON.stringify({
+            hooks: {
+              SessionEnd: [
+                { hooks: [{ type: 'command', command: HOOK_COMMAND }] },
+              ],
+            },
+          }),
+        );
+        await mkdir(dirname(projectRun()), { recursive: true });
+        await mkdir(dirname(projectSkill()), { recursive: true });
+        await writeFile(projectRun(), ours(projectRun()));
+        await writeFile(projectSkill(), ours(projectSkill()));
+        const mine = join(project, '.claude', 'commands', 'sealkeeper-duel.md');
+        await writeFile(mine, 'my own duel command\n');
+        world.stdin = answering('');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(result.err).not.toContain(HOOKS_QUESTION);
+        expect(result.out).toContain(
+          `  ${movedOutLine(join(project, '.claude'))}\n`,
+        );
+        expect(await readIfExists(projectRun())).toBe('');
+        expect(await readIfExists(projectSkill())).toBe('');
+        expect(await readFile(mine, 'utf8')).toBe('my own duel command\n');
+        expect(await readFile(userRun(), 'utf8')).toBe(RUN_COMMAND_TEXT);
+        expect(isManaged(await readFile(userSkill(), 'utf8'))).toBe(true);
+
+        // Run again, nothing is left to move.
+        world = newWorld();
+        world.cwd = project;
+        world.stdin = answering('');
+        const again = await run(world, 'init');
+        expect(again.code).toBe(0);
+        expect(again.out).not.toContain('Moved the slash commands');
+      });
+
+      // The user scope copies are written before the project ones go, so a
+      // write that fails never leaves the commands in neither scope.
+      it.each([
+        ['current hooks on a repeat init', HOOK_COMMAND],
+        ['hooks of an older path', STALE_HOOK],
+      ])(
+        'stay in the project when the user scope write fails, with %s',
+        async (_, command) => {
+          await writeFile(
+            projectFile,
+            JSON.stringify({
+              hooks: {
+                SessionEnd: [{ hooks: [{ type: 'command', command }] }],
+              },
+            }),
+          );
+          await mkdir(dirname(projectRun()), { recursive: true });
+          await mkdir(dirname(projectSkill()), { recursive: true });
+          await writeFile(projectRun(), ours(projectRun()));
+          await writeFile(projectSkill(), ours(projectSkill()));
+          // A file where the user commands folder goes, so no command can
+          // be written there.
+          await mkdir(dirname(dirname(userRun())), { recursive: true });
+          await writeFile(dirname(userRun()), 'not a folder\n');
+          world.stdin = answering('');
+          const result = await run(
+            world,
+            'init',
+            '--name',
+            'scout',
+            '--runtime',
+            'claude-code',
+          );
+          expect(result.code).toBe(0);
+          expect(result.out).not.toContain('Moved the slash commands');
+          expect(await readFile(projectRun(), 'utf8')).toBe(ours(projectRun()));
+          expect(await readFile(projectSkill(), 'utf8')).toBe(
+            ours(projectSkill()),
+          );
+        },
+      );
+
+      it('never follow a project skills folder that links outside the project', async () => {
+        await staleProjectHooks();
+        const outside = join(home, 'outside');
+        await mkdir(join(outside, 'sealkeeper'), { recursive: true });
+        await symlink(outside, join(project, '.claude', 'skills'));
+        world.stdin = answering('');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(result.err).toContain(
+          `refusing to write ${projectSkill()}, it resolves to`,
+        );
+        expect(result.err).toContain('outside the project');
+        expect(
+          await readIfExists(join(outside, 'sealkeeper', 'SKILL.md')),
+        ).toBe('');
+        // The project install was refused as a whole.
+        expect(await readFile(projectFile, 'utf8')).toContain(STALE_SCRIPT);
+      });
     });
 
     it('asks nothing on a repeat init when the hooks are current', async () => {
@@ -2038,13 +2493,19 @@ describe('sealkeeper init', () => {
         expect(result.out).not.toContain('Set up the daily routine');
       });
 
-      it('registers a plain non-terminal init with the suggested name, asking nothing and never ending as D6', async () => {
+      // VOU-649. The name is public, so nobody takes the repo's for it.
+      it('a plain non-terminal init needs --name, then registers asking nothing and never ending as D6', async () => {
         await withClaudeCode();
         world.repo = 'research-bot';
         // A pipe that is already closed, as a script or an agent gives.
         const stdin = answering(null, false);
         world.stdin = stdin;
-        const result = await run(world, 'init');
+        const refused = await run(world, 'init');
+        expect(refused.code).toBe(1);
+        expect(refused.err).toBe(`${NAME_REQUIRED}\n`);
+        expect(world.fetchUrls).toEqual([]);
+        expect(await readIfExists(paths(home).key)).toBe('');
+        const result = await run(world, 'init', '--name', 'research-bot');
         expect(result.code).toBe(0);
         expect(stdin.reads).toBe(0);
         expect(result.all).not.toContain(INPUT_CLOSED);
@@ -2283,27 +2744,52 @@ describe('sealkeeper init', () => {
   describe('the agent name', () => {
     it('suggests the repository name of the git remote over the directory name', async () => {
       world.repo = 'Research_Bot.v2';
+      world.stdin = answeringEach(['', '', '', '']);
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/work/my-agent');
       const result = await run(world, 'init').finally(() => cwd.mockRestore());
       expect(result.code).toBe(0);
+      expect(result.err).toContain(nameQuestion('research-bot-v2'));
       expect(world.registrations[0]?.name).toBe('research-bot-v2');
     });
 
     it('falls back to the directory name when the remote makes no name', async () => {
       world.repo = '--';
+      world.stdin = answeringEach(['', '', '', '']);
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/work/my-agent');
       const result = await run(world, 'init').finally(() => cwd.mockRestore());
       expect(result.code).toBe(0);
       expect(world.registrations[0]?.name).toBe('my-agent');
     });
 
-    it('without a terminal and no usable name, ends before anything is created', async () => {
+    // VOU-649. The name is public, so without a terminal the repo's name or
+    // the folder's is never taken for it, with --json or a pipe.
+    it.each([
+      ['--json', [['--json'], undefined]],
+      ['a pipe', [[], answering('scout', false)]],
+    ] as const)(
+      'without a terminal and no --name, ends before anything is created, with %s',
+      async (_, [flags, stdin]) => {
+        world.repo = 'research-bot';
+        if (stdin !== undefined) world.stdin = stdin;
+        const result = await run(world, 'init', ...flags);
+        expect(result.code).toBe(1);
+        expect(result.err).toBe(`${NAME_REQUIRED}\n`);
+        expect(NAME_REQUIRED).toBe(
+          'there is no terminal to ask the agent name, which is public, so pass --name with lowercase letters, digits and single hyphens, 2 to 39 characters, starting and ending with a letter or digit',
+        );
+        expect(world.fetchUrls).toEqual([]);
+        expect(world.registrations).toEqual([]);
+        expect(await readIfExists(paths(home).key)).toBe('');
+      },
+    );
+
+    it('asks without a default on a terminal when no name can be made', async () => {
+      world.stdin = answeringEach(['scout', '', '', '']);
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/');
       const result = await run(world, 'init').finally(() => cwd.mockRestore());
-      expect(result.code).toBe(1);
-      expect(result.err).toContain(NO_NAME);
-      expect(world.fetchUrls).toEqual([]);
-      expect(await readIfExists(paths(home).key)).toBe('');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`  ${nameQuestion(null)} `);
+      expect(world.registrations[0]?.name).toBe('scout');
     });
 
     it('asks on a terminal, and Enter takes the suggestion', async () => {
@@ -3520,6 +4006,22 @@ describe('sealkeeper init', () => {
       expect(await folders()).toEqual({ [app]: '.', [worktree]: '.' });
     });
 
+    // VOU-649. A new agent's name is public, so without a terminal the
+    // repo's name never becomes one.
+    it('without a terminal refuses a suggestion that would register a new agent', async () => {
+      await registerApp();
+      world.cwd = billing;
+      world.repo = 'billing';
+      const result = await run(world, 'init');
+      expect(result.code).toBe(1);
+      expect(result.err).toBe(`${NAME_REQUIRED}\n`);
+      expect(signedIn()).toBe(false);
+      expect(await folders()).toEqual({ [app]: '.' });
+      expect(await readIfExists(paths(namedHome('billing', root)).key)).toBe(
+        '',
+      );
+    });
+
     it('refuses a new name whose home holds an agent already', async () => {
       await registerApp();
       // An agent renamed since keeps the home of its old name.
@@ -3637,7 +4139,7 @@ describe('sealkeeper init', () => {
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
           Play duels and weekly challenges? [Y/n]   Game units a UTC day, 0 to 5? [5] 
-          This sign in sends your GitHub token to the API at https://api.test, not https://api.sealkeeper.run.
+          This sign in sends your GitHub token to the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.
 
           Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
 

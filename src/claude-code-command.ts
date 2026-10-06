@@ -174,8 +174,10 @@ ${answerRules('sealkeeper')}
 export type CommandResult = 'written' | 'unchanged' | 'kept';
 
 // <dir of the settings file>/commands/sealkeeper-<verb>.md for each slash
-// command, in the order of SLASH_COMMANDS. The user scope puts them in the
-// Claude Code config dir, the project scope in <cwd>/.claude.
+// command, in the order of SLASH_COMMANDS. They are written only in the
+// user scope, the Claude Code config dir. The project's <cwd>/.claude path
+// is used only to find and remove the copies an install before VOU-649
+// wrote there, since they hold this machine's absolute paths.
 export function commandPaths(settingsFile: string): string[] {
   return SLASH_COMMANDS.map((c) => commandPath(settingsFile, c));
 }
@@ -254,17 +256,22 @@ export async function refreshCommands(
   settingsFile: string,
   invocation: string,
 ): Promise<boolean> {
-  let ours = false;
+  if (!(await hasCommands(settingsFile))) return false;
+  const installed = await installCommands(settingsFile, invocation);
+  return installed.some((i) => i.result === 'written');
+}
+
+// Whether a slash command of ours, or the retired /sealkeeper-prove, is
+// beside settingsFile. Reads only.
+export async function hasCommands(settingsFile: string): Promise<boolean> {
   for (const file of [
     ...commandPaths(settingsFile),
     retiredCommandPath(settingsFile),
   ]) {
     const current = await readOurFile(file);
-    if (current !== null && isManaged(current)) ours = true;
+    if (current !== null && isManaged(current)) return true;
   }
-  if (!ours) return false;
-  const installed = await installCommands(settingsFile, invocation);
-  return installed.some((i) => i.result === 'written');
+  return false;
 }
 
 // Removes each slash command, and the retired /sealkeeper-prove, only when

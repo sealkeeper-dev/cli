@@ -3,7 +3,12 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ANSWERS_DIR, type FileRules, readGuardedFile } from './file-guard.js';
+import {
+  ANSWERS_DIR,
+  type FileRules,
+  readGuardedFile,
+  SECRET_FILE_REFUSAL,
+} from './file-guard.js';
 
 // open is wrapped so a test can tell whether a file was opened at all.
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -70,8 +75,10 @@ describe('readGuardedFile (VOU-229)', () => {
       join(userHome, '.config', 'gh', 'hosts.yml'),
       't',
     );
-    const netrc = await write(join(userHome, '.netrc'), 'n');
-    for (const file of [token, netrc]) {
+    // A name off the secret list, so the hidden folder rule is the one that
+    // refuses it.
+    const history = await write(join(userHome, '.zsh_history'), 'n');
+    for (const file of [token, history]) {
       for (const at of [{ cwd }, { cwd: userHome }]) {
         const read = await readGuardedFile(file, {
           ...rules,
@@ -150,7 +157,7 @@ describe('readGuardedFile (VOU-229)', () => {
 
   it('keeps a hidden home folder closed when it is the current directory itself', async () => {
     const ssh = join(userHome, '.ssh');
-    const key = await write(join(ssh, 'id_ed25519'), 'k');
+    const key = await write(join(ssh, 'known_hosts'), 'k');
     const read = await readGuardedFile(key, { ...rules, cwd: ssh });
     expect((read as { error: string }).error).toContain(
       'a hidden file or folder in your home',
@@ -247,6 +254,70 @@ describe('readGuardedFile (VOU-229)', () => {
       expect(fs.open).not.toHaveBeenCalled();
     },
   );
+
+  // VOU-649. A spec can ask an agent with tools for --file .env, or --text
+  // @.env on post, and the file is inside the current directory.
+  it('refuses a file whose name marks secrets, anywhere and in every mode, without opening it', async () => {
+    const names = [
+      '.env',
+      '.env.local',
+      '.ENV.production',
+      '.envrc',
+      'server.pem',
+      'tls.KEY',
+      'credentials',
+      'credentials.json',
+      'id_rsa',
+      'id_ed25519.pub',
+      'secrets.yaml',
+      '.npmrc',
+      '.netrc',
+      '.pgpass',
+      '.git-credentials',
+      'cert.p12',
+    ];
+    for (const name of names) {
+      for (const file of [join(cwd, name), join(cwd, ANSWERS_DIR, name)]) {
+        await write(file, 'SECRET=1');
+        for (const allowOutsideCwd of [true, false]) {
+          const read = await readGuardedFile(file, {
+            ...rules,
+            allowOutsideCwd,
+          });
+          expect(read, file).toEqual({
+            error: `refusing to submit ${file}, ${SECRET_FILE_REFUSAL}`,
+          });
+        }
+      }
+    }
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it('judges a symlink by its own name and by the name of what it points to', async () => {
+    const env = await write(join(cwd, '.env'), 'SECRET=1');
+    const answer = join(cwd, ANSWERS_DIR, 'a.txt');
+    await fs.symlink(env, answer);
+    expect(await readGuardedFile(answer, rules)).toHaveProperty('error');
+    const plain = await write(join(cwd, 'plain.txt'), 'p');
+    const named = join(cwd, 'deploy.key');
+    await fs.symlink(plain, named);
+    expect(await readGuardedFile(named, rules)).toHaveProperty('error');
+    expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  it('reads files whose names only look close', async () => {
+    for (const name of [
+      'environment.md',
+      'my.env.txt',
+      'keys.txt',
+      'monkey.ts',
+      'pem.md',
+      'answer.txt',
+    ]) {
+      const file = await write(join(cwd, ANSWERS_DIR, name), 'ok');
+      expect(await readGuardedFile(file, rules), name).toEqual({ text: 'ok' });
+    }
+  });
 
   it('says when the file cannot be read', async () => {
     const missing = join(cwd, 'missing.txt');
