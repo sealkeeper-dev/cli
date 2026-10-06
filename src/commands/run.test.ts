@@ -27,6 +27,7 @@ import { resetInvocation } from '../invocation.js';
 import { countPending } from '../log.js';
 import { createProgram } from '../program.js';
 import { ANSWER_FILE, submitCommand } from '../tasks.js';
+import { takePurpose } from '../test-purpose.js';
 import {
   actionCommand,
   EXPLAIN,
@@ -94,8 +95,10 @@ class FakeApi {
       if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
       const signed = (await verify(body.envelope, base64urlDecode(kid)))
         .payload;
-      if (readAudience(signed, [API_URL]).result !== 'match') {
-        this.errors.push('aud');
+      const check = readAudience(signed, [API_URL]);
+      if (check.result !== 'match') this.errors.push('aud');
+      if (!takePurpose(check.payload, method, url.pathname).ok) {
+        this.errors.push('purpose');
       }
       return this.status ? Response.json(this.status) : error(404, 'not_found');
     }
@@ -110,7 +113,9 @@ class FakeApi {
         .payload;
       const check = readAudience(signed, [API_URL]);
       if (check.result !== 'match') this.errors.push('aud');
-      this.runs.push(RunRequest.parse(check.payload));
+      const named = takePurpose(check.payload, method, url.pathname);
+      if (!named.ok) this.errors.push('purpose');
+      this.runs.push(RunRequest.parse(named.payload));
       const answer = this.answer;
       if ('status' in answer && typeof answer.status === 'number') {
         return error(answer.status, String(answer.code));

@@ -15,6 +15,7 @@ import { wasAskedRuntime } from '../agent-runtime.js';
 import { writeConfig } from '../config.js';
 import { createKey } from '../identity.js';
 import { createProgram } from '../program.js';
+import { takePurpose } from '../test-purpose.js';
 
 const API_URL = 'https://api.test';
 
@@ -49,7 +50,9 @@ describe('sealkeeper agent runtime', () => {
       [API_URL],
     );
     expect(check.result).toBe('match');
-    const payload = UpdateAgentRequest.parse(check.payload);
+    const named = takePurpose(check.payload, 'PATCH', url);
+    expect(named.ok).toBe(true);
+    const payload = UpdateAgentRequest.parse(named.payload);
     patches.push(payload);
     if (refusal !== null) return refusal;
     return Response.json({

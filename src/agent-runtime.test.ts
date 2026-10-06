@@ -28,6 +28,7 @@ import type { Input } from './ask.js';
 import { hookCommand } from './claude-code-settings.js';
 import { paths } from './config.js';
 import { createKey } from './identity.js';
+import { takePurpose } from './test-purpose.js';
 
 const API_URL = 'https://api.test';
 
@@ -263,10 +264,15 @@ describe('offerRuntime', () => {
     }
     const { envelope } = JSON.parse(String(init.body)) as { envelope: string };
     const { kid } = decodeHeader(envelope);
-    const payload = readAudience(
-      (await verify(envelope, base64urlDecode(kid))).payload,
-      [API_URL],
-    ).payload;
+    const named = takePurpose(
+      readAudience((await verify(envelope, base64urlDecode(kid))).payload, [
+        API_URL,
+      ]).payload,
+      'PATCH',
+      url,
+    );
+    expect(named.ok).toBe(true);
+    const payload = named.payload;
     patches.push(UpdateAgentRequest.parse(payload));
     if (reply !== null) return reply;
     return Response.json({

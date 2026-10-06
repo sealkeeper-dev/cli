@@ -33,6 +33,7 @@ import { readOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import { appendRoutine } from '../routine.js';
 import { copyPaths, writeCopy } from '../routine-copy.js';
+import { takePurpose } from '../test-purpose.js';
 import { VERSION } from '../version.js';
 import {
   HOOKS_MISSING,
@@ -247,7 +248,9 @@ class FakeApi {
         .payload;
       const check = readAudience(signed, [API_URL]);
       if (check.result !== 'match') this.errors.push('aud');
-      this.requests.push(StatusRequest.parse(check.payload));
+      const named = takePurpose(check.payload, method, url.pathname);
+      if (!named.ok) this.errors.push('purpose');
+      this.requests.push(StatusRequest.parse(named.payload));
       const answer = this.answer;
       if ('status' in answer && typeof answer.status === 'number') {
         return error(answer.status, String(answer.code));

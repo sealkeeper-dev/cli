@@ -175,15 +175,15 @@ describe('identity', () => {
 
   it('signs an envelope that verifies against the loaded public key', async () => {
     const { agentId } = await createKey();
-    const payload = { event_id: 'x', type: 'tool.call', n: 1 };
-    const jws = await signEnvelope(payload, `${API}/`);
+    const payload = { issuedAt: '2026-10-05T00:00:00.000Z' };
+    const jws = await signEnvelope(payload, `${API}/`, 'agent.status');
 
     const key = await loadKey();
     if (key === null) throw new Error('expected a key');
     expect(decodeHeader(jws)).toEqual({ alg: 'EdDSA', kid: agentId });
     expect(await verify(jws, key.publicKey)).toEqual({
       header: { alg: 'EdDSA', kid: agentId },
-      payload: { ...payload, aud: API },
+      payload: { ...payload, aud: API, purpose: 'agent.status' },
     });
   });
 
@@ -194,10 +194,29 @@ describe('identity', () => {
     const key = await loadKey();
     if (key === null) throw new Error('expected a key');
     const { payload } = await verify(
-      await signer.sign({ a: 1 }),
+      await signer.sign({ a: 1 }, 'agent.delete'),
       key.publicKey,
     );
-    expect(payload).toEqual({ a: 1, aud: 'http://localhost:8080' });
+    expect(payload).toEqual({
+      a: 1,
+      aud: 'http://localhost:8080',
+      purpose: 'agent.delete',
+    });
+  });
+
+  // VOU-637. An event and the sync's fingerprint declaration name no
+  // purpose, and every request names its route's.
+  it('signs an event with aud and no purpose', async () => {
+    await createKey();
+    const signer = await loadSigner(API);
+    const key = await loadKey();
+    if (key === null) throw new Error('expected a key');
+    const event = { event_id: 'x', type: 'tool.call', n: 1 };
+    const { payload } = await verify(
+      await signer.signEvent(event),
+      key.publicKey,
+    );
+    expect(payload).toEqual({ ...event, aud: API });
   });
 
   it('refuses to sign for an insecure API URL', async () => {
@@ -208,7 +227,9 @@ describe('identity', () => {
   });
 
   it('refuses to sign without a key', async () => {
-    await expect(signEnvelope({ a: 1 }, API)).rejects.toThrow(NO_KEY);
+    await expect(signEnvelope({ a: 1 }, API, 'agent.status')).rejects.toThrow(
+      NO_KEY,
+    );
   });
 
   it.each(VECTORS)(
@@ -223,7 +244,7 @@ describe('identity', () => {
       expect(key?.publicKey).toEqual(hex(v.publicKey));
       expect(key?.agentId).toBe(v.agentId);
 
-      const jws = await signEnvelope({ ok: true }, API);
+      const jws = await signEnvelope({ ok: true }, API, 'agent.status');
       expect(decodeHeader(jws).kid).toBe(v.agentId);
     },
   );
@@ -233,7 +254,7 @@ describe('identity', () => {
     const seed = (await readFile(paths().key, 'utf8')).trim();
     await chmod(paths().key, 0o644);
     await loadKey();
-    await signEnvelope({ a: 1 }, API);
+    await signEnvelope({ a: 1 }, API, 'agent.status');
     await expect(createKey()).rejects.toThrow();
     await writeFile(paths().key, `${seed}x\n`);
     const error = await loadKey().catch((e: Error) => e);

@@ -515,7 +515,7 @@ export async function routineRun(
           });
           return await s.api.routineNext(
             s.signer.agentId,
-            await s.signer.sign(request),
+            await s.signer.sign(request, 'routine.next'),
           );
         } catch (error) {
           if (!(error instanceof ApiError) || !askAgain(error)) throw error;

@@ -147,6 +147,7 @@ export function register(
             anyway: options.anyway === true,
             issuedAt: new Date().toISOString(),
           }),
+          'agent.run',
           (envelope) => api.run(signer.agentId, envelope),
         );
       } catch (error) {

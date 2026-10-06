@@ -19,6 +19,7 @@ import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
 import { readRoutine } from '../routine.js';
 import { ANSWER_FILE } from '../tasks.js';
+import { takePurpose } from '../test-purpose.js';
 import {
   BAD_AGENT,
   BAD_CATEGORY,
@@ -141,7 +142,9 @@ class FakeApi {
     const signed = (await verify(body.envelope, base64urlDecode(kid))).payload;
     const check = readAudience(signed, [API_URL]);
     if (check.result !== 'match') this.errors.push('aud');
-    const { fingerprint, ...payload } = DuelNextRequest.parse(check.payload);
+    const named = takePurpose(check.payload, method, url.pathname);
+    if (!named.ok) this.errors.push('purpose');
+    const { fingerprint, ...payload } = DuelNextRequest.parse(named.payload);
     if (fingerprint !== undefined) this.fingerprints += 1;
     this.payloads.push(payload);
     if (this.refuse) {

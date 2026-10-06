@@ -65,6 +65,7 @@ import { copyPaths, copyVersion } from '../routine-copy.js';
 import type { Runner } from '../routine-scheduler.js';
 import { stripStyle } from '../style.js';
 import { describeTaxonomy, isSent, NEVER_LEAVES } from '../taxonomy.js';
+import { takePurpose } from '../test-purpose.js';
 import { VERSION } from '../version.js';
 import {
   ACCOUNT_URL,
@@ -142,11 +143,14 @@ const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 const audErrors: unknown[] = [];
 // The aud of every signed payload the fake took, in order.
 const auds: unknown[] = [];
-const unsigned = (payload: unknown) => {
+// It names the route it is for too (VOU-637), checked and taken off the
+// same way.
+const unsigned = (payload: unknown, method: string, url: string) => {
   auds.push((payload as { aud?: unknown }).aud);
   const check = readAudience(payload, [API_URL]);
-  if (check.result !== 'match') audErrors.push(payload);
-  return check.payload;
+  const named = takePurpose(check.payload, method, url);
+  if (check.result !== 'match' || !named.ok) audErrors.push(payload);
+  return named.payload;
 };
 afterEach(() => {
   auds.length = 0;
@@ -298,6 +302,8 @@ function fakeFetch(world: World): typeof fetch {
       const { kid } = decodeHeader(envelope);
       const payload = unsigned(
         (await verify(envelope, base64urlDecode(kid))).payload,
+        init.method ?? 'POST',
+        url,
       );
       const registration = payload as Record<string, unknown>;
       world.registrations.push(registration);
@@ -315,6 +321,8 @@ function fakeFetch(world: World): typeof fetch {
       const { kid } = decodeHeader(envelope);
       const payload = unsigned(
         (await verify(envelope, base64urlDecode(kid))).payload,
+        init.method ?? 'POST',
+        url,
       ) as Record<string, unknown>;
       if (url.endsWith('/settings')) {
         world.gameChanges = [...(world.gameChanges ?? []), payload];
@@ -379,6 +387,8 @@ function fakeFetch(world: World): typeof fetch {
         const { kid } = decodeHeader(envelope);
         const payload = unsigned(
           (await verify(envelope, base64urlDecode(kid))).payload,
+          'PATCH',
+          url,
         );
         const change = payload as { version?: string; runtime?: string };
         if (change.runtime !== undefined) {
@@ -593,6 +603,9 @@ describe('sealkeeper init', () => {
         version: '0.1.0',
         // Nobody to ask, so the default.
         gameEnabled: true,
+        // Taken after the device flow, so the API's window starts at the
+        // signature (VOU-637).
+        issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       },
     ]);
     // The API URL came from SEALKEEPER_API_URL alone, so it is not saved.

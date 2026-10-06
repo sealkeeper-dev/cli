@@ -43,6 +43,7 @@ import { createProgram } from '../program.js';
 import { appendRoutine } from '../routine.js';
 import { copyPaths } from '../routine-copy.js';
 import { jobName, type Runner } from '../routine-scheduler.js';
+import { takePurpose } from '../test-purpose.js';
 
 const API_URL = 'https://api.test';
 const DELETE_LINE_START = 'the key and any copies of it, config.json, the log';
@@ -56,10 +57,13 @@ const HOOK = hookCommand(
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
-const unsigned = (payload: unknown) => {
+// It names the route it is for too (VOU-637), checked and taken off the
+// same way.
+const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
-  if (check.result !== 'match') audErrors.push(payload);
-  return check.payload;
+  const named = takePurpose(check.payload, method, path);
+  if (check.result !== 'match' || !named.ok) audErrors.push(payload);
+  return named.payload;
 };
 afterEach(() => {
   expect(audErrors.splice(0)).toEqual([]);
@@ -106,6 +110,8 @@ class FakeApi {
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
     const payload = unsigned(
       (await verify(envelope, base64urlDecode(kid))).payload,
+      call.method,
+      call.path,
     );
     call.payload = DeleteAgentRequest.parse(payload);
     if (this.deleteStatus === 204) return new Response(null, { status: 204 });

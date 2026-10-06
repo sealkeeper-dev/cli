@@ -197,7 +197,7 @@ export async function submitAnswer(
   let result = task;
   if (!alreadySubmitted) {
     const send = (payload: object) =>
-      sendWithFingerprint(signer, payload, (envelope) =>
+      sendWithFingerprint(signer, payload, 'task.submit', (envelope) =>
         api.submitTask(id, envelope),
       );
     const named = options.modelName
@@ -251,8 +251,11 @@ export async function submitAnswer(
       ...(options.routine === true ? { origin: 'routine' } : {}),
     });
     try {
-      result = await sendWithFingerprint(signer, outcome, (envelope) =>
-        api.postOutcome(id, envelope),
+      result = await sendWithFingerprint(
+        signer,
+        outcome,
+        'task.outcome',
+        (envelope) => api.postOutcome(id, envelope),
       );
     } catch (error) {
       if (error instanceof ApiError) {

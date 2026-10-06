@@ -169,8 +169,8 @@ async function send(
   const call = (envelope: string) =>
     api.challengeNext(signer.agentId, envelope);
   return step
-    ? sendWithFingerprint(signer, request, call)
-    : call(await signer.sign(request));
+    ? sendWithFingerprint(signer, request, 'challenge.next', call)
+    : call(await signer.sign(request, 'challenge.next'));
 }
 
 // The answer, or the command ended with one line. 404 is an API from

@@ -50,7 +50,9 @@ export function register(
       const { signer, api } = await openTaskSession(this, deps);
       let rating: RatingResponse;
       try {
-        rating = await api.postRating(await signer.sign(request));
+        rating = await api.postRating(
+          await signer.sign(request, 'rating.post'),
+        );
       } catch (error) {
         if (error instanceof ApiError) this.error(rateRefusal(error, agentId));
         throw error;

@@ -93,6 +93,7 @@ import {
   withoutBlock,
 } from '../routine-scheduler.js';
 import type { TasksDeps } from '../tasks.js';
+import { takePurpose } from '../test-purpose.js';
 import { VERSION } from '../version.js';
 import {
   BLOCK_TITLE,
@@ -123,10 +124,12 @@ const OPENCLAW = '/usr/local/bin/openclaw';
 const MODEL = 'google/gemini-3-flash-preview';
 
 const audErrors: unknown[] = [];
-const unsigned = (payload: unknown) => {
+// Each names the API and the route it is for (VOU-111, VOU-637).
+const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
-  if (check.result !== 'match') audErrors.push(payload);
-  return check.payload as Record<string, unknown>;
+  const named = takePurpose(check.payload, method, path);
+  if (check.result !== 'match' || !named.ok) audErrors.push(payload);
+  return named.payload as Record<string, unknown>;
 };
 
 type RunResult = { code: number; out: string; err: string };
@@ -278,12 +281,18 @@ class FakeApi {
       );
   }
 
-  private async payload(init?: RequestInit): Promise<Payload> {
+  private async payload(
+    init: RequestInit | undefined,
+    method: string,
+    path: string,
+  ): Promise<Payload> {
     const body = JSON.parse(String(init?.body)) as { envelope: string };
     const kid = decodeHeader(body.envelope).kid;
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
     return unsigned(
       (await verify(body.envelope, base64urlDecode(kid))).payload,
+      method,
+      path,
     );
   }
 
@@ -299,7 +308,7 @@ class FakeApi {
       method === 'POST' &&
       url.pathname === `/v1/agents/${this.agentId}/routine/next`
     ) {
-      const p = await this.payload(init);
+      const p = await this.payload(init, method, url.pathname);
       this.routineCalls.push(p);
       const reply = this.routineReply?.(p) ?? null;
       if (reply !== null) return reply;
@@ -315,11 +324,11 @@ class FakeApi {
       return Response.json({ accepted: envelopes.length, duplicates: 0 });
     }
     if (url.pathname === '/v1/game/status') {
-      await this.payload(init);
+      await this.payload(init, method, url.pathname);
       return Response.json(this.game);
     }
     if (url.pathname === '/v1/game/settings') {
-      const p = await this.payload(init);
+      const p = await this.payload(init, method, url.pathname);
       this.settings.push(p);
       if (typeof p.enabled === 'boolean') this.game.enabled = p.enabled;
       if (typeof p.cap === 'number') this.game.cap = p.cap;
@@ -340,7 +349,7 @@ class FakeApi {
           : task,
       );
     }
-    const p = await this.payload(init);
+    const p = await this.payload(init, method, url.pathname);
     if (match[2] === '/submit') {
       this.submitted.push(p);
       if (this.submitReply) return this.submitReply(task);

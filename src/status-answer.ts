@@ -84,7 +84,10 @@ export async function readStatus(
     const signer = await loadSigner(api.apiUrl, p);
     const answer = await api.status(
       config.agentId,
-      await signer.sign(StatusRequest.parse({ issuedAt: now.toISOString() })),
+      await signer.sign(
+        StatusRequest.parse({ issuedAt: now.toISOString() }),
+        'agent.status',
+      ),
     );
     if (answer.status.agent.id !== config.agentId) {
       why = 'the status answer is for another agent';

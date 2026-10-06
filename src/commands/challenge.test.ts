@@ -18,6 +18,7 @@ import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
 import { ANSWER_FILE } from '../tasks.js';
+import { takePurpose } from '../test-purpose.js';
 import {
   BOARD_LIMIT,
   handOff,
@@ -128,7 +129,9 @@ class FakeApi {
       [API_URL],
     );
     if (check.result !== 'match') this.errors.push('wrong aud');
-    const payload = check.payload as Record<string, unknown>;
+    const named = takePurpose(check.payload, method, url.pathname);
+    if (!named.ok) this.errors.push('wrong purpose');
+    const payload = named.payload as Record<string, unknown>;
     this.payloads.push(payload);
     this.sent.push(ChallengeNextRequest.parse(payload));
     const answer = this.answer;

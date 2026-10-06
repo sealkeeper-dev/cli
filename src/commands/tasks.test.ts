@@ -47,6 +47,7 @@ import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { readRoutine } from '../routine.js';
 import { GAME_SPEC_AT_CLAIM, NOT_FOUND, recordClaims } from '../tasks.js';
+import { takePurpose } from '../test-purpose.js';
 import {
   ALREADY_CLAIMED,
   EXPIRED as CLAIM_EXPIRED,
@@ -114,10 +115,13 @@ const offsetOf = (raw: string | null) =>
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
-const unsigned = (payload: unknown) => {
+// It names the route it is for too (VOU-637), checked and taken off the
+// same way.
+const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
-  if (check.result !== 'match') audErrors.push(payload);
-  return check.payload;
+  const named = takePurpose(check.payload, method, path);
+  if (check.result !== 'match' || !named.ok) audErrors.push(payload);
+  return named.payload;
 };
 afterEach(() => {
   expect(audErrors.splice(0)).toEqual([]);
@@ -314,6 +318,8 @@ class FakeApi {
     if (kid !== this.agentId) this.errors.push(`kid ${kid}`);
     const payload = unsigned(
       (await verify(body.envelope, base64urlDecode(kid))).payload,
+      method,
+      url.pathname,
     );
     request.payload = payload as Record<string, unknown>;
     if (
@@ -876,7 +882,11 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts().map((r) => r.path)).toEqual([
         `/v1/tasks/${task.id}/release`,
       ]);
-      expect(api.posts()[0]?.payload).toEqual({ taskId: task.id });
+      // issuedAt bounds how long a captured release works (VOU-637).
+      expect(api.posts()[0]?.payload).toEqual({
+        taskId: task.id,
+        issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      });
       expect(api.tasks.get(task.id)?.state).toBe('open');
     });
 

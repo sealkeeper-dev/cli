@@ -34,7 +34,7 @@ export async function changeVersion(options: {
   });
   const agent = await options.api.patchAgent(
     options.config.agentId,
-    await options.signer.sign(request),
+    await options.signer.sign(request, 'agent.update'),
   );
   const config = await writeConfig(
     { ...options.config, version: agent.version },

@@ -15,6 +15,7 @@ import { writeConfig } from './config.js';
 import { BAD_CAP, OLD_API } from './game.js';
 import { createKey } from './identity.js';
 import { createProgram } from './program.js';
+import { takePurpose } from './test-purpose.js';
 
 const API_URL = 'https://api.test';
 const RESET_AT = '2026-10-02T00:00:00.000Z';
@@ -65,7 +66,9 @@ class FakeGame {
       [API_URL],
     );
     if (check.result !== 'match') this.errors.push('wrong aud');
-    const payload = check.payload as Record<string, unknown>;
+    const named = takePurpose(check.payload, method, url.pathname);
+    if (!named.ok) this.errors.push('wrong purpose');
+    const payload = named.payload as Record<string, unknown>;
     this.sent.push({ method, path: url.pathname, payload });
     if (this.gone) {
       return Response.json(

@@ -160,8 +160,8 @@ export function register(
       let answer: DuelAnswerResponse;
       try {
         answer = look
-          ? await call(await signer.sign(request))
-          : await sendWithFingerprint(signer, request, call);
+          ? await call(await signer.sign(request, 'duel.next'))
+          : await sendWithFingerprint(signer, request, 'duel.next', call);
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         if (

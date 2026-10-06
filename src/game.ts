@@ -36,6 +36,7 @@ export async function changeGame(
   return api.gameSettings(
     await signer.sign(
       SignedGameSettingsRequest.parse({ ...change, issuedAt: now() }),
+      'game.settings',
     ),
   );
 }
@@ -63,6 +64,9 @@ export async function readGameStatus({
   api,
 }: Pick<TaskSession, 'signer' | 'api'>): Promise<GameStatusResponse> {
   return api.gameStatus(
-    await signer.sign(GameStatusRequest.parse({ issuedAt: now() })),
+    await signer.sign(
+      GameStatusRequest.parse({ issuedAt: now() }),
+      'game.status',
+    ),
   );
 }

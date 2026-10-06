@@ -243,7 +243,7 @@ export async function changeRuntime(options: {
   });
   return options.api.patchAgent(
     options.agentId,
-    await options.signer.sign(request),
+    await options.signer.sign(request, 'agent.update'),
   );
 }
 

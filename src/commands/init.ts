@@ -758,6 +758,8 @@ async function init(
   });
 
   // unknown is what the API stores when runtime is left out, so it is.
+  // issuedAt is taken after the device flow, right before signing, so a
+  // captured envelope stops working after the API's window.
   const request: RegisterAgentRequest = {
     publicKey: agentId,
     githubToken,
@@ -765,9 +767,10 @@ async function init(
     version: options.version,
     ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
     gameEnabled,
+    issuedAt: new Date().toISOString(),
   };
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
-  const envelope = await signEnvelope(request, api.apiUrl, p);
+  const envelope = await signEnvelope(request, api.apiUrl, 'agent.register', p);
   const agent = await api.registerAgent(envelope);
   if (agent.id !== agentId) {
     throw new ApiError(

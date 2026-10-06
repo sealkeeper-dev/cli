@@ -241,7 +241,7 @@ async function sendRounds(
         ? (await declaredModel({ paths: p, now }))?.name
         : undefined;
       jwsNamesModel = model !== undefined;
-      fingerprintJws = await s.sign(
+      fingerprintJws = await s.signEvent(
         model === undefined ? { fingerprint } : { fingerprint, model },
       );
     }
@@ -298,7 +298,8 @@ async function sendRounds(
 
     const signed: string[] = [];
     const roundSigner = await loadOnce();
-    for (const { event } of fresh) signed.push(await roundSigner.sign(event));
+    for (const { event } of fresh)
+      signed.push(await roundSigner.signEvent(event));
     let fingerprint = await fingerprintToSend(roundSigner);
     let envelopes = fitBatch(signed, fingerprint);
 

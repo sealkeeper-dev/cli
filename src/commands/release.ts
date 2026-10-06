@@ -68,7 +68,10 @@ export async function releaseClaim(
 ): Promise<TaskResponse> {
   return api.releaseTask(
     taskId,
-    await signer.sign(ReleaseTaskRequest.parse({ taskId })),
+    await signer.sign(
+      ReleaseTaskRequest.parse({ taskId, issuedAt: new Date().toISOString() }),
+      'task.release',
+    ),
   );
 }
 

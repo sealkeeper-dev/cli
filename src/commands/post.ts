@@ -443,7 +443,7 @@ async function postAndPrint(
   }
   let task: TaskResponse;
   try {
-    task = await api.postTask(await signer.sign(request));
+    task = await api.postTask(await signer.sign(request, 'task.post'));
   } catch (error) {
     if (error instanceof ApiError) cmd.error(postRefusal(error, assignee));
     throw error;
@@ -515,7 +515,7 @@ async function adoptPost(
   const { signer, api } = await openTaskSession(cmd, deps);
   let task: TaskResponse;
   try {
-    task = await api.postTask(await signer.sign(request));
+    task = await api.postTask(await signer.sign(request, 'task.post'));
   } catch (error) {
     if (error instanceof ApiError) cmd.error(adoptRefusal(error, category));
     throw error;

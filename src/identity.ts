@@ -10,6 +10,7 @@ import {
   base64urlDecode,
   base64urlEncode,
   generateKeypair,
+  type RequestPurpose,
   signRequest,
 } from '@sealkeeper/schema';
 import { ApiError } from './api.js';
@@ -164,7 +165,12 @@ export type Signer = {
   // The origin of the API URL. Every payload is signed with it as aud, so
   // the request is good only at that API (VOU-111).
   aud: string;
-  sign(payload: object): Promise<string>;
+  // A request to one route, signed with that route's purpose too, so the
+  // API refuses it on every other route (VOU-637).
+  sign(payload: object, purpose: RequestPurpose): Promise<string>;
+  // An event, or the fingerprint declaration a sync sends beside its
+  // events. Neither names a purpose.
+  signEvent(payload: object): Promise<string>;
 };
 
 // The only place the CLI signs. It loads the local key once and hands every
@@ -190,16 +196,20 @@ export async function loadSigner(
   return {
     agentId: key.agentId,
     aud,
-    sign: (payload) => signRequest(payload, key.privateKey, key.agentId, aud),
+    sign: (payload, purpose) =>
+      signRequest(payload, key.privateKey, key.agentId, aud, purpose),
+    signEvent: (payload) =>
+      signRequest(payload, key.privateKey, key.agentId, aud),
   };
 }
 
 export async function signEnvelope(
   payload: object,
   apiUrl: string,
+  purpose: RequestPurpose,
   p: Paths = paths(),
 ): Promise<string> {
-  return (await loadSigner(apiUrl, p)).sign(payload);
+  return (await loadSigner(apiUrl, p)).sign(payload, purpose);
 }
 
 // Accepts exactly 43 base64url characters with at most one trailing newline.

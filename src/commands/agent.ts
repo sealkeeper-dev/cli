@@ -153,7 +153,7 @@ export function register(
       try {
         renamed = await api.patchAgent(
           config.agentId,
-          await signer.sign(request),
+          await signer.sign(request, 'agent.update'),
         );
       } catch (error) {
         if (error instanceof ApiError) this.error(refusal(error));
@@ -342,7 +342,7 @@ export function register(
       try {
         result = await api.deleteAgent(
           config.agentId,
-          await signer.sign(request),
+          await signer.sign(request, 'agent.delete'),
         );
       } catch (error) {
         if (error instanceof ApiError) this.error(refusal(error));

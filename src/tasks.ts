@@ -1,6 +1,10 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { createHash } from 'node:crypto';
-import { GAME, GAME_TASK_ORIGINS } from '@sealkeeper/schema';
+import {
+  GAME,
+  GAME_TASK_ORIGINS,
+  type RequestPurpose,
+} from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import {
   type ApiClient,
@@ -114,21 +118,23 @@ export async function afterTaskWork(
 // Signs and sends a claim, submit or outcome request with the declared
 // fingerprint (VB-3), and once more without it when the API refuses the
 // field, so a fingerprint never costs the request. request is the payload
-// its schema already parsed. What send throws otherwise is thrown.
+// its schema already parsed, purpose the route it is for. What send throws
+// otherwise is thrown.
 export async function sendWithFingerprint<T>(
   signer: Signer,
   request: object,
+  purpose: RequestPurpose,
   send: (envelope: string) => Promise<T>,
 ): Promise<T> {
   const declared = await declaredFingerprint();
   if (declared.fingerprint === undefined) {
-    return send(await signer.sign(request));
+    return send(await signer.sign(request, purpose));
   }
   try {
-    return await send(await signer.sign({ ...request, ...declared }));
+    return await send(await signer.sign({ ...request, ...declared }, purpose));
   } catch (error) {
     if (!refusesFingerprint(error)) throw error;
-    return send(await signer.sign(request));
+    return send(await signer.sign(request, purpose));
   }
 }
 

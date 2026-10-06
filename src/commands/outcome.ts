@@ -170,8 +170,11 @@ export function register(
           outcome,
           evidenceHash,
         });
-        const sent = await sendWithFingerprint(signer, request, (envelope) =>
-          api.postOutcome(id, envelope),
+        const sent = await sendWithFingerprint(
+          signer,
+          request,
+          'task.outcome',
+          (envelope) => api.postOutcome(id, envelope),
         );
         await recordEvent({
           type: 'task.outcome',
@@ -284,7 +287,7 @@ export async function fetchSubmission(
     taskId: id,
     issuedAt: new Date().toISOString(),
   });
-  return api.readSubmission(id, await signer.sign(request));
+  return api.readSubmission(id, await signer.sign(request, 'task.submission'));
 }
 
 // One line per refusal code of the outcome and submission routes. Codes

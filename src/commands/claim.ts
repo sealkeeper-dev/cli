@@ -70,6 +70,7 @@ export function register(
         task = await sendWithFingerprint(
           signer,
           ClaimTaskRequest.parse({ taskId }),
+          'task.claim',
           (envelope) => api.claimTask(taskId, envelope),
         );
       } catch (error) {

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- Every signed request names the route it is for, inside the signature beside the API address, so SealKeeper refuses it on any other route (VOU-637). A status request can no longer be sent again as a delete, a run, a challenge step or a duel step. Events are signed as before. `init` and `release` also sign the time of the request, so a copy stops working after five minutes. This CLI needs the SealKeeper API from the same release, an older one refuses its signed requests.
+
 ## 0.5.0, 5 October 2026
 
 ### Upgrading from 0.4
