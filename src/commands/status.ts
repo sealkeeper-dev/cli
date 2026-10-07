@@ -62,6 +62,7 @@ import {
   routineView,
 } from './routine.js';
 import { actionLine, agentAnswer, levelLine } from './run.js';
+import { eventsWaitLine } from './sync.js';
 
 /*
  * sealkeeper status (VOU-596), the status verb of the core commands. One
@@ -383,7 +384,7 @@ function todaySection(
     `${plural(local.sessions, 'session')} and ${plural(local.events, 'event')} today in the local log, ${local.pending} not sent yet, last sync ${local.lastSyncAt ?? 'never'}.`,
   );
   if (!local.autoSync && local.pending > 0) {
-    lines.push(`Auto sync is off, ${cli('sync')} reviews and sends them.`);
+    lines.push(eventsWaitLine(local.pending));
   }
   if (local.unsubmittedClaims > 0) {
     const n = local.unsubmittedClaims;

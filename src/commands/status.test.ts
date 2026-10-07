@@ -617,7 +617,7 @@ describe('status', () => {
         `2 sessions and 3 events today in the local log, 3 not sent yet, last sync ${LAST_SYNC}.\n`,
       );
       expect(out).toContain(
-        'Auto sync is off, npx sealkeeper sync reviews and sends them.\n',
+        '3 events wait in the local log with automatic sync off, npx sealkeeper sync reviews and sends them.\n',
       );
       expect(out).toContain(
         '1 claimed task is not submitted yet. Your agent gets it again with npx sealkeeper run --json.\n',

@@ -118,10 +118,13 @@ import {
   FIRST_RUN_QUESTION,
   INSTALL_QUESTION,
   startInProcess,
+  syncHelp,
+  syncQuestion,
   TIME_NOW_LINE,
   timeQuestion,
   WORK_QUESTION,
 } from './routine.js';
+import { AUTO_SYNC_OFF, AUTO_SYNC_ON } from './sync.js';
 
 const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const HOOK_COMMAND = hookCommand(
@@ -3379,7 +3382,8 @@ describe('sealkeeper init', () => {
 
     // The runtime, the game, its cap, the hooks and the nudge, each by
     // Enter, then the guided setup of sealkeeper routine, the time, tasks or
-    // the game, the install question and the first run question.
+    // the game, whether to sync, the install question and the first run
+    // question.
     const answersThen = (...routine: string[]) =>
       answeringEach(['', '', '', '', '', ...routine]);
 
@@ -3387,11 +3391,11 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      const stdin = answersThen('', '', '', 'n');
+      const stdin = answersThen('', '', 'n', '', 'n');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(9);
+      expect(stdin.reads).toBe(10);
       const schedule = (await readRoutineConfig()).schedule;
       const job = schedule?.job ?? '';
       // The guided setup of sealkeeper routine, indented as init's other
@@ -3399,7 +3403,8 @@ describe('sealkeeper init', () => {
       const block = [
         `  Agent     Claude Code, ${CLAUDE}`,
         `  ${TIME_NOW_LINE}`,
-        `  ${timeQuestion('09:05')}  ${WORK_QUESTION}  Daily routine   09:05, only when there is work`,
+        `  ${timeQuestion('09:05')}  ${WORK_QUESTION}  ${syncHelp()}`,
+        `  ${syncQuestion(0)}  Daily routine   09:05, only when there is work`,
         '',
         '    Claims   Seed tasks and tasks from operators you allow',
         '    Posts    1 task a day when posting is behind',
@@ -3448,12 +3453,12 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      const stdin = answersThen('', '', '', '');
+      const stdin = answersThen('', '', 'n', '', '');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       // A first run that fails does not fail init.
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(9);
+      expect(stdin.reads).toBe(10);
       expect(result.out).toContain(
         '  First run started. It stops within 15 minutes.\n',
       );
@@ -3475,11 +3480,11 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      const stdin = answersThen('', '', 'n');
+      const stdin = answersThen('', '', 'n', 'n');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(8);
+      expect(stdin.reads).toBe(9);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(result.err).not.toContain(FIRST_RUN_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -3491,11 +3496,11 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      const stdin = answersThen('', '', 'maybe', 'what', 'hm');
+      const stdin = answersThen('', '', 'n', 'maybe', 'what', 'hm');
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(10);
+      expect(stdin.reads).toBe(11);
       expect(result.err).toContain(
         `  Please answer y or n. ${INSTALL_QUESTION}`,
       );
@@ -3507,7 +3512,7 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      world.stdin = answersThen('', '', 'y', 'n');
+      world.stdin = answersThen('', '', 'n', 'y', 'n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       const c = copyPaths(paths(home));
       await writeFile(c.meta, '{"type":"module","version":"0.0.1"}\n');
@@ -3532,7 +3537,7 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      world.stdin = answersThen('', '', 'y', 'n');
+      world.stdin = answersThen('', '', 'n', 'y', 'n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       const routine = await readRoutineConfig();
       if (routine.schedule === undefined) throw new Error('no schedule');
@@ -3558,7 +3563,7 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      world.stdin = answersThen('', '', 'y', 'n');
+      world.stdin = answersThen('', '', 'n', 'y', 'n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       const routine = await readRoutineConfig();
       const { program: _, ...earlier } = routine.schedule ?? {};
@@ -3578,16 +3583,16 @@ describe('sealkeeper init', () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
-      world.stdin = answersThen('', '', 'n');
+      world.stdin = answersThen('', '', 'n', 'n');
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       world = newWorld();
       await withBundle();
       world.claude = true;
-      const stdin = answeringEach(['', '', 'n']);
+      const stdin = answeringEach(['', '', 'n', 'n']);
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(3);
+      expect(stdin.reads).toBe(4);
       expect(result.err).toContain(INSTALL_QUESTION);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
     });
@@ -3607,7 +3612,7 @@ describe('sealkeeper init', () => {
         ),
       );
       world.claude = true;
-      world.stdin = answersThen('', '', 'y', 'n');
+      world.stdin = answersThen('', '', 'n', 'y', 'n');
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       const [plist = ''] = (await readRoutineConfig()).schedule?.files ?? [];
@@ -3654,7 +3659,7 @@ describe('sealkeeper init', () => {
       world.openclaw = true;
       // The runtime, the game and its cap, no hooks and no nudge, then the
       // model, which OpenClaw gives no default for here, the time, tasks or
-      // the game, the install and the first run.
+      // the game, whether to sync, the install and the first run.
       const stdin = answeringEach([
         '',
         '',
@@ -3662,13 +3667,14 @@ describe('sealkeeper init', () => {
         'google/gemini-3-flash-preview',
         '',
         '',
+        'n',
         '',
         'n',
       ]);
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(8);
+      expect(stdin.reads).toBe(9);
       expect(result.all).toContain(`  Agent     OpenClaw, ${OPENCLAW}`);
       expect(result.err).toContain('  Which model does OpenClaw use? ');
       expect(result.err).not.toContain('Which agent runs it?');
@@ -3688,18 +3694,52 @@ describe('sealkeeper init', () => {
         'anthropic/claude-sonnet-4-6',
         '',
         '',
+        'n',
         '',
         'n',
       );
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(11);
+      expect(stdin.reads).toBe(12);
       expect(result.err).toContain(
         '  Which agent runs it? 1 Claude Code  2 OpenClaw [1] ',
       );
       expect((await readRoutineConfig()).schedule?.agent).toBe('openclaw');
     });
+
+    // VOU-657. The one sync question of an init is the routine setup's.
+    for (const answer of ['y', 'n']) {
+      it(`asks about sync once, in the routine setup, keeps ${answer === 'y' ? 'a yes' : 'nothing on a no'} and Next says the truth`, async () => {
+        world.serverVersion = '0.1.0';
+        world.live = { verifiedTasks: 0, level: 'none' };
+        await withClaudeCode();
+        await withBundle();
+        world.claude = true;
+        const stdin = answersThen('', '', answer, '', 'n');
+        world.stdin = stdin;
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(stdin.reads).toBe(10);
+        expect(result.err.split('Turn on automatic sync')).toHaveLength(2);
+        expect(result.out).toContain(
+          `  ${answer === 'y' ? AUTO_SYNC_ON : AUTO_SYNC_OFF}\n`,
+        );
+        expect((await readConfig(paths(home)))?.autoSync).toBe(
+          answer === 'y' ? true : undefined,
+        );
+        // Nothing is sent by init or the setup.
+        expect(world.fetchUrls.filter((u) => u.endsWith('/v1/events'))).toEqual(
+          [],
+        );
+        const next = result.out
+          .split('\n')
+          .filter((l) => /^ {2}\d {2}/.test(l));
+        expect(next.some((l) => l.includes('Review and send'))).toBe(
+          answer === 'n',
+        );
+      });
+    }
 
     it('asks nothing and installs nothing with --json or without a terminal', async () => {
       await withClaudeCode();

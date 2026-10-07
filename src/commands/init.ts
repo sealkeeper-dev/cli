@@ -938,7 +938,7 @@ async function init(
   printNext(
     ui.out,
     hooks,
-    nextStateOf(config, live),
+    nextStateOf(await configNow(config, p), live),
     await routineStepFirst(hooks, deps, p),
   );
 }
@@ -1075,7 +1075,7 @@ async function initRegistered(
   printNext(
     ui.out,
     hooks,
-    nextStateOf(existing, live),
+    nextStateOf(await configNow(existing, p), live),
     await routineStepFirst(hooks, deps, p),
   );
 }
@@ -1267,16 +1267,17 @@ async function offerNudge(
 
 // Offers the daily routine when a person can answer, after the Claude
 // Code section, through the same guided setup as sealkeeper routine (RS-1),
-// so the agent, the time, tasks only or the game, the block with the
-// limits, the install and one run now are asked the same way. One with a
-// job installed already is named, its copy of the CLI refreshed when its
-// version is not this one (RS-2), a stored agent inside a project named
-// in one line, and nothing is asked. No is not stored,
-// so a repeat init asks again the way it asks about the hooks. A machine
-// where the routine cannot be installed, neither claude nor openclaw on
-// PATH or a scheduler that cannot be read, hears nothing, since init has
-// nothing to offer it. One whose only agent is inside a project hears why,
-// in one line (VOU-647).
+// so the agent, the time, tasks only or the game, whether to sync, the
+// block with the limits, the install and one run now are asked the same
+// way. Its sync question is the only one init asks about sync (VOU-657).
+// One with a job installed already is named, its copy of the CLI
+// refreshed when its version is not this one (RS-2), a stored agent
+// inside a project named in one line, and nothing is asked. No is not
+// stored, so a repeat init asks again the way it asks about the hooks. A
+// machine where the routine cannot be installed, neither claude nor
+// openclaw on PATH or a scheduler that cannot be read, hears nothing,
+// since init has nothing to offer it. One whose only agent is inside a
+// project hears why, in one line (VOU-647).
 async function offerRoutine(
   deps: InitDeps,
   routineDeps: RoutineDeps,
@@ -1366,6 +1367,13 @@ export type NextState = {
   level: Level | null;
   autoSync: boolean;
 };
+
+// The config as Next reads it, after the routine setup, whose sync
+// question may have turned automatic sync on (VOU-657). The one init read
+// before when it cannot be read again.
+async function configNow(before: Config, p: Paths): Promise<Config> {
+  return (await readConfig(p).catch(() => null)) ?? before;
+}
 
 // null when the API does not answer or sends no count, so Next falls back
 // to the generic steps rather than failing init.

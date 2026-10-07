@@ -154,9 +154,9 @@ async function runHook(
         await observe(null);
         await removeSessionMarkers(p);
         // Every SessionEnd, whatever session it ends, but with nothing
-        // pending it makes no request. Nothing leaves on its own until the
-        // operator has previewed and confirmed a first sync, which turns
-        // autoSync on.
+        // pending it makes no request. Nothing leaves on its own until
+        // autoSync is on, which a confirmed first sync, a yes in the
+        // routine setup or config auto-sync on sets.
         if (config.autoSync) await trySync(deps, p);
         return;
       // Stop, a tool event, and any other, records nothing.

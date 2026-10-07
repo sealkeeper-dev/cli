@@ -41,6 +41,7 @@ import {
   writeNudge,
   writeRoutineConfig,
 } from '../config.js';
+import { emit } from '../emit.js';
 import { tildePath } from '../files.js';
 import {
   observeParts,
@@ -117,9 +118,12 @@ import {
   preview,
   type RoutineDeps,
   startInProcess,
+  syncHelp,
+  syncQuestion,
   TIME_NOW_LINE,
   WORK_QUESTION,
 } from './routine.js';
+import { AUTO_SYNC_OFF, AUTO_SYNC_ON, eventsWaitLine } from './sync.js';
 
 const API_URL = 'https://api.test';
 const HOUR = 3_600_000;
@@ -803,7 +807,7 @@ describe('routine', () => {
     });
 
     it('asks the time and the work, shows the limits, installs and turns the game on when asked', async () => {
-      answers = ['09:30', 'g', '', 'n'];
+      answers = ['09:30', 'g', 'n', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.out).toContain(`Agent     Claude Code, ${CLAUDE}\n`);
@@ -840,7 +844,7 @@ describe('routine', () => {
     });
 
     it('keeps the time on Enter, takes tasks only, and asks again on an answer it does not take', async () => {
-      answers = ['25:00', '', 'maybe', 't', 'n'];
+      answers = ['25:00', '', 'maybe', 't', 'n', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(1);
       expect(result.err).toContain(
@@ -853,7 +857,7 @@ describe('routine', () => {
     });
 
     it('takes the time now on Enter for a new routine, so routines spread over the day (VOU-612)', async () => {
-      answers = ['', '', '', 'n'];
+      answers = ['', '', 'n', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.out).toContain('Routine on. It runs every day at 14:37.');
@@ -868,7 +872,7 @@ describe('routine', () => {
 
     it('offers the time a routine has, with no word about now, and keeps a typed time as typed', async () => {
       await setRoutine({ time: '07:15' });
-      answers = ['', '', '', 'n'];
+      answers = ['', '', 'n', '', 'n'];
       const kept = await run('routine');
       expect(kept.code).toBe(0);
       expect(kept.out).not.toContain(TIME_NOW_LINE);
@@ -877,14 +881,14 @@ describe('routine', () => {
       );
       expect(crontab).toContain('15 7 * * *');
       await run('routine', 'off', '--yes');
-      answers = ['10:00', '', '', 'n'];
+      answers = ['10:00', '', 'n', '', 'n'];
       expect((await run('routine')).code).toBe(0);
       expect(crontab).toContain('0 10 * * *');
       expect((await readRoutineConfig()).time).toBe('10:00');
     });
 
     it('installs on Enter and watches the first run, which solves a task (RS-9)', async () => {
-      answers = ['', '', '', ''];
+      answers = ['', '', 'n', '', ''];
       const task = api.add({ taskType: 'text_dedupe' });
       api.steps = [api.task(task)];
       nextAgents = [() => says('a\nb\n')];
@@ -950,6 +954,211 @@ describe('routine', () => {
       expect(crontab).toContain('15 7 * * *');
       expect(spawned).toEqual([]);
       expect(await runs()).toEqual([]);
+    });
+  });
+
+  // VOU-657. A routine-only agent sends nothing until its operator said
+  // yes, and the setup is where it is asked.
+  describe('the sync question', () => {
+    const WAITS = 'in the local log with automatic sync off';
+
+    // n events in the local log, as an earlier run left them.
+    async function logged(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        await emit({
+          type: 'session.start',
+          payload: { session_id: randomUUID() },
+        });
+      }
+    }
+
+    beforeEach(() => {
+      tty = true;
+      // The throttle is per process, so a run's sync here never waits on
+      // another test's.
+      resetBackgroundSyncThrottle();
+    });
+
+    it('says the question and the sentence of what a yes sends as the code has them', () => {
+      expect(syncQuestion(0)).toBe('Turn on automatic sync? [y/N] ');
+      expect(syncQuestion(1)).toBe(
+        'Turn on automatic sync and send the event waiting in the local log? [y/N] ',
+      );
+      expect(syncQuestion(106)).toBe(
+        'Turn on automatic sync and send the 106 events waiting in the local log? [y/N] ',
+      );
+      expect(syncHelp()).toBe(
+        "Automatic sync sends the events in this agent's local log to SealKeeper as they are logged, each run's session, the tokens, time and model of each answer, the task claims, submits and outcomes and any event emit wrote, with the agent's fingerprint as SHA-256 hashes and its model name beside them, metadata only and never prompts, answers or file contents, and sealkeeper sync --dry-run shows every one first.",
+      );
+      expect(eventsWaitLine(1)).toBe(
+        '1 event waits in the local log with automatic sync off, sealkeeper sync reviews and sends it.',
+      );
+      expect(eventsWaitLine(3)).toBe(
+        '3 events wait in the local log with automatic sync off, sealkeeper sync reviews and sends them.',
+      );
+      expect(eventsWaitLine(null)).toBe(
+        'Events wait in the local log with automatic sync off, sealkeeper sync reviews and sends them.',
+      );
+    });
+
+    it('asks once after the work, with the events waiting, and a yes turns automatic sync on after the install and sends nothing itself', async () => {
+      await logged(3);
+      answers = ['', '', 'y', '', 'n'];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`${syncHelp()}\n`);
+      const question = syncQuestion(3);
+      expect(result.err.split(question)).toHaveLength(2);
+      expect(result.err.indexOf(WORK_QUESTION)).toBeLessThan(
+        result.err.indexOf(question),
+      );
+      expect(result.err.indexOf(question)).toBeLessThan(
+        result.err.indexOf(INSTALL_QUESTION),
+      );
+      expect(result.out.indexOf(`${AUTO_SYNC_ON}\n`)).toBeGreaterThan(
+        result.out.indexOf('Routine on. It runs every day at 14:37.'),
+      );
+      expect((await readConfig())?.autoSync).toBe(true);
+      // The first events go with the gate at the end of the next run.
+      expect(api.requests).not.toContain('POST /v1/events');
+      expect(api.synced).toBe(0);
+      expect(result.out).not.toContain(WAITS);
+    });
+
+    it('asks again on an unclear answer and takes Enter as no', async () => {
+      answers = ['', '', 'maybe', '', '', 'n'];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`Please answer y or n. ${syncQuestion(0)}`);
+      expect((await readConfig())?.autoSync).toBeUndefined();
+      expect(result.out).toContain(`${AUTO_SYNC_OFF}\n`);
+    });
+
+    it('writes nothing after a yes when the install is declined', async () => {
+      await logged(2);
+      answers = ['', '', 'y', 'n'];
+      const result = await run('routine');
+      expect(result.code).toBe(1);
+      expect(result.err).toContain('nothing installed');
+      expect(result.out).not.toContain(AUTO_SYNC_ON);
+      expect((await readConfig())?.autoSync).toBeUndefined();
+      expect(crontab).toBeNull();
+      expect(api.requests).not.toContain('POST /v1/events');
+    });
+
+    it('writes nothing on a no, and the first run and the job send no event and say what waits', async () => {
+      await logged(2);
+      answers = ['', '', 'n', '', ''];
+      const task = api.add({ taskType: 'text_dedupe' });
+      api.steps = [api.task(task)];
+      nextAgents = [() => says('a\nb\n')];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(`${AUTO_SYNC_OFF}\n`);
+      expect((await readConfig())?.autoSync).toBeUndefined();
+      expect(api.submitted).toHaveLength(1);
+      expect(api.requests).not.toContain('POST /v1/events');
+      expect(api.synced).toBe(0);
+      // The two logged before and the run's own, after its run line.
+      const waiting = `${eventsWaitLine((await events()).length)}\n`;
+      expect((await events()).length).toBeGreaterThan(2);
+      const at = result.out.indexOf(waiting);
+      expect(at).toBeGreaterThan(result.out.indexOf('Routine run done.'));
+      expect(at).toBeLessThan(result.out.indexOf('See every run with'));
+
+      // The job's own output, a plain routine run. Its own process starts
+      // with no throttle, so its gate reaches the autoSync check, which a
+      // no left unset.
+      tty = false;
+      resetBackgroundSyncThrottle();
+      expect((await readConfig())?.autoSync).toBeUndefined();
+      const job = await run('routine', 'run');
+      expect(job.code).toBe(0);
+      expect(job.out).toContain(`${eventsWaitLine((await events()).length)}\n`);
+      expect(api.requests).not.toContain('POST /v1/events');
+      // A run adds no field for it to the routine log.
+      expect(JSON.stringify(await readRoutine())).not.toContain(
+        'automatic sync',
+      );
+    });
+
+    it("sends the waiting events and the run's at the end of the first run after a yes, and says nothing waits", async () => {
+      await logged(2);
+      answers = ['', '', 'y', '', ''];
+      api.steps = [api.task(api.add({ taskType: 'text_dedupe' }))];
+      nextAgents = [() => says('a\nb\n')];
+      const result = await run('routine');
+      expect(result.code).toBe(0);
+      expect(api.requests.at(-1)).toBe('POST /v1/events');
+      expect(api.synced).toBe((await events()).length);
+      expect(result.out).not.toContain(WAITS);
+    });
+
+    it('is not asked while automatic sync is on or turned off, which stands', async () => {
+      for (const autoSync of [true, false]) {
+        const config = await readConfig();
+        if (config === null) throw new Error('no config');
+        await writeConfig({ ...config, autoSync });
+        answers = ['', '', '', 'n'];
+        const result = await run('routine');
+        expect(result.code, String(autoSync)).toBe(0);
+        expect(result.err).not.toContain('Turn on automatic sync');
+        expect(result.out).not.toContain(syncHelp());
+        expect((await readConfig())?.autoSync).toBe(autoSync);
+        expect((await run('routine', 'off', '--yes')).code).toBe(0);
+      }
+    });
+
+    it('is not asked by --yes, --json, routine on or without a terminal, which change nothing about sync', async () => {
+      await logged(2);
+      const asked = (r: RunResult) =>
+        r.err.includes('Turn on automatic sync') || r.out.includes(syncHelp());
+
+      // A terminal and --json shows the screen.
+      const json = await run('routine', '--json');
+      expect(asked(json)).toBe(false);
+      // No terminal shows the screen, which says what waits.
+      tty = false;
+      const screen = await run('routine');
+      expect(asked(screen)).toBe(false);
+      expect(screen.out).toContain(`${eventsWaitLine(2)}\n`);
+      expect(crontab).toBeNull();
+
+      const yes = await run('routine', '--yes');
+      expect(yes.code).toBe(0);
+      expect(asked(yes)).toBe(false);
+      expect(yes.out).toContain(`${eventsWaitLine(2)}\n`);
+      const on = await run('routine', 'on', '--yes', '--json');
+      expect(asked(on)).toBe(false);
+      expect(JSON.parse(on.out)).toMatchObject({ on: true, autoSync: false });
+      expect((await run('routine', 'off', '--yes')).code).toBe(0);
+
+      // routine on in a terminal asks the install, not about sync.
+      tty = true;
+      answers = ['', 'n'];
+      const terminal = await run('routine', 'on');
+      expect(terminal.code).toBe(0);
+      expect(asked(terminal)).toBe(false);
+      expect((await readConfig())?.autoSync).toBeUndefined();
+      expect(api.requests).not.toContain('POST /v1/events');
+
+      await autoSyncOn();
+      const synced = await run('routine', 'on', '--yes', '--json');
+      expect(JSON.parse(synced.out)).toMatchObject({ autoSync: true });
+    });
+
+    it('says on the screen what waits only while automatic sync is not on and something waits', async () => {
+      tty = false;
+      const none = await run('routine');
+      expect(none.out).not.toContain(WAITS);
+      await logged(1);
+      const one = await run('routine');
+      expect(one.out).toContain(`${eventsWaitLine(1)}\n`);
+      const shown = await routineJson();
+      expect(JSON.stringify(shown)).not.toContain(WAITS);
+      await autoSyncOn();
+      const on = await run('routine');
+      expect(on.out).not.toContain(WAITS);
     });
   });
 
@@ -3064,7 +3273,7 @@ describe('routine', () => {
       onPath = { claude: CLAUDE, openclaw: OPENCLAW };
       // Enter takes the default model OpenClaw says (VOU-623).
       nextAgents = [() => defaultModel({ primary: MODEL })];
-      answers = ['2', '', '', '', '', 'n'];
+      answers = ['2', '', '', '', 'n', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.err).toContain(
@@ -3097,7 +3306,16 @@ describe('routine', () => {
       tty = true;
       onPath = { openclaw: OPENCLAW };
       nextAgents = [noDefault];
-      answers = ['', '--help', 'anthropic/claude-sonnet-4-6', '', '', '', 'n'];
+      answers = [
+        '',
+        '--help',
+        'anthropic/claude-sonnet-4-6',
+        '',
+        '',
+        'n',
+        '',
+        'n',
+      ];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.err).toContain('Which model does OpenClaw use? ');
@@ -3266,7 +3484,7 @@ describe('routine', () => {
       tty = true;
       onPath = { openclaw: OPENCLAW };
       nextAgents = [() => defaultModel(MODEL)];
-      answers = ['', '', '', '', 'n'];
+      answers = ['', '', '', 'n', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
       expect(result.err).not.toContain('Which agent runs it?');

@@ -101,8 +101,9 @@ export async function recordEvent(input: EmitInput): Promise<void> {
 // is SealKeeper work, so it starts a sync through the gate every automatic
 // sync takes, as a routine run does at its end (backgroundSync), and
 // refreshes the goal the session summary reads (keepNudgeFresh). The gate
-// sends nothing before the operator's first sync showed the events and
-// asked, nothing with auto sync off and nothing inside the throttle. Both
+// sends nothing before automatic sync is on (a confirmed first sync, a yes
+// in the routine setup or config auto-sync on), nothing with it off and
+// nothing inside the throttle. Both
 // are side tasks that print nothing and never reject, so a command starts
 // it after its write and awaits it after its output, and a failure never
 // fails the command.

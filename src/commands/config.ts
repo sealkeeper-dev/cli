@@ -14,9 +14,7 @@ import { NUDGE_OFF, NUDGE_ON, setNudge } from '../nudge.js';
 import { stdout, wantsJson } from '../output.js';
 import type { GameSettingsResponse, GameStatusResponse } from '../responses.js';
 import { openTaskSession, utc } from '../tasks.js';
-import { AUTO_SYNC_ON } from './sync.js';
-
-const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
+import { AUTO_SYNC_OFF, AUTO_SYNC_ON } from './sync.js';
 
 // The game switch, as config game shows it and as on leaves it. The cap,
 // the units and the duels started come from the API's answer.

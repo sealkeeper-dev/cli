@@ -278,7 +278,7 @@ export async function countPending(
 }
 
 // A quick count of the lines after the cursor, for a hint like emit's
-// "N events waiting". It reads only the cursor's day file and the ones after
+// eventsWaitLine. It reads only the cursor's day file and the ones after
 // it, leaves out day files too old to send and never parses a line, so it
 // stays cheap on a log that has grown for weeks while automatic sync was
 // off. A line of a type never sent is found without a parse and not

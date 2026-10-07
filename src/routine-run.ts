@@ -177,7 +177,8 @@ type StopFor = NonNullable<AgentResult['stoppedFor']>;
  * with the time the answer took and the model, see recordUsage. Once the
  * lock is released a run that held it syncs through the gate every
  * automatic sync takes, unless its caller aborted it, so nothing leaves
- * before the operator's first sync and nothing with auto sync off. A sync
+ * before automatic sync is on (a confirmed first sync, a yes in the
+ * routine setup or config auto-sync on) and nothing with it off. A sync
  * that fails is a sync_failed line and never fails the run.
  *
  * The fingerprint (VOU-655). The run recomputes it from its own home's

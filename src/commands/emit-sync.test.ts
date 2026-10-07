@@ -1551,7 +1551,7 @@ describe('emit and sync', () => {
       expect(code).toBe(0);
       expect(out).toMatch(/^[0-9a-f-]{36}\n$/);
       expect(err).toBe(
-        '2 events waiting, run npx sealkeeper sync to review and send\n',
+        '2 events wait in the local log with automatic sync off, npx sealkeeper sync reviews and sends them.\n',
       );
       expect(calls).toBe(0);
       expect(await countPending()).toBe(2);
@@ -1567,7 +1567,7 @@ describe('emit and sync', () => {
         '{"session_id":"s1"}',
       );
       expect(err).toBe(
-        '1 event waiting, run npx sealkeeper sync to review and send\n',
+        '1 event waits in the local log with automatic sync off, npx sealkeeper sync reviews and sends it.\n',
       );
     });
 
@@ -1847,7 +1847,7 @@ describe('emit and sync', () => {
         '{"session_id":"s1"}',
       );
       expect(err).toBe(
-        '1 event waiting, run npx sealkeeper sync to review and send\n',
+        '1 event waits in the local log with automatic sync off, npx sealkeeper sync reviews and sends it.\n',
       );
       expect(server.batches).toEqual([]);
     });

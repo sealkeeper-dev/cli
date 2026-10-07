@@ -28,12 +28,14 @@ import {
   SCHEDULED_AGENTS,
   type ScheduledAgent,
   sealkeeperRoot,
+  writeConfig,
   writeRoutineConfig,
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
 import { BAD_CAP, changeGame, gameRefusal, readGameStatus } from '../game.js';
 import { cli, printedInvocation } from '../invocation.js';
+import { countPending } from '../log.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import {
   JSON_FLAG,
@@ -111,6 +113,7 @@ import {
 } from '../routine-watch.js';
 import { createStyle } from '../style.js';
 import { VERSION } from '../version.js';
+import { AUTO_SYNC_OFF, AUTO_SYNC_ON, eventsWaiting } from './sync.js';
 
 /*
  * sealkeeper routine (VOU-136, VOU-138, VOU-599, VOU-601), the routine verb of the
@@ -635,19 +638,40 @@ export function routineTime(deps: RoutineDeps, routine: RoutineConfig): string {
 }
 
 export const WORK_QUESTION = 'Tasks only, or tasks and the game? [T/g] ';
+
+// Said before the sync question, from what a sync sends. Every event in
+// the local log, which a routine run fills with session.start, session.end
+// and usage (routine-run.ts), task commands with task.claimed,
+// task.submitted and task.outcome, and the operator's own emit with any
+// type, and beside them the fingerprint as hashes and the model name, as
+// the first sync's preview says (besideText in preview.ts). what-is-shared
+// lists every field.
+export const syncHelp = (): string =>
+  `Automatic sync sends the events in this agent's local log to SealKeeper as they are logged, each run's session, the tokens, time and model of each answer, the task claims, submits and outcomes and any event emit wrote, with the agent's fingerprint as SHA-256 hashes and its model name beside them, metadata only and never prompts, answers or file contents, and ${cli('sync --dry-run')} shows every one first.`;
+// The sync question, no by default (VOU-657). Events in the local log
+// already go with the first sync after a yes, so it says how many.
+export function syncQuestion(pending: number): string {
+  const waiting =
+    pending === 0
+      ? ''
+      : ` and send the ${pending === 1 ? 'event' : `${pending} events`} waiting in the local log`;
+  return `Turn on automatic sync${waiting}? [y/N] `;
+}
 // Asked again after an answer that is not one it takes, up to this many
 // questions in all, and then the default, or no.
 export const MAX_ASKS = 3;
 
-// Asks a question whose default is yes. prompt writes it, with again in
-// front after an unclear answer. A closed input is no.
+// Asks a yes or no question, whose answer on Enter is fallback, yes unless
+// a caller says no. prompt writes it, with again in front after an unclear
+// answer. A closed input is no, and so is no clear answer.
 export async function askYes(
   input: Input,
   prompt: (again: string) => void,
+  fallback: 'yes' | 'no' = 'yes',
 ): Promise<boolean> {
   for (let asked = 0; asked < MAX_ASKS; asked++) {
     prompt(asked === 0 ? '' : 'Please answer y or n. ');
-    const answer = readYesNo(await input.readLine(), 'yes');
+    const answer = readYesNo(await input.readLine(), fallback);
     if (answer !== 'unclear') return answer === 'yes';
   }
   return false;
@@ -767,9 +791,13 @@ async function firstRun(
     pollMs: deps.pollMs,
   });
   switch (watched.kind) {
-    case 'done':
+    case 'done': {
       for (const line of reportLines(watched.entry)) print.line(line);
+      // The run sent nothing unless automatic sync is on (VOU-657).
+      const waiting = await eventsWaiting(p);
+      if (waiting !== null) print.line(waiting);
       break;
+    }
     case 'detached':
       print.line(STOPPED_WATCHING);
       break;
@@ -1017,7 +1045,8 @@ const plainPrint = (): SetupPrint => {
 };
 
 // The guided setup (VOU-599), the one routine and init share. The agent
-// found on this machine, the time, tasks only or tasks and the game, the
+// found on this machine, the time, tasks only or tasks and the game,
+// whether to sync while automatic sync was never turned on or off, the
 // block with the limits, then the install and one run now, watched. null
 // once it is installed, else why nothing was installed. A scheduler that
 // cannot be read or refuses is said as its reason.
@@ -1055,6 +1084,7 @@ export async function guidedSetup(
   if (current.time === undefined) print.dim(TIME_NOW_LINE);
   const time = await askTime(input, routineTime(deps, current), print);
   const game = await askGame(input, print);
+  const sync = await askSync(input, print);
   const chosen = { ...current, model, time, game };
   const installed = await installJob(deps, chosen, input, print, {
     gameOn: game,
@@ -1062,8 +1092,52 @@ export async function guidedSetup(
   });
   if (typeof installed === 'string') return installed;
   print.line(installedLine(time));
+  if (sync !== null) await keepSyncAnswer(sync, installed.p, print);
   await offerFirstRun(deps, input, installed, print);
   return null;
+}
+
+// Asks whether to turn on automatic sync, only while autoSync is unset,
+// so an operator who said yes to a first sync or turned it off with config
+// auto-sync is never asked (VOU-657). A declined first sync leaves it
+// unset, so that operator is asked here. Without it a routine-only agent never
+// sends an event, since the gate at the end of a run sends only with
+// automatic sync on. No by default. null when it was not asked. The
+// answer is kept only once the install succeeded, see keepSyncAnswer.
+async function askSync(
+  input: Input,
+  print: SetupPrint,
+  p: Paths = paths(),
+): Promise<boolean | null> {
+  const config = await readConfig(p).catch(() => null);
+  if (config === null || config.autoSync !== undefined) return null;
+  const pending = await countPending(p).catch(() => 0);
+  print.dim(syncHelp());
+  return askYes(
+    input,
+    (again) => print.ask(`${again}${syncQuestion(pending)}`),
+    'no',
+  );
+}
+
+// A yes turns automatic sync on, with the line config auto-sync on prints.
+// Nothing is sent here, the first events go with the gate at the end of
+// the next run. A no writes nothing, so the first sync still shows the
+// events and asks.
+async function keepSyncAnswer(
+  yes: boolean,
+  p: Paths,
+  print: SetupPrint,
+): Promise<void> {
+  if (!yes) {
+    print.line(AUTO_SYNC_OFF);
+    return;
+  }
+  const config = await readConfig(p).catch(() => null);
+  // Turned on or off since the question, which stands.
+  if (config === null || config.autoSync !== undefined) return;
+  await writeConfig({ ...config, autoSync: true }, p);
+  print.line(AUTO_SYNC_ON);
 }
 
 const agentQuestion = (found: FoundAgent[]): string =>
@@ -1213,20 +1287,22 @@ async function installJob(
 }
 
 // Offers one run now after an install in a terminal, and watches it.
+// Whether it started one.
 async function offerFirstRun(
   deps: RoutineDeps,
   input: Input,
   { schedule, saved, p }: Installed,
   print: SetupPrint,
-): Promise<void> {
+): Promise<boolean> {
   const now = await askYes(input, (again) =>
     print.ask(`${again}${FIRST_RUN_QUESTION}`),
   );
   if (!now) {
     print.line(laterLine(schedule.time, deps.now?.()));
-    return;
+    return false;
   }
   await firstRun(deps, saved, p, print);
+  return true;
 }
 
 // routine on and routine --yes. The install, then its line, or with --json
@@ -1244,8 +1320,9 @@ async function install(
     agentPath,
   });
   if (typeof installed === 'string') cmd.error(installed);
-  const { schedule, saved } = installed;
+  const { schedule, saved, p } = installed;
   if (print === null) {
+    const config = await readConfig(p).catch(() => null);
     stdout(
       JSON.stringify({
         on: true,
@@ -1253,14 +1330,24 @@ async function install(
         time: saved.time,
         game: saved.game,
         limits: saved.limits,
+        // Whether the gate at the end of a run sends its events. Never
+        // changed here.
+        autoSync: config?.autoSync === true,
       }),
     );
     return;
   }
   print.line(installedLine(schedule.time));
-  // --yes is for scripts and agents, which never start a run here.
-  if (input === undefined) return;
-  await offerFirstRun(deps, input, installed, print);
+  // --yes is for scripts and agents, which never start a run here. A first
+  // run says what waits once it ended.
+  if (
+    input !== undefined &&
+    (await offerFirstRun(deps, input, installed, print))
+  ) {
+    return;
+  }
+  const waiting = await eventsWaiting(p);
+  if (waiting !== null) print.line(waiting);
 }
 
 // Turns the game on for a routine that plays it, the person's own choice
@@ -1616,7 +1703,11 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (json) {
     stdout(JSON.stringify(entry));
   } else {
+    // The job writes this to its output file. The run's own sync has
+    // ended, so what waits is what it left (VOU-657).
     for (const line of reportLines(entry)) stdout(line);
+    const waiting = await eventsWaiting(p);
+    if (waiting !== null) stdout(waiting);
   }
   if (entry.outcome === 'failed') process.exitCode = 1;
 }
@@ -1963,11 +2054,16 @@ export async function routineView(
 }
 
 async function printScreen(cmd: Command, deps: RoutineDeps): Promise<void> {
-  const view = await routineView(deps);
+  const p = paths();
+  const view = await routineView(deps, p);
   if (wantsJson(cmd)) {
     stdout(JSON.stringify(view.json));
   } else {
     for (const line of view.screen) stdout(line);
+    // Here and not in routineView, so status, which says it in Today,
+    // reads the log once.
+    const waiting = await eventsWaiting(p);
+    if (waiting !== null) stdout(waiting);
   }
   for (const line of view.warnings) stderr(line);
 }

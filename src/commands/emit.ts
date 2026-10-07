@@ -11,7 +11,7 @@ import { countPending, countPendingLines } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { pendingText, SyncError } from '../sync.js';
 import { UNSENT_TYPES } from '../taxonomy.js';
-import { defaultSyncDeps, type SyncDeps } from './sync.js';
+import { defaultSyncDeps, eventsWaitLine, type SyncDeps } from './sync.js';
 
 type EmitOptions = {
   type: string;
@@ -78,17 +78,15 @@ export function register(
       }
       if (!options.sync) return;
 
-      // Until the first sync is previewed and confirmed nothing leaves on its
-      // own. One line says what is waiting and how to review it. The count
-      // only counts lines from the cursor on, it does not parse the log,
-      // which keeps growing while nothing is sent.
+      // Until automatic sync is on (a confirmed first sync, a yes in the
+      // routine setup or config auto-sync on) nothing leaves on its own.
+      // One line says what is waiting and how to send it, the sentence
+      // status and the routine print. The count only counts lines from the
+      // cursor on, it does not parse the log, which keeps growing while
+      // nothing is sent.
       if (config.autoSync !== true) {
         const pending = await countPendingLines().catch(() => null);
-        const count =
-          pending === null
-            ? 'events'
-            : `${pending} event${pending === 1 ? '' : 's'}`;
-        stderr(`${count} waiting, run ${cli('sync')} to review and send`);
+        stderr(eventsWaitLine(pending));
         return;
       }
 

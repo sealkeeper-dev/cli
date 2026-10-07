@@ -4,12 +4,12 @@ import { createApiClient, resolveApiUrl } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
 import { SyncBusyError, withSyncLock } from '../background-sync.js';
 import { requireConfig } from '../cli-config.js';
-import { writeConfig } from '../config.js';
+import { type Paths, readConfig, writeConfig } from '../config.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { type Sleep, sleep } from '../github-device.js';
 import { KeyError } from '../identity.js';
 import { cli } from '../invocation.js';
-import { CursorError, type LogPosition } from '../log.js';
+import { CursorError, countPending, type LogPosition } from '../log.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import {
   type Preview,
@@ -35,6 +35,34 @@ export const defaultSyncDeps: SyncDeps = {
 };
 
 export const AUTO_SYNC_ON = `automatic sync is on, emit now sends new events as they happen. Turn it off with ${cli('config auto-sync off')}`;
+export const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
+
+// The one sentence that says events wait while automatic sync is not on,
+// and how to send them. status prints it, emit, and the routine after a
+// first run, on its screen and in the job's output (VOU-657). null when
+// the count could not be read, which only emit says.
+export function eventsWaitLine(pending: number | null): string {
+  const one = pending === 1;
+  const count =
+    pending === null
+      ? 'Events wait'
+      : `${pending} event${one ? ' waits' : 's wait'}`;
+  return `${count} in the local log with automatic sync off, ${cli('sync')} reviews and sends ${one ? 'it' : 'them'}.`;
+}
+
+// eventsWaitLine for the agent at p, read when it is printed from its
+// config and its local log. null when automatic sync is on, nothing waits,
+// or either cannot be read, since a line is never worth failing a command.
+export async function eventsWaiting(p: Paths): Promise<string | null> {
+  try {
+    const config = await readConfig(p);
+    if (config === null || config.autoSync === true) return null;
+    const pending = await countPending(p);
+    return pending > 0 ? eventsWaitLine(pending) : null;
+  } catch {
+    return null;
+  }
+}
 
 type SyncOptions = { dryRun?: boolean; yes?: boolean };
 
