@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3, 7 October 2026
+
+### Fixes
+
+- `init` from the folder that holds the Claude Code config, the home folder on most machines, keeps the slash commands and the skill (VOU-649). 0.5.1 wrote them to `~/.claude` and then took them out again as the project's old copies, since from the home folder the project's `.claude` is the user's `.claude`, and every `/sealkeeper-*` command was unknown in the next session with an empty `~/.claude/commands`. Run `init` again to put them back.
+
 ## 0.5.2, 7 October 2026
 
 ### Changes

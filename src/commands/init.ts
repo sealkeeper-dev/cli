@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { rm } from 'node:fs/promises';
-import { basename, dirname } from 'node:path';
+import { realpath, rm } from 'node:fs/promises';
+import { basename, dirname, resolve } from 'node:path';
 import {
   AgentName,
   GAME_CAP_MAX,
@@ -1632,7 +1632,7 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       if (!(error instanceof SettingsError)) throw error;
       warn(error.message);
     }
-    if (inUserScope(installed)) await leaveProject(project, dirs.cwd, ui);
+    if (inUserScope(installed)) await leaveProject(project, user, dirs.cwd, ui);
   }
   if (driven) warn(HOOKS_BY_CLAUDE);
   return 'installed';
@@ -1665,7 +1665,7 @@ async function moveFromShared(
   }
   const installed = await installAt(project, user, hook, ui);
   if (installed === null) return;
-  if (inUserScope(installed)) await leaveProject(project, cwd, ui);
+  if (inUserScope(installed)) await leaveProject(project, user, cwd, ui);
   let removed: number;
   try {
     removed = await uninstallHooks(shared, hook);
@@ -1690,9 +1690,13 @@ async function moveFromShared(
 // or a file that cannot be removed, is left as it is with a warning.
 async function leaveProject(
   project: string,
+  user: string,
   cwd: string,
   ui: Ui | null,
 ): Promise<void> {
+  // From the home folder the project's .claude is the user's .claude, so
+  // the copies to take out are the ones just written. Nothing to move.
+  if (await sameFolder(dirname(project), dirname(user))) return;
   let commands: string[];
   let skill: boolean;
   try {
@@ -1710,6 +1714,18 @@ async function leaveProject(
     if (ui === null) stderr(line);
     else say(ui.out.line`${line}`);
   }
+}
+
+// Whether two folders are one, through their real paths, so a link, a
+// trailing separator or a different case of a drive letter on Windows does
+// not tell them apart. A folder that does not exist is compared as given.
+async function sameFolder(a: string, b: string): Promise<boolean> {
+  const real = (dir: string) => realpath(dir).catch(() => resolve(dir));
+  const [ra, rb] = await Promise.all([real(a), real(b)]);
+  return (
+    ra === rb ||
+    (process.platform === 'win32' && ra.toLowerCase() === rb.toLowerCase())
+  );
 }
 
 // Whether an install wrote, or found, the slash commands and the skill in
@@ -1806,7 +1822,7 @@ async function refreshCommand(
     if (!(error instanceof SettingsError)) throw error;
     return;
   }
-  if (project !== null) await leaveProject(project, cwd, ui);
+  if (project !== null) await leaveProject(project, user, cwd, ui);
 }
 
 // The install of the hooks into one settings file, and of the slash

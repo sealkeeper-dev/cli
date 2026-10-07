@@ -1831,6 +1831,52 @@ describe('sealkeeper init', () => {
         expect(await readIfExists(projectSkill())).toBe('');
       });
 
+      it('stay when init runs from the folder that holds the Claude Code config, since the project .claude is the user .claude', async () => {
+        // Carl on Windows, 6 October 2026. init from the home folder wrote
+        // the commands to the user scope and then took them out again as
+        // the project's old copies, leaving an empty commands folder.
+        // The Claude Code dir is <home>/.claude here, as on a machine with
+        // no CLAUDE_CONFIG_DIR, and init runs from <home>.
+        const dir = join(home, '.claude');
+        vi.stubEnv('CLAUDE_CONFIG_DIR', dir);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'settings.json'), EXISTING);
+        world.cwd = home;
+        const file = join(dir, 'settings.local.json');
+        await writeFile(
+          file,
+          JSON.stringify({
+            hooks: {
+              SessionEnd: [
+                { hooks: [{ type: 'command', command: STALE_HOOK }] },
+              ],
+            },
+          }),
+        );
+        world.stdin = answering('');
+        const result = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(result.code).toBe(0);
+        expect(
+          await readFile(join(dir, 'commands', 'sealkeeper-run.md'), 'utf8'),
+        ).toBe(RUN_COMMAND_TEXT);
+        expect(
+          isManaged(
+            await readFile(
+              join(dir, 'skills', 'sealkeeper', 'SKILL.md'),
+              'utf8',
+            ),
+          ),
+        ).toBe(true);
+        expect(result.out).not.toContain('Moved the slash commands');
+      });
+
       it('of an earlier install move out of the project on a repeat init, and a file of the operator stays', async () => {
         await writeFile(
           projectFile,
