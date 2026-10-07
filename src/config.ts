@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   AgentId,
-  AgentName,
+  AgentNameShape,
   agentHandle,
   ROUTINE_LIMIT_DEFAULTS,
   ROUTINE_LIMIT_MAX,
@@ -402,7 +402,8 @@ const HomeValue = z.union([
     .refine(
       (value) =>
         value.startsWith(`${AGENTS_DIR_NAME}/`) &&
-        AgentName.safeParse(value.slice(AGENTS_DIR_NAME.length + 1)).success,
+        AgentNameShape.safeParse(value.slice(AGENTS_DIR_NAME.length + 1))
+          .success,
       `expected . or ${AGENTS_DIR_NAME}/<agent name>`,
     ),
 ]);
@@ -487,7 +488,7 @@ export function relativeHome(
   if (
     parts.length === 2 &&
     parts[0] === AGENTS_DIR_NAME &&
-    AgentName.safeParse(parts[1]).success
+    AgentNameShape.safeParse(parts[1]).success
   ) {
     return `${AGENTS_DIR_NAME}/${parts[1]}`;
   }

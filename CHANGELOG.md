@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+
+- A folder bound to an agent named `sealkeeper` or `vouched` reads again (VOU-648). 0.5.1 reserved both for new names and read the folder map in `agents.json` with the same rule, so a machine with such an agent from before got `Invalid agent folders ... expected . or agents/<agent name>` from every command. The map and the handle in `live-agent.ts` now check the shape of a name alone, and the reserved words stop only `init --name` and `agent rename`.
+
 ## 0.5.4, 7 October 2026
 
 ### Fixes

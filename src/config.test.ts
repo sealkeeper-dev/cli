@@ -252,6 +252,16 @@ describe('agent per folder', () => {
     expect(sealkeeperHome(env, billing)).toBe(join(root, 'agents', 'billing'));
   });
 
+  it('keeps a folder bound to an agent whose name was reserved later', async () => {
+    // An agent named sealkeeper from before VOU-648 reserved the name. The
+    // map still reads, so init and every command keep finding its home.
+    await writeMap({ [billing]: 'agents/sealkeeper' });
+    expect(sealkeeperHome(env, billing)).toBe(
+      join(root, 'agents', 'sealkeeper'),
+    );
+    expect(boundHome(billing, root)).toBe(join(root, 'agents', 'sealkeeper'));
+  });
+
   it('tells a folder bound to the root apart from one bound to nothing', async () => {
     expect(boundHome(app, root)).toBeNull();
     await writeMap({ [app]: '.', [billing]: 'agents/billing' });
