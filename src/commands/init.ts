@@ -463,7 +463,7 @@ export function register(
     .option('--force', 'regenerate the key and register again')
     .action(async function (this: Command, options: InitOptions) {
       try {
-        await init(this, options, stopOnClose(deps), routineDeps);
+        await init(this, options, deps, routineDeps);
       } catch (error) {
         // The pinned list stops counting, so an error prints under it.
         trackOutput(null);
@@ -497,10 +497,13 @@ const startStep = (ui: Ui | null, key: StepKey, text?: string) =>
 const finishStep = (ui: Ui | null, key: StepKey, text: string) =>
   ui?.list?.finish(key, text);
 
-// deps whose stdin tells the pinned list about every answer, so the
+// deps whose stdin guards every question init asks, its own and the
+// runtime, nudge and routine questions it borrows. A closed input throws
+// InputClosed, so init ends with INPUT_CLOSED instead of reading the close
+// as an answer (D6), and an answer is told to the pinned list, so the
 // question area is cleared after it. The list may not exist yet when the
 // input is made, so it is looked up at each answer.
-function clearOnAnswer(deps: InitDeps, ui: Ui): InitDeps {
+function guardInput(deps: InitDeps, ui: Ui | null): InitDeps {
   const stdin = deps.stdin;
   if (stdin === undefined) return deps;
   return {
@@ -511,7 +514,8 @@ function clearOnAnswer(deps: InitDeps, ui: Ui): InitDeps {
         isTTY: input.isTTY,
         readLine: async () => {
           const line = await input.readLine();
-          ui.list?.answered(line ?? '');
+          if (line === null) throw new InputClosed();
+          ui?.list?.answered(line);
           return line;
         },
       };
@@ -531,11 +535,7 @@ const note = (line?: Styled) => stderrStyled(indent(line));
 // terminal's width known, the list is pinned and the rest of init runs in
 // the area under it, see LiveList. Anywhere else the list is printed once
 // and the rest scrolls under it.
-async function welcome(
-  ui: Ui,
-  deps: InitDeps,
-  initial: StepStates,
-): Promise<void> {
+function welcome(ui: Ui, claudeCode: boolean, initial: StepStates): void {
   const s = ui.err;
   note();
   const rows = s.wordmark();
@@ -544,7 +544,7 @@ async function welcome(
   } else {
     for (const row of rows) note(row);
   }
-  const steps = stepsFor(await hasClaudeCode(deps));
+  const steps = stepsFor(claudeCode);
   note();
   note(s.line`${s.bold(SETUP_TITLE)} ${s.dot()} ${setupCount(steps.length)}`);
   note();
@@ -563,7 +563,8 @@ async function welcome(
 }
 
 // Whether Claude Code is set up on this machine, its config folder exists,
-// which is when init offers the hooks, the skill and the slash commands.
+// which is when init lists and offers the hooks, the skill and the slash
+// commands. Read once per run and passed down.
 async function hasClaudeCode(deps: InitDeps): Promise<boolean> {
   return isDirectory((deps.claudeDir ?? claudeConfigDir)());
 }
@@ -597,6 +598,7 @@ async function chooseHome(
   options: InitOptions,
   deps: InitDeps,
   ui: Ui | null,
+  claudeCode: boolean,
 ): Promise<Target> {
   if (readEnv('SEALKEEPER_HOME') !== undefined) {
     return { p: paths(), folder: null, welcomed: false };
@@ -612,7 +614,7 @@ async function chooseHome(
   if (agents.length === 0) {
     return { p: paths(root), folder: cwd, welcomed: false };
   }
-  return choose(cmd, options, deps, ui, cwd, root, agents);
+  return choose(cmd, options, deps, ui, claudeCode, cwd, root, agents);
 }
 
 // The choice, for an unbound folder on a machine with agents. The name
@@ -627,6 +629,7 @@ async function choose(
   options: InitOptions,
   deps: InitDeps,
   ui: Ui | null,
+  claudeCode: boolean,
   cwd: string,
   root: string,
   agents: (MachineAgent & { config: Config })[],
@@ -658,7 +661,7 @@ async function choose(
         known.set(agent.config.name, agent.config.name);
         known.set(handle, agent.config.name);
       }
-      await welcome(ui, deps, {});
+      welcome(ui, claudeCode, {});
       welcomed = true;
       note();
       note(ui.err.line`${machineAgentsLine(handles)}`);
@@ -698,8 +701,9 @@ async function init(
         err: createStyle(process.stderr),
         list: null,
       };
-  if (ui !== null) deps = clearOnAnswer(deps, ui);
-  const target = await chooseHome(cmd, options, deps, ui);
+  deps = guardInput(deps, ui);
+  const claudeCode = await hasClaudeCode(deps);
+  const target = await chooseHome(cmd, options, deps, ui, claudeCode);
   const p = target.p;
 
   // Without --force an existing config ends the command here. With --force it
@@ -714,7 +718,7 @@ async function init(
   } else {
     const existing = await readConfig(p);
     if (existing !== null) {
-      await initRegistered(existing, target, deps, routineDeps, ui);
+      await initRegistered(existing, target, deps, routineDeps, ui, claudeCode);
       return;
     }
   }
@@ -773,7 +777,7 @@ async function init(
     if (terminal === undefined || ui === null) {
       cmd.error(envApiRefused(apiUrl, source));
     }
-    if (!welcomed) await welcome(ui, deps, {});
+    if (!welcomed) welcome(ui, claudeCode, {});
     welcomed = true;
     note();
     promptStyled(indent(ui.err.line`${envApiQuestion(apiUrl, source)}`));
@@ -790,7 +794,7 @@ async function init(
 
   // The banner before the key is made, with no step done, since --force
   // makes a new key.
-  if (ui !== null && !welcomed) await welcome(ui, deps, {});
+  if (ui !== null && !welcomed) welcome(ui, claudeCode, {});
   startStep(ui, 'key', KEY_GENERATING);
 
   // With --force the old config describes the old key, so it goes as soon as
@@ -969,7 +973,7 @@ async function init(
   // fresh (VOU-603).
   const card = await writeCard(config, { fetch: deps.fetch }, p);
   if (ui === null) {
-    const hooks = await offerHooks(deps, null);
+    const hooks = await offerHooks(deps, null, claudeCode);
     stdout(
       JSON.stringify({
         agentId: config.agentId,
@@ -1001,7 +1005,7 @@ async function init(
   const s = ui.out;
   say(s.line`${s.tick()} Signed in as ${s.bold(config.operatorLogin)}`);
   finishStep(ui, 'sign-in', config.operatorLogin);
-  const hooks = await offerHooks(deps, ui);
+  const hooks = await offerHooks(deps, ui, claudeCode);
   await offerNudge(hooks, deps, ui, p);
   const enabled = await askGame(api.apiUrl, deps, ui, p, terminal);
   await offerRoutine(deps, routineDeps, ui, p);
@@ -1128,6 +1132,7 @@ async function initRegistered(
   deps: InitDeps,
   routineDeps: RoutineDeps,
   ui: Ui | null,
+  claudeCode: boolean,
 ): Promise<void> {
   const p = target.p;
   const folder =
@@ -1164,7 +1169,7 @@ async function initRegistered(
     finishStep(ui, 'key', done.key.text);
     finishStep(ui, 'sign-in', done['sign-in'].text);
   } else {
-    await welcome(ui, deps, done);
+    welcome(ui, claudeCode, done);
   }
   const handle = handleOf(existing, slug);
   // A moved version has a level of its own, so the agent is read again
@@ -1184,7 +1189,7 @@ async function initRegistered(
     env: deps.env?.(),
     paths: p,
   });
-  const hooks = await offerHooks(deps, ui);
+  const hooks = await offerHooks(deps, ui, claudeCode);
   await offerNudge(hooks, deps, ui, p);
   await offerRoutine(deps, routineDeps, ui, p);
   // Only for the step line, which asks nothing, and only where there is
@@ -1213,28 +1218,6 @@ async function initRegistered(
 // Thrown when stdin closes at a question, caught by the action (D6).
 class InputClosed extends Error {
   override name = 'InputClosed';
-}
-
-// deps whose stdin throws InputClosed on a closed input, so every question
-// init asks, its own and the runtime and nudge questions it borrows, ends
-// init with INPUT_CLOSED instead of reading the close as an answer.
-function stopOnClose(deps: InitDeps): InitDeps {
-  const stdin = deps.stdin;
-  if (stdin === undefined) return deps;
-  return {
-    ...deps,
-    stdin: () => {
-      const input = stdin();
-      return {
-        isTTY: input.isTTY,
-        readLine: async () => {
-          const line = await input.readLine();
-          if (line === null) throw new InputClosed();
-          return line;
-        },
-      };
-    },
-  };
 }
 
 // Whether Claude Code runs this init for the user, stdin not a terminal
@@ -1702,8 +1685,12 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // and the skill always go in the user scope, and ours in the project's
 // .claude move there (VOU-649). A --json run, ui null, never asks, and
 // prints any install lines on stderr.
-async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
-  if (!(await hasClaudeCode(deps))) return 'none';
+async function offerHooks(
+  deps: InitDeps,
+  ui: Ui | null,
+  claudeCode: boolean,
+): Promise<HooksResult> {
+  if (!claudeCode) return 'none';
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   startStep(ui, 'hooks');
   if (ui !== null) {
