@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.2, 7 October 2026
 
 ### Changes
 
