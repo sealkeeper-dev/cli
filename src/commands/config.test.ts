@@ -212,6 +212,10 @@ describe('what-is-shared', () => {
     expect(out).toContain(
       'Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run',
     );
+    // VOU-656. The profile shows a submit's name too.
+    expect(out).toContain(
+      "The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit sent.",
+    );
     expect(out).toContain(
       'Only the name leaves, never a prompt, an input or an output.',
     );
