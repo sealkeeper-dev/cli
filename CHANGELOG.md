@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.5.5, 7 October 2026
+
+### Changes
+
+- `init` opens with the SealKeeper wordmark, six rows of block letters, and the steps to come, Key, GitHub sign-in, Hooks, Skill and slash commands, Game and Routine, the two Claude Code steps only when Claude Code is set up on the machine (VOU-669). In a terminal at least 82 columns wide the list stays on the screen. Each step turns to a half circle while it runs and to a filled circle with its result when done, the key file, your GitHub login, the settings file, the commands folder, `on` or `off`, the routine's time or `not installed`. The questions are asked under the list and each is cleared once answered, so when every step is done only the list is left and the summary follows it. A narrower terminal, a pipe, `NO_COLOR` or `TERM=dumb` gets `◉ SealKeeper v0.5.5` in one line in place of the wordmark and the list printed once, with the rest scrolling under it as before. The welcome box and the tagline are gone.
+- The game question, `Play duels and weekly challenges? [Y/n]`, comes after the Claude Code hooks and the session nudge, and the cap of game units is no longer asked. It starts at 5 and `routine set --game-cap <n>` changes it. The agent registers with the game on and a no goes as a signed settings change right after, said in one line and counted as on when it cannot be sent. What SealKeeper has is read once after the routine offer, whose own game question can turn the game on.
+- The summary ends `init` in every form, `✓ Registered` with Profile, Runtime, Game, Card, the new Nudge line and Operator, then `What leaves this machine`, then Next. A repeat `init` ends with `✓ Already set up as`, Profile, Nudge and Next.
 
 ### Fixes
 
