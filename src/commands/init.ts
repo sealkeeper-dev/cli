@@ -40,8 +40,6 @@ import {
 import { writeCard } from '../card.js';
 import {
   commandPaths,
-  hasCommands,
-  installCommands,
   refreshCommands,
   uninstallCommands,
 } from '../claude-code-command.js';
@@ -1778,12 +1776,14 @@ async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
 
 // Brings the slash commands up to date on a run that finds the hooks
 // already in, so a newer CLI's commands reach Claude Code without a
-// reinstall, see refreshCommands. Only a file of ours that differs is
-// written. They live beside the user settings, user. When the hooks are in
-// the project's settings.local.json, project, the commands and the skill
-// an install before VOU-649 wrote beside them are written in the user
-// scope first and then taken out of the project, see leaveProject. A write
-// that fails leaves the project copies where they are.
+// reinstall, and a set that is missing comes back, see refreshCommands.
+// Only a file of ours that differs or is missing is written, and the
+// skill below follows the same rule. They live beside the user settings,
+// user. When the hooks are in the project's settings.local.json, project,
+// the commands and the skill an install before VOU-649 wrote beside them
+// are written in the user scope first and then taken out of the project,
+// see leaveProject. A write that fails leaves the project copies where
+// they are.
 async function refreshCommand(
   user: string,
   project: string | null,
@@ -1795,13 +1795,7 @@ async function refreshCommand(
   const skillFile = skillPath(user);
   const invocation = invocationOf(hook);
   try {
-    const wrote =
-      project !== null && (await hasCommands(project))
-        ? (await installCommands(user, invocation)).some(
-            (c) => c.result === 'written',
-          )
-        : await refreshCommands(user, invocation);
-    if (wrote) {
+    if (await refreshCommands(user, invocation)) {
       if (ui !== null) {
         const s = ui.out;
         say(

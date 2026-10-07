@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.4, 7 October 2026
+
+### Fixes
+
+- A repeat `init` with the hooks in place puts the slash commands back when none of them is there (VOU-661). It took an empty set as removed on purpose and wrote nothing, so the commands that 0.5.1 and 0.5.2 deleted from `~/.claude` (VOU-649) never came back, and 0.5.3 said to run `init` again for nothing. It now writes the missing commands as a fresh install does and says `Slash commands updated`, as it already did for the skill. A file that SealKeeper did not write is still kept.
+
 ## 0.5.3, 7 October 2026
 
 ### Fixes

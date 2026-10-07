@@ -1877,6 +1877,89 @@ describe('sealkeeper init', () => {
         expect(result.out).not.toContain('Moved the slash commands');
       });
 
+      // VOU-661. CLI 0.5.1 and 0.5.2 run from the home folder deleted the
+      // commands and left the hooks and the skill (VOU-649). A repeat init
+      // took the empty set as removed by the operator and wrote nothing,
+      // whatever version ran. It now writes the set, as the skill does.
+      async function homeInstallWithoutCommands(): Promise<string> {
+        const dir = join(home, '.claude');
+        vi.stubEnv('CLAUDE_CONFIG_DIR', dir);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, 'settings.json'), EXISTING);
+        world.cwd = home;
+        await writeFile(
+          join(dir, 'settings.local.json'),
+          JSON.stringify({
+            hooks: {
+              SessionEnd: [
+                { hooks: [{ type: 'command', command: STALE_HOOK }] },
+              ],
+            },
+          }),
+        );
+        world.stdin = answering('');
+        const first = await run(
+          world,
+          'init',
+          '--name',
+          'scout',
+          '--runtime',
+          'claude-code',
+        );
+        expect(first.code).toBe(0);
+        for (const c of SLASH_COMMANDS) {
+          await rm(join(dir, 'commands', `sealkeeper-${c.verb}.md`));
+        }
+        return dir;
+      }
+
+      it('come back on a repeat init from that folder when an older CLI deleted them', async () => {
+        const dir = await homeInstallWithoutCommands();
+        const skill = join(dir, 'skills', 'sealkeeper', 'SKILL.md');
+        expect(isManaged(await readFile(skill, 'utf8'))).toBe(true);
+        world = newWorld();
+        world.cwd = home;
+        world.stdin = answering('');
+        const result = await run(world, 'init');
+        expect(result.code).toBe(0);
+        for (const c of SLASH_COMMANDS) {
+          const text = await readFile(
+            join(dir, 'commands', `sealkeeper-${c.verb}.md`),
+            'utf8',
+          );
+          expect(isManaged(text)).toBe(true);
+          expect(text).toBe(commandText(c, invocationOf(HOOK_COMMAND)));
+        }
+        expect(result.out).toContain(
+          `  ✓ Slash commands updated in ${join(dir, 'commands')}\n`,
+        );
+        expect(isManaged(await readFile(skill, 'utf8'))).toBe(true);
+      });
+
+      it('come back beside a command file of the operator, which stays', async () => {
+        const dir = await homeInstallWithoutCommands();
+        const own = join(dir, 'commands', 'sealkeeper-run.md');
+        await writeFile(own, 'my own command\n');
+        world = newWorld();
+        world.cwd = home;
+        world.stdin = answering('');
+        const result = await run(world, 'init');
+        expect(result.code).toBe(0);
+        expect(await readFile(own, 'utf8')).toBe('my own command\n');
+        const [, ...rest] = SLASH_COMMANDS;
+        for (const c of rest) {
+          expect(
+            await readFile(
+              join(dir, 'commands', `sealkeeper-${c.verb}.md`),
+              'utf8',
+            ),
+          ).toBe(commandText(c, invocationOf(HOOK_COMMAND)));
+        }
+        expect(result.out).toContain(
+          `  ✓ Slash commands updated in ${join(dir, 'commands')}\n`,
+        );
+      });
+
       it('of an earlier install move out of the project on a repeat init, and a file of the operator stays', async () => {
         await writeFile(
           projectFile,

@@ -246,32 +246,21 @@ export async function installManagedFile(
   return 'written';
 }
 
-// Brings the slash commands up to date when one of them, or the retired
-// /sealkeeper-prove of an older init, is there and ours. The set came
-// with that install, so a command a newer CLI added is written beside the
-// others, as installCommands does. With none of ours there nothing is
-// written, since the operator may have removed them. Returns whether it
-// wrote a command.
+// Brings the slash commands up to date on a repeat init with the hooks
+// in, as installCommands does. A file of ours that differs is written, and
+// one that is missing is added, so a command a newer CLI added and a set
+// that is gone come back. Before VOU-661 a set with none of ours left was
+// taken as removed by the operator and not written, so the commands that
+// 0.5.1 and 0.5.2 deleted from the home folder (VOU-649) never came back.
+// The skill is added back the same way, and the hooks stay the place to
+// opt out. A file that is not ours is kept. Returns whether it wrote a
+// command.
 export async function refreshCommands(
   settingsFile: string,
   invocation: string,
 ): Promise<boolean> {
-  if (!(await hasCommands(settingsFile))) return false;
   const installed = await installCommands(settingsFile, invocation);
   return installed.some((i) => i.result === 'written');
-}
-
-// Whether a slash command of ours, or the retired /sealkeeper-prove, is
-// beside settingsFile. Reads only.
-export async function hasCommands(settingsFile: string): Promise<boolean> {
-  for (const file of [
-    ...commandPaths(settingsFile),
-    retiredCommandPath(settingsFile),
-  ]) {
-    const current = await readOurFile(file);
-    if (current !== null && isManaged(current)) return true;
-  }
-  return false;
 }
 
 // Removes each slash command, and the retired /sealkeeper-prove, only when
