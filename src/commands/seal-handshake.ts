@@ -26,7 +26,8 @@ export const NO_FINGERPRINT = `no fingerprint yet, run ${cli('sync')} to compute
 // verifier that checks with its own name refuses it relayed to another. A
 // verifier on a CLI or schema before --for reads one made with it as
 // malformed, so add it only when the verifier asked.
-// The fingerprint is the one sync or run last wrote, never recomputed.
+// The fingerprint is the one last written to fingerprint.json, never
+// recomputed.
 // Exits 1 with one line when there is none.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent

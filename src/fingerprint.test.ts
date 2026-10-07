@@ -39,6 +39,7 @@ import {
   partsFromCaptures,
   recordCapture,
   refreshFingerprint,
+  refreshFingerprintOnChange,
   replaceSource,
   SOURCE_MAX_AGE_SECONDS,
 } from './fingerprint.js';
@@ -632,6 +633,44 @@ describe('the OpenClaw adapter', () => {
       expect(file.openclaw.model_name).toBe('alice-llm');
       expect(file.openclaw.tools).toBeUndefined();
     });
+  });
+});
+
+// VOU-655. What a routine run calls before each step and submit.
+describe('recompute on change', () => {
+  const captures = async (): Promise<unknown[]> =>
+    JSON.parse(await readFile(p.fingerprint, 'utf8')).captures;
+  const refresh = (seconds: number) =>
+    refreshFingerprintOnChange({
+      paths: p,
+      env: {},
+      now: () => seconds * 1000,
+    });
+
+  it('records a first capture, none while the parts stay, and one when a part changes', async () => {
+    await replaceSource('claude-code', { model_set: await h('a') }, p, NOW);
+    await refresh(NOW);
+    expect(await captures()).toHaveLength(1);
+    await refresh(NOW + 1);
+    await refresh(NOW + 2);
+    expect(await captures()).toHaveLength(1);
+    await observeParts('claude-code', { model_set: await h('b') }, p, NOW + 3);
+    await refresh(NOW + 3);
+    expect(await captures()).toEqual([
+      { at: NOW, parts: await parts({ model_set: 'a' }) },
+      { at: NOW + 3, parts: await parts({ model_set: 'b' }) },
+    ]);
+    expect((await currentFingerprint(p))?.parts.model_set).toEqual({
+      hash: await h('b'),
+    });
+  });
+
+  it('never throws, and writes nothing before init', async () => {
+    await mkdir(p.fingerprint);
+    await expect(refresh(NOW)).resolves.toBeUndefined();
+    const before = paths(join(root, 'not-yet'));
+    await refreshFingerprintOnChange({ paths: before });
+    await expect(readdir(before.home)).rejects.toThrow();
   });
 });
 

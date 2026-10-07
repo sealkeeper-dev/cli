@@ -5,9 +5,10 @@ import type { Paths } from './config.js';
 import { currentFingerprint } from './fingerprint.js';
 
 // The fingerprint a request declares, the one last written to
-// fingerprint.json. claim, submit, outcome, run, duel and challenge carry it
-// inside their signed payload (VB-3, sendWithFingerprint in tasks.ts), and
-// sync as its own signed JWS beside the envelopes (VB-4).
+// fingerprint.json. claim, submit, outcome, run, duel, challenge and each
+// routine step carry it inside their signed payload (VB-3,
+// sendWithFingerprint in tasks.ts), and sync as its own signed JWS beside
+// the envelopes (VB-4).
 
 // The fingerprint to declare. Nothing when there is none, or when its hash
 // is not the hash of its parts, which the API would refuse. It never

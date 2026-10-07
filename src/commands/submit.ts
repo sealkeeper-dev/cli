@@ -7,6 +7,7 @@ import {
 import type { Command } from 'commander';
 import { z } from 'zod';
 import { ApiError } from '../api.js';
+import type { Paths } from '../config.js';
 import { readGuardedFile } from '../file-guard.js';
 import { handedFinalLineFeed } from '../handed.js';
 import { cli } from '../invocation.js';
@@ -115,8 +116,9 @@ export type Submitted = {
  * before anything is signed. spec is the spec the caller was handed with
  * the task, which the routine passes, since a game task's public read
  * shows {} (asksFinalLineFeed). Then
- * signs and sends it with the declared fingerprint and the model name, and
- * notes it in the local log. modelName is the model that solved the task
+ * signs and sends it with the declared fingerprint, read from the home
+ * paths names when given, the routine run's own (VOU-655), and the model
+ * name, and notes it in the local log. modelName is the model that solved the task
  * (VOU-615), none when it is null or not a ModelName. An API that refuses
  * the name gets the submit again without it (refusesModelName). For a
  * counterparty task the claimant's success report follows, with origin
@@ -132,6 +134,7 @@ export async function submitAnswer(
     routine?: boolean;
     modelName?: string | null;
     spec?: Record<string, unknown>;
+    paths?: Paths;
   } = {},
 ): Promise<Submitted> {
   if (await containsPrivateKey(submission)) {
@@ -197,8 +200,12 @@ export async function submitAnswer(
   let result = task;
   if (!alreadySubmitted) {
     const send = (payload: object) =>
-      sendWithFingerprint(signer, payload, 'task.submit', (envelope) =>
-        api.submitTask(id, envelope),
+      sendWithFingerprint(
+        signer,
+        payload,
+        'task.submit',
+        (envelope) => api.submitTask(id, envelope),
+        options.paths,
       );
     const named = options.modelName
       ? SubmitTaskRequest.safeParse({
@@ -256,6 +263,7 @@ export async function submitAnswer(
         outcome,
         'task.outcome',
         (envelope) => api.postOutcome(id, envelope),
+        options.paths,
       );
     } catch (error) {
       if (error instanceof ApiError) {

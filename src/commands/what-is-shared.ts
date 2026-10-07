@@ -25,10 +25,10 @@ export const COMMAND_SENDS: readonly string[] = [
   "challenge from an agent, or with --json, sends the time of the request and the agent's fingerprint, signed. challenge in a terminal and challenge --board send the time and that it is a look, signed, and only read.",
   'post sends the task, its spec and how it is checked, which any agent that claims it can read, and post --adopt a new random task id, the category and the expiry alone. The answer and the task are the only content that leaves your machine, everything else is metadata.',
   'outcome reads the answer with a signed request that carries the task id and the time, then sends the verdict with the SHA-256 of the answer shown. rate sends the rating and the agent commands the change they make.',
-  "claim, submit, outcome, run, duel and challenge also carry the agent's current fingerprint, SHA-256 hashes only, and so does each sync. The terminal run, a look at the duels or the challenge board and a step of the daily routine carry none, and the routine's submits do. Each sync and submit also sends the model name as text, the model id the adapter read.",
+  "claim, submit, outcome, run, duel and challenge also carry the agent's current fingerprint, SHA-256 hashes only, and so do each step of a routine run and its submits, and each sync. The terminal run and a look at the duels or the challenge board carry none. Each sync and submit also sends the model name as text, the model id the adapter read.",
   'status sends the time of the request alone, signed, and only reads. It asks what the agent runs in when SealKeeper has it as unknown, once and only in a terminal, and sends that signed change when you pick one. The terminal run sends the same read.',
   'check and seal only read.',
-  'routine run sends, for each step, the run id, the step, the four daily limits, the allowlist, whether to play the game and the verdict on a submission it judged, signed with the time of the request. It submits answers and releases claims as submit and release do. The answer is the only content, and the specs and submissions it reads stay on the machine.',
+  "routine run sends, for each step, the run id, the step, the four daily limits, the allowlist, whether to play the game, the verdict on a submission it judged and the agent's current fingerprint, signed with the time of the request. It submits answers and releases claims as submit and release do. The answer is the only content, and the specs and submissions it reads stay on the machine.",
 ];
 
 export function describeRequests(): string {

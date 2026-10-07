@@ -23,6 +23,10 @@ import {
   writeFileAtomic,
 } from './config.js';
 import { type EmitInput, emit } from './emit.js';
+import {
+  refreshFingerprintOnChange,
+  refreshFingerprintQuietly,
+} from './fingerprint.js';
 import { createObserver } from './fingerprint-observer.js';
 import { takeAskAgain } from './handed.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
@@ -57,7 +61,7 @@ import {
   verdictOf,
 } from './routine-prompt.js';
 import { durationText } from './sync.js';
-import { recordClaims } from './tasks.js';
+import { recordClaims, sendWithFingerprint } from './tasks.js';
 
 // One routine run, the loop the API drives (VOU-599). sealkeeper routine
 // run starts it from the scheduler's job with Claude Code or OpenClaw, and
@@ -175,6 +179,16 @@ type StopFor = NonNullable<AgentResult['stoppedFor']>;
  * automatic sync takes, unless its caller aborted it, so nothing leaves
  * before the operator's first sync and nothing with auto sync off. A sync
  * that fails is a sync_failed line and never fails the run.
+ *
+ * The fingerprint (VOU-655). The run recomputes it from its own home's
+ * files before its first step, so an agent whose only work is its routine
+ * declares one. Each step and each submit carries the fingerprint on disk
+ * the way a claim does (sendWithFingerprint), and goes again without it
+ * when the API refuses the field. Before each of them the run recomputes
+ * it once more only when the parts changed, as when the agent's own start
+ * wrote its Claude Code hook capture or the runtime reported a new model,
+ * so the first submit of a first run carries what that start wrote. None
+ * of it can fail, print or hold up the run.
  */
 export async function routineRun(
   deps: RunDeps,
@@ -202,9 +216,9 @@ export async function routineRun(
   let costUsd: number | null = null;
   let entry: Omit<RunEntry, 'at'> | null = null;
   // The model the runtime reports for an answer goes to the runtime's
-  // fingerprint source, as the live adapters write it, so the next sync
-  // declares it (VOU-614). Written when the run sees a new id, never fails
-  // the run.
+  // fingerprint source, as the live adapters write it, so the run's next
+  // step or submit and the next sync declare it (VOU-614, VOU-655).
+  // Written when the run sees a new id, never fails the run.
   const observer =
     agent === null ? null : createObserver(agent.runtime, () => p);
 
@@ -378,6 +392,9 @@ export async function routineRun(
       made ??= (agent as RunAgent).start(workDir);
       return made.agent;
     };
+    // From this home's files, never the default home's, since one machine
+    // can hold several agents. Never throws.
+    await refreshFingerprintQuietly({ paths: p });
     try {
       await loop(session, runtime, workDir);
     } finally {
@@ -495,6 +512,7 @@ export async function routineRun(
       n: number,
       v: { taskId: string; outcome: TaskOutcome } | null,
     ): Promise<RoutineAnswerResponse | null> {
+      await refreshFingerprintOnChange({ paths: p });
       for (let tries = 1; ; tries++) {
         try {
           const request = RoutineNextRequest.parse({
@@ -513,9 +531,12 @@ export async function routineRun(
               : { verdict: { taskId: v.taskId, outcome: v.outcome } }),
             issuedAt: new Date().toISOString(),
           });
-          return await s.api.routineNext(
-            s.signer.agentId,
-            await s.signer.sign(request, 'routine.next'),
+          return await sendWithFingerprint(
+            s.signer,
+            request,
+            'routine.next',
+            (envelope) => s.api.routineNext(s.signer.agentId, envelope),
+            p,
           );
         } catch (error) {
           if (!(error instanceof ApiError) || !askAgain(error)) throw error;
@@ -715,6 +736,7 @@ export async function routineRun(
       // the tries, or when the wait does not fit, it fails as any refused
       // submit, and a wait that does not fit or that the caller aborts ends
       // the run.
+      await refreshFingerprintOnChange({ paths: p });
       for (let tries = 1; ; tries++) {
         try {
           // The model the runtime reported for this answer, else the
@@ -722,6 +744,7 @@ export async function routineRun(
           const sent = await submitAnswer(s, task.id, text, {
             routine: true,
             spec: task.spec,
+            paths: p,
             modelName:
               solvedBy ?? (await declaredModel({ paths: p }))?.name ?? null,
           });

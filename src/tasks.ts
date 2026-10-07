@@ -115,18 +115,20 @@ export async function afterTaskWork(
   ]);
 }
 
-// Signs and sends a claim, submit or outcome request with the declared
-// fingerprint (VB-3), and once more without it when the API refuses the
-// field, so a fingerprint never costs the request. request is the payload
-// its schema already parsed, purpose the route it is for. What send throws
-// otherwise is thrown.
+// Signs and sends a claim, submit, outcome or routine step request with the
+// declared fingerprint (VB-3), and once more without it when the API
+// refuses the field, so a fingerprint never costs the request. request is
+// the payload its schema already parsed, purpose the route it is for. p is
+// the home whose fingerprint.json is read, the routine run's own (VOU-655),
+// else the default. What send throws otherwise is thrown.
 export async function sendWithFingerprint<T>(
   signer: Signer,
   request: object,
   purpose: RequestPurpose,
   send: (envelope: string) => Promise<T>,
+  p?: Paths,
 ): Promise<T> {
-  const declared = await declaredFingerprint();
+  const declared = await declaredFingerprint(p);
   if (declared.fingerprint === undefined) {
     return send(await signer.sign(request, purpose));
   }

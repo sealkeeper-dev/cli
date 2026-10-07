@@ -111,7 +111,7 @@ export async function gatedSync(
     // finished a sync between the first look and taking the lock.
     if (await recentlyStarted(p, start)) return 'throttled';
     await touch(join(p.home, STAMP_FILE), start);
-    // A sync is one of the two moments the fingerprint is recomputed, see
+    // A sync is one of the moments the fingerprint is recomputed, see
     // fingerprint.ts. It never holds up or fails the sync.
     await refreshFingerprintQuietly({ paths: p, now });
     await syncEvents({

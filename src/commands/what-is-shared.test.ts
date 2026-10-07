@@ -32,6 +32,10 @@ function sources(): { file: string; code: string }[] {
 const names = (text: string, name: string) =>
   new RegExp(`(^|[\\s,(])${name}\\b`).test(text);
 
+// A sender whose file is not named after its command, by the words the
+// text uses for it. routine-run.ts signs each routine step (VOU-655).
+const SENDER_WORDS: Record<string, string> = { 'routine-run': 'routine run' };
+
 // The commands whose requests carry the fingerprint, each caller of
 // sendWithFingerprint in tasks.ts and each caller of postEvents, which
 // sends it beside the events, named by its file.
@@ -50,7 +54,7 @@ describe('what-is-shared names every request that carries the fingerprint', () =
   it('finds the senders in the code', () => {
     // A floor, so a broken scan cannot pass by finding nothing.
     expect(fingerprintSenders()).toEqual(
-      expect.arrayContaining(['claim', 'submit', 'sync']),
+      expect.arrayContaining(['claim', 'routine-run', 'submit', 'sync']),
     );
   });
 
@@ -60,8 +64,9 @@ describe('what-is-shared names every request that carries the fingerprint', () =
     );
     expect(line).toBeDefined();
     for (const sender of fingerprintSenders()) {
-      expect(names(FINGERPRINT_SENDS, sender), sender).toBe(true);
-      expect(names(line ?? '', sender), sender).toBe(true);
+      const words = SENDER_WORDS[sender] ?? sender;
+      expect(names(FINGERPRINT_SENDS, words), sender).toBe(true);
+      expect(names(line ?? '', words), sender).toBe(true);
     }
   });
 });

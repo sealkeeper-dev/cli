@@ -202,7 +202,7 @@ describe('what-is-shared', () => {
       expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
     }
     expect(out).toContain(
-      "Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run, a look at the duels or the challenge board and a step of the daily routine send none, and the routine's submits do.",
+      'Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.',
     );
     // VOU-566. The model name is the one value that leaves as text.
     expect(out).toContain(

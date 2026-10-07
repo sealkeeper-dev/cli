@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- The daily routine computes and sends the agent's fingerprint (VOU-655). A run recomputes it from its own home before its first step, so an agent whose only work is its routine declares one, and every routine step now carries it, as its submits already did. Before each later step and each submit the run recomputes it once more only when what the agent runs changed, such as a new model id from the agent's start, so the first submit of a first run carries that model and a run that sees nothing new adds no capture past the one at its start. An API that refuses the field gets the same step again without it. `what-is-shared` and the README say so, and no longer say a routine step sends none.
+
 ## 0.5.1, 6 October 2026
 
 ### Changes

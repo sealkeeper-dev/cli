@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import {
   chmod,
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -19,6 +20,7 @@ import { PassThrough } from 'node:stream';
 import {
   base64urlDecode,
   decodeHeader,
+  partHash,
   readAudience,
   verify,
 } from '@sealkeeper/schema';
@@ -40,7 +42,11 @@ import {
   writeRoutineConfig,
 } from '../config.js';
 import { tildePath } from '../files.js';
-import { observeParts, readSource } from '../fingerprint.js';
+import {
+  observeParts,
+  readSource,
+  refreshFingerprint,
+} from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { dayOf, readDay } from '../log.js';
@@ -2120,6 +2126,149 @@ describe('routine', () => {
       ];
       expect((await run('routine', 'run')).code).toBe(0);
       expect(api.submitted[0]?.modelName).toBe('claude-sonnet-5');
+    });
+
+    // VOU-655. A run recomputes the fingerprint from its own home at its
+    // start, and again before a step or a submit only when the parts
+    // changed, and every step and submit carries it.
+    describe('the fingerprint', () => {
+      type Captured = {
+        captures: { parts: Record<string, unknown> }[];
+        current: { hash: string; parts: Record<string, unknown> };
+      };
+      const fingerprintFile = async (p = paths()): Promise<Captured> =>
+        JSON.parse(await readFile(p.fingerprint, 'utf8'));
+      // The agent's answer, as claude -p streams it with the model it ran.
+      const answersWith = (model: string) => () =>
+        new FakeAgent(
+          [
+            { type: 'system', subtype: 'init', model },
+            assistant(randomUUID(), 50),
+            { type: 'result', result: 'a\nb', total_cost_usd: 0.01 },
+          ],
+          0,
+        );
+      const fingerprintOf = (payload: Payload | undefined) =>
+        payload?.fingerprint as Captured['current'] | undefined;
+
+      it('sends one on every step and submit of a first run in a new home, with the model its agent reported', async () => {
+        expect(existsSync(paths().fingerprint)).toBe(false);
+        api.steps = [api.task(api.add())];
+        nextAgents = [answersWith('claude-opus-5')];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect((await runs())[0]).toMatchObject({ outcome: 'done' });
+
+        // Step 0 went before the agent was asked, so nothing is declared.
+        expect(fingerprintOf(api.routineCalls[0])?.parts).toEqual({
+          model_set: 'not_declared',
+          prompt: 'not_declared',
+          tools: 'not_declared',
+          framework: 'not_declared',
+        });
+        // The submit carries the model the agent's start reported, and so
+        // does the step after it.
+        const model = (await readSource('claude-code', paths()))?.model_set;
+        expect(model).toBeDefined();
+        const submitted = fingerprintOf(api.submitted[0]);
+        expect(submitted?.parts.model_set).toEqual({ hash: model });
+        expect(fingerprintOf(api.routineCalls.at(-1))).toEqual(submitted);
+        const file = await fingerprintFile();
+        expect(file.current).toEqual(submitted);
+        expect(file.captures).toHaveLength(2);
+      });
+
+      it('asks the same step again without it when the API refuses the field, and the run goes on', async () => {
+        api.routineReply = (p) =>
+          p.fingerprint === undefined
+            ? null
+            : error(400, 'fingerprint_mismatch');
+        api.steps = [api.task(api.add())];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect((await runs())[0]).toMatchObject({
+          outcome: 'done',
+          submitted: 1,
+        });
+        expect(
+          api.routineCalls.map((c) => [c.step, c.fingerprint !== undefined]),
+        ).toEqual([
+          [0, true],
+          [0, false],
+          [1, true],
+          [1, false],
+        ]);
+      });
+
+      it('puts a model the agent reports during the run into the next submit, one capture per change', async () => {
+        api.steps = [api.task(api.add()), api.task(api.add())];
+        nextAgents = [
+          answersWith('claude-opus-5'),
+          answersWith('claude-sonnet-5'),
+        ];
+        expect((await run('routine', 'run')).code).toBe(0);
+        const [one, two] = api.submitted.map(fingerprintOf);
+        expect(one?.parts.model_set).not.toBe('not_declared');
+        expect(two?.parts.model_set).not.toEqual(one?.parts.model_set);
+        // The step between the submits carries the first one's.
+        expect(fingerprintOf(api.routineCalls[1])).toEqual(one);
+        expect(fingerprintOf(api.routineCalls[2])).toEqual(two);
+        // The start, then one for each new model.
+        expect((await fingerprintFile()).captures).toHaveLength(3);
+      });
+
+      it('records exactly one capture in a run in which nothing changes', async () => {
+        const model = await partHash(agentId, 'claude-opus-5');
+        await observeParts('claude-code', { model_set: model }, paths());
+        api.steps = [api.task(api.add()), api.task(api.add())];
+        nextAgents = [() => says('a\nb'), () => says('a\nb')];
+        expect((await run('routine', 'run')).code).toBe(0);
+        const file = await fingerprintFile();
+        expect(file.captures).toHaveLength(1);
+        expect(file.current.parts.model_set).toEqual({ hash: model });
+        const sent = [...api.routineCalls, ...api.submitted].map(
+          (c) => fingerprintOf(c)?.hash,
+        );
+        expect(sent).toHaveLength(5);
+        expect(new Set(sent)).toEqual(new Set([file.current.hash]));
+      });
+
+      it("reads and writes its own home's files when the default home has others", async () => {
+        const mine = await partHash(agentId, 'mine');
+        const theirs = await partHash(agentId, 'theirs');
+        await observeParts('claude-code', { model_set: theirs }, paths());
+        await refreshFingerprint({ paths: paths() });
+        const before = await readFile(paths().fingerprint, 'utf8');
+        // The same agent's key in a second home, as a named agent's home
+        // sits beside the default one.
+        const other = paths(join(home, 'other'));
+        await mkdir(other.home, { recursive: true });
+        await writeConfig((await readConfig()) as Config, other);
+        await copyFile(paths().key, other.key);
+        await chmod(other.key, 0o600);
+        await observeParts('claude-code', { model_set: mine }, other);
+        api.steps = [api.task(api.add())];
+        const entry = await routineRun(
+          { fetch: api.fetch, sleep: async () => undefined },
+          (await readConfig(other)) as Config,
+          await readRoutineConfig(),
+          {
+            runtime: 'mastra',
+            start: () => ({
+              agent: mastraRuntime({
+                generate: async () => ({ text: 'a\nb' }),
+              }),
+            }),
+          },
+          other,
+        );
+        expect(entry).toMatchObject({ outcome: 'done', submitted: 1 });
+        for (const payload of [...api.routineCalls, ...api.submitted]) {
+          expect(fingerprintOf(payload)?.parts.model_set).toEqual({
+            hash: mine,
+          });
+        }
+        expect((await fingerprintFile(other)).captures).toHaveLength(1);
+        expect(await readFile(paths().fingerprint, 'utf8')).toBe(before);
+      });
     });
 
     it('starts no agent when the API has nothing to do, and says why', async () => {

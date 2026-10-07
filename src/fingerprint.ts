@@ -4,10 +4,12 @@
 // here, and only the hashes are kept, see Fingerprint in @sealkeeper/schema.
 //
 // fingerprint.json in the home holds the last FINGERPRINT_WINDOW captures and
-// the current fingerprint made from them. It is recomputed at sync, run and
-// each duel or challenge step only (refreshFingerprint), and only once
-// config.json exists. Anything that
-// needs the fingerprint reads the cached file with currentFingerprint.
+// the current fingerprint made from them. It is recomputed at sync, run,
+// each duel or challenge step and each routine run only (refreshFingerprint),
+// and only once config.json exists. A routine run recomputes it at its start
+// and again before a step or a submit only when the parts changed
+// (refreshFingerprintOnChange, VOU-655). Anything that needs the fingerprint
+// reads the cached file with currentFingerprint.
 //
 // Where the parts come from. Each source writes the hashes of what it sees
 // to fingerprint-sources.json, and the recompute reads them from there, so
@@ -305,8 +307,8 @@ export async function captureParts(
   };
 }
 
-// Captures the parts and records them. At sync, run, duel and challenge
-// only. null when there is no config yet.
+// Captures the parts and records them. At sync, run, duel, challenge and
+// the start of a routine run only. null when there is no config yet.
 export async function refreshFingerprint(
   options: CaptureOptions = {},
 ): Promise<Fingerprint | null> {
@@ -316,8 +318,8 @@ export async function refreshFingerprint(
   return recordCapture(p, parts, Math.floor(now / 1000));
 }
 
-// refreshFingerprint that never throws, for sync, run, duel and challenge,
-// which must not fail over a fingerprint. null when it could not be computed.
+// refreshFingerprint that never throws, for sync, run, duel, challenge and
+// the start of a routine run, which must not fail over a fingerprint. null when it could not be computed.
 export async function refreshFingerprintQuietly(
   options: CaptureOptions = {},
 ): Promise<Fingerprint | null> {
@@ -325,6 +327,34 @@ export async function refreshFingerprintQuietly(
     return await refreshFingerprint(options);
   } catch {
     return null;
+  }
+}
+
+// Records one capture only when the parts the chosen source gives now differ
+// from the newest capture's, or there is no capture yet. A routine run calls
+// it before each step and each submit (VOU-655), so what the agent's own
+// start wrote, a Claude Code SessionStart hook or the model the runtime
+// reported, is in the next request it signs. Before step 0 it finds no
+// change, since the run captured at its start. A run so
+// adds one capture at its start and one more only for a real change, and the
+// unstable rule, FINGERPRINT_WINDOW differing captures in a row, still means
+// a part that kept changing, never one that was captured often. Never
+// throws, a failure loses the capture only.
+export async function refreshFingerprintOnChange(
+  options: CaptureOptions = {},
+): Promise<void> {
+  try {
+    const p = options.paths ?? paths();
+    const parts = await captureParts({ ...options, paths: p });
+    const newest = (await readFingerprintFile(p))?.captures.at(-1)?.parts;
+    const same =
+      newest !== undefined &&
+      FINGERPRINT_PARTS.every((name) => newest[name] === parts[name]);
+    if (same) return;
+    const now = options.now?.() ?? Date.now();
+    await recordCapture(p, parts, Math.floor(now / 1000));
+  } catch {
+    // Not captured. The request goes with the fingerprint on disk.
   }
 }
 
@@ -344,10 +374,11 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
 };
 
 // Which requests carry the fingerprint, every caller of
-// sendWithFingerprint in tasks.ts and sync (VOU-624). what-is-shared.test.ts
-// fails when a command that sends it is missing here.
+// sendWithFingerprint in tasks.ts and sync (VOU-624), each step of a routine
+// run among them since VOU-655. what-is-shared.test.ts fails when a command
+// that sends it is missing here.
 export const FINGERPRINT_SENDS =
-  "claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run, a look at the duels or the challenge board and a step of the daily routine send none, and the routine's submits do.";
+  'claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.';
 
 // The model name block of what-is-shared (VOU-566).
 export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A routine run sends the id the runtime reported for its answers. Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run, and the task keeps it beside the answer, which only the poster and your agent can read. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
@@ -357,7 +388,7 @@ export function describeFingerprint(): string {
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync, run and each duel or challenge step. Only a SHA-256 hash of each part is stored, never what it is hashed from. ${FINGERPRINT_SENDS}`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync, run, each duel or challenge step and the start of a routine run, and again during the run when what the agent runs changed. Only a SHA-256 hash of each part is stored, never what it is hashed from. ${FINGERPRINT_SENDS}`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),
