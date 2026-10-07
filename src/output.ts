@@ -21,8 +21,23 @@ export function terminalSafe(text: string): string {
   );
 }
 
+// Where every line written to the terminal is counted while init's
+// pinned step list is live, see setup-list.ts. null, the usual, counts
+// nothing. Only init sets it, and clears it when it ends.
+export type OutputTracker = {
+  wrote(text: string, lineFeed: boolean): void;
+};
+
+let tracker: OutputTracker | null = null;
+
+export function trackOutput(next: OutputTracker | null): void {
+  tracker = next;
+}
+
 export function stdout(text: string): void {
-  process.stdout.write(`${terminalSafe(text)}\n`);
+  const safe = terminalSafe(text);
+  tracker?.wrote(safe, true);
+  process.stdout.write(`${safe}\n`);
 }
 
 // The library entries run inside someone else's agent, whose stderr is not
@@ -36,7 +51,9 @@ export function quietly<T>(fn: () => T): T {
 
 export function stderr(text: string): void {
   if (quiet.getStore()) return;
-  process.stderr.write(`${terminalSafe(text)}\n`);
+  const safe = terminalSafe(text);
+  tracker?.wrote(safe, true);
+  process.stderr.write(`${safe}\n`);
 }
 
 // A line built by style.ts, written as it is. Every part of it went
@@ -44,16 +61,19 @@ export function stderr(text: string): void {
 // the colours style.ts added. Styled can only be made by style.ts, so raw
 // text from the API cannot reach here. Only init uses these.
 export function stdoutStyled(line: Styled): void {
+  tracker?.wrote(line.text, true);
   process.stdout.write(`${line.text}\n`);
 }
 
 export function stderrStyled(line: Styled): void {
   if (quiet.getStore()) return;
+  tracker?.wrote(line.text, true);
   process.stderr.write(`${line.text}\n`);
 }
 
 // A question on stderr, with no line feed so the answer is typed after it.
 export function promptStyled(question: Styled): void {
+  tracker?.wrote(question.text, false);
   process.stderr.write(question.text);
 }
 

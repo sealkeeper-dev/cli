@@ -741,6 +741,11 @@ type FirstRunPrint = {
   line: (text: string) => void;
   dim: (text: string) => void;
   indent: string;
+  // Told once the job is installed, with its time, and once a first run
+  // starts, whose lines then follow. init finishes its routine step on the
+  // first and lets the run's lines stay on the screen from the second.
+  installed?: (time: string) => void;
+  starting?: () => void;
 };
 
 // The first run after a setup, as init and routine start it (RS-3, RS-9).
@@ -778,6 +783,7 @@ async function firstRun(
     deps,
   );
   const tty = stdoutIsTTY(deps);
+  print.starting?.();
   print.dim(firstRunLine(routine.limits.minutesPerRun));
   if (tty) print.dim(watchHintLine());
   const watched = await watchRun({
@@ -1092,6 +1098,7 @@ export async function guidedSetup(
   });
   if (typeof installed === 'string') return installed;
   print.line(installedLine(time));
+  print.installed?.(time);
   if (sync !== null) await keepSyncAnswer(sync, installed.p, print);
   await offerFirstRun(deps, input, installed, print);
   return null;

@@ -6,12 +6,12 @@ import { terminalSafe } from './output.js';
 // on when the stream is a terminal, NO_COLOR is unset, TERM is not dumb and
 // --json is not in use. FORCE_COLOR turns it on regardless, which is how
 // tests see the styled form. Off, every function hands its text back
-// unchanged and box() drops the border, so the plain form is the same words.
-// A command decides once per run and stream, with createStyle.
+// unchanged and wordmark() draws nothing, so the plain form is the same
+// words. A command decides once per run and stream, with createStyle.
 //
-// The glyphs, the mark, the tick, the box border and the spinner frames of
-// routine-watch.ts, are ASCII in a Windows console whose code page is not
-// UTF-8, see asciiGlyphs.
+// The glyphs, the mark, the tick, the step glyphs, the dot and the spinner
+// frames of routine-watch.ts, are ASCII in a Windows console whose code
+// page is not UTF-8, see asciiGlyphs. The wordmark has no ASCII form.
 //
 // The escape codes are only safe because nothing else can put an ESC in a
 // styled line. Every plain string a style function takes, whether it came
@@ -83,13 +83,22 @@ export type Style = {
   mark(): Styled;
   // A green check mark.
   tick(): Styled;
+  // A step done, a filled green circle, one in progress, a green half
+  // circle, and one still to do, an empty grey circle.
+  done(): Styled;
+  doing(): Styled;
+  todo(): Styled;
+  // The middle dot between two parts of a line, as in a title and a count.
+  dot(): Styled;
   // A tagged template. The literal text and every value are escaped unless
   // the value is already Styled, as in s.line`Signed in as ${s.bold(login)}`.
   line(strings: TemplateStringsArray, ...parts: Part[]): Styled;
-  // The lines inside a rounded gold border, ready to print. Off, or when the
-  // stream is narrower than the box and its two space indent, the lines
-  // come back as they are.
-  box(lines: Part[]): Styled[];
+  // The SealKeeper wordmark in block letters, SEAL in green and KEEPER in
+  // the text colour, each with its shadow dimmed, one Styled per row. null
+  // when styling is off, when the glyphs are ASCII or when the stream is
+  // narrower than the wordmark and its two space indent, and the caller
+  // draws the name in one line instead.
+  wordmark(): Styled[] | null;
 };
 
 // The one enabled check.
@@ -155,14 +164,31 @@ export function stripStyle(text: string | Styled): string {
   return String(text).replace(ESCAPE_CODE, '');
 }
 
-// Columns the text takes, counted in code points, so the mark and the box
-// characters count as one each.
+// Columns the text takes, counted in code points, so the mark and the
+// wordmark glyphs count as one each.
 export function visibleWidth(text: string | Styled): number {
   return [...stripStyle(text)].length;
 }
 
 // The indent every line of the init output carries.
 export const INDENT = '  ';
+
+// The wordmark, 80 columns of block letters with a shadow, from the init
+// banner design. SEAL takes the first SEAL_COLUMNS of every row and KEEPER
+// the rest. A full block is a letter and every other glyph its shadow.
+const WORDMARK = [
+  '███████╗███████╗ █████╗ ██╗     ██╗  ██╗███████╗███████╗██████╗ ███████╗██████╗ ',
+  '██╔════╝██╔════╝██╔══██╗██║     ██║ ██╔╝██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗',
+  '███████╗█████╗  ███████║██║     █████╔╝ █████╗  █████╗  ██████╔╝█████╗  ██████╔╝',
+  '╚════██║██╔══╝  ██╔══██║██║     ██╔═██╗ ██╔══╝  ██╔══╝  ██╔═══╝ ██╔══╝  ██╔══██╗',
+  '███████║███████╗██║  ██║███████╗██║  ██╗███████╗███████╗██║     ███████╗██║  ██║',
+  '╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝',
+];
+const SEAL_COLUMNS = 32;
+const BLOCK = '█';
+// Runs of letter and runs of shadow, in order.
+const RUNS = new RegExp(`${BLOCK}+|[^${BLOCK}]+`, 'g');
+export const WORDMARK_WIDTH = Math.max(...WORDMARK.map(visibleWidth));
 
 // A line two spaces in, or an empty line as it is.
 export function indent(line: Part = ''): Styled {
@@ -206,39 +232,53 @@ export function createStyle(
     return styled(text);
   }
 
-  function box(parts: Part[]): Styled[] {
-    const lines = parts.map((part) => styled(safe(part)));
-    if (!enabled) return lines;
-    const inner = Math.max(0, ...lines.map(visibleWidth));
-    const width = inner + 4;
-    // A terminal that reports no size, or 0 as some ptys do, gets the box.
+  const dim = wrap('2', '22');
+  const grey = rgb(140, 140, 135);
+
+  // The letters of a word in one colour and its shadow in another, the
+  // rows of the wordmark are source text, so nothing in them needs
+  // escaping.
+  function letters(
+    text: string,
+    letter: (run: string) => Styled,
+    shadow: (run: string) => Styled,
+  ): string {
+    return (text.match(RUNS) ?? [])
+      .map((run) => (run.startsWith(BLOCK) ? letter(run) : shadow(run)).text)
+      .join('');
+  }
+
+  function wordmark(): Styled[] | null {
+    if (!enabled || plain()) return null;
+    // A terminal that reports no size, or 0 as some ptys do, gets it.
     const columns = stream.columns;
-    if (columns && width + INDENT.length > columns) return lines;
-    const pad = (l: Styled) =>
-      styled(l.text + ' '.repeat(inner - visibleWidth(l)));
-    const [top, bottom, across, side] = plain()
-      ? ['++', '++', '-', '|']
-      : ['╭╮', '╰╯', '─', '│'];
-    const edge = (corners: string) =>
-      gold(`${corners[0]}${across.repeat(width - 2)}${corners[1]}`);
-    return [
-      edge(top),
-      ...lines.map((l) => line`${gold(side)} ${pad(l)} ${gold(side)}`),
-      edge(bottom),
-    ];
+    if (columns && WORDMARK_WIDTH + INDENT.length > columns) return null;
+    return WORDMARK.map((row) => {
+      const glyphs = [...row];
+      const seal = glyphs.slice(0, SEAL_COLUMNS).join('');
+      const keeper = glyphs.slice(SEAL_COLUMNS).join('').trimEnd();
+      return styled(
+        letters(seal, green, (run) => dim(green(run))) +
+          letters(keeper, styled, dim),
+      );
+    });
   }
 
   return {
     enabled,
     bold: wrap('1', '22'),
-    dim: wrap('2', '22'),
+    dim,
     gold,
     green,
     cyan: rgb(90, 170, 210),
-    grey: rgb(140, 140, 135),
+    grey,
     mark: () => gold(plain() ? '*' : '◉'),
     tick: () => green(plain() ? '+' : '✓'),
+    done: () => green(plain() ? '+' : '●'),
+    doing: () => green(plain() ? '*' : '◐'),
+    todo: () => grey(plain() ? 'o' : '○'),
+    dot: () => styled(plain() ? '-' : '·'),
     line,
-    box,
+    wordmark,
   };
 }

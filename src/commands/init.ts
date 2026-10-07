@@ -3,8 +3,6 @@ import { realpath, rm } from 'node:fs/promises';
 import { basename, dirname, resolve } from 'node:path';
 import {
   AgentName,
-  GAME_CAP_MAX,
-  GameCap,
   isRuntimeName,
   LEVEL_THRESHOLDS,
   type Level,
@@ -132,13 +130,24 @@ import {
   stderrStyled,
   stdout,
   stdoutStyled,
+  trackOutput,
   wantsJson,
 } from '../output.js';
 import { refusal } from '../refusal.js';
-import type { GameStatusResponse } from '../responses.js';
 import { projectAgentWarning } from '../routine-copy.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
+import {
+  KEY_GENERATING,
+  LiveList,
+  SETUP_TITLE,
+  type StepKey,
+  type StepStates,
+  setupCount,
+  stepLine,
+  stepsFor,
+  TODO,
+} from '../setup-list.js';
 import {
   createStyle,
   INDENT,
@@ -160,7 +169,6 @@ import {
   defaultRoutineDeps,
   guidedSetup,
   IN_PROJECT,
-  MAX_ASKS,
   NOTHING_INSTALLED,
   prepareInstall,
   type RoutineDeps,
@@ -211,14 +219,11 @@ export const envApiRefused = (apiUrl: string, source: ApiSource): string =>
 export const envApiDeclined = (source: ApiSource): string =>
   `init stopped before the sign in, nothing was sent. Unset ${source} to sign in with ${DEFAULT_API_URL}.`;
 
-// The human output. The welcome box, then the name, the runtime and the
-// game, the terms and the sign in, the registration and the card, what
-// leaves this machine, the Claude Code hooks, the skill and the slash
-// commands, the routine and what to do next.
-export const TAGLINE = [
-  'Prove your agent. A signed, portable track record',
-  'anyone can check offline.',
-];
+// The human output. The banner with the steps to come, see setup-list.ts,
+// then the name and the runtime, the terms and the sign in, the Claude
+// Code hooks, the skill and the slash commands, the game, the routine, and
+// at the end the summary, the registration and the card, what leaves this
+// machine and what to do next.
 export const SHARED_SUMMARY = [
   'Task outcomes, and the timing and token counts of routine runs, each',
   'signed with your key. Never prompts, tool inputs or outputs, file',
@@ -263,16 +268,14 @@ export const BRONZE = LEVEL_THRESHOLDS.bronze;
 export const versionQuestion = (server: string, local: string): string =>
   `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
 // The game layer, duels and weekly challenges (D-GAME-2). Asked in a
-// terminal after the runtime, before the sign in, with yes as the default.
-// Without a terminal, or when Claude Code runs init, nobody is asked and
-// the default goes. The answer goes with the registration. A yes asks
-// the daily cap of game units next, the most by default, which goes once
-// the agent is registered. The line after the registration says what
-// SealKeeper has and how to change it.
+// terminal after the Claude Code hooks, as the fifth step, with yes as the
+// default. Without a terminal, or when Claude Code runs init, nobody is
+// asked and the default goes. The agent registers with the game on and a
+// no is sent as the signed settings change right after. The daily cap of
+// game units is not asked, it stays at the most and routine set changes
+// it. The Game line of the summary says what SealKeeper has and how to
+// change it, and the step line says on or off.
 export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
-export const gameCapQuestion = (again: string): string =>
-  `${again}Game units a UTC day, 0 to ${GAME_CAP_MAX}? [${GAME_CAP_MAX}] `;
-export const GAME_CAP_AGAIN = `Please answer a whole number from 0 to ${GAME_CAP_MAX}. `;
 // The cap counts the duels the agent creates and the challenge tasks it
 // claims, never an invite it accepts, so only the switch stops invites,
 // and the line names config game off for that (VOU-611, VOU-617).
@@ -282,6 +285,20 @@ export function gameLine(game: { enabled: boolean; cap: number | null }) {
   if (game.cap === null) return `on, ${stop}`;
   return `on, ${game.cap} game units a UTC day, spent on the duels it creates and the challenge tasks it claims, change it with ${cli('routine set --game-cap <n>')}, ${stop}`;
 }
+// What the game step ends as. unknown when SealKeeper could not be read
+// on a repeat init, which asks nothing.
+export function gameResult(game: { enabled: boolean } | null): string {
+  if (game === null) return 'unknown';
+  return game.enabled ? 'on' : 'off';
+}
+// Said when the no to the game could not be sent, so the game is still on.
+export const GAME_OFF_FAILED = `The game could not be turned off, so it is still on. Run ${cli('config game off')} to try again.`;
+// What the hooks, skill and routine steps end as when nothing went in.
+export const NOT_INSTALLED = 'not installed';
+// The session nudge in the summary, once the hooks are in and it was
+// answered, here or on an earlier init.
+export const nudgeLine = (on: boolean): string =>
+  on ? 'on' : `off, ${cli('config nudge on')} turns it on`;
 // The next steps a --json run lists in nextSteps.
 export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
@@ -448,6 +465,8 @@ export function register(
       try {
         await init(this, options, stopOnClose(deps), routineDeps);
       } catch (error) {
+        // The pinned list stops counting, so an error prints under it.
+        trackOutput(null);
         if (error instanceof InputClosed) this.error(INPUT_CLOSED);
         if (
           error instanceof ApiError ||
@@ -460,30 +479,93 @@ export function register(
           );
         }
         throw error;
+      } finally {
+        trackOutput(null);
       }
     });
 }
 
 // The two streams init writes to, each styled or not on its own, decided
-// once per run. null for a --json run, which prints what it always has.
-type Ui = { out: Style; err: Style };
+// once per run, and the pinned step list once the banner drew one, see
+// setup-list.ts. null for a --json run, which prints what it always has.
+type Ui = { out: Style; err: Style; list: LiveList | null };
+
+// Marks a step as started or finished on the pinned list. Nothing without
+// one, where the list was printed once and the output scrolls under it.
+const startStep = (ui: Ui | null, key: StepKey, text?: string) =>
+  ui?.list?.start(key, text);
+const finishStep = (ui: Ui | null, key: StepKey, text: string) =>
+  ui?.list?.finish(key, text);
+
+// deps whose stdin tells the pinned list about every answer, so the
+// question area is cleared after it. The list may not exist yet when the
+// input is made, so it is looked up at each answer.
+function clearOnAnswer(deps: InitDeps, ui: Ui): InitDeps {
+  const stdin = deps.stdin;
+  if (stdin === undefined) return deps;
+  return {
+    ...deps,
+    stdin: () => {
+      const input = stdin();
+      return {
+        isTTY: input.isTTY,
+        readLine: async () => {
+          const line = await input.readLine();
+          ui.list?.answered(line ?? '');
+          return line;
+        },
+      };
+    },
+  };
+}
 
 // One line of the human output, two spaces in, or an empty line. Only
 // Styled lines, so every part of them was escaped when it was built.
 const say = (line?: Styled) => stdoutStyled(indent(line));
 const note = (line?: Styled) => stderrStyled(indent(line));
 
-// The welcome box, on stderr with the terms and the sign in.
-function welcome(ui: Ui): void {
+// The banner, on stderr with the questions. The wordmark in a terminal
+// wide enough for it, else the name and the version in one line, then the
+// steps to come, with the states known already, the key and the sign in
+// on a repeat init. Under the wordmark, with both streams styled and the
+// terminal's width known, the list is pinned and the rest of init runs in
+// the area under it, see LiveList. Anywhere else the list is printed once
+// and the rest scrolls under it.
+async function welcome(
+  ui: Ui,
+  deps: InitDeps,
+  initial: StepStates,
+): Promise<void> {
   const s = ui.err;
   note();
-  for (const text of s.box([
-    s.line`${s.mark()} ${s.bold('SealKeeper')} ${s.dim(`v${VERSION}`)}`,
-    '',
-    ...TAGLINE,
-  ])) {
-    note(text);
+  const rows = s.wordmark();
+  if (rows === null) {
+    note(s.line`${s.mark()} ${s.bold('SealKeeper')} ${s.dim(`v${VERSION}`)}`);
+  } else {
+    for (const row of rows) note(row);
   }
+  const steps = stepsFor(await hasClaudeCode(deps));
+  note();
+  note(s.line`${s.bold(SETUP_TITLE)} ${s.dot()} ${setupCount(steps.length)}`);
+  note();
+  const columns = process.stderr.columns ?? 0;
+  if (rows !== null && ui.out.enabled && columns > 0) {
+    const list = new LiveList(process.stderr, s, steps, initial);
+    for (const line of list.lines()) note(line);
+    note();
+    ui.list = list;
+    trackOutput(list);
+    return;
+  }
+  steps.forEach((step, i) => {
+    note(stepLine(s, i + 1, step, initial[step.key] ?? TODO));
+  });
+}
+
+// Whether Claude Code is set up on this machine, its config folder exists,
+// which is when init offers the hooks, the skill and the slash commands.
+async function hasClaudeCode(deps: InitDeps): Promise<boolean> {
+  return isDirectory((deps.claudeDir ?? claudeConfigDir)());
 }
 
 // The profile URL is built from the handle in the config file, so it is
@@ -501,7 +583,7 @@ type Target = {
   folder: string | null;
   // The name the choice asked for, so the registration does not ask again.
   name?: string;
-  // Whether the choice printed the welcome box already.
+  // Whether the choice printed the banner already.
   welcomed: boolean;
 };
 
@@ -576,7 +658,7 @@ async function choose(
         known.set(agent.config.name, agent.config.name);
         known.set(handle, agent.config.name);
       }
-      welcome(ui);
+      await welcome(ui, deps, {});
       welcomed = true;
       note();
       note(ui.err.line`${machineAgentsLine(handles)}`);
@@ -614,7 +696,9 @@ async function init(
     : {
         out: createStyle(process.stdout),
         err: createStyle(process.stderr),
+        list: null,
       };
+  if (ui !== null) deps = clearOnAnswer(deps, ui);
   const target = await chooseHome(cmd, options, deps, ui);
   const p = target.p;
 
@@ -689,7 +773,7 @@ async function init(
     if (terminal === undefined || ui === null) {
       cmd.error(envApiRefused(apiUrl, source));
     }
-    if (!welcomed) welcome(ui);
+    if (!welcomed) await welcome(ui, deps, {});
     welcomed = true;
     note();
     promptStyled(indent(ui.err.line`${envApiQuestion(apiUrl, source)}`));
@@ -703,6 +787,11 @@ async function init(
     !options.apiUrl?.trim() && readEnv(API_URL_ENV) !== undefined
       ? previous?.apiUrl
       : apiUrl;
+
+  // The banner before the key is made, with no step done, since --force
+  // makes a new key.
+  if (ui !== null && !welcomed) await welcome(ui, deps, {});
+  startStep(ui, 'key', KEY_GENERATING);
 
   // With --force the old config describes the old key, so it goes as soon as
   // the new key exists. A failed registration then leaves a key and no
@@ -735,11 +824,12 @@ async function init(
     }
   }
   if (ui === null && leftBehind > 0) stderr(leftBehindLine(leftBehind));
+  finishStep(ui, 'key', tildePath(p.key));
+  startStep(ui, 'sign-in');
 
   let prompt: ((url: string, code: string) => void) | undefined;
   if (ui !== null) {
     const s = ui.err;
-    if (!welcomed) welcome(ui);
     if (backup !== undefined) {
       note();
       note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
@@ -779,14 +869,6 @@ async function init(
     runtime = (await askRuntime(terminal, detected, indent)) ?? undefined;
     askedRuntime = true;
   }
-  let gameEnabled = true;
-  let gameCap: number | undefined;
-  if (terminal !== undefined && ui !== null) {
-    note();
-    gameEnabled = await askYes(terminal, question(ui, GAME_QUESTION));
-    if (gameEnabled) gameCap = await askGameCap(terminal, ui);
-  }
-
   // The terms, right before the device code. On stderr with the device flow
   // prompts, so --json output stays one object. Before them, the API the
   // token goes to when it is not the SealKeeper one.
@@ -826,7 +908,9 @@ async function init(
     name,
     version: options.version,
     ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
-    gameEnabled,
+    // On, and a no to the game question, asked after the hooks, is sent
+    // as a settings change.
+    gameEnabled: true,
     issuedAt: new Date().toISOString(),
   };
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
@@ -916,23 +1000,31 @@ async function init(
   // here, beside it.
   const s = ui.out;
   say(s.line`${s.tick()} Signed in as ${s.bold(config.operatorLogin)}`);
+  finishStep(ui, 'sign-in', config.operatorLogin);
+  const hooks = await offerHooks(deps, ui);
+  await offerNudge(hooks, deps, ui, p);
+  const enabled = await askGame(api.apiUrl, deps, ui, p, terminal);
+  await offerRoutine(deps, routineDeps, ui, p);
+  // Read after the routine, whose own game question can turn the game on.
+  const read = await readGame(api.apiUrl, deps, p);
+  if (read !== null) finishStep(ui, 'game', gameResult(read));
+  const game = read ?? { enabled, cap: null };
+  ui.list?.end();
+
   say();
   say(s.line`${s.tick()} Registered ${s.bold(handle)}`);
   say(profileLine(s, profileUrl));
   if (registeredRuntime !== 'unknown') {
     say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
   }
-  const game = await registeredGame(api.apiUrl, deps, p, gameEnabled, gameCap);
   say(s.line`  ${s.dim('Game')}  ${gameLine(game)}`);
   if (card !== null) say(s.line`  ${s.dim('Card')}  ${tildePath(card)}`);
+  await printNudge(s, hooks, p);
   await printOperator(s, config, live, deps);
   if (folder !== null && target.folder !== null) {
     say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
   }
   printShared(ui.err);
-  const hooks = await offerHooks(deps, ui);
-  await offerNudge(hooks, deps, ui, p);
-  await offerRoutine(deps, routineDeps, ui, p);
   printNext(
     ui.out,
     hooks,
@@ -941,56 +1033,76 @@ async function init(
   );
 }
 
-// The game SealKeeper has for the agent just registered, read with the
-// signed status read, and the cap asked for sent when it differs. A key
-// registered before keeps its switch, as it keeps its runtime, so the
-// answer sent may not be what the API has. The answer sent, with no cap,
-// when the read fails, and the cap read when only the change fails, each
-// with the short timeout of the agent read, so a slow API never holds init
-// up.
-async function registeredGame(
+// The game question, in a terminal, after the hooks. The agent registered
+// with the game on, so a no goes as the signed settings change at once,
+// and the step line shows the answer. What SealKeeper has is read after
+// the routine, see readGame, since the routine's own game question can
+// turn the game on again. A no that could not be sent is said, and the
+// game counts as on. Without a terminal nothing is asked and the game
+// stays on.
+async function askGame(
+  apiUrl: string,
+  deps: InitDeps,
+  ui: Ui,
+  p: Paths,
+  terminal: Input | undefined,
+): Promise<boolean> {
+  startStep(ui, 'game');
+  let enabled = true;
+  if (terminal !== undefined) {
+    note();
+    enabled = await askYes(terminal, question(ui, GAME_QUESTION));
+  }
+  if (!enabled) {
+    try {
+      await changeGame(await gameSession(apiUrl, deps, p), { enabled: false });
+    } catch {
+      note(ui.err.line`${GAME_OFF_FAILED}`);
+      enabled = true;
+    }
+  }
+  finishStep(ui, 'game', gameResult({ enabled }));
+  return enabled;
+}
+
+// A signed session for the game routes, with the short timeout of the
+// agent read, so a slow API never holds init up.
+async function gameSession(
   apiUrl: string,
   deps: InitDeps,
   p: Paths,
-  sent: boolean,
-  cap: number | undefined,
-): Promise<{ enabled: boolean; cap: number | null }> {
-  let session: Pick<TaskSession, 'signer' | 'api'>;
-  let status: GameStatusResponse;
-  try {
-    const api = createApiClient({
-      apiUrl,
-      fetch: deps.fetch,
-      timeoutMs: SCORE_TIMEOUT_MS,
-    });
-    session = { api, signer: await loadSigner(api.apiUrl, p) };
-    status = await readGameStatus(session);
-  } catch {
-    return { enabled: sent, cap: null };
-  }
-  if (status.enabled && cap !== undefined && cap !== status.cap) {
-    status = await changeGame(session, { cap }).catch(() => status);
-  }
-  return { enabled: status.enabled, cap: status.cap };
+): Promise<Pick<TaskSession, 'signer' | 'api'>> {
+  const api = createApiClient({
+    apiUrl,
+    fetch: deps.fetch,
+    timeoutMs: SCORE_TIMEOUT_MS,
+  });
+  return { api, signer: await loadSigner(api.apiUrl, p) };
 }
 
-// The daily cap of game units, asked after a yes to the game. Enter or a
-// closed input keeps the most, and an answer that is not a whole number in
-// range asks again, up to MAX_ASKS questions, then keeps the most.
-async function askGameCap(input: Input, ui: Ui): Promise<number> {
-  const e = ui.err;
-  for (let asked = 0; asked < MAX_ASKS; asked++) {
-    promptStyled(
-      indent(e.line`${gameCapQuestion(asked === 0 ? '' : GAME_CAP_AGAIN)}`),
-    );
-    const line = await input.readLine();
-    if (line === null) return GAME_CAP_MAX;
-    const answer = cleanAnswer(line).trim();
-    if (answer === '') return GAME_CAP_MAX;
-    const cap = GameCap.safeParse(/^\d+$/.test(answer) ? Number(answer) : NaN);
-    if (cap.success) return cap.data;
+// The game as SealKeeper has it, from one signed status read. A key
+// registered before keeps its switch, as it keeps its runtime, so this may
+// differ from the answer. null when SealKeeper does not answer.
+async function readGame(
+  apiUrl: string,
+  deps: InitDeps,
+  p: Paths,
+): Promise<{ enabled: boolean; cap: number | null } | null> {
+  try {
+    const status = await readGameStatus(await gameSession(apiUrl, deps, p));
+    return { enabled: status.enabled, cap: status.cap };
+  } catch {
+    return null;
   }
-  return GAME_CAP_MAX;
+}
+
+// The session nudge in the summary, once the hooks are in and it has an
+// answer, from this init or an earlier one.
+async function printNudge(s: Style, hooks: HooksResult, p: Paths) {
+  if (hooks !== 'present' && hooks !== 'installed') return;
+  const on = await readNudge(p);
+  if (on === undefined) return;
+  say(s.line`  ${s.dim('Nudge')}  ${nudgeLine(on)}`);
 }
 
 // Who the agent is, as a repeat init prints it with --json.
@@ -1042,14 +1154,19 @@ async function initRegistered(
     return;
   }
   const s = ui.out;
-  if (!target.welcomed) welcome(ui);
-  say();
-  const handle = handleOf(existing, slug);
-  if (folder !== null && target.folder !== null) {
-    say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
+  const done = {
+    key: { status: 'done', text: tildePath(p.key) },
+    'sign-in': { status: 'done', text: existing.operatorLogin },
+  } as const;
+  if (target.welcomed) {
+    // The choice drew the banner before it knew which agent, so the two
+    // steps a registered agent has behind it finish here.
+    finishStep(ui, 'key', done.key.text);
+    finishStep(ui, 'sign-in', done['sign-in'].text);
+  } else {
+    await welcome(ui, deps, done);
   }
-  say(s.line`${s.tick()} Already set up as ${s.bold(handle)}`);
-  say(profileLine(s, profileUrlOf(existing, slug)));
+  const handle = handleOf(existing, slug);
   // A moved version has a level of its own, so the agent is read again
   // for Next.
   const live = (await offerVersionMove(existing, deps, ui, p))
@@ -1070,6 +1187,21 @@ async function initRegistered(
   const hooks = await offerHooks(deps, ui);
   await offerNudge(hooks, deps, ui, p);
   await offerRoutine(deps, routineDeps, ui, p);
+  // Only for the step line, which asks nothing, and only where there is
+  // one to finish.
+  if (ui.list !== null) {
+    const apiUrl = resolveApiUrl({ config: existing.apiUrl });
+    finishStep(ui, 'game', gameResult(await readGame(apiUrl, deps, p)));
+  }
+  ui.list?.end();
+
+  say();
+  if (folder !== null && target.folder !== null) {
+    say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
+  }
+  say(s.line`${s.tick()} Already set up as ${s.bold(handle)}`);
+  say(profileLine(s, profileUrlOf(existing, slug)));
+  await printNudge(s, hooks, p);
   printNext(
     ui.out,
     hooks,
@@ -1283,7 +1415,11 @@ async function offerRoutine(
   p: Paths,
 ): Promise<void> {
   const input = deps.stdin?.();
-  if (input === undefined || !input.isTTY) return;
+  if (input === undefined || !input.isTTY) {
+    finishStep(ui, 'routine', await routineNow(p));
+    return;
+  }
+  startStep(ui, 'routine');
   const e = ui.err;
   const o = ui.out;
   let current: RoutineConfig;
@@ -1292,9 +1428,11 @@ async function offerRoutine(
   } catch (error) {
     if (!(error instanceof ConfigError)) throw error;
     note(e.line`${error.message}`);
+    finishStep(ui, 'routine', NOT_INSTALLED);
     return;
   }
   if (current.schedule !== undefined) {
+    finishStep(ui, 'routine', current.schedule.time);
     say(o.line`${o.tick()} ${routinePresentLine(current.schedule.time)}`);
     if (current.schedule.program === undefined) {
       say(o.line`${o.dim(ROUTINE_EARLIER_LINE)}`);
@@ -1321,10 +1459,12 @@ async function offerRoutine(
         note(e.line`${planned}`);
         say(o.line`${ROUTINE_NOT_INSTALLED}`);
       }
+      finishStep(ui, 'routine', NOT_INSTALLED);
       return;
     }
   } catch (error) {
     if (!(error instanceof SchedulerError)) throw error;
+    finishStep(ui, 'routine', NOT_INSTALLED);
     return;
   }
   note();
@@ -1334,10 +1474,24 @@ async function offerRoutine(
     dim: (text) => say(o.line`${o.dim(text)}`),
     indent: INDENT,
     ask: (text) => promptStyled(indent(e.line`${text}`)),
+    installed: (time) => finishStep(ui, 'routine', time),
+    // The first run's lines stay on the screen under the finished list.
+    starting: () => ui.list?.end(),
   });
   if (failed === null) return;
   if (failed !== NOTHING_INSTALLED) note(e.line`${failed}`);
   say(o.line`${ROUTINE_NOT_INSTALLED}`);
+  finishStep(ui, 'routine', NOT_INSTALLED);
+}
+
+// What the routine step ends as when nothing is offered, the time of the
+// job installed already, else not installed.
+async function routineNow(p: Paths): Promise<string> {
+  try {
+    return (await readRoutineConfig(p)).schedule?.time ?? NOT_INSTALLED;
+  } catch {
+    return NOT_INSTALLED;
+  }
 }
 
 // A yes by default question as init asks it, indented, with the default
@@ -1549,8 +1703,9 @@ type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 // .claude move there (VOU-649). A --json run, ui null, never asks, and
 // prints any install lines on stderr.
 async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
+  if (!(await hasClaudeCode(deps))) return 'none';
   const dir = (deps.claudeDir ?? claudeConfigDir)();
-  if (!(await isDirectory(dir))) return 'none';
+  startStep(ui, 'hooks');
   if (ui !== null) {
     note();
     note(ui.err.bold('Claude Code'));
@@ -1576,7 +1731,22 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
     // Current hooks in the shared settings.json, which a repo commits, hold
     // this machine's absolute paths. They were installed already, so they
     // move to the local file without a question.
-    await moveFromShared(shared, project, user, dirs.cwd, hook, ui);
+    const moved = await moveFromShared(
+      shared,
+      project,
+      user,
+      dirs.cwd,
+      hook,
+      ui,
+    );
+    finishStep(ui, 'hooks', tildePath(moved === null ? shared : project));
+    // Left where they were, the commands and the skill of an earlier
+    // install may be in the user scope already.
+    finishStep(
+      ui,
+      'skill',
+      moved === null ? await skillPresent(user) : skillResult(moved, user),
+    );
     return 'present';
   }
   if (found !== null) {
@@ -1584,8 +1754,11 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
       const s = ui.out;
       say(s.line`${s.tick()} Hooks in ${tildePath(found)}`);
     }
+    finishStep(ui, 'hooks', tildePath(found));
+    startStep(ui, 'skill');
     await dropRetired(found, !inUser, dirs.cwd, hook, ui);
     await refreshCommand(user, inUser ? null : found, dirs.cwd, hook, ui);
+    finishStep(ui, 'skill', commandsDir(user));
     return 'present';
   }
   // Hooks of ours in the project settings, with an older path, are
@@ -1599,13 +1772,18 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   // runs it, so they go in without a question (RS-8). Anywhere else a
   // missing terminal is a no.
   const driven = claudeDriven(deps, input);
+  const notInstalled = (): HooksResult => {
+    finishStep(ui, 'hooks', NOT_INSTALLED);
+    finishStep(ui, 'skill', NOT_INSTALLED);
+    return 'not-installed';
+  };
   if (!driven) {
     if (ui === null || input === undefined || !input.isTTY) {
-      return 'not-installed';
+      return notInstalled();
     }
     if ((await askHooks(input, ui)) !== 'yes') {
       say(ui.out.line`${HOOKS_NOT_INSTALLED}`);
-      return 'not-installed';
+      return notInstalled();
     }
   }
   const warn = (message: string) =>
@@ -1618,11 +1796,13 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
     } catch (error) {
       if (!(error instanceof SettingsError)) throw error;
       warn(error.message);
-      return 'not-installed';
+      return notInstalled();
     }
   }
   const installed = await installAt(file, user, hook, ui);
-  if (installed === null) return 'not-installed';
+  if (installed === null) return notInstalled();
+  finishStep(ui, 'hooks', tildePath(file));
+  finishStep(ui, 'skill', skillResult(installed, user));
   if (file === project) {
     try {
       await uninstallHooks(shared, hook);
@@ -1636,10 +1816,32 @@ async function offerHooks(deps: InitDeps, ui: Ui | null): Promise<HooksResult> {
   return 'installed';
 }
 
+// Where the slash commands and the skill of the user scope are, for the
+// skill step, the commands folder.
+const commandsDir = (user: string): string =>
+  tildePath(dirname(commandPaths(user)[0] ?? user));
+
+// What the skill step ends as when nothing was written this run, the
+// commands folder when the skill is there from an earlier install.
+async function skillPresent(user: string): Promise<string> {
+  return (await exists(skillPath(user))) ? commandsDir(user) : NOT_INSTALLED;
+}
+
+// What the skill step ends as after an install, the commands folder when
+// they were written, see installClaudeCode.
+const skillResult = (
+  installed: ClaudeCodeInstall | null,
+  user: string,
+): string =>
+  installed?.commands === null || installed === null
+    ? NOT_INSTALLED
+    : commandsDir(user);
+
 // Moves current hooks of ours from the shared project settings.json into
 // settings.local.json, the same install as the stale path case, and takes
 // them out of the shared file. A path outside the project, or a local file
-// that cannot be changed, leaves the hooks where they are with a warning.
+// that cannot be changed, leaves the hooks where they are with a warning,
+// and answers null. Else what the install wrote.
 async function moveFromShared(
   shared: string,
   project: string,
@@ -1647,7 +1849,7 @@ async function moveFromShared(
   cwd: string,
   hook: string,
   ui: Ui | null,
-): Promise<void> {
+): Promise<ClaudeCodeInstall | null> {
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
   try {
@@ -1659,10 +1861,10 @@ async function moveFromShared(
       const s = ui.out;
       say(s.line`${s.tick()} Hooks in ${tildePath(shared)}`);
     }
-    return;
+    return null;
   }
   const installed = await installAt(project, user, hook, ui);
-  if (installed === null) return;
+  if (installed === null) return null;
   if (inUserScope(installed)) await leaveProject(project, user, cwd, ui);
   let removed: number;
   try {
@@ -1670,12 +1872,13 @@ async function moveFromShared(
   } catch (error) {
     if (!(error instanceof SettingsError)) throw error;
     warn(error.message);
-    return;
+    return installed;
   }
-  if (removed === 0) return;
+  if (removed === 0) return installed;
   const moved = `Moved the hooks out of ${tildePath(shared)}, since they hold absolute paths on this machine and a repo commits that file`;
   if (ui === null) stderr(moved);
   else say(ui.out.line`${moved}`);
+  return installed;
 }
 
 // Takes the slash commands and the skill of ours out of the project's

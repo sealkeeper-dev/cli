@@ -8,13 +8,12 @@ import {
   stripStyle,
   styleEnabled,
   visibleWidth,
+  WORDMARK_WIDTH,
 } from './style.js';
 
 const TTY = { isTTY: true, columns: 120 };
 const PIPE = { isTTY: false };
 const ESC = String.fromCharCode(27);
-// The text of each styled line, as it would be written.
-const texts = (lines: Styled[]) => lines.map((l) => l.text);
 
 describe('style', () => {
   it('is off when the stream is not a terminal', () => {
@@ -66,36 +65,64 @@ describe('style', () => {
     expect(visibleWidth(styled)).toBe(12);
   });
 
-  it('draws a box as wide as the longest visible line', () => {
+  it('draws the wordmark, SEAL in green and KEEPER plain, each shadow dim', () => {
     const s = createStyle(TTY, { env: {} });
-    const lines = s.box([s.bold('abc'), '', 'abcdef']);
-    expect(lines.map(stripStyle)).toEqual([
-      '╭────────╮',
-      '│ abc    │',
-      '│        │',
-      '│ abcdef │',
-      '╰────────╯',
-    ]);
+    const rows = s.wordmark();
+    expect(rows).toHaveLength(6);
+    const plain = (rows ?? []).map(stripStyle);
+    expect(plain[0]).toBe(
+      '███████╗███████╗ █████╗ ██╗     ██╗  ██╗███████╗███████╗██████╗ ███████╗██████╗',
+    );
+    expect(plain[5]).toBe(
+      '╚══════╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝',
+    );
+    expect(Math.max(...plain.map((row) => [...row].length))).toBe(
+      WORDMARK_WIDTH,
+    );
+    const green = `${ESC}[38;2;80;180;110m`;
+    const first = (rows ?? [])[0]?.text ?? '';
+    // SEAL, a letter then its shadow, dim inside the green.
+    expect(
+      first.startsWith(`${green}███████${ESC}[39m${ESC}[2m${green}╗`),
+    ).toBe(true);
+    // KEEPER carries no colour, only the dim shadow.
+    const keeper = first.slice(first.indexOf('     ') + 5);
+    expect(keeper).not.toContain(green);
+    expect(keeper).toContain(`${ESC}[2m╗`);
   });
 
-  it('drops the border when the terminal is narrower than the box', () => {
-    const s = createStyle({ isTTY: true, columns: 10 }, { env: {} });
-    expect(texts(s.box(['abc', 'abcdef']))).toEqual(['abc', 'abcdef']);
-    const wide = createStyle({ isTTY: true, columns: 12 }, { env: {} });
-    expect(wide.box(['abc', 'abcdef'])).toHaveLength(4);
+  it('draws no wordmark when the terminal is narrower than it and its indent', () => {
+    const narrow = createStyle(
+      { isTTY: true, columns: WORDMARK_WIDTH + 1 },
+      { env: {} },
+    );
+    expect(narrow.wordmark()).toBeNull();
+    const wide = createStyle(
+      { isTTY: true, columns: WORDMARK_WIDTH + 2 },
+      { env: {} },
+    );
+    expect(wide.wordmark()).toHaveLength(6);
   });
 
-  it('keeps the border when the terminal reports no width', () => {
+  it('draws the wordmark when the terminal reports no width', () => {
     const zero = createStyle({ isTTY: true, columns: 0 }, { env: {} });
-    expect(zero.box(['abc'])).toHaveLength(3);
+    expect(zero.wordmark()).toHaveLength(6);
+    const none = createStyle({ isTTY: true }, { env: {} });
+    expect(none.wordmark()).toHaveLength(6);
   });
 
-  it('prints the lines without a border when off', () => {
-    expect(texts(createStyle(PIPE, { env: {} }).box(['a', '', 'b']))).toEqual([
-      'a',
-      '',
-      'b',
-    ]);
+  it('draws no wordmark when off', () => {
+    expect(createStyle(PIPE, { env: {} }).wordmark()).toBeNull();
+    expect(createStyle(TTY, { env: { NO_COLOR: '1' } }).wordmark()).toBeNull();
+  });
+
+  it('draws the step glyphs and the dot', () => {
+    const s = createStyle(TTY, { env: {} });
+    expect(stripStyle(s.done())).toBe('●');
+    expect(stripStyle(s.todo())).toBe('○');
+    expect(s.dot().text).toBe('·');
+    expect(s.done().text).toContain(`${ESC}[38;2;80;180;110m`);
+    expect(s.todo().text).toContain(`${ESC}[38;2;140;140;135m`);
   });
 
   describe('untrusted text', () => {
@@ -135,7 +162,7 @@ describe('style', () => {
         const lines = [
           s.line`Registered ${s.bold(raw)}`,
           indent(raw),
-          ...s.box([raw, s.gold(raw)]),
+          s.gold(raw),
         ];
         for (const l of lines) {
           expect(l.text).not.toContain(ESC);
@@ -144,15 +171,6 @@ describe('style', () => {
         }
       },
     );
-
-    it('escapes raw text in a box and still draws the border', () => {
-      const s = createStyle(TTY, { env: {} });
-      const lines = s.box([`${ESC}]52;c;aGk=\u0007`]);
-      expect(lines).toHaveLength(3);
-      expect(stripStyle(lines[1] as Styled)).toBe(
-        '│ \\u001b]52;c;aGk=\\u0007 │',
-      );
-    });
 
     it('treats a string holding our own codes as raw text', () => {
       const s = createStyle(TTY, { env: {} });
@@ -205,7 +223,7 @@ describe('style', () => {
       }
     });
 
-    it('draw the mark, the tick and the box in ASCII on code page 437, styled or not', () => {
+    it('draw the glyphs in ASCII and no wordmark on code page 437, styled or not', () => {
       const { calls, codePage } = reader(437);
       const s = createStyle(TTY, { env: {}, platform: 'win32', codePage });
       s.bold('x');
@@ -213,16 +231,16 @@ describe('style', () => {
       expect(calls.n).toBe(0);
       expect(stripStyle(s.mark())).toBe('*');
       expect(stripStyle(s.tick())).toBe('+');
-      expect(s.box(['ab']).map(stripStyle)).toEqual([
-        '+----+',
-        '| ab |',
-        '+----+',
-      ]);
+      expect(stripStyle(s.done())).toBe('+');
+      expect(stripStyle(s.todo())).toBe('o');
+      expect(s.dot().text).toBe('-');
+      expect(s.wordmark()).toBeNull();
       // Read once for the style, however many glyphs it draws.
       expect(calls.n).toBe(1);
       const plain = createStyle(PIPE, { env: {}, platform: 'win32', codePage });
       expect(plain.tick().text).toBe('+');
       expect(plain.mark().text).toBe('*');
+      expect(plain.todo().text).toBe('o');
     });
 
     it('stay UTF-8 on win32 with code page 65001', () => {
@@ -233,11 +251,8 @@ describe('style', () => {
       });
       expect(stripStyle(s.mark())).toBe('◉');
       expect(stripStyle(s.tick())).toBe('✓');
-      expect(s.box(['ab']).map(stripStyle)).toEqual([
-        '╭────╮',
-        '│ ab │',
-        '╰────╯',
-      ]);
+      expect(stripStyle(s.todo())).toBe('○');
+      expect(s.wordmark()).toHaveLength(6);
     });
   });
 });

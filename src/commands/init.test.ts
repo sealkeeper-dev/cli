@@ -64,6 +64,7 @@ import { createProgram } from '../program.js';
 import { readRoutine } from '../routine.js';
 import { copyPaths, copyVersion, projectAgentLine } from '../routine-copy.js';
 import type { Runner } from '../routine-scheduler.js';
+import { SETUP_TITLE } from '../setup-list.js';
 import { stripStyle } from '../style.js';
 import { describeTaxonomy, isSent, NEVER_LEAVES } from '../taxonomy.js';
 import { takePurpose } from '../test-purpose.js';
@@ -78,9 +79,8 @@ import {
   envApiQuestion,
   envApiRefused,
   folderLine,
-  GAME_CAP_AGAIN,
+  GAME_OFF_FAILED,
   GAME_QUESTION,
-  gameCapQuestion,
   HOOKS_BY_CLAUDE,
   HOOKS_INTRO,
   HOOKS_MAX_ASKS,
@@ -111,7 +111,6 @@ import {
   runtimeNameLine,
   runtimeNameNudge,
   SHARED_SUMMARY,
-  TAGLINE,
   versionQuestion,
 } from './init.js';
 import {
@@ -343,6 +342,7 @@ function fakeFetch(world: World): typeof fetch {
       if (url.endsWith('/settings')) {
         world.gameChanges = [...(world.gameChanges ?? []), payload];
         if (typeof payload.cap === 'number') world.gameCap = payload.cap;
+        if (typeof payload.enabled === 'boolean') world.game = payload.enabled;
       } else {
         world.gameReads = [...(world.gameReads ?? []), payload];
       }
@@ -827,9 +827,9 @@ describe('sealkeeper init', () => {
       expect(asked).toBeGreaterThanOrEqual(0);
       expect(warned).toBeGreaterThan(asked);
       expect(device).toBeGreaterThan(warned);
-      // One welcome box, before the question.
-      expect(result.err.split(TAGLINE[0] as string)).toHaveLength(2);
-      expect(result.err.indexOf(TAGLINE[0] as string)).toBeLessThan(
+      // One banner, before the question.
+      expect(result.err.split(SETUP_TITLE)).toHaveLength(2);
+      expect(result.err.indexOf(SETUP_TITLE)).toBeLessThan(
         result.err.indexOf(
           envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL'),
         ),
@@ -1178,7 +1178,8 @@ describe('sealkeeper init', () => {
     );
     expect(result.err).not.toContain(CONSENT);
     expect(result.out).not.toContain('operatorLogin');
-    // Only the read of the verified count for Next. No sign in.
+    // Only the read of the verified count for Next. No sign in, and no
+    // game read, since the list is not pinned here.
     expect(world.fetchUrls).toEqual([
       `${API_URL}/v1/agents/${(await loadKey(paths(home)))?.agentId}`,
     ]);
@@ -1510,8 +1511,8 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      // Only the game question and its cap.
-      expect((world.stdin as Input & { reads: number }).reads).toBe(2);
+      // Only the game question.
+      expect((world.stdin as Input & { reads: number }).reads).toBe(1);
       expect(result.all).not.toContain('hook');
       expect(result.all).not.toContain('Claude Code');
       expect(result.err).not.toContain(HOOKS_QUESTION);
@@ -1605,9 +1606,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One read for the game question, and one more for the session nudge
-      // question, once hooks are in.
-      expect(stdin.reads).toBe(3);
+      // One read for the session nudge question, once hooks are in, and
+      // one for the game question after it.
+      expect(stdin.reads).toBe(2);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -1716,9 +1717,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // Only the game and session nudge questions are read, the hooks are
+      // Only the session nudge and game questions are read, the hooks are
       // not asked.
-      expect(stdin.reads).toBe(3);
+      expect(stdin.reads).toBe(2);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${projectFile}\n`);
       expect(result.out).toContain(`Moved the hooks out of ${sharedFile}`);
@@ -2111,9 +2112,8 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One read for the game question, and one more for the session nudge
-      // question, once hooks are in.
-      expect(stdin.reads).toBe(4);
+      // The hooks, then the session nudge once they are in, then the game.
+      expect(stdin.reads).toBe(3);
       expect(result.err).toContain(HOOKS_QUESTION);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(result.out).not.toContain(INSTALL_COMMAND);
@@ -2265,9 +2265,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One read for the game question, and one more for the session nudge
-      // question, once hooks are in.
-      expect(stdin.reads).toBe(3);
+      // One read for the session nudge question, once hooks are in, and
+      // one for the game question after it.
+      expect(stdin.reads).toBe(2);
       expect(result.out).not.toContain(INSTALL_COMMAND);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
     });
@@ -2319,9 +2319,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One read for the game question, and one more for the session nudge
-      // question, once hooks are in.
-      expect(stdin.reads).toBe(6);
+      // The hooks, the session nudge once they are in, and the game, each
+      // answered with arrows then y.
+      expect(stdin.reads).toBe(3);
       expect(result.out).toContain(`  ✓ Hooks in ${settingsFile()}\n`);
       expect(hooksIn(await readFile(settingsFile(), 'utf8'))).toContain(
         'SessionEnd',
@@ -2347,8 +2347,8 @@ describe('sealkeeper init', () => {
 
     it('asks again on an unclear answer and installs on a later y', async () => {
       await withClaudeCode();
-      // Enter at the game question before, and at the nudge that follows.
-      const stdin = answeringEach(['', '', 'maybe', 'y', '']);
+      // Enter at the nudge that follows, and at the game question after it.
+      const stdin = answeringEach(['maybe', 'y', '', '']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -2359,9 +2359,9 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      // One read for the game question, and one more for the session nudge
-      // question, once hooks are in.
-      expect(stdin.reads).toBe(5);
+      // One read for the session nudge question, once hooks are in, then
+      // one for the game question.
+      expect(stdin.reads).toBe(4);
       expect(result.err).toContain(
         '  Please answer y or n. Install them now? [Y/n] ',
       );
@@ -2370,8 +2370,8 @@ describe('sealkeeper init', () => {
 
     it('counts as no after three unclear answers and says so with the command', async () => {
       await withClaudeCode();
-      // Enter at the game question first.
-      const stdin = answeringEach(['', '', 'what', '\u001b[Bx', 'nope', 'y']);
+      // Then y at the game question.
+      const stdin = answeringEach(['what', '\u001b[Bx', 'nope', 'y']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -2382,7 +2382,7 @@ describe('sealkeeper init', () => {
         'claude-code',
       );
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(2 + HOOKS_MAX_ASKS);
+      expect(stdin.reads).toBe(HOOKS_MAX_ASKS + 1);
       expect(HOOKS_MAX_ASKS).toBe(3);
       expect(result.out).toContain(`  ${HOOKS_NOT_INSTALLED}\n`);
       expect(HOOKS_NOT_INSTALLED).toBe(
@@ -2699,7 +2699,8 @@ describe('sealkeeper init', () => {
 
         world = newWorld();
         await withClaudeCode();
-        const nudge = answeringEach(['y', '', 'y']);
+        // y to the hooks, then the input closes at the nudge.
+        const nudge = answeringEach(['y']);
         world.stdin = nudge;
         const atNudge = await run(
           world,
@@ -2710,7 +2711,7 @@ describe('sealkeeper init', () => {
           'claude-code',
         );
         expect(atNudge.code).toBe(1);
-        expect(nudge.reads).toBe(4);
+        expect(nudge.reads).toBe(2);
         expect(atNudge.err).toContain(INPUT_CLOSED);
       });
 
@@ -2740,8 +2741,8 @@ describe('sealkeeper init', () => {
 
       it('installs the skill with the hooks and turns the nudge on after a yes', async () => {
         await withClaudeCode();
-        // The game, the hooks and the nudge.
-        const stdin = answeringEach(['', '', 'y', 'y']);
+        // The hooks, the nudge, then the game.
+        const stdin = answeringEach(['y', 'y', '']);
         world.stdin = stdin;
         const result = await run(
           world,
@@ -2752,7 +2753,7 @@ describe('sealkeeper init', () => {
           'claude-code',
         );
         expect(result.code).toBe(0);
-        expect(stdin.reads).toBe(4);
+        expect(stdin.reads).toBe(3);
         expect(result.err).toContain(NUDGE_INTRO);
         expect(result.err).toContain('three line SealKeeper summary');
         expect(result.out).toContain('  ✓ Session nudge on\n');
@@ -2772,7 +2773,7 @@ describe('sealkeeper init', () => {
           pending: { addressed: 2, outcomes: 0 },
           asOf: '2026-09-25T10:15:00.000Z',
         };
-        world.stdin = answeringEach(['', '', 'y', 'y']);
+        world.stdin = answeringEach(['y', 'y', '', '']);
         const result = await run(
           world,
           'init',
@@ -2796,7 +2797,7 @@ describe('sealkeeper init', () => {
 
       it('says nothing more and still exits 0 when the goal cannot be read', async () => {
         await withClaudeCode();
-        world.stdin = answeringEach(['', '', 'y', 'y']);
+        world.stdin = answeringEach(['y', 'y', '', '']);
         const result = await run(
           world,
           'init',
@@ -2926,14 +2927,14 @@ describe('sealkeeper init', () => {
 
     it('asks on a terminal, and Enter takes the suggestion', async () => {
       world.repo = 'scout-repo';
-      const stdin = answeringEach(['', '', '', '']);
+      const stdin = answeringEach(['', '', '']);
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(result.err).toContain(`  ${nameQuestion('scout-repo')} `);
       expect(world.registrations[0]?.name).toBe('scout-repo');
       // The name, then the runtime, skipped, then the game.
-      expect(stdin.reads).toBe(4);
+      expect(stdin.reads).toBe(3);
     });
 
     it('takes a typed name, and asks again after one that is not valid', async () => {
@@ -2958,7 +2959,7 @@ describe('sealkeeper init', () => {
 
     it('nudges once for a runtime name, and Enter keeps it', async () => {
       world.repo = 'claude-code';
-      const stdin = answeringEach(['', '', '', '', '']);
+      const stdin = answeringEach(['', '', '', '']);
       world.stdin = stdin;
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
@@ -2966,7 +2967,7 @@ describe('sealkeeper init', () => {
       expect(world.registrations[0]?.name).toBe('claude-code');
       // The name, the name again after the nudge, the runtime, then the
       // game.
-      expect(stdin.reads).toBe(5);
+      expect(stdin.reads).toBe(4);
     });
 
     it('takes another name typed after the nudge', async () => {
@@ -2979,7 +2980,7 @@ describe('sealkeeper init', () => {
     });
 
     it('with --name says one line for a runtime name and does not ask', async () => {
-      const stdin = answeringEach(['', '', '']);
+      const stdin = answeringEach(['', '']);
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'codex');
       expect(result.code).toBe(0);
@@ -2987,7 +2988,7 @@ describe('sealkeeper init', () => {
       expect(result.err).not.toContain(runtimeNameNudge('codex'));
       expect(result.err).not.toContain(nameQuestion(null));
       // Only the runtime and game questions.
-      expect(stdin.reads).toBe(3);
+      expect(stdin.reads).toBe(2);
       expect(world.registrations[0]?.name).toBe('codex');
     });
 
@@ -3001,7 +3002,7 @@ describe('sealkeeper init', () => {
 
   describe('the runtime', () => {
     it('sends --runtime with the registration and asks only the game', async () => {
-      const stdin = answeringEach(['', '']);
+      const stdin = answeringEach(['']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -3012,7 +3013,7 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(2);
+      expect(stdin.reads).toBe(1);
       expect(world.registrations[0]).toMatchObject({ runtime: 'codex' });
       expect(result.out).toContain('    Runtime  Codex\n');
       const agentId = (await loadKey(paths(home)))?.agentId ?? '';
@@ -3113,9 +3114,9 @@ describe('sealkeeper init', () => {
       '    Game  on, stop playing with npx sealkeeper config game off\n';
     const OFF = `    Game  off, npx sealkeeper config game on turns it on\n`;
 
-    it('asks in a terminal after the runtime, and y turns the game on with the cap asked next', async () => {
+    it('asks in a terminal after the hooks, and y keeps the game on with the most game units, sending no change', async () => {
       world.game = true;
-      const stdin = answeringEach(['y', '3']);
+      const stdin = answeringEach(['y']);
       world.stdin = stdin;
       const result = await run(
         world,
@@ -3126,68 +3127,25 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(2);
+      expect(stdin.reads).toBe(1);
       expect(GAME_QUESTION).toBe('Play duels and weekly challenges? [Y/n] ');
       expect(result.err).toContain(`  ${GAME_QUESTION}`);
-      expect(result.err).toContain(`  ${gameCapQuestion('')}`);
-      expect(gameCapQuestion('')).toBe('Game units a UTC day, 0 to 5? [5] ');
-      // Both before the sign in.
-      expect(result.err.indexOf(gameCapQuestion(''))).toBeLessThan(
+      expect(result.err).not.toContain('Game units');
+      // After the sign in, as the fifth step.
+      expect(result.err.indexOf(GAME_QUESTION)).toBeGreaterThan(
         result.err.indexOf(CONSENT),
       );
       expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
-      // The line reads what SealKeeper has, with a signed status read, and
-      // the cap goes in a signed settings change of the cap alone.
+      // The line reads what SealKeeper has, with one signed status read
+      // after the routine offer. The cap is not asked, so nothing is sent.
       expect(world.gameReads).toHaveLength(1);
       expect(Object.keys(world.gameReads?.[0] ?? {})).toEqual(['issuedAt']);
-      expect(world.gameChanges).toHaveLength(1);
-      expect(Object.keys(world.gameChanges?.[0] ?? {}).sort()).toEqual([
-        'cap',
-        'issuedAt',
-      ]);
-      expect(world.gameChanges?.[0]?.cap).toBe(3);
-      expect(result.out).toContain(CAPPED(3));
-    });
-
-    it('keeps the most game units on Enter at the cap, and sends no change', async () => {
-      world.game = true;
-      const stdin = answeringEach(['', '']);
-      world.stdin = stdin;
-      const result = await run(
-        world,
-        'init',
-        '--name',
-        'scout',
-        '--runtime',
-        'codex',
-      );
-      expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(2);
       expect(world.gameChanges).toBeUndefined();
       expect(result.out).toContain(CAPPED(5));
     });
 
-    it('asks the cap again after an answer out of range, then keeps the most', async () => {
+    it('turns the game off on n with a signed settings change', async () => {
       world.game = true;
-      const stdin = answeringEach(['', '6', 'x', '-1']);
-      world.stdin = stdin;
-      const result = await run(
-        world,
-        'init',
-        '--name',
-        'scout',
-        '--runtime',
-        'codex',
-      );
-      expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(4);
-      expect(result.err.split(GAME_CAP_AGAIN)).toHaveLength(3);
-      expect(world.gameChanges).toBeUndefined();
-      expect(result.out).toContain(CAPPED(5));
-    });
-
-    it('turns the game off on n, and asks no cap', async () => {
-      world.game = false;
       world.stdin = answeringEach(['n']);
       const result = await run(
         world,
@@ -3198,12 +3156,38 @@ describe('sealkeeper init', () => {
         'codex',
       );
       expect(result.code).toBe(0);
-      expect(world.registrations[0]).toMatchObject({ gameEnabled: false });
+      // The agent registers with the game on, and the no goes after.
+      expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
+      expect(world.gameChanges).toHaveLength(1);
+      expect(Object.keys(world.gameChanges?.[0] ?? {}).sort()).toEqual([
+        'enabled',
+        'issuedAt',
+      ]);
+      expect(world.gameChanges?.[0]?.enabled).toBe(false);
       expect(result.out).toContain(OFF);
     });
 
+    it('says when the no could not be sent, and counts the game as on', async () => {
+      // No game route at all, so the settings change and the read fail.
+      world.stdin = answeringEach(['n']);
+      const result = await run(
+        world,
+        'init',
+        '--name',
+        'scout',
+        '--runtime',
+        'codex',
+      );
+      expect(result.code).toBe(0);
+      expect(result.err).toContain(`  ${GAME_OFF_FAILED}\n`);
+      expect(GAME_OFF_FAILED).toBe(
+        'The game could not be turned off, so it is still on. Run npx sealkeeper config game off to try again.',
+      );
+      expect(result.out).toContain(ON);
+    });
+
     it('turns the game on with Enter, since yes is the default', async () => {
-      world.stdin = answeringEach(['', '']);
+      world.stdin = answeringEach(['']);
       const result = await run(
         world,
         'init',
@@ -3220,7 +3204,7 @@ describe('sealkeeper init', () => {
 
     it('says what SealKeeper has when it differs from the answer, as for a key registered before', async () => {
       world.game = false;
-      world.stdin = answeringEach(['', '2']);
+      world.stdin = answeringEach(['']);
       const result = await run(
         world,
         'init',
@@ -3232,7 +3216,6 @@ describe('sealkeeper init', () => {
       expect(result.code).toBe(0);
       expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
       expect(result.out).toContain(OFF);
-      // A game that is off takes no cap.
       expect(world.gameChanges).toBeUndefined();
     });
 
@@ -3268,7 +3251,7 @@ describe('sealkeeper init', () => {
       expect(world.registrations[0]).toMatchObject({ gameEnabled: true });
     });
 
-    it('ends init with one line when stdin closes at the question', async () => {
+    it('ends init with one line when stdin closes at the question, and the registration stands', async () => {
       world.stdin = answeringEach([]);
       const result = await run(
         world,
@@ -3280,7 +3263,11 @@ describe('sealkeeper init', () => {
       );
       expect(result.code).toBe(1);
       expect(result.err).toContain(INPUT_CLOSED);
-      expect(world.registrations).toEqual([]);
+      // The question comes after the sign in, so the agent is registered
+      // with the game on, and a repeat init goes on from there.
+      expect(world.registrations).toHaveLength(1);
+      expect(world.gameChanges).toBeUndefined();
+      expect(await readConfig(paths(home))).not.toBeNull();
     });
   });
 
@@ -3509,12 +3496,11 @@ describe('sealkeeper init', () => {
       return script;
     }
 
-    // The runtime, the game, its cap, the hooks and the nudge, each by
-    // Enter, then the guided setup of sealkeeper routine, the time, tasks or
-    // the game, whether to sync, the install question and the first run
-    // question.
+    // The runtime, the hooks, the nudge and the game, each by Enter, then
+    // the guided setup of sealkeeper routine, the time, tasks or the game,
+    // whether to sync, the install question and the first run question.
     const answersThen = (...routine: string[]) =>
-      answeringEach(['', '', '', '', '', ...routine]);
+      answeringEach(['', '', '', '', ...routine]);
 
     it('offers the routine as one block after the hooks and installs on Enter (RS-1)', async () => {
       await withClaudeCode();
@@ -3524,7 +3510,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(10);
+      expect(stdin.reads).toBe(9);
       const schedule = (await readRoutineConfig()).schedule;
       const job = schedule?.job ?? '';
       // The guided setup of sealkeeper routine, indented as init's other
@@ -3587,7 +3573,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       // A first run that fails does not fail init.
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(10);
+      expect(stdin.reads).toBe(9);
       expect(result.out).toContain(
         '  First run started. It stops within 15 minutes.\n',
       );
@@ -3613,7 +3599,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(9);
+      expect(stdin.reads).toBe(8);
       expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(result.err).not.toContain(FIRST_RUN_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -3629,7 +3615,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(11);
+      expect(stdin.reads).toBe(10);
       expect(result.err).toContain(
         `  Please answer y or n. ${INSTALL_QUESTION}`,
       );
@@ -3760,7 +3746,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(5);
+      expect(stdin.reads).toBe(4);
       expect(result.all).not.toContain('Daily routine');
       expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -3774,7 +3760,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(5);
+      expect(stdin.reads).toBe(4);
       expect(result.err).toContain(
         `claude at ${PROJECT_CLAUDE} is inside a project or the npx cache, so the daily job will not run it. Install Claude Code globally, or name its path with npx sealkeeper routine on --agent-path <path>`,
       );
@@ -3786,11 +3772,10 @@ describe('sealkeeper init', () => {
     it('offers the routine without a Claude Code dir when only openclaw is on PATH (VOU-601)', async () => {
       await withBundle();
       world.openclaw = true;
-      // The runtime, the game and its cap, no hooks and no nudge, then the
-      // model, which OpenClaw gives no default for here, the time, tasks or
-      // the game, whether to sync, the install and the first run.
+      // The runtime and the game, no hooks and no nudge, then the model,
+      // which OpenClaw gives no default for here, the time, tasks or the
+      // game, whether to sync, the install and the first run.
       const stdin = answeringEach([
-        '',
         '',
         '',
         'google/gemini-3-flash-preview',
@@ -3803,7 +3788,7 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(9);
+      expect(stdin.reads).toBe(8);
       expect(result.all).toContain(`  Agent     OpenClaw, ${OPENCLAW}`);
       expect(result.err).toContain('  Which model does OpenClaw use? ');
       expect(result.err).not.toContain('Which agent runs it?');
@@ -3830,11 +3815,32 @@ describe('sealkeeper init', () => {
       world.stdin = stdin;
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
-      expect(stdin.reads).toBe(12);
+      expect(stdin.reads).toBe(11);
       expect(result.err).toContain(
         '  Which agent runs it? 1 Claude Code  2 OpenClaw [1] ',
       );
       expect((await readRoutineConfig()).schedule?.agent).toBe('openclaw');
+    });
+
+    it('reads the game after the routine, whose own game answer turns it on again', async () => {
+      await withClaudeCode();
+      await withBundle();
+      world.claude = true;
+      world.game = true;
+      // The runtime, the hooks and the nudge by Enter, n to the game, then
+      // the time, g at the work question, no sync, install and no first run.
+      const stdin = answeringEach(['', '', '', 'n', '', 'g', 'n', '', 'n']);
+      world.stdin = stdin;
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(result.code).toBe(0);
+      expect(stdin.reads).toBe(9);
+      // The no went at once, the routine turned it back on, and the read
+      // came after both.
+      expect(world.gameChanges?.map((c) => c.enabled)).toEqual([false, true]);
+      expect(world.gameReads?.length).toBeGreaterThanOrEqual(1);
+      expect(result.out).toContain(
+        '    Game  on, 5 game units a UTC day, spent on the duels it creates and the challenge tasks it claims, change it with npx sealkeeper routine set --game-cap <n>, stop playing with npx sealkeeper config game off\n',
+      );
     });
 
     // VOU-657. The one sync question of an init is the routine setup's.
@@ -3849,7 +3855,7 @@ describe('sealkeeper init', () => {
         world.stdin = stdin;
         const result = await run(world, 'init', '--name', 'scout');
         expect(result.code).toBe(0);
-        expect(stdin.reads).toBe(10);
+        expect(stdin.reads).toBe(9);
         expect(result.err.split('Turn on automatic sync')).toHaveLength(2);
         expect(result.out).toContain(
           `  ${answer === 'y' ? AUTO_SYNC_ON : AUTO_SYNC_OFF}\n`,
@@ -4047,8 +4053,8 @@ describe('sealkeeper init', () => {
       const choice = lines.indexOf(`  ${machineAgentsLine(['alice/app'])}`);
       expect(choice).toBeGreaterThan(0);
       expect(result.err).toContain(`  ${nameQuestion('app')} `);
-      // The welcome box once, before the choice.
-      expect(result.err.split(TAGLINE[0] as string)).toHaveLength(2);
+      // The banner once, before the choice.
+      expect(result.err.split(SETUP_TITLE)).toHaveLength(2);
       expect(result.out).toContain(
         [
           `  ✓ ${folderLine(tildePath(worktree), 'alice/app')}`,
@@ -4301,13 +4307,18 @@ describe('sealkeeper init', () => {
         "
           ◉ SealKeeper v<version>
 
-          Prove your agent. A signed, portable track record
-          anyone can check offline.
+          Setting up this agent · 6 steps
+
+            ○ 1  Key
+            ○ 2  GitHub sign-in
+            ○ 3  Hooks
+            ○ 4  Skill and slash commands
+            ○ 5  Game                      on / off
+            ○ 6  Routine                   offered at the end
 
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
-          Play duels and weekly challenges? [Y/n]   Game units a UTC day, 0 to 5? [5] 
           This sign in sends your GitHub token to the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.
 
           Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
@@ -4316,17 +4327,6 @@ describe('sealkeeper init', () => {
           Open https://github.com/login/device and enter ABCD-1234
           ✓ Signed in as alice
 
-          ✓ Registered alice/scout
-            Profile  https://sealkeeper.run/agents/alice/scout
-            Game  on, stop playing with npx sealkeeper config game off
-            Card  <home>/agent-card.json
-
-          What leaves this machine
-          Task outcomes, and the timing and token counts of routine runs, each
-          signed with your key. Never prompts, tool inputs or outputs, file
-          contents or model output, except answers and the tasks your agent creates.
-          Full list  npx sealkeeper what-is-shared
-
           Claude Code
           The hooks record no session. They read the model your agent runs and sync when a session ends.
           Install them now? [Y/n]   ✓ Hooks in <home>/claude/settings.json
@@ -4334,6 +4334,19 @@ describe('sealkeeper init', () => {
           ✓ sealkeeper skill in <home>/claude/skills/sealkeeper
           The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
           Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]   Session nudge off. Run npx sealkeeper config nudge on to turn it on later.
+
+          Play duels and weekly challenges? [Y/n] 
+          ✓ Registered alice/scout
+            Profile  https://sealkeeper.run/agents/alice/scout
+            Game  on, stop playing with npx sealkeeper config game off
+            Card  <home>/agent-card.json
+            Nudge  off, npx sealkeeper config nudge on turns it on
+
+          What leaves this machine
+          Task outcomes, and the timing and token counts of routine runs, each
+          signed with your key. Never prompts, tool inputs or outputs, file
+          contents or model output, except answers and the tasks your agent creates.
+          Full list  npx sealkeeper what-is-shared
 
           Next
           1  In Claude Code, run /sealkeeper-run to earn your first verified tasks
@@ -4361,15 +4374,22 @@ describe('sealkeeper init', () => {
         "
           ◉ SealKeeper v<version>
 
-          Prove your agent. A signed, portable track record
-          anyone can check offline.
+          Setting up this agent · 6 steps
 
-          ✓ Already set up as alice/scout
-            Profile  https://sealkeeper.run/agents/alice/scout
+            ● 1  Key                       <home>/key
+            ● 2  GitHub sign-in            alice
+            ○ 3  Hooks
+            ○ 4  Skill and slash commands
+            ○ 5  Game                      on / off
+            ○ 6  Routine                   offered at the end
 
           Claude Code
           The hooks record no session. They read the model your agent runs and sync when a session ends.
           ✓ Hooks in <home>/claude/settings.json
+
+          ✓ Already set up as alice/scout
+            Profile  https://sealkeeper.run/agents/alice/scout
+            Nudge  off, npx sealkeeper config nudge on turns it on
 
           Next
           1  In Claude Code, run /sealkeeper-run to earn your first verified tasks
@@ -4383,17 +4403,25 @@ describe('sealkeeper init', () => {
       `);
     });
 
-    it('prints the welcome box and colours with FORCE_COLOR', async () => {
+    it('prints the wordmark and colours with FORCE_COLOR', async () => {
       vi.stubEnv('FORCE_COLOR', '1');
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(result.err).toContain(String.fromCharCode(27));
-      expect(result.err).toContain('╭');
-      expect(result.err).toContain('╯');
-      expect(result.err).toContain(`v${VERSION}`);
       const plain = stripStyle(result.all);
-      expect(plain).toContain(`│ ◉ SealKeeper v${VERSION}`);
-      for (const text of TAGLINE) expect(plain).toContain(`│ ${text}`);
+      // The wordmark, six rows of block letters, stands in for the name
+      // line, which carries the version.
+      const rows = plain.split('\n').filter((l) => /[█╚]/.test(l));
+      expect(rows).toHaveLength(6);
+      expect(rows[0]).toBe(
+        '  ███████╗███████╗ █████╗ ██╗     ██╗  ██╗███████╗███████╗██████╗ ███████╗██████╗',
+      );
+      expect(plain).not.toContain(`SealKeeper v${VERSION}`);
+      expect(plain).toContain(`\n  ${SETUP_TITLE} · 4 steps\n`);
+      // The terminal's width is not known here, so the list is printed
+      // once and never redrawn.
+      expect(result.all).not.toContain(`${String.fromCharCode(27)}7`);
+      expect(result.all).not.toContain(`${String.fromCharCode(27)}[0J`);
       expect(plain).toContain(
         [
           `  ${CONSENT}`,
@@ -4405,13 +4433,77 @@ describe('sealkeeper init', () => {
       expect(plain).toContain(`  Mastra or OpenClaw  ${ADAPTERS_URL}`);
     });
 
-    it('with FORCE_COLOR and --json prints no escape codes and no box', async () => {
+    it('with FORCE_COLOR and --json prints no escape codes and no banner', async () => {
       vi.stubEnv('FORCE_COLOR', '1');
       const result = await run(world, 'init', '--name', 'scout', '--json');
       expect(result.code).toBe(0);
       expect(result.all).not.toContain(String.fromCharCode(27));
       expect(result.all).not.toContain('SealKeeper v');
+      expect(result.all).not.toContain('█');
+      expect(result.all).not.toContain(SETUP_TITLE);
       expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
+    });
+
+    it('lists four steps without Claude Code and six with it, all to do on a first run', async () => {
+      const without = await run(world, 'init', '--name', 'scout');
+      expect(without.code).toBe(0);
+      expect(without.err).toContain(
+        [
+          `  ◉ SealKeeper v${VERSION}`,
+          '',
+          `  ${SETUP_TITLE} · 4 steps`,
+          '',
+          '    ○ 1  Key',
+          '    ○ 2  GitHub sign-in',
+          '    ○ 3  Game                      on / off',
+          '    ○ 4  Routine                   offered at the end',
+          '',
+        ].join('\n'),
+      );
+      await rm(paths(home).config, { force: true });
+      await withClaudeCode();
+      world = newWorld();
+      world.stdin = answering('n');
+      const withDir = await run(world, 'init', '--name', 'scout');
+      expect(withDir.code).toBe(0);
+      expect(withDir.err).toContain(
+        [
+          `  ${SETUP_TITLE} · 6 steps`,
+          '',
+          '    ○ 1  Key',
+          '    ○ 2  GitHub sign-in',
+          '    ○ 3  Hooks',
+          '    ○ 4  Skill and slash commands',
+          '    ○ 5  Game                      on / off',
+          '    ○ 6  Routine                   offered at the end',
+          '',
+        ].join('\n'),
+      );
+      // The banner comes before the key is made, so a stdin that closes
+      // at the first question still saw it.
+      expect(withDir.err.indexOf(SETUP_TITLE)).toBeLessThan(
+        withDir.err.indexOf(HOOKS_QUESTION),
+      );
+    });
+
+    it('marks the key and the sign in done on a repeat init', async () => {
+      expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+      world = newWorld();
+      const again = await run(world, 'init');
+      expect(again.code).toBe(0);
+      expect(again.err).toContain(
+        [
+          `    ● 1  ${'Key'.padEnd(26)}${paths(home).key}`,
+          `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice`,
+          '    ○ 3  Game                      on / off',
+          '    ○ 4  Routine                   offered at the end',
+        ].join('\n'),
+      );
+      // --force makes a new key, so nothing is done yet.
+      world = newWorld();
+      const forced = await run(world, 'init', '--force', '--name', 'scout');
+      expect(forced.code).toBe(0);
+      expect(forced.err).toContain('    ○ 1  Key\n    ○ 2  GitHub sign-in');
     });
 
     it('prints a Claude Code section only when the config folder exists', async () => {
@@ -4443,6 +4535,131 @@ describe('sealkeeper init', () => {
         '  1  In Claude Code, run /sealkeeper-run to earn your first verified tasks',
       );
       expect(installed.out).not.toContain(INSTALL_COMMAND);
+    });
+
+    describe('the pinned list in a styled terminal of a known size', () => {
+      const ESC = String.fromCharCode(27);
+      // Every escape sequence taken out, the colours and the cursor moves.
+      const bare = (text: string) =>
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: matching them is the point
+        text.replace(/\u001b(?:\[[0-9;]*[A-Za-z]|7|8)/g, '');
+      // The cursor moves kept, the colours taken out.
+      const moves = (text: string) => stripStyle(text);
+
+      beforeEach(() => {
+        vi.stubEnv('FORCE_COLOR', '1');
+        // Wide, so no result is cut short.
+        Object.defineProperty(process.stderr, 'columns', {
+          value: 200,
+          configurable: true,
+        });
+        Object.defineProperty(process.stderr, 'rows', {
+          value: 40,
+          configurable: true,
+        });
+      });
+
+      afterEach(() => {
+        delete (process.stderr as { columns?: number }).columns;
+        delete (process.stderr as { rows?: number }).rows;
+      });
+
+      it('redraws each step as it starts and finishes, clears every question and leaves the summary under the list', async () => {
+        await withClaudeCode();
+        world.stdin = answering('');
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        const all = moves(result.all);
+        // The list under the wordmark, every step to do, then the empty
+        // line the area starts after.
+        expect(bare(result.err)).toContain(
+          [
+            `  ${SETUP_TITLE} · 6 steps`,
+            '',
+            '    ○ 1  Key',
+            '    ○ 2  GitHub sign-in',
+            '    ○ 3  Hooks',
+            '    ○ 4  Skill and slash commands',
+            '    ○ 5  Game                      on / off',
+            '    ○ 6  Routine                   offered at the end',
+            '',
+          ].join('\n'),
+        );
+        // The key step starts first, seven rows up, the empty line and the
+        // six steps, and ends with the key file.
+        expect(all).toContain(
+          `${ESC}7${ESC}[7A\r${ESC}[2K    ◐ 1  ${'Key'.padEnd(26)}generating…${ESC}8`,
+        );
+        expect(all).toContain(
+          `${ESC}7${ESC}[7A\r${ESC}[2K    ● 1  ${'Key'.padEnd(26)}${paths(home).key}${ESC}8`,
+        );
+        expect(all).toContain(
+          `\r${ESC}[2K    ● 2  ${'GitHub sign-in'.padEnd(26)}alice${ESC}8`,
+        );
+        expect(all).toContain(
+          `\r${ESC}[2K    ● 3  ${'Hooks'.padEnd(26)}${join(claudeDir(), 'settings.json')}${ESC}8`,
+        );
+        expect(all).toContain(
+          `\r${ESC}[2K    ● 4  ${'Skill and slash commands'.padEnd(26)}${join(home, 'claude', 'commands')}${ESC}8`,
+        );
+        expect(all).toContain(
+          `${ESC}7${ESC}[3A\r${ESC}[2K    ● 5  ${'Game'.padEnd(26)}on${ESC}8`,
+        );
+        expect(all).toContain(
+          `${ESC}7${ESC}[2A\r${ESC}[2K    ● 6  ${'Routine'.padEnd(26)}not installed${ESC}8`,
+        );
+        // Each answer clears the area, the question row and what came
+        // before it. The hooks question is one row after the Claude Code
+        // heading and the intro, the empty line before them included.
+        expect(all).toContain(`  ${HOOKS_QUESTION}\r${ESC}[4A${ESC}[0J`);
+        // The summary comes after the last clear and the last redraw, and
+        // is never cleared.
+        const last = Math.max(
+          all.lastIndexOf(`${ESC}[0J`),
+          all.lastIndexOf(`${ESC}8`),
+        );
+        expect(last).toBeGreaterThan(0);
+        expect(all.indexOf('✓ Registered alice/scout')).toBeGreaterThan(last);
+        expect(all.slice(last + 2)).not.toContain(`${ESC}7`);
+        expect(all.slice(last + 2)).not.toContain(`${ESC}[0J`);
+        expect(bare(all.slice(last))).toContain(
+          [
+            '',
+            '  ✓ Registered alice/scout',
+            '    Profile  https://sealkeeper.run/agents/alice/scout',
+            '    Game  on, stop playing with npx sealkeeper config game off',
+            `    Card  ${paths(home).card}`,
+            '    Nudge  off, npx sealkeeper config nudge on turns it on',
+            '',
+            '  What leaves this machine',
+          ].join('\n'),
+        );
+      });
+
+      it('stops counting once init ends, so the next run prints plainly', async () => {
+        await withClaudeCode();
+        world.stdin = answering('');
+        expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+        vi.stubEnv('FORCE_COLOR', '');
+        world = newWorld();
+        world.stdin = answering('');
+        const again = await run(world, 'init');
+        expect(again.code).toBe(0);
+        expect(again.all).not.toContain(ESC);
+        expect(again.err).toContain(
+          `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice\n`,
+        );
+      });
+
+      it('leaves the list alone and prints under it without a terminal width', async () => {
+        delete (process.stderr as { columns?: number }).columns;
+        await withClaudeCode();
+        world.stdin = answering('');
+        const result = await run(world, 'init', '--name', 'scout');
+        expect(result.code).toBe(0);
+        expect(result.all).not.toContain(`${ESC}7`);
+        expect(result.all).not.toContain(`${ESC}[0J`);
+      });
     });
 
     describe('untrusted text', () => {
