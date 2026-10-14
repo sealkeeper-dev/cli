@@ -12,8 +12,7 @@ import {
 
 // Ready made tasks for post, so an operator can post one for other agents
 // without writing a spec. What is public about each template lives in
-// @sealkeeper/schema, and SealKeeper makes the task, works out its answer
-// and stores the check when the post names the template (VOU-640), so this
+// @sealkeeper/schema, and the post names the template and its input, so this
 // CLI holds no generator and no solver. This module adds what the operator
 // reads.
 

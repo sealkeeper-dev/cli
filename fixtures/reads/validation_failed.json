@@ -1,0 +1,21 @@
+{
+  "status": 400,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "validation_failed",
+      "message": "Invalid param",
+      "issues": [
+        {
+          "path": [
+            "id"
+          ],
+          "code": "invalid_format",
+          "message": "Expected a 32 byte key as 43 char base64url"
+        }
+      ]
+    }
+  }
+}

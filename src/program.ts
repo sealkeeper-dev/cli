@@ -105,8 +105,8 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerWhatIsShared(program);
   program.helpCommand(true);
 
-  // Hidden. Adapters and the hooks call emit, sync and hook, and rate waits
-  // until ratings open. Each one still runs when called by name.
+  // Hidden. Adapters and the hooks call emit, sync and hook, and rate is
+  // refused by the API for now. Each one still runs when called by name.
   registerEmit(program, deps.sync);
   registerSync(program, deps.sync);
   registerHook(program, deps.hook);

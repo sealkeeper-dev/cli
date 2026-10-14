@@ -88,7 +88,7 @@ describe('deviceFlow', () => {
     });
   });
 
-  // VOU-453. The CLI version header goes to the SealKeeper API alone, so
+  // The CLI version header goes to the SealKeeper API alone, so
   // every request to GitHub carries these two headers and no other.
   it('never sends GitHub the CLI version', async () => {
     const { promise, calls } = run([

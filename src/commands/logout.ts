@@ -17,21 +17,19 @@ import {
 } from './routine.js';
 
 // Removes the local session. config.json, credential.json, score.json,
-// inbox.json, goal.json, operator-slug.json and the post-prompt.json of CLI
-// 0.4.14 and earlier go, and the daily routine job when one is installed,
-// since it would run for nobody.
-// nudge.json and the routine's limits and allowlist stay. The key, the log,
-// the cursor and the fingerprint files stay too, so a later init brings the
-// same identity back and sync goes on where it was.
+// inbox.json, goal.json, operator-slug.json and an older post-prompt.json go,
+// and the daily routine job when one is installed. nudge.json and the routine's
+// limits and allowlist stay. The key, the log, the cursor and the fingerprint
+// files stay too, so a later init brings the same identity back and sync goes
+// on where it was.
 //
 // --delete-key with --yes also deletes the key, every copy of it
-// (key.<time>.bak and key.<id>.tmp), the log, the cursor and the
-// fingerprint files, which go with the key, as agent delete does, so a new
-// key never signs the events the old one logged. There is no prompt, the
-// --yes flag is the confirmation, and everything removed is printed. With
-// the key gone the folders init bound to this agent are unbound too, and a
-// named home left empty is removed. A plain logout keeps them, since the
-// key stays.
+// (key.<time>.bak and key.<id>.tmp), the log, the cursor and the fingerprint
+// files, as agent delete does, so a new key never signs the events the old one
+// logged. There is no prompt, the --yes flag is the confirmation, and
+// everything removed is printed. With the key gone the folders init bound to
+// this agent are unbound too, and a named home left empty is removed. A plain
+// logout keeps them, since the key stays.
 
 const NOT_INITIALISED_LOGOUT = 'not initialised, nothing to log out';
 
@@ -57,9 +55,9 @@ export function register(
       const json = wantsJson(this);
       const deleteKey = options.deleteKey === true && options.yes === true;
       if (!(await exists(p.config))) {
-        // After a plain logout only the key and the log are left. The key
-        // must still be deletable then, or no command could remove it, and
-        // --delete-key without --yes is refused as before a logout.
+        // After a plain logout only the key and the log are left. The key must
+        // still be deletable then, and --delete-key without --yes is refused as
+        // before a logout.
         const hasKey = await exists(p.key);
         if (options.deleteKey && !options.yes && hasKey) {
           this.error(deleteKeyRefusal(p, 'this agent'));

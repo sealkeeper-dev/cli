@@ -112,7 +112,7 @@ describe('printed invocation', () => {
     );
   });
 
-  it('keeps the quoted node and script invocation a routine run sets, so the submit lines run prints match its rule (RS-11)', () => {
+  it('keeps the quoted node and script invocation a routine run sets, so the submit lines run prints match its rule', () => {
     const invocation =
       '"/usr/local/bin/node" "/Users/alice/.sealkeeper/routine/cli.js"';
     vi.stubEnv('SEALKEEPER_INVOCATION', invocation);

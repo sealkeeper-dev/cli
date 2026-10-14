@@ -4,16 +4,14 @@ import { ApiError } from './api.js';
 import type { Paths } from './config.js';
 import { currentFingerprint } from './fingerprint.js';
 
-// The fingerprint a request declares, the one last written to
-// fingerprint.json. claim, submit, outcome, run, duel, challenge and each
-// routine step carry it inside their signed payload (VB-3,
-// sendWithFingerprint in tasks.ts), and sync as its own signed JWS beside
-// the envelopes (VB-4).
+// The fingerprint a request declares, the one last written to fingerprint.json.
+// claim, submit, outcome, run, duel, challenge and each routine step carry it
+// inside their signed payload (sendWithFingerprint in tasks.ts), and sync as
+// its own signed JWS beside the envelopes.
 
-// The fingerprint to declare. Nothing when there is none, or when its hash
-// is not the hash of its parts, which the API would refuse. It never
-// recomputes and never throws, so a command never waits on a capture or
-// fails over one.
+// The fingerprint to declare. Nothing when there is none, or when its hash is
+// not the hash of its parts. It never recomputes and never throws, so a command
+// never waits on a capture or fails over one.
 export async function declaredFingerprint(
   p?: Paths,
 ): Promise<{ fingerprint?: Fingerprint }> {
@@ -28,11 +26,9 @@ export async function declaredFingerprint(
   }
 }
 
-// True when the API refused the fingerprint, a 400 or 401 whose issue names
-// it. An API from before the field answers validation_failed, the key
-// unknown to its strict payload or body, one that finds the hash wrong
-// fingerprint_mismatch, and the sync route names the fingerprint in the
-// issue path of every refusal of its own.
+// True when the API refused the fingerprint, a 400 or 401 whose issue names it,
+// as validation_failed, fingerprint_mismatch or an issue path that holds
+// fingerprint.
 export function refusesFingerprint(error: unknown): boolean {
   return (
     error instanceof ApiError &&

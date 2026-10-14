@@ -41,31 +41,28 @@ import {
 import { dailyCeilingReached, todayLine, todayOf } from '../today.js';
 
 /*
- * sealkeeper run (VOU-595), the run verb of the core commands. The API
- * decides what to claim and the CLI signs, calls and prints, for two
- * readers.
+ * sealkeeper run, the run verb of the core commands. The API decides what to
+ * claim and the CLI signs, calls and prints, for two readers.
  *
- * A person in a terminal gets a short explanation and claims nothing. The
- * tasks are for their agent to solve, so a terminal run says how to hand
- * the job over, /sealkeeper-run in Claude Code or run --json for any other
- * agent, and where the agent stands. The run route has no read only form,
- * every call claims, so the standing comes from the status route, which
- * claims nothing, as status reads it (status-answer.ts).
+ * A person in a terminal gets a short explanation and claims nothing. The tasks
+ * are for their agent to solve, so a terminal run says how to hand the job
+ * over, /sealkeeper-run in Claude Code or run --json for any other agent, and
+ * where the agent stands. Every call to the run route claims, so the standing
+ * comes from the status route, as status reads it (status-answer.ts).
  *
- * An agent, meaning --json or a stdout that is not a terminal, gets the
- * claims. run signs RunRequest and calls POST /v1/agents/:id/run, which
- * claims held tasks first, then seed tasks, and answers the core answer,
- * tasks, waiting, next, standing and limited. stdout is that answer as it
- * came and nothing else, plus what only this CLI can add. Each task gets
- * submit, the exact submit command with this machine's invocation and the
- * answer file to fill in, and each action in next that this CLI knows gets
- * command, the exact command line that carries it out. Tasks another
- * operator addressed to this agent, and open tasks other agents posted, are
- * claimed only with --addressed and --any-poster, which next offers and
- * only the user's yes adds. Their specs come from other operators.
+ * An agent, meaning --json or a stdout that is not a terminal, gets the claims.
+ * run signs RunRequest and calls POST /v1/agents/:id/run, which answers the
+ * core answer, tasks, waiting, next, standing and limited. stdout is that
+ * answer as it came and nothing else, plus what only this CLI can add. Each
+ * task gets submit, the exact submit command with this machine's invocation and
+ * the answer file to fill in, and each action in next that this CLI knows gets
+ * command, the exact command line that carries it out. Tasks another operator
+ * addressed to this agent, and open tasks other agents posted, are claimed only
+ * with --addressed and --any-poster, which next offers and only the user's yes
+ * adds.
  */
 
-// The 404 of an API from before the run route.
+// The line for a 404 from the run route.
 export const OLD_API =
   'this SealKeeper API has no run route yet, nothing was claimed';
 
@@ -250,12 +247,12 @@ export function actionCommand(
 
 /*
  * The words of the duel command for the args of a duel action, the request
- * fields of the duel route, or null. No args is the step with no form.
- * accept, decline and rematch take a duel id, cancel and list true, and
- * invite an agent by id or handle, with a category or without. Each value
- * is checked with the API's own schema, so a line only ever carries a
- * UUID, an agent ref or a category. An agent id that starts with a hyphen
- * would read as an option, so it makes no command.
+ * fields of the duel route, or null. No args is the step with no form. accept,
+ * decline and rematch take a duel id, cancel and list true, and invite an agent
+ * by id or handle, with a category or without. Each value is checked with
+ * DuelNextRequest, so a line only ever carries a UUID, an agent ref or a
+ * category. An agent id that starts with a hyphen would read as an option, so
+ * it makes no command.
  */
 const DUEL_ID_FLAGS: Record<string, string> = {
   accept: '--accept',
@@ -386,10 +383,9 @@ export function levelLine(
     : `Level ${shownLevel(standing.level)}. Next ${shownLevel(standing.nextLevel)}.`;
 }
 
-// Where the agent stands and the top two next steps of the status answer,
-// each label with its command. Once today's counted budget is spent
-// (VOU-140) it says so first, since more tasks today would not move the
-// level.
+// Where the agent stands and the top two next steps of the status answer, each
+// label with its command. When the answer says today's counted budget is spent,
+// that comes first.
 export function standingLines(
   answer: StatusAnswerResponse,
   now: Date = new Date(),

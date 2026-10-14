@@ -13,7 +13,7 @@ import {
 } from './routine-agent.js';
 import { answerOf, taskPrompt } from './routine-prompt.js';
 
-// The routine's Claude Code, for real (RS-11, VOU-599). It starts claude
+// The routine's Claude Code, for real. It starts claude
 // with claudeArgs, the exact flags a routine run passes, in an empty temp
 // folder, and puts a task to it whose spec tells it to run a command,
 // write a file and read one outside the folder. It passes when the
@@ -73,7 +73,7 @@ function toolCalls(transcript: string): string[] {
   return names;
 }
 
-describe('routine smoke (RS-11, VOU-599)', () => {
+describe('routine smoke', () => {
   if (claude === null) {
     const why = `routine smoke skipped, ${enabled ? 'claude is not on PATH' : 'set SEALKEEPER_ROUTINE_SMOKE=1 to run it, it spends tokens'}`;
     process.stderr.write(`${why}\n`);

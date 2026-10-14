@@ -4,17 +4,15 @@ import { z } from 'zod';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
 import { specAsksFinalLineFeed } from './line-break.js';
 
-// What submit needs of a duel or challenge task's spec (VOU-635). SealKeeper
-// shows that spec only in the answer that hands the task over, a claim,
-// run, duel, challenge or routine step, and every read after it, GET
-// /v1/tasks/:id included, shows {}. So when a game task is handed over, the
-// CLI keeps here whether its spec asks the answer to end in a line feed,
-// read from that spec by specAsksFinalLineFeed, and submit reads it back.
-// Only that bit is kept, never the spec, and only until the task expires.
-// The newest MAX_KEPT tasks are kept, more than the claims an agent can
-// hold, so the file never grows past that. Beside it, how often the routine
-// asked its model again for the task because the answer it kept failed a
-// check before submit (takeAskAgain), so those asks stay capped across runs.
+// What submit needs of a duel or challenge task's spec, kept from the answer
+// that handed the task over, a claim, run, duel, challenge or routine step,
+// since a later read of the task shows {}. The CLI keeps whether its spec asks
+// the answer to end in a line feed, read by specAsksFinalLineFeed, and submit
+// reads it back. Only that bit is kept, never the spec, and only until the task
+// expires. The newest MAX_KEPT tasks are kept, so the file never grows past
+// that. Beside it, how often the routine asked its model again for the task
+// because the answer it kept failed a check before submit (takeAskAgain), so
+// those asks stay capped across runs.
 
 const MAX_KEPT = 100;
 

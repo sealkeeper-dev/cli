@@ -7,12 +7,12 @@ import { declaredModel } from './model-name.js';
 import { pendingText, staleCutoff } from './sync.js';
 import { isSent, WIRE_FORM } from './taxonomy.js';
 
-// The pending events exactly as sync would send them. sync signs the JSON
-// of each event as it is read from the log, so JSON.stringify of the same
-// event is the payload inside the signature, byte for byte. Events older
-// than the API accepts are left out, since sync drops them without sending,
-// and counted apart in stale (cli-adapters-tasks-11). A type this CLI never
-// sends, see UNSENT_TYPES, is left out and not counted.
+// The pending events exactly as sync would send them. sync signs the JSON of
+// each event as it is read from the log, so JSON.stringify of the same event is
+// the payload inside the signature, byte for byte. Events older than the
+// accepted window are left out, since sync drops them without sending, and
+// counted apart in stale. A type this CLI never sends, see UNSENT_TYPES, is
+// left out and not counted.
 
 // How many events the summary before a sync prints in full.
 export const PREVIEW_SAMPLE = 3;
@@ -32,8 +32,8 @@ export type Preview = {
   // left out as too old or of a type never sent, which that send moves the
   // cursor past. Null when the log holds nothing after the cursor.
   last: LogPosition | null;
-  // The model name the send declares beside the events, as text (VOU-566),
-  // null when there is none.
+  // The model name the send declares beside the events, as text, null when
+  // there is none.
   model: string | null;
 };
 
@@ -115,8 +115,8 @@ export function previewLines(preview: Preview, p: Paths = paths()): string[] {
   return lines;
 }
 
-// What leaves beside the events, the fingerprint and the model name, which
-// is the one value that leaves as text (VOU-46, VOU-566).
+// What leaves beside the events, the fingerprint and the model name, which is
+// the one value that leaves as text.
 export function besideText(model: string | null): string {
   return model === null
     ? "Beside them goes the agent's fingerprint, SHA-256 hashes only. No model name goes, since no adapter read one."

@@ -12,14 +12,13 @@ export function toolNameOf(value: unknown): string | null {
   return name.length > 0 ? name : null;
 }
 
-// The model name an adapter declares for a model id it read (VOU-566), as
-// text, or null when the id gives none. The id through toolNameOf, so
-// opus[1m] reads as opus-1m-, when that is a ModelName. An AWS ARN, as a
-// Bedrock inference profile in ANTHROPIC_MODEL is, names the operator's
-// account and region, and an id longer than 64 characters would be cut
-// short, so of either only the part after the last slash is kept, and no
-// name when that part is still an ARN or too long. The model part of the
-// fingerprint hashes the whole id as before.
+// The model name an adapter declares for a model id it read, as text, or null
+// when the id gives none. The id through toolNameOf, so opus[1m] reads as
+// opus-1m-, when that is a ModelName. An AWS ARN, as a Bedrock inference
+// profile in ANTHROPIC_MODEL is, names the operator's account and region, and
+// an id longer than 64 characters would be cut short, so of either only the
+// part after the last slash is kept, and no name when that part is still an ARN
+// or too long. The model part of the fingerprint hashes the whole id.
 export function modelNameOf(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const id = value.trim();

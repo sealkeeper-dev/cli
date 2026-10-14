@@ -97,16 +97,13 @@ export async function recordEvent(input: EmitInput): Promise<void> {
   }
 }
 
-// What a task command does once it wrote a task event (VOU-627). Task work
-// is SealKeeper work, so it starts a sync through the gate every automatic
-// sync takes, as a routine run does at its end (backgroundSync), and
-// refreshes the goal the session summary reads (keepNudgeFresh). The gate
-// sends nothing before automatic sync is on (a confirmed first sync, a yes
-// in the routine setup or config auto-sync on), nothing with it off and
-// nothing inside the throttle. Both
-// are side tasks that print nothing and never reject, so a command starts
-// it after its write and awaits it after its output, and a failure never
-// fails the command.
+// What a task command does once it wrote a task event. It starts a sync through
+// the gate every automatic sync takes, as a routine run does at its end
+// (backgroundSync), and refreshes the goal the session summary reads
+// (keepNudgeFresh). The gate sends nothing before automatic sync is on and
+// nothing inside the throttle. Both are side tasks that print nothing and never
+// reject, so a command starts it after its write and awaits it after its
+// output, and a failure never fails the command.
 export async function afterTaskWork(
   deps: Pick<TasksDeps, 'fetch'>,
 ): Promise<void> {
@@ -117,11 +114,11 @@ export async function afterTaskWork(
 }
 
 // Signs and sends a claim, submit, outcome or routine step request with the
-// declared fingerprint (VB-3), and once more without it when the API
-// refuses the field, so a fingerprint never costs the request. request is
-// the payload its schema already parsed, purpose the route it is for. p is
-// the home whose fingerprint.json is read, the routine run's own (VOU-655),
-// else the default. What send throws otherwise is thrown.
+// declared fingerprint, and once more without it when the API refuses the
+// field, so a fingerprint never costs the request. request is the payload its
+// schema already parsed, purpose the route it is for. p is the home whose
+// fingerprint.json is read, the routine run's own, else the default. What send
+// throws otherwise is thrown.
 export async function sendWithFingerprint<T>(
   signer: Signer,
   request: object,
@@ -166,19 +163,23 @@ export function utc(iso: string): string {
   return `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-// A duel or weekly challenge task (D-GAME-5). Its spec reaches its
-// claimant only in the claim, submit and release answers, timed from the
-// claim, and every other read, GET /v1/tasks/:id included, shows {}.
+// A duel or weekly challenge task, by its origin. Every read of it but the
+// answers that hand it over shows its spec as {}.
 export const isGameTask = (task: Pick<TaskResponse, 'origin'>): boolean =>
   (GAME_TASK_ORIGINS as readonly string[]).includes(task.origin ?? '');
 
 // The kinds a handed over task of a duel or a challenge has, its origin.
 const GAME_KINDS: ReadonlySet<string> = new Set(GAME_TASK_ORIGINS);
 
-// What a repeated claim prints for the spec of a game task, which
-// every read but its first claim shows as {}.
+// What a repeated claim prints for the spec of a game task, which every read
+// but its first claim shows as {}.
 export const GAME_SPEC_AT_CLAIM =
   'The spec of a duel or challenge task is shown only in the answer to its claim.';
+
+// What outcome refuses with and a task read prints for an endpoint check task,
+// which has no claim, submit or report.
+export const ENDPOINT_CHECK_NOTE =
+  "An endpoint check by SealKeeper's Examiner. The agent's endpoint answered OK, so it verified when the check ran. There is nothing to claim, submit or report.";
 
 // The submits of a duel side, one today, as duel and submit word it.
 export const DUEL_SUBMITS =
@@ -191,8 +192,7 @@ export const CHALLENGE_SUBMITS =
     ? 'one submit'
     : `${GAME.challengeSubmits} submits`;
 
-// A task lives at most seven days, so a claim older than that is expired
-// whatever happened to it. One more day covers the UTC day boundary.
+// How many days back the local log is read for claims.
 const CLAIM_LOOKBACK_DAYS = 8;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -226,33 +226,26 @@ export const ANSWER_FILE = '<answer file>';
 export const submitCommand = (taskId: string): string =>
   `${cli(`submit ${taskId}`)} --file ${ANSWER_FILE}`;
 
-// The claimed tasks a list of the server reads at most, one page.
-const HELD_LIMIT = 100;
-
-// The claimed tasks the server says this agent holds, which include claims
-// made on another machine. The API filters on the claimant, so other
-// agents' claims never push these off the page (VOU-208), and the claim
-// cap keeps them to one page. Throws what the API client throws.
-export async function serverHeld(
-  api: ApiClient,
-  agentId: string,
-): Promise<TaskResponse[]> {
-  const claimed = await api.listTasks({
-    state: 'claimed',
-    claimant: agentId,
-    limit: HELD_LIMIT,
-  });
-  return claimed.filter((task) => task.claimantAgentId === agentId);
-}
-
 // One task in full, as claim prints it. The spec, the schema when
 // there is one and the two ways to submit. tail replaces the submit lines,
-// as outcome does for the poster.
+// as outcome does for the poster. An endpoint check task gets its spec and
+// one line instead, since nobody claims or submits it.
 export function taskDetail(
   task: TaskResponse,
   now: number,
   tail?: string[],
 ): string[] {
+  // The spec shows the skill, the outcome and the format result, and the
+  // expiry is the check's own time, so it is left out.
+  if (task.verification.kind === 'endpoint') {
+    return [
+      `Task ${task.id}. type ${task.taskType}. ${task.state}.`,
+      ENDPOINT_CHECK_NOTE,
+      'Spec:',
+      indentText(JSON.stringify(task.spec, null, 2)),
+      ...(tail ?? []),
+    ];
+  }
   const lines = [
     `Task ${task.id}. type ${task.taskType}. ${task.state}. expires ${relative(Date.parse(task.expiresAt) - now)}.`,
     ...(task.assignee

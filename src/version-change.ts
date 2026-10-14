@@ -26,8 +26,7 @@ export async function changeVersion(options: {
   paths?: Paths;
 }): Promise<VersionChange> {
   const p = options.paths ?? paths();
-  // issuedAt is signed with the version, so the API can refuse an old
-  // envelope sent again.
+  // issuedAt is signed with the version.
   const request = ChangeVersionRequest.parse({
     version: options.version,
     issuedAt: new Date().toISOString(),

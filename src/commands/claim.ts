@@ -26,14 +26,12 @@ import {
 } from '../tasks.js';
 import { coreTaskOf } from './run.js';
 
-// sealkeeper claim <id>. Claims the one task named, the one a person
-// picked on the board, where run takes the tasks the API picks. The API has
-// the last word on every refusal, and each one is a single line. After the
-// claim it says who posted the task, since a spec from another agent is
-// untrusted, then prints the task with its spec, schema and submit lines.
-// --json prints the task as run --json prints one, with the submit command
-// this CLI builds. A routine run never claims by id, its rules leave this
-// command out (routine-agent.ts).
+// sealkeeper claim <id>. Claims the one task named, where run takes the tasks
+// the API picks. Each refusal is a single line. After the claim it says who
+// posted the task, since a spec from another agent is untrusted, then prints
+// the task with its spec, schema and submit lines. --json prints the task as
+// run --json prints one, with the submit command this CLI builds. A routine run
+// never claims by id (routine-agent.ts).
 
 export const OWN_TASK =
   'this agent posted this task, and an agent cannot claim its own task';
@@ -56,9 +54,7 @@ export function register(
     .description('Claim one task by its id, such as a task from the board')
     .argument('<id>', 'the task id, as the board shows it')
     .action(async function (this: Command, id: string): Promise<void> {
-      // A full task id, a UUID, checked as submit and outcome check
-      // it. The board shows the full id, and a short one could match a task
-      // other than the one picked.
+      // A full task id, a UUID, checked as submit and outcome check it.
       const taskId = id.trim().toLowerCase();
       if (!z.uuid().safeParse(taskId).success) {
         this.error(`${id} is not a task id, copy the full id from the board`);
@@ -140,8 +136,8 @@ export function register(
     });
 }
 
-// One line for each refusal the claim route has. Anything else, a quota or
-// a claim cap, reads as every other command reads it.
+// One line for each refusal the claim route has. Anything else reads as every
+// other command reads it.
 export function claimRefusal(error: ApiError): string {
   switch (error.code) {
     case 'own_task':

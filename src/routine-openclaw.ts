@@ -16,47 +16,34 @@ import {
   type Transcript,
 } from './routine-agent.js';
 
-// OpenClaw as a routine runtime (VOU-601). Each question is one
-// openclaw agent exec, which runs one embedded agent turn with no Gateway,
-// reads the question on stdin and prints one JSON envelope on stdout.
+// OpenClaw as a routine runtime. Each question is one openclaw agent exec,
+// which runs one embedded agent turn with no Gateway, reads the question on
+// stdin and prints one JSON envelope on stdout.
 // https://docs.openclaw.ai/cli/agent
 //
 // Every question gets a fresh temp folder, removed after, which holds the
 // config below and an empty work folder. --cwd is that work folder, and
 // OpenClaw keeps its filesystem tools inside --cwd.
 //
-// No tools. Left to itself agent exec picks the coding tool profile, which
-// has a shell, and an operator's own config may pick more. So the run
-// never reads the operator's OpenClaw config. --config pins it to the file
-// below, whose tools.deny of * denies every tool, deny winning over any
-// allow, and --code-mode direct keeps code mode off. --isolated is not
-// used, it runs on the exec defaults and so with the coding profile.
-// OpenClaw uses its stored provider credentials with a pinned config, as
-// with its own, which openclaw models auth paste-api-key stores, and a key
-// in the environment, such as GEMINI_API_KEY.
+// No tools. The run never reads the operator's OpenClaw config. --config pins
+// it to the file below, whose tools.deny of * denies every tool, deny winning
+// over any allow, and --code-mode direct keeps code mode off. --isolated is not
+// used, since it runs on the exec defaults with a shell. OpenClaw still uses
+// its stored provider credentials and a key in the environment, such as
+// GEMINI_API_KEY.
 //
-// The pinned config also drops the operator's default model, and with no
-// model named OpenClaw picks its own built-in default, an OpenAI model,
-// whatever key is stored. So every question names the routine's model with
-// --model (VOU-623), which routine.json keeps, see OpenClawModel in
-// config.ts.
+// The pinned config has no default model, so every question names the routine's
+// model with --model, which routine.json keeps, see OpenClawModel in config.ts.
 //
-// OpenClaw reads OPENCLAW_CONFIG_PATH to pick its config file, from the
-// environment or from a .env file in the cwd or its state folder, which
-// never override the environment. So the question's environment sets it
-// to the pinned file too, and an operator's own value, which would bring
-// back their config and its tools if it ever won over --config, never
-// reaches the run. OPENCLAW_INCLUDE_ROOTS is dropped, since the pinned
-// config has no $include (VOU-649). OPENCLAW_HOME, OPENCLAW_STATE_DIR and
-// OPENCLAW_PROFILE stay, since they say where the stored provider
-// credentials are. Installed plugins still load from the operator's plugin
-// roots, and the deny of * covers the tools they add.
+// The question's environment sets OPENCLAW_CONFIG_PATH to the pinned file too,
+// so an operator's own value never reaches the run. OPENCLAW_INCLUDE_ROOTS is
+// dropped, since the pinned config has no $include. OPENCLAW_HOME,
+// OPENCLAW_STATE_DIR and OPENCLAW_PROFILE stay, since they say where the stored
+// provider credentials are. Installed plugins still load from the operator's
+// plugin roots, and the deny of * covers the tools they add.
 //
-// The live check of 4 October 2026 (VOU-600, OpenClaw 2026.9.8) saw a
-// model asked to write a file under this config fail its turn with no file
-// made. The CLI still cannot see inside a turn, since OpenClaw runs the
-// model. The envelope reports tool calls, and an answer from a run that
-// reports any is dropped and fails the run.
+// The envelope reports tool calls, and an answer from a run that reports any is
+// dropped and fails the run.
 
 // The config every question runs on.
 export const OPENCLAW_CONFIG = {
@@ -180,12 +167,10 @@ const noFolder = (error: unknown): AgentResult => ({
 export const ENVELOPE_CAP = 4 * 1024 * 1024;
 
 // A provider credential that is missing or refused, by the error's kind or
-// message, read loosely. The live check saw "No route-compatible
-// authentication source is configured for openai." and "No API key found
-// for provider anthropic". A model the provider does not have, by the
-// message the live check saw, or one OpenClaw's own catalog does not know,
-// "Unknown model:", said before any provider is asked (OpenClaw 2026.9.8).
-// A message is only matched, never kept, as it may name the key.
+// message, read loosely, as in "No API key found for provider anthropic". A
+// model the provider does not have, or one OpenClaw's own catalog does not
+// know, "Unknown model:". A message is only matched, never kept, as it may name
+// the key.
 const AUTH =
   /auth|credential|api[ _-]?key|unauthori[sz]ed|forbidden|\b40[13]\b/i;
 const MODEL_NOT_FOUND = /selected model was not found|\bunknown model\b/i;
@@ -193,21 +178,18 @@ const MODEL_NOT_FOUND = /selected model was not found|\bunknown model\b/i;
 // An error kind short and plain enough to say in the run line.
 const PLAIN_KIND = /^[a-z][a-z0-9_.-]{0,39}$/i;
 
-// Reads the one JSON envelope agent exec --json prints, loosely, so a
-// field a newer OpenClaw adds or leaves out never breaks the run. As the
-// live check saw it, ok and status say whether the turn worked, final is
-// the answer and payloads the answer in parts, usage the tokens, input,
-// output, cacheRead, cacheWrite and total, with the cost in usage.cost.total
-// (costUsd is read when that is absent), model the model id that answered,
-// error.kind and error.message what failed. toolSummary.tools lists the
-// tools that were called, never the tools on offer, and bridgeCalls counts
-// the code mode bridge's calls and may be there with all zeros. A turn that
-// calls no tool has neither. Exit 2, with status timeout, is OpenClaw's own
-// timeout and nothing else, a usage error is exit 1. The envelope also names
-// the provider, which is not read, so the id is the one the live adapter
-// reads from llm_output and both hash alike (VOU-614). The split of an
-// answer's tokens is usage.input in and usage.output out, as OpenClaw's
-// llm_output reports them, known only when both are numbers.
+// Reads the one JSON envelope agent exec --json prints, loosely, so a field a
+// newer OpenClaw adds or leaves out never breaks the run. ok and status say
+// whether the turn worked, final is the answer and payloads the answer in
+// parts, usage the tokens, input, output, cacheRead, cacheWrite and total, with
+// the cost in usage.cost.total (costUsd is read when that is absent), model the
+// model id that answered, error.kind and error.message what failed.
+// toolSummary.tools lists the tools that were called, and bridgeCalls counts
+// the code mode bridge's calls and may be there with all zeros. Exit 2, with
+// status timeout, is OpenClaw's own timeout, a usage error is exit 1. The
+// provider is not read, so the id hashes like the one the live adapter reads
+// from llm_output. The split of an answer's tokens is usage.input in and
+// usage.output out, known only when both are numbers.
 export class EnvelopeReader implements StdoutReader {
   private out = '';
   private over = false;

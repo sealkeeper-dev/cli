@@ -1,11 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 
-// What submit checks about how a hash answer ends (VOU-181). It
-// imports nothing, so the API's seed tests can load it by path and check
-// that every seed spec whose answer ends in a line feed says so.
+// What submit checks about how a hash answer ends. It imports nothing, so it
+// loads on its own by path.
 
-// The failed submits a claim allows before it ends (VOU-181). The API
-// enforces it as TASK_MAX_FAILED_SUBMITS, this copy is only for messages.
+// The failed submits a claim allows, for the line break refusal's message.
 export const MAX_FAILED_SUBMITS = 3;
 
 export function endsInLineBreak(submission: string): boolean {

@@ -48,7 +48,7 @@ describe('published mastra types', () => {
     expectTypeOf(agent).toExtend<published.MastraAgentLike>();
   });
 
-  it('takes routine options with a signal, or none (VOU-620)', () => {
+  it('takes routine options with a signal, or none', () => {
     expectTypeOf<Parameters<typeof published.routine>[1]>().toEqualTypeOf<
       published.RoutineOptions | undefined
     >();

@@ -130,7 +130,7 @@ describe('Claude Code settings', () => {
     expect(after.endsWith('\n')).toBe(false);
   });
 
-  // VOU-451, VOU-627. The hooks write no event, Stop is retired.
+  // The hooks write no event, Stop is retired.
   it('a fresh install writes the two session hooks', async () => {
     expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({

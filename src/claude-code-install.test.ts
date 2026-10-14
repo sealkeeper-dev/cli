@@ -75,12 +75,11 @@ const VERBS = SLASH_COMMANDS.map((c) => c.verb);
 const OUR_ENTRY = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
 const EVENTS = ['SessionStart', 'SessionEnd'];
 // The tool call hooks an install before 0.4.14 wrote next to them.
-// The hooks an older CLI installed, which install takes out (VOU-451,
-// VOU-627).
+// The hooks an older CLI installed, which install takes out.
 const TOOL_EVENTS = ['Stop', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
 
-// The Claude Code install init runs and the uninstall agent delete runs
-// (VOU-603), driven here as one run per call. install and uninstall take
+// The Claude Code install init runs and the uninstall agent delete runs,
+// driven here as one run per call. install and uninstall take
 // --scope project for the project's settings.local.json and --json for
 // what they did as data.
 describe('the Claude Code install and uninstall', () => {
@@ -240,7 +239,7 @@ describe('the Claude Code install and uninstall', () => {
     expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
   });
 
-  // VOU-451, VOU-627. The hooks write no event, so a repeat install takes
+  // The hooks write no event, so a repeat install takes
   // the tool call hooks and Stop of an older install out, in whichever file
   // it writes.
   it.each([
@@ -494,7 +493,7 @@ describe('the Claude Code install and uninstall', () => {
       );
     });
 
-    // VOU-649. They hold this machine's paths, and a repo commits
+    // They hold this machine's paths, and a repo commits
     // .claude/commands, so the project scope writes them for the user.
     it('--scope project writes it in the user scope, never under the working directory', async () => {
       await run('install', '--scope', 'project');
@@ -573,7 +572,7 @@ describe('the Claude Code install and uninstall', () => {
       );
     });
 
-    // VOU-595. run replaced prove, so the /sealkeeper-prove an older
+    // run replaced prove, so the /sealkeeper-prove an older
     // install wrote goes, and one the operator wrote stays.
     it('install removes the retired /sealkeeper-prove of ours, never one it did not write', async () => {
       const retired = join(home, '.claude', 'commands', 'sealkeeper-prove.md');
@@ -652,14 +651,14 @@ describe('the Claude Code install and uninstall', () => {
       // Plus outcomes and addressed tasks, never open tasks of strangers.
       expect(text).toContain('`sealkeeper outcome <id> success`');
       expect(text).toContain('`sealkeeper claim <id>`');
-      // VOU-603. The commands moved to the top level, and no text names
+      // The commands moved to the top level, and no text names
       // the tasks group, which is gone.
       expect(text).not.toContain('sealkeeper tasks ');
       expect(RUN_COMMAND_TEXT).not.toContain('sealkeeper tasks ');
       expect(text).toContain('Never add `--addressed` or `--any-poster`');
     });
 
-    it('says once where answers go when the project folder is not writable (D27)', () => {
+    it('says once where answers go when the project folder is not writable', () => {
       for (const text of [SKILL_TEXT(), RUN_COMMAND_TEXT]) {
         expect(text.split(ANSWERS_FALLBACK)).toHaveLength(2);
         // Beside the .sealkeeper-answers/ rule of step 4.
@@ -674,7 +673,7 @@ describe('the Claude Code install and uninstall', () => {
       );
     });
 
-    it('allows routine, on, off and set on a clear yes, and never the run (VOU-599)', () => {
+    it('allows routine, on, off and set on a clear yes, and never the run', () => {
       expect(ROUTINE_COMMANDS).toEqual([
         'sealkeeper routine --yes',
         'sealkeeper routine on --yes',
@@ -712,9 +711,8 @@ describe('the Claude Code install and uninstall', () => {
       }
     });
 
-    // VOU-572 and VOU-500. A task the agent leaves is released at no
-    // penalty, and a claim left to reach its expiry costs Trust as
-    // abandoned, even after a failed submit.
+    // The command text tells the agent to release a task it cannot
+    // finish rather than leave the claim to expire.
     it('tells the agent a claim allows 3 failed submits and to release and move on after two', () => {
       const rules = answerRules('sealkeeper');
       for (const text of [SKILL_TEXT(), RUN_COMMAND_TEXT]) {
@@ -731,7 +729,7 @@ describe('the Claude Code install and uninstall', () => {
         'If it fails a second time, do not submit that task again.',
       );
       expect(rules).not.toContain('until the third failed submit ends');
-      // VOU-572. A task it leaves is released, at no penalty.
+      // A task it leaves is released, at no penalty.
       expect(rules).toContain(
         "Run `sealkeeper release <id>` with that task's id, which gives the claim back at no penalty, then move on to the next task",
       );
@@ -750,7 +748,7 @@ describe('the Claude Code install and uninstall', () => {
       }
     });
 
-    it('--scope project writes it in the user scope, never under the working directory (VOU-649)', async () => {
+    it('--scope project writes it in the user scope, never under the working directory', async () => {
       await run('install', '--scope', 'project');
       expect(await readFile(userSkill(), 'utf8')).toBe(SKILL_TEXT());
       await expect(stat(join(project, '.claude', 'skills'))).rejects.toThrow(

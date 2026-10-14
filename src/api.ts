@@ -25,6 +25,7 @@ import {
   GameSettingsResponse,
   GameStatusResponse,
   GoalResponse,
+  ListedMergeResponse,
   type ListTasksPage,
   ListTasksResponse,
   RatingResponse,
@@ -39,12 +40,14 @@ import {
 } from './responses.js';
 import { VERSION } from './version.js';
 
-// A small client for the SealKeeper API. Every response is parsed before
-// anything reads it, with the loose schemas in responses.ts, so a field the
-// API adds later never breaks this CLI.
+// A small client for the SealKeeper API. Every response is parsed with the
+// loose schemas in responses.ts before anything reads it, so an unknown field
+// never breaks this CLI.
 
 export const API_URL_ENV = 'SEALKEEPER_API_URL';
 const REQUEST_TIMEOUT_MS = 30_000;
+// The timeout for the merge request of init --listed, longer than the default.
+export const LISTED_MERGE_TIMEOUT_MS = 150_000;
 
 type ApiIssue = ErrorIssue;
 
@@ -65,9 +68,9 @@ export class ApiError extends Error {
   }
 }
 
-// The SEAL routes answered 404 with no SEAL, withheld for cause or while
-// dormant (VOU-85). withheld says which and why. The message is one plain
-// line with the reason class or the dormant days.
+// The SEAL routes answered 404 because the SEAL is withheld. withheld says
+// which kind and why, and the message is one plain line with the reason class
+// or the dormant days.
 export class SealWithheldError extends ApiError {
   override name = 'SealWithheldError';
   constructor(readonly withheld: SealWithheld) {
@@ -123,9 +126,16 @@ export type ApiClient = {
     options?: RequestOptions & { ok?: number[] },
   ): Promise<z.output<S>>;
   registerAgent(envelope: string): Promise<AgentResponse>;
+  // The merge of the agent that signed envelope into a listed agent its
+  // operator claimed.
+  listedMerge(
+    domain: string,
+    name: string,
+    envelope: string,
+  ): Promise<ListedMergeResponse>;
   getAgent(agentId: string): Promise<AgentResponse>;
-  // fingerprint is the agent's fingerprint as a JWS it signed over
-  // { fingerprint }, sent beside the envelopes when given (VB-4).
+  // fingerprint is the agent's fingerprint as a JWS it signed over {
+  // fingerprint }, sent beside the envelopes when given.
   postEvents(
     envelopes: string[],
     fingerprint?: string,
@@ -151,8 +161,7 @@ export type ApiClient = {
   postTask(envelope: string): Promise<TaskResponse>;
   claimTask(taskId: string, envelope: string): Promise<TaskResponse>;
   submitTask(taskId: string, envelope: string): Promise<TaskResponse>;
-  // POST /v1/tasks/:id/release, signed by the claimant (VOU-572). An API
-  // from before it answers 404 not_found.
+  // POST /v1/tasks/:id/release, signed by the claimant.
   releaseTask(taskId: string, envelope: string): Promise<TaskResponse>;
   postOutcome(taskId: string, envelope: string): Promise<TaskResponse>;
   // POST /v1/tasks/:id/submission, signed by the poster. The task with its
@@ -169,35 +178,29 @@ export type ApiClient = {
   // else throws.
   deleteAgent(agentId: string, envelope: string): Promise<'deleted' | 'gone'>;
   // POST /v1/game/status, signed over { issuedAt }. The agent's own game
-  // settings and the units it used today. An API from before the game
-  // answers 404 not_found.
+  // settings and the units it used today.
   gameStatus(envelope: string): Promise<GameStatusResponse>;
   // PUT /v1/game/settings, signed over { enabled?, cap?, issuedAt }. The
   // status after the change, as gameStatus answers it, and what turning
   // the game off closed when the API sends it.
   gameSettings(envelope: string): Promise<GameSettingsResponse>;
-  // POST /v1/agents/:id/run, signed over RunRequest (VOU-590). Claims the
-  // tasks the agent solves now and answers the core answer. An API from
-  // before it answers 404 not_found.
+  // POST /v1/agents/:id/run, signed over RunRequest. Claims the tasks the agent
+  // solves now and returns the core answer.
   run(agentId: string, envelope: string): Promise<CoreAnswerResponse>;
-  // POST /v1/agents/:id/status, signed over StatusRequest (VOU-591). The
-  // whole status screen as data, claiming nothing. An API from before it
-  // answers 404 not_found.
+  // POST /v1/agents/:id/status, signed over StatusRequest. The whole status
+  // screen as data, claiming nothing.
   status(agentId: string, envelope: string): Promise<StatusAnswerResponse>;
-  // POST /v1/agents/:id/challenge/next, signed over ChallengeNextRequest
-  // (VOU-592). One step through the weekly challenge, or with board a look
-  // at its top places. An API from before it answers 404 not_found.
+  // POST /v1/agents/:id/challenge/next, signed over ChallengeNextRequest. One
+  // step through the weekly challenge, or with board a look at its top places.
   challengeNext(
     agentId: string,
     envelope: string,
   ): Promise<ChallengeAnswerResponse>;
-  // POST /v1/agents/:id/duel/next, signed over DuelNextRequest (VOU-593).
-  // One duel step, the core answer plus duel. An API from before it
-  // answers 404 not_found.
+  // POST /v1/agents/:id/duel/next, signed over DuelNextRequest. One duel step,
+  // the core answer plus duel.
   duelNext(agentId: string, envelope: string): Promise<DuelAnswerResponse>;
-  // POST /v1/agents/:id/routine/next, signed over RoutineNextRequest
-  // (VOU-594). The next action of a routine run. An API from before it
-  // answers 404 not_found.
+  // POST /v1/agents/:id/routine/next, signed over RoutineNextRequest. The next
+  // action of a routine run.
   routineNext(
     agentId: string,
     envelope: string,
@@ -207,11 +210,10 @@ export type ApiClient = {
 // timeoutMs bounds each request. emit passes a short one so a slow network
 // never holds up the hook that called it.
 //
-// Every request to the SealKeeper API says which CLI sent it, the version
-// string alone in CLI_VERSION_HEADER, so the API can count callers by
-// version (VOU-453). Nothing about the machine, the user or the folder goes
-// with it. sendVersion false leaves the header out, for a host that is not
-// the SealKeeper API, such as the site that serves the production keys.
+// Every request carries this CLI's version string alone in CLI_VERSION_HEADER,
+// and nothing about the machine, the user or the folder. sendVersion false
+// leaves the header out, for a host that is not the SealKeeper API, such as the
+// site that serves the production keys.
 export function createApiClient(options: {
   apiUrl: string;
   fetch?: typeof fetch;
@@ -308,11 +310,9 @@ export function createApiClient(options: {
   }
 
   /*
-   * GET /v1/tasks. The query is checked with the API's own schema before it
-   * is sent, then sent as text. seed, poster and claimant ask the API to
-   * filter, so a flood of older tasks from others cannot push the ones this
-   * CLI wants off the page (VOU-208). An API from before them refuses them
-   * with 400, so this CLI needs the API from the same release.
+   * GET /v1/tasks. The query is checked with ListTasksQuery before it is sent,
+   * then sent as text. seed, poster and claimant filter the page to the tasks
+   * this CLI asks for.
    */
   async function listTasksPage(
     query: Omit<z.input<typeof ListTasksQuery>, 'cursor'> & {
@@ -345,6 +345,12 @@ export function createApiClient(options: {
         body: { envelope },
         ok: [200, 201],
       }),
+    listedMerge: (domain, name, envelope) =>
+      call(
+        `/v1/me/listed/${encodeURIComponent(domain)}/${encodeURIComponent(name)}/merge`,
+        ListedMergeResponse,
+        { body: { envelope }, timeoutMs: LISTED_MERGE_TIMEOUT_MS },
+      ),
     // The public agent answer, with live counts and operatedBySealKeeper.
     getAgent: (agentId) => call(agentPath(agentId), AgentResponse),
     postEvents: (envelopes, fingerprint) =>
@@ -354,9 +360,8 @@ export function createApiClient(options: {
             ? { envelopes }
             : { envelopes, fingerprint },
       }),
-    // GET /v1/agents/:id/seal. /credential is the old path of the same
-    // answer, kept by the API for one release.
-    // A 404 that says the SEAL is withheld is a SealWithheldError.
+    // GET /v1/agents/:id/seal. A 404 that says the SEAL is withheld is a
+    // SealWithheldError.
     async getCredential(agentId) {
       const { status, json, headers } = await request(
         agentPath(agentId, '/seal'),
@@ -469,7 +474,7 @@ function httpDate(value: string | null): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-// Only the delay-seconds form. The API never sends an HTTP date.
+// Only the delay-seconds form is read.
 function retryAfter(value: string | null | undefined): number | null {
   if (!value || !/^\d+$/.test(value.trim())) return null;
   return Number(value.trim());
@@ -478,12 +483,10 @@ function retryAfter(value: string | null | undefined): number | null {
 export const isRedirect = (status: number): boolean =>
   status >= 300 && status < 400;
 
-// A redirect is never followed. It usually means the API moved, as when
-// api.vouched.run became api.sealkeeper.run, so the error names the old
-// address and the new one from the Location header and says where to set
-// it. path is the part of the request after the API URL. When the new
-// address ends with the same path, the API URL is what is left, otherwise
-// the origin of the new address.
+// A redirect is never followed. The error names the old address and the new one
+// from the Location header and says where to set it. path is the part of the
+// request after the API URL. When the new address ends with the same path, the
+// API URL is what is left, otherwise the origin of the new address.
 export function redirectError(
   apiUrl: string,
   path: string,

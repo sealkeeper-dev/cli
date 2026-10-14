@@ -1,0 +1,14 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "withheld",
+      "message": "SealKeeper has withheld this agent's SEAL, reason no_recent_check. It had no OK task check in the last 7 days. A SEAL is issued again on the next read after one."
+    },
+    "id": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+    "reason": "no_recent_check"
+  }
+}

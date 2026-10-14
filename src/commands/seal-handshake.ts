@@ -18,17 +18,14 @@ import type { SealDeps } from './seal.js';
 
 export const NO_FINGERPRINT = `no fingerprint yet, run ${cli('sync')} to compute one`;
 
-// Prints a handshake, the agent's current fingerprint hash signed with its
-// key, for a verifier to check beside the SEAL with seal verify
-// --handshake. Without a nonce it is good for as long as a SEAL lives,
-// HANDSHAKE_MAX_AGE_SECONDS, and with one for HANDSHAKE_SKEW_SECONDS, the
-// live challenge. With --for it is made for that verifier alone, so a
-// verifier that checks with its own name refuses it relayed to another. A
-// verifier on a CLI or schema before --for reads one made with it as
-// malformed, so add it only when the verifier asked.
-// The fingerprint is the one last written to fingerprint.json, never
-// recomputed.
-// Exits 1 with one line when there is none.
+// Prints a handshake, the agent's current fingerprint hash signed with its key,
+// for a verifier to check beside the SEAL with seal verify --handshake. Without
+// a nonce it is good for HANDSHAKE_MAX_AGE_SECONDS, and with one for
+// HANDSHAKE_SKEW_SECONDS. With --for it is made for that verifier alone, so a
+// verifier that checks with its own name refuses it relayed to another. Add
+// --for only when the verifier asked, since an older verifier reads it as
+// malformed. The fingerprint is the one last written to fingerprint.json, never
+// recomputed. Exits 1 with one line when there is none.
 export function register(parent: Command, deps: SealDeps): Command {
   return parent
     .command('handshake')

@@ -27,7 +27,7 @@ const answer = (over: Record<string, unknown>) => ({
 const AT_NONE = answer({
   level: 'none',
   nextLevel: 'bronze',
-  // 20 verified tasks that count 13 (VOU-139).
+  // 20 verified tasks that count 13.
   thresholds: [
     {
       name: 'verified_tasks',

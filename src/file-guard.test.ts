@@ -16,7 +16,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return { ...actual, open: vi.fn(actual.open) };
 });
 
-describe('readGuardedFile (VOU-229)', () => {
+describe('readGuardedFile', () => {
   let dir: string;
   let cwd: string;
   let userHome: string;
@@ -98,7 +98,7 @@ describe('readGuardedFile (VOU-229)', () => {
     });
   });
 
-  it('reads a project of its own below a hidden home folder (VOU-241)', async () => {
+  it('reads a project of its own below a hidden home folder', async () => {
     const project = join(userHome, '.config', 'tool', 'project');
     const own = await write(join(project, 'answer.txt'), 'own');
     await fs.mkdir(join(project, '.git'), { recursive: true });
@@ -255,7 +255,7 @@ describe('readGuardedFile (VOU-229)', () => {
     },
   );
 
-  // VOU-649. A spec can ask an agent with tools for --file .env, or --text
+  // A spec can ask an agent with tools for --file .env, or --text
   // @.env on post, and the file is inside the current directory.
   it('refuses a file whose name marks secrets, anywhere and in every mode, without opening it', async () => {
     const names = [

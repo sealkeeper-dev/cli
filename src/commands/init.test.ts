@@ -136,7 +136,7 @@ const STALE_HOOK = hookCommand('/usr/local/bin/node', STALE_SCRIPT);
 const [RUN] = SLASH_COMMANDS;
 const RUN_COMMAND_TEXT = commandText(RUN, invocationOf(HOOK_COMMAND));
 // A local API, so a URL from SEALKEEPER_API_URL alone signs in without the
-// question a remote one gets (VOU-649), which the tests of that question
+// question a remote one gets, which the tests of that question
 // set up with REMOTE_API_URL.
 const API_URL = 'http://127.0.0.1:8080';
 const REMOTE_API_URL = 'https://api.example.org';
@@ -146,16 +146,16 @@ const OPENCLAW = '/usr/local/bin/openclaw';
 const PROJECT_CLAUDE = '/srv/proj/node_modules/.bin/claude';
 const PROGRAM = ['/usr/local/bin/node', '/opt/sealkeeper/dist/index.js'];
 const NPX_PROGRAM = ['/usr/local/bin/node', STALE_SCRIPT];
-// What a bundle the routine tests copy holds (RS-2).
+// What a bundle the routine tests copy holds.
 const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 
-// Every signed payload names the API it is for (VOU-111). The fake takes
+// Every signed payload names the API it is for. The fake takes
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
 // The aud of every signed payload the fake took, in order.
 const auds: unknown[] = [];
-// It names the route it is for too (VOU-637), checked and taken off the
+// It names the route it is for too, checked and taken off the
 // same way.
 const unsigned = (payload: unknown, method: string, url: string) => {
   auds.push((payload as { aud?: unknown }).aud);
@@ -220,7 +220,7 @@ type World = {
   claude?: boolean;
   openclaw?: boolean;
   // claude only in a project's node_modules/.bin, as npx puts it first on
-  // PATH (VOU-647).
+  // PATH.
   projectClaude?: boolean;
   // Every scheduler command the routine offer ran, as file and args
   // joined. The fake scheduler is launchd and answers every call with 0.
@@ -485,7 +485,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       spawner: () => {
         throw new Error('init tests start no agent');
       },
-      // The first run in this process, never a real one (RS-9).
+      // The first run in this process, never a real one.
       startRun: startInProcess,
       pollMs: 5,
       // Plain output whatever runs the tests, and never the real SIGINT.
@@ -624,7 +624,7 @@ describe('sealkeeper init', () => {
         // Nobody to ask, so the default.
         gameEnabled: true,
         // Taken after the device flow, so the API's window starts at the
-        // signature (VOU-637).
+        // signature.
         issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
       },
     ]);
@@ -701,7 +701,7 @@ describe('sealkeeper init', () => {
         new RegExp(`^${type.replace('.', '\\.')}$`, 'm'),
       );
     }
-    // No hook or adapter sends it since 0.4.14 (VOU-451).
+    // No hook or adapter sends it since 0.4.14.
     expect(result.err).not.toMatch(/^tool\.call$/m);
     expect(
       result.err.endsWith(`${describeTaxonomy()}\n\n${NOTHING_SENT}\n`),
@@ -748,7 +748,7 @@ describe('sealkeeper init', () => {
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
   });
 
-  it('uses SEALKEEPER_API_URL for the run but never saves it (cli-core-3)', async () => {
+  it('uses SEALKEEPER_API_URL for the run but never saves it', async () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(world.fetchUrls).toContain(`${API_URL}/v1/agents`);
@@ -756,7 +756,7 @@ describe('sealkeeper init', () => {
     expect((await readConfig(paths(home)))?.apiUrl).toBe(DEFAULT_API_URL);
   });
 
-  // VOU-649. A project's .claude/settings.json can set SEALKEEPER_API_URL
+  // A project's .claude/settings.json can set SEALKEEPER_API_URL
   // for every shell Claude Code starts, and the GitHub token goes to it.
   describe('an API from SEALKEEPER_API_URL alone', () => {
     beforeEach(() => {
@@ -1204,7 +1204,7 @@ describe('sealkeeper init', () => {
     );
   });
 
-  it('--force starts the cursor at the end of the log (cli-core-6)', async () => {
+  it('--force starts the cursor at the end of the log', async () => {
     expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
     const logged = (n: number) => ({
       event_id: randomUUID(),
@@ -1356,7 +1356,7 @@ describe('sealkeeper init', () => {
       'invalid API URL http://api.example.com',
     ],
   ])(
-    'names a bad flag %j before a missing client id (VOU-311)',
+    'names a bad flag %j before a missing client id',
     async (flags, message) => {
       vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
       const result = await run(world, 'init', ...flags);
@@ -1616,7 +1616,7 @@ describe('sealkeeper init', () => {
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
-    // VOU-451, VOU-627. The hooks write no event, so a repeat init that
+    // The hooks write no event, so a repeat init that
     // finds ours takes out the tool call hooks and Stop an older install
     // wrote.
     it.each([
@@ -1772,7 +1772,7 @@ describe('sealkeeper init', () => {
       expect(await readFile(settingsFile(), 'utf8')).toBe(EXISTING);
     });
 
-    // VOU-649. The slash commands and the skill hold this machine's absolute
+    // The slash commands and the skill hold this machine's absolute
     // paths, and a repo commits .claude/commands and .claude/skills, so the
     // project scope writes only the hooks, to settings.local.json.
     describe('the slash commands and the skill of a project install', () => {
@@ -1833,7 +1833,7 @@ describe('sealkeeper init', () => {
       });
 
       it('stay when init runs from the folder that holds the Claude Code config, since the project .claude is the user .claude', async () => {
-        // Carl on Windows, 6 October 2026. init from the home folder wrote
+        // An older init run from the home folder wrote
         // the commands to the user scope and then took them out again as
         // the project's old copies, leaving an empty commands folder.
         // The Claude Code dir is <home>/.claude here, as on a machine with
@@ -1878,8 +1878,8 @@ describe('sealkeeper init', () => {
         expect(result.out).not.toContain('Moved the slash commands');
       });
 
-      // VOU-661. CLI 0.5.1 and 0.5.2 run from the home folder deleted the
-      // commands and left the hooks and the skill (VOU-649). A repeat init
+      // CLI 0.5.1 and 0.5.2 run from the home folder deleted the
+      // commands and left the hooks and the skill. A repeat init
       // took the empty set as removed by the operator and wrote nothing,
       // whatever version ran. It now writes the set, as the skill does.
       async function homeInstallWithoutCommands(): Promise<string> {
@@ -2442,7 +2442,7 @@ describe('sealkeeper init', () => {
       expect((await run(world, 'init')).out).not.toContain('updated');
     });
 
-    // VOU-602. A command a newer CLI added is written beside the others of
+    // A command a newer CLI added is written beside the others of
     // ours on a repeat run, which brings the set up to date.
     it('adds a slash command missing beside ours on a repeat run', async () => {
       await withClaudeCode();
@@ -2474,7 +2474,7 @@ describe('sealkeeper init', () => {
       );
     });
 
-    // VOU-595. An older init wrote /sealkeeper-prove. A repeat run writes
+    // An older init wrote /sealkeeper-prove. A repeat run writes
     // /sealkeeper-run in its place and removes the old one, ours only.
     it('replaces the retired /sealkeeper-prove of ours on a repeat run', async () => {
       await withClaudeCode();
@@ -2535,7 +2535,7 @@ describe('sealkeeper init', () => {
       expect(await readFile(command, 'utf8')).toBe('my own command\n');
     });
 
-    describe('init run by Claude Code, with no terminal (RS-8)', () => {
+    describe('init run by Claude Code, with no terminal', () => {
       it('installs the hooks without asking, leaves the nudge off and puts the routine first in Next', async () => {
         await withClaudeCode();
         world.env = { CLAUDECODE: '1' };
@@ -2625,7 +2625,7 @@ describe('sealkeeper init', () => {
         expect(result.out).not.toContain('Set up the daily routine');
       });
 
-      // VOU-649. The name is public, so nobody takes the repo's for it.
+      // The name is public, so nobody takes the repo's for it.
       it('a plain non-terminal init needs --name, then registers asking nothing and never ending as D6', async () => {
         await withClaudeCode();
         world.repo = 'research-bot';
@@ -2667,7 +2667,7 @@ describe('sealkeeper init', () => {
       });
     });
 
-    describe('a stdin that closes at a question (D6)', () => {
+    describe('a stdin that closes at a question', () => {
       it('ends with the no terminal line and exit 1 at the hooks question', async () => {
         await withClaudeCode();
         const stdin = answeringEach([]);
@@ -2894,7 +2894,7 @@ describe('sealkeeper init', () => {
       expect(world.registrations[0]?.name).toBe('my-agent');
     });
 
-    // VOU-649. The name is public, so without a terminal the repo's name or
+    // The name is public, so without a terminal the repo's name or
     // the folder's is never taken for it, with --json or a pipe.
     it.each([
       ['--json', [['--json'], undefined]],
@@ -3320,7 +3320,7 @@ describe('sealkeeper init', () => {
       expect(world.fetchUrls.some((u) => u.includes('operator='))).toBe(false);
     });
 
-    it('stores the slug, and a repeat init shows it online and offline (VOU-187)', async () => {
+    it('stores the slug, and a repeat init shows it online and offline', async () => {
       expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
       const agentId = (await readConfig(paths(home)))?.agentId ?? '';
       expect(await readOperatorSlug(agentId, paths(home))).toBe('alice-2');
@@ -3486,7 +3486,7 @@ describe('sealkeeper init', () => {
       await writeFile(join(claudeDir(), 'settings.json'), '{}\n');
     }
 
-    // The bundle the CLI runs from, a real file install copies (RS-2).
+    // The bundle the CLI runs from, a real file install copies.
     async function withBundle(
       script = join(home, 'dist', 'index.js'),
     ): Promise<string> {
@@ -3502,7 +3502,7 @@ describe('sealkeeper init', () => {
     const answersThen = (...routine: string[]) =>
       answeringEach(['', '', '', '', ...routine]);
 
-    it('offers the routine as one block after the hooks and installs on Enter (RS-1)', async () => {
+    it('offers the routine as one block after the hooks and installs on Enter', async () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
@@ -3514,7 +3514,7 @@ describe('sealkeeper init', () => {
       const schedule = (await readRoutineConfig()).schedule;
       const job = schedule?.job ?? '';
       // The guided setup of sealkeeper routine, indented as init's other
-      // lines (VOU-603).
+      // lines.
       const block = [
         `  Agent     Claude Code, ${CLAUDE}`,
         `  ${TIME_NOW_LINE}`,
@@ -3564,7 +3564,7 @@ describe('sealkeeper init', () => {
       expect(await readRoutine(paths(home))).toEqual([]);
     });
 
-    it('runs the first one on Enter and says where to look (RS-3)', async () => {
+    it('runs the first one on Enter and says where to look', async () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
@@ -3648,7 +3648,7 @@ describe('sealkeeper init', () => {
       expect(result.err).not.toContain(projectAgentLine(CLAUDE));
     });
 
-    it("names a project's claude an earlier CLI stored as the job's agent on a repeat init (VOU-647)", async () => {
+    it("names a project's claude an earlier CLI stored as the job's agent on a repeat init", async () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
@@ -3752,7 +3752,7 @@ describe('sealkeeper init', () => {
       expect(world.scheduler).toEqual([]);
     });
 
-    it('says in one line why there is no routine when the only claude is inside a project (VOU-647)', async () => {
+    it('says in one line why there is no routine when the only claude is inside a project', async () => {
       await withClaudeCode();
       await withBundle();
       world.projectClaude = true;
@@ -3769,7 +3769,7 @@ describe('sealkeeper init', () => {
       expect(world.scheduler).toEqual([]);
     });
 
-    it('offers the routine without a Claude Code dir when only openclaw is on PATH (VOU-601)', async () => {
+    it('offers the routine without a Claude Code dir when only openclaw is on PATH', async () => {
       await withBundle();
       world.openclaw = true;
       // The runtime and the game, no hooks and no nudge, then the model,
@@ -3798,7 +3798,7 @@ describe('sealkeeper init', () => {
       expect(routine.schedule?.agentCommand).toBe(OPENCLAW);
     });
 
-    it('asks which agent runs it when claude and openclaw are both on PATH (VOU-601)', async () => {
+    it('asks which agent runs it when claude and openclaw are both on PATH', async () => {
       await withClaudeCode();
       await withBundle();
       world.claude = true;
@@ -3843,7 +3843,7 @@ describe('sealkeeper init', () => {
       );
     });
 
-    // VOU-657. The one sync question of an init is the routine setup's.
+    // The one sync question of an init is the routine setup's.
     for (const answer of ['y', 'n']) {
       it(`asks about sync once, in the routine setup, keeps ${answer === 'y' ? 'a yes' : 'nothing on a no'} and Next says the truth`, async () => {
         world.serverVersion = '0.1.0';
@@ -3939,7 +3939,7 @@ describe('sealkeeper init', () => {
         operatorLogin: 'alice',
         name: config?.name,
         version: '0.1.0',
-        // SEALKEEPER_API_URL is used for the run and never saved (VOU-237).
+        // SEALKEEPER_API_URL is used for the run and never saved.
         apiUrl: DEFAULT_API_URL,
         profileUrl: `https://sealkeeper.run/agents/alice/${config?.name}`,
       };
@@ -4181,7 +4181,7 @@ describe('sealkeeper init', () => {
       expect(await folders()).toEqual({ [app]: '.', [worktree]: '.' });
     });
 
-    // VOU-649. A new agent's name is public, so without a terminal the
+    // A new agent's name is public, so without a terminal the
     // repo's name never becomes one.
     it('without a terminal refuses a suggestion that would register a new agent', async () => {
       await registerApp();

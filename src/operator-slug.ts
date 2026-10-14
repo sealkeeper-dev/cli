@@ -11,15 +11,12 @@ import {
 } from './config.js';
 import { type LiveAgent, readLiveAgent } from './live-agent.js';
 
-// The operator slug, the first half of the handle (VOU-187). The API
-// builds the handle from it, and it differs from the GitHub login when the
-// slug was suffixed at backfill or changed on the web. status, init, run
-// and agent rename and delete build the handle offline, so the last slug
-// the API sent is kept in operator-slug.json. Not in config.json, since CLI 0.4.4
-// and earlier read that file strictly and fail on a key they do not know.
-// The file names the agent it belongs to, so a new agent on the same
-// machine never takes the slug of the one before. The login stands in only
-// while nothing is stored.
+// The operator slug, the first half of the handle, which can differ from the
+// GitHub login. status, init, run and agent rename and delete build the handle
+// offline, so the last slug the API sent is kept in operator-slug.json. Not in
+// config.json, since CLI 0.4.4 and earlier read that file strictly. The file
+// names the agent it belongs to, so a new agent on the same machine never takes
+// the slug of the one before. The login stands in only while nothing is stored.
 
 // seenAt is when this slug was first stored. The file is written again
 // only when the slug changes.
@@ -69,9 +66,8 @@ export async function saveOperatorSlug(
   }
 }
 
-// The slug an agent answer carries, operator.slug, or the first half of
-// the handle from an answer without it. undefined from an API before
-// slugs, which sends neither.
+// The slug an agent answer carries, operator.slug, or the first half of the
+// handle from an answer without it. undefined when the answer has neither.
 export function slugOfAnswer(answer: {
   handle?: string | null;
   operator?: { slug?: string | null } | null;

@@ -16,6 +16,7 @@ import type { TaskResponse, TaskSubmissionResponse } from '../responses.js';
 import {
   afterTaskWork,
   defaultTasksDeps,
+  ENDPOINT_CHECK_NOTE,
   indentText,
   openTaskSession,
   printFields,
@@ -27,11 +28,9 @@ import {
 } from '../tasks.js';
 
 // sealkeeper outcome <id> success|failure. The poster's verdict on a
-// counterparty task. The claimant reports success when it submits, and the
-// task is verified once the poster reports success too. The poster sees the
-// submission first and is asked before anything is signed, unless --yes.
-// What it says afterwards comes from the reports the API holds, read back
-// after the report is sent, never from this side's report alone.
+// counterparty task. The poster sees the submission first and is asked before
+// anything is signed, unless --yes. What it says afterwards comes from the
+// reports the API holds, read back after the report is sent.
 
 export const NOT_COUNTERPARTY =
   'this task is checked by SealKeeper on submit, only counterparty tasks take an outcome';
@@ -255,14 +254,16 @@ function agreementLine(
   }
 }
 
-// The same checks the API runs, and expiry, done first so nothing is signed
-// for a task that cannot take this agent's verdict. Expiry blocks only a
-// task with no submission. Work submitted in time can still be judged.
+// Checks done before anything is signed, so nothing is sent for a task that
+// cannot take this agent's verdict. Expiry blocks only a task with no
+// submission.
 export function localRefusal(
   task: TaskResponse,
   agentId: string,
   now: number,
 ): string | null {
+  // An endpoint check task has no submit, so it gets its own line.
+  if (task.verification.kind === 'endpoint') return ENDPOINT_CHECK_NOTE;
   if (task.verification.kind !== 'counterparty') return NOT_COUNTERPARTY;
   if (task.posterAgentId !== agentId) {
     return task.claimantAgentId === agentId ? CLAIMANT_REPORTS : NOT_POSTER;
@@ -275,9 +276,8 @@ export function localRefusal(
   return null;
 }
 
-// The poster's signed read of the task, with the submission and both
-// reports. issuedAt is signed, so a captured envelope stops working after
-// the API's window.
+// The poster's signed read of the task, with the submission and both reports.
+// issuedAt is signed with the request.
 export async function fetchSubmission(
   api: ApiClient,
   signer: Signer,
@@ -312,15 +312,4 @@ export function outcomeRefusal(error: ApiError, id: string): string {
 
 function noInput(): Input {
   return { isTTY: false, readLine: async () => null };
-}
-
-// True when the task is this agent's counterparty task with a submission
-// that waits for its verdict.
-export function awaitingVerdict(task: TaskResponse, agentId: string): boolean {
-  return (
-    task.posterAgentId === agentId &&
-    task.verification.kind === 'counterparty' &&
-    task.submittedAt !== null &&
-    task.verifiedAt === null
-  );
 }

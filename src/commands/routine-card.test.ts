@@ -31,7 +31,7 @@ import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
 import { type RoutineEntry, readRoutine } from '../routine.js';
 
-// The daily routine refreshes the card init wrote (VOU-383).
+// The daily routine refreshes the card init wrote.
 
 const API_URL = 'https://api.test';
 const KID = 'sealkeeper-test-1';
@@ -304,7 +304,7 @@ describe('the routine refreshes the card', () => {
     });
     expect(result.out).toBe(`${NOTHING} Card refreshed.\n`);
 
-    // The routine screen and status say it in the same words (VOU-619).
+    // The routine screen and status say it in the same words.
     const line = `Card       ${cardFile}, holds the SEAL the CLI holds now, last written 2026-09-29T10:01:00.000Z\n`;
     const screen = await run(fetchFn, 'routine');
     expect(screen.out).toContain(line);
@@ -443,7 +443,7 @@ describe('the routine refreshes the card', () => {
     expect(await readFile(cardFile, 'utf8')).toBe(before);
   });
 
-  // status shows the card from the files alone (VOU-619), offline too, and
+  // status shows the card from the files alone, offline too, and
   // a card it cannot use is one line, never a failed status.
   describe('status shows the card', () => {
     // The card line of status, offline, with what --json carries.

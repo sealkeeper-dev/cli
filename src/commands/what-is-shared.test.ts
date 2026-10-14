@@ -6,7 +6,7 @@ import { FINGERPRINT_SENDS } from '../fingerprint.js';
 import { createProgram } from '../program.js';
 import { COMMAND_SENDS } from './what-is-shared.js';
 
-// VOU-624. what-is-shared is a privacy promise, so it must never say less
+// what-is-shared is a privacy promise, so it must never say less
 // than the code sends. These read the code rather than a list written here,
 // so a new sender fails until the text names it.
 
@@ -33,7 +33,7 @@ const names = (text: string, name: string) =>
   new RegExp(`(^|[\\s,(])${name}\\b`).test(text);
 
 // A sender whose file is not named after its command, by the words the
-// text uses for it. routine-run.ts signs each routine step (VOU-655).
+// text uses for it. routine-run.ts signs each routine step.
 const SENDER_WORDS: Record<string, string> = { 'routine-run': 'routine run' };
 
 // The commands whose requests carry the fingerprint, each caller of

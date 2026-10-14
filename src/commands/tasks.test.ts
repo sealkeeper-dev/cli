@@ -49,7 +49,13 @@ import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
 import type { TaskResponse } from '../responses.js';
 import { readRoutine } from '../routine.js';
-import { GAME_SPEC_AT_CLAIM, NOT_FOUND, recordClaims } from '../tasks.js';
+import {
+  ENDPOINT_CHECK_NOTE,
+  GAME_SPEC_AT_CLAIM,
+  NOT_FOUND,
+  recordClaims,
+  taskDetail,
+} from '../tasks.js';
 import { takePurpose } from '../test-purpose.js';
 import {
   ALREADY_CLAIMED,
@@ -116,11 +122,11 @@ const pageCursor = (offset: number) =>
 const offsetOf = (raw: string | null) =>
   raw === null ? 0 : Number(decodeTasksCursor(raw)?.atMicros ?? 0);
 
-// Every signed payload names the API it is for (VOU-111). The fake takes
+// Every signed payload names the API it is for. The fake takes
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
-// It names the route it is for too (VOU-637), checked and taken off the
+// It names the route it is for too, checked and taken off the
 // same way.
 const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
@@ -178,24 +184,23 @@ class FakeApi {
   errors: string[] = [];
   // The query of every GET /v1/tasks.
   listed: string[] = [];
-  // The payload of every signed open list as a query, issuedAt left out
-  // (VOU-200).
+  // The payload of every signed open list as a query, issuedAt left out.
   opened: string[] = [];
   // Open tasks this agent is barred from, left out of the signed open
   // list. The public GET still lists them.
   barred = new Set<string>();
   // False for an API from before POST /v1/tasks/open.
   openRoute = true;
-  // False for an API from before POST /v1/tasks/:id/release (VOU-572).
+  // False for an API from before POST /v1/tasks/:id/release.
   releaseRoute = true;
   // Replaces the answer to a release when set.
   releaseReply: (() => Response) | null = null;
   // Replaces the answer to the signed open list when set.
   openReply: (() => Response) | null = null;
-  // True for an API from before VB-3, whose strict payloads refuse a
+  // True for an older API, whose strict payloads refuse a
   // fingerprint.
   refuseFingerprint = false;
-  // True for an API from before VOU-615, whose strict submit payload
+  // True for an older API, whose strict submit payload
   // refuses a model name.
   refuseModelName = false;
 
@@ -210,8 +215,7 @@ class FakeApi {
       spec: { words: 100 },
       verification: { kind: 'counterparty' },
       state: 'open',
-      // Past the claim age threshold, which a routine leaves to a person first
-      // (RT-8).
+      // Posted an hour ago.
       postedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
       claimedAt: null,
       submittedAt: null,
@@ -252,8 +256,8 @@ class FakeApi {
 
     // Like the API, the open pool leaves addressed tasks out, and assignee
     // keeps only the tasks addressed to that agent. One page at a time, the
-    // cursor the offset of the next (VOU-208). barred leaves out the tasks
-    // this agent is barred from, as the signed open list does (VOU-200).
+    // cursor the offset of the next. barred leaves out the tasks
+    // this agent is barred from, as the signed open list does.
     const page = (q: {
       state: string | null;
       assignee?: string | null;
@@ -400,7 +404,7 @@ class FakeApi {
 
     if (url.pathname === '/v1/tasks') {
       if (this.postReply) return this.postReply();
-      // A template post (VOU-640). The API makes the task, which the fake
+      // A template post. The API makes the task, which the fake
       // stands in for with a spec that carries the input and a check of the
       // template's kind.
       if (
@@ -558,7 +562,7 @@ class FakeApi {
   }) as typeof fetch;
 }
 
-// The API's message for 409 poster_operator_cap (VOU-564).
+// The API's message for 409 poster_operator_cap.
 const POSTER_OPERATOR_CAP =
   "The agents of this operator have claimed 10 open tasks from the agents of this task's poster's operator in the last 30 days, the most one operator may. They can claim that operator's tasks again from 2026-10-29T08:00:00Z";
 
@@ -600,7 +604,7 @@ describe('submit, release and the tasks commands', () => {
   // Files a test wrote next to the home, removed after it.
   let onCleanup: string[] = [];
   // The current directory the commands see. The temp folder, so the files
-  // tests write next to the home count as inside it (VOU-229).
+  // tests write next to the home count as inside it.
   let cwd: string;
 
   async function run(...args: string[]): Promise<RunResult> {
@@ -856,7 +860,7 @@ describe('submit, release and the tasks commands', () => {
       expect(await logged()).toEqual([]);
     });
 
-    // VOU-564. The claim bound between two operators is a code this CLI
+    // The claim bound between two operators is a code this CLI
     // has no line of its own for, so it prints the API's message, which
     // says when the operator may claim that poster's tasks again.
     it('refuses past the claim bound between two operators in one line, the API message', async () => {
@@ -888,6 +892,43 @@ describe('submit, release and the tasks commands', () => {
       expect(await logged()).toEqual([]);
     });
 
+    // An endpoint check task arrives already verified, so its claim is
+    // refused like any task another agent holds, and a read of it prints
+    // its spec and one line, never the submit lines.
+    it('refuses a claim on an endpoint check task and prints one sensibly', async () => {
+      const checkId = randomUUID();
+      const at = new Date().toISOString();
+      const task = api.add({
+        taskType: 'endpoint_check',
+        origin: 'endpoint_check',
+        category: 'endpoint',
+        difficulty: 1,
+        verification: { kind: 'endpoint', checkId },
+        spec: { skillId: 'answer', outcome: 'OK', formatOk: true },
+        state: 'verified',
+        claimantAgentId: OTHER_AGENT,
+        claimedAt: at,
+        submittedAt: at,
+        verifiedAt: at,
+        expiresAt: at,
+      });
+      api.claims.set(task.id, 409);
+      const claimed = await run('claim', task.id);
+      expect(claimed.code).toBe(1);
+      expect(claimed.err).toBe(`${ALREADY_CLAIMED}\n`);
+      expect(await logged()).toEqual([]);
+
+      const lines = taskDetail(task, Date.now());
+      expect(lines[0]).toBe(`Task ${task.id}. type endpoint_check. verified.`);
+      expect(lines).toContain(ENDPOINT_CHECK_NOTE);
+      const text = lines.join('\n');
+      expect(text).toContain('"skillId": "answer"');
+      expect(text).toContain('"outcome": "OK"');
+      expect(text).toContain('"formatOk": true');
+      expect(text).not.toContain('Submit with');
+      expect(text).not.toContain('expires');
+    });
+
     it('refuses anything but a full task id before any request', async () => {
       const { code, err } = await run('claim', 'abcd1234');
       expect(code).toBe(1);
@@ -898,7 +939,7 @@ describe('submit, release and the tasks commands', () => {
     });
   });
 
-  // VOU-572. The claimant gives a claim back, one line either way.
+  // The claimant gives a claim back, one line either way.
   describe('release', () => {
     const held = (extra: Partial<TaskResponse> = {}) =>
       api.add({
@@ -919,7 +960,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts().map((r) => r.path)).toEqual([
         `/v1/tasks/${task.id}/release`,
       ]);
-      // issuedAt bounds how long a captured release works (VOU-637).
+      // issuedAt bounds how long a captured release works.
       expect(api.posts()[0]?.payload).toEqual({
         taskId: task.id,
         issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
@@ -1106,7 +1147,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts()).toEqual([]);
     });
 
-    it('submits a duel or challenge answer that ends in the line feed its handed over spec asks for (VOU-635)', async () => {
+    it('submits a duel or challenge answer that ends in the line feed its handed over spec asks for', async () => {
       for (const origin of ['duel', 'challenge'] as const) {
         const task = await handedGame(origin, FINAL_LINE_FEED, 'a\nb\n');
         const file = `${home}-answer.txt`;
@@ -1127,7 +1168,7 @@ describe('submit, release and the tasks commands', () => {
       }
     });
 
-    it('submits the final line feed of a challenge task claimed with claim (VOU-635)', async () => {
+    it('submits the final line feed of a challenge task claimed with claim', async () => {
       const task = api.add({
         origin: 'challenge',
         taskType: 'line_sort',
@@ -1140,7 +1181,7 @@ describe('submit, release and the tasks commands', () => {
       expect(out).toContain('state  verified');
     });
 
-    it('never says to remove the line break when the spec of a game task cannot be seen here (VOU-635)', async () => {
+    it('never says to remove the line break when the spec of a game task cannot be seen here', async () => {
       for (const origin of ['duel', 'challenge'] as const) {
         // Handed over by an older CLI, so nothing of its spec is kept.
         const task = api.add({
@@ -1267,7 +1308,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts()).toEqual([]);
     });
 
-    it('writes nothing to the routine log, also with the variable an older routine set (VOU-599)', async () => {
+    it('writes nothing to the routine log, also with the variable an older routine set', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
       const task = claimed({ kind: 'hash', sha256: sha256('right') });
       const { code } = await run('submit', task.id, '--text', 'wrong');
@@ -1374,7 +1415,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    describe('which files --file reads (VOU-229)', () => {
+    describe('which files --file reads', () => {
       // A folder of its own for each test, removed after it.
       let dir: string;
       beforeEach(async () => {
@@ -1435,7 +1476,7 @@ describe('submit, release and the tasks commands', () => {
         expect(api.posts()).toEqual([]);
       });
 
-      // VOU-649. A spec can ask an agent with tools to submit a project's
+      // A spec can ask an agent with tools to submit a project's
       // .env, which sits inside the current directory.
       it('refuses a file whose name marks secrets, in the current directory or the answers folder', async () => {
         cwd = join(dir, 'work');
@@ -1542,7 +1583,7 @@ describe('submit, release and the tasks commands', () => {
         taskType: 'summarise',
         spec: { words: 100 },
         verification,
-        // Always sent, summarise's own as a template type (D-TS-3).
+        // Always sent, summarise's own as a template type.
         difficulty: 3,
       });
       expect(JSON.parse(out)).toMatchObject({
@@ -1588,7 +1629,7 @@ describe('submit, release and the tasks commands', () => {
       expect(out).toContain('state    open');
     });
 
-    it('posts the --category and --size it is given (RT-2)', async () => {
+    it('posts the --category and --size it is given', async () => {
       const { code } = await run(
         'post',
         '--type',
@@ -1609,7 +1650,7 @@ describe('submit, release and the tasks commands', () => {
       });
     });
 
-    it('posts --category math and names the six in its refusal (D-UI-12)', async () => {
+    it('posts --category math and names the six in its refusal', async () => {
       const { code } = await run(
         'post',
         '--type',
@@ -1649,7 +1690,7 @@ describe('submit, release and the tasks commands', () => {
     it.each([
       [['--category', 'cooking'], badCategory('cooking')],
       [['--category', 'Data'], badCategory('Data')],
-      // No longer offered (D-UI-12). A post from an older CLI still names
+      // No longer offered. A post from an older CLI still names
       // them, and the API still takes it.
       [['--category', 'conversation'], badCategory('conversation')],
       [['--category', 'other'], badCategory('other')],
@@ -1685,26 +1726,23 @@ describe('submit, release and the tasks commands', () => {
         ),
         '--spec must have at most 500 keys',
       ],
-    ])(
-      'refuses an inline --spec %s in one line (VOU-304)',
-      async (_, spec, message) => {
-        const { code, err } = await run(
-          'post',
-          '--type',
-          'summarise',
-          '--spec',
-          spec,
-          '--verify',
-          'counterparty',
-        );
-        expect(code).toBe(1);
-        expect(err).toBe(`${message}\n`);
-        expect(api.requests).toEqual([]);
-      },
-    );
+    ])('refuses an inline --spec %s in one line', async (_, spec, message) => {
+      const { code, err } = await run(
+        'post',
+        '--type',
+        'summarise',
+        '--spec',
+        spec,
+        '--verify',
+        'counterparty',
+      );
+      expect(code).toBe(1);
+      expect(err).toBe(`${message}\n`);
+      expect(api.requests).toEqual([]);
+    });
 
     it('says an API from before the fields does not take category or size', async () => {
-      // What an API before RT-2 answers, its strict payload refusing both.
+      // What an older API answers, its strict payload refusing both.
       api.postReply = () =>
         Response.json(
           {
@@ -1745,7 +1783,7 @@ describe('submit, release and the tasks commands', () => {
       );
     });
 
-    // D-TS-3. --difficulty, sent on every post, the template's for a
+    // --difficulty, sent on every post, the template's for a
     // template task type when not given, else 2.
     it.each([1, 2, 3, 4, 5])(
       'posts --difficulty %i on a counterparty task',
@@ -1835,7 +1873,7 @@ describe('submit, release and the tasks commands', () => {
     );
 
     it('says an API from before difficulty does not take it', async () => {
-      // What an API before VOU-496 answers, its strict payload refusing it.
+      // What an older API answers, its strict payload refusing it.
       api.postReply = () =>
         Response.json(
           {
@@ -1901,7 +1939,7 @@ describe('submit, release and the tasks commands', () => {
         ],
       ],
     ])(
-      'says after an adoption with %o who checks the answer (RT-16)',
+      'says after an adoption with %o who checks the answer',
       async (verification, lines) => {
         // SealKeeper picks the task, and now and then posts a confirm
         // candidate as a counterparty task its poster judges.
@@ -1926,7 +1964,7 @@ describe('submit, release and the tasks commands', () => {
       },
     );
 
-    it('says before an adoption that some adopted tasks wait on the poster (RT-16)', () => {
+    it('says before an adoption that some adopted tasks wait on the poster', () => {
       expect(adoptPreviewLines('data')).toContain(ADOPT_PREVIEW_CHECK);
       expect(ADOPT_PREVIEW_CHECK).toBe(
         'SealKeeper knows the answer. It checks most adopted tasks on submit, and for the rest you judge the result.',
@@ -2165,7 +2203,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('checks the guided walk --for against the stored slug (VOU-196)', async () => {
+    it('checks the guided walk --for against the stored slug', async () => {
       await saveOperatorSlug(agentId, 'alice-dev');
       stdoutTTY = true;
       const input = answers('1', '', 'y');
@@ -2215,7 +2253,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('reads --input @file under the same rules as submit --file (VOU-229)', async () => {
+    it('reads --input @file under the same rules as submit --file', async () => {
       const dir = await realpath(
         await mkdtemp(join(tmpdir(), 'sealkeeper-vou229-')),
       );
@@ -2266,7 +2304,7 @@ describe('submit, release and the tasks commands', () => {
       }
     });
 
-    it('reads --spec and --verify schema: files under the same rules (VOU-241)', async () => {
+    it('reads --spec and --verify schema: files under the same rules', async () => {
       const dir = await realpath(
         await mkdtemp(join(tmpdir(), 'sealkeeper-vou241-')),
       );
@@ -2353,7 +2391,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    // VOU-640. The CLI names the template and SealKeeper makes the task, so
+    // The CLI names the template and SealKeeper makes the task, so
     // the post carries no spec, check or digest of the CLI's own.
     it('posts a drawn hash template with --yes as the template alone, and prints the task made', async () => {
       const { code, out } = await run(
@@ -2366,7 +2404,7 @@ describe('submit, release and the tasks commands', () => {
       expect(code).toBe(0);
       const sent = api.posts()[0]?.payload;
       const payload = TemplatePostRequest.parse(sent);
-      // A template post says so, for the gold rule (VOU-134).
+      // A template post says so, for the gold rule.
       expect(sent).toEqual({
         taskId: payload.taskId,
         template: 'text_dedupe',
@@ -2435,7 +2473,7 @@ describe('submit, release and the tasks commands', () => {
     });
 
     it('says so when the API is older than template posts', async () => {
-      // An API before VOU-640 reads the post as an adoption.
+      // An older API reads the post as an adoption.
       api.postReply = () =>
         Response.json(
           {
@@ -2564,9 +2602,8 @@ describe('submit, release and the tasks commands', () => {
       const payload = TemplatePostRequest.parse(api.posts()[0]?.payload);
       expect(payload.input).toBe('What is the capital of Norway?');
       expect(payload.origin).toBe('template');
-      // The template sets its category, size and difficulty (RT-2,
-      // D-TS-3), shown before the yes. answer_question is in writing since
-      // D-UI-12.
+      // The template sets its category, size and difficulty, shown
+      // before the yes. answer_question is in writing.
       expect(out).toContain('category writing');
       expect(out).toContain('size     s, difficulty 2');
       expect(payload).not.toHaveProperty('assignee');
@@ -2680,7 +2717,7 @@ describe('submit, release and the tasks commands', () => {
       },
     );
 
-    describe('own agent by operator slug (VOU-196)', () => {
+    describe('own agent by operator slug', () => {
       it('refuses a handle with the stored slug after a slug change', async () => {
         await saveOperatorSlug(agentId, 'alice-dev');
         const { code, err } = await postFor('Alice-Dev/other');
@@ -3011,6 +3048,18 @@ describe('submit, release and the tasks commands', () => {
           }),
         NOT_COUNTERPARTY,
       ],
+      // It arrives verified and nothing submits it, so the refusal
+      // says so rather than the submit check line.
+      [
+        'an endpoint check task',
+        () =>
+          submitted({
+            verification: { kind: 'endpoint', checkId: randomUUID() },
+            origin: 'endpoint_check',
+            category: 'endpoint',
+          }),
+        ENDPOINT_CHECK_NOTE,
+      ],
     ])('refuses when %s and signs nothing', async (_, make, message) => {
       const task = make();
       const { code, err } = await report(task.id, 'success');
@@ -3085,7 +3134,7 @@ describe('submit, release and the tasks commands', () => {
     });
   });
 
-  // VOU-627. The adapters write no event, so task work done by hand syncs
+  // The adapters write no event, so task work done by hand syncs
   // itself. A task command that wrote a task event starts a sync through
   // the gate every automatic sync takes, and every SealKeeper command
   // refreshes the goal the session summary reads while the nudge is on.
@@ -3267,7 +3316,7 @@ describe('submit, release and the tasks commands', () => {
     });
   });
 
-  // VB-3. Claim, submit and outcome carry the fingerprint sync and run
+  // Claim, submit and outcome carry the fingerprint sync and run
   // last wrote, and leave it out when there is none.
   describe('fingerprint', () => {
     const MODEL = 'A'.repeat(42).concat('E');
@@ -3365,7 +3414,7 @@ describe('submit, release and the tasks commands', () => {
     });
   });
 
-  // VOU-615. submit sends the model name sync declares, inside its signed
+  // submit sends the model name sync declares, inside its signed
   // payload, and once more without it when the API refuses the field.
   describe('model name', () => {
     const submits = () => api.posts().filter((r) => r.path.endsWith('/submit'));

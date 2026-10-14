@@ -506,7 +506,7 @@ describe('run', () => {
       expect(await claimedInLog()).toEqual([first.id, second.id]);
     });
 
-    // VOU-627. The claims run records sync themselves, through the gate.
+    // The claims run records sync themselves, through the gate.
     it('sends the claims it recorded once automatic sync is on', async () => {
       await writeConfig({
         agentId,

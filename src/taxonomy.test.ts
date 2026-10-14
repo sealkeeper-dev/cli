@@ -23,7 +23,7 @@ describe('describeTaxonomy', () => {
     expect(typeLines).toEqual(EventType.options.filter(isSent));
   });
 
-  // VOU-451. tool.call stays in the taxonomy for older CLIs, and no hook or
+  // tool.call stays in the taxonomy for older CLIs, and no hook or
   // adapter here sends it.
   it('leaves out tool.call and says why', () => {
     expect(UNSENT_TYPES).toEqual(['tool.call']);

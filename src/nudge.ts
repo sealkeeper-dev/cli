@@ -12,21 +12,19 @@ import { cachedGoal, loadGoal } from './goal.js';
 import { HIGHEST_ISSUED, plainName } from './level-text.js';
 import { dailyCeilingReached, todayOf } from './today.js';
 
-// The session nudge (VOU-137). A short goal summary the adapters add to the
-// agent's own context when a session starts, so the agent knows where it
-// stands and what waits for it without a person typing /sealkeeper-run.
+// The session nudge. A short goal summary the adapters add to the agent's own
+// context when a session starts, so the agent knows where it stands and what
+// waits for it without a person typing /sealkeeper-run.
 //
-// It is read from the cached goal only, so a session start never waits on
-// the network. A cache up to a day old is used. It is refreshed only at
-// SealKeeper moments, never by a session hook (VOU-627). status and the
-// terminal run, the task commands after their write, post, and a routine
-// run at its end call keepNudgeFresh while the nudge is on. Turning the
-// nudge on fills it once, see setNudge. No cache, an older one or no config means
-// no summary. It only runs once the operator said yes, nudge.json on, and
-// it only points at the run flow, which claims seed tasks, at tasks
-// addressed to this agent and at outcomes this agent owes. Never at open
-// tasks from other posters. It names the run flow and leaves running it
-// to the user's say.
+// It is read from the cached goal only, so a session start never waits on the
+// network. A cache up to a day old is used. It is refreshed only by commands,
+// never by a session hook. status and the terminal run, the task commands after
+// their write, post, and a routine run at its end call keepNudgeFresh while the
+// nudge is on. Turning the nudge on fills it once, see setNudge. No cache, an
+// older one or no config means no summary. It only runs once the operator said
+// yes, nudge.json on, and it only points at the run flow, at tasks addressed to
+// this agent and at outcomes this agent owes. Never at open tasks from other
+// posters. It names the run flow and leaves running it to the user's say.
 
 // Only the fields the summary reads, so a goal answer with more fields, or
 // a newer one, still fits.
@@ -41,7 +39,7 @@ export type NudgeGoal = {
   }[];
   // posterOutcomes from an API that sends it, see GoalResponse.
   pending: { addressed: number; outcomes: number; posterOutcomes?: unknown };
-  // The day's counted tasks (VOU-140), read through todayOf.
+  // The day's counted tasks, read through todayOf.
   today?: unknown;
 };
 
@@ -102,12 +100,11 @@ function plural(n: number, one: string, many: string): string {
 }
 
 // At most three lines. The level and the biggest gap to the next one, what
-// waits for the agent, and that run exists for when the user wants it. run
-// is how this framework starts the run flow, /sealkeeper-run in Claude
-// Code. Once today's counted tasks reach the daily ceiling (VOU-140) the
-// last line says so instead, since more work today would not move the
-// level. fetchedAt, when the goal is older than fifteen minutes, labels
-// what waits with how old the count is.
+// waits for the agent, and that run exists for when the user wants it. run is
+// how this framework starts the run flow, /sealkeeper-run in Claude Code. When
+// today's counted tasks reached the daily ceiling the last line says so
+// instead. fetchedAt, when the goal is older than fifteen minutes, labels what
+// waits with how old the count is.
 export function goalSummary(
   goal: NudgeGoal,
   run: string,
@@ -217,13 +214,11 @@ export async function nudgeLines(
   }
 }
 
-// Writes the operator's answer to nudge.json, never config.json, which
-// CLI 0.4.4 and earlier read strictly. Turning it on also fills the goal
-// cache once, since the summary reads
-// only that cache and the first session after would print nothing
-// (VOU-303). A cache under fifteen minutes old is kept. It is a side task,
-// so no answer, an error or no config leaves the cache as it was and says
-// nothing. fetch defaults to the global one.
+// Writes the operator's answer to nudge.json, never config.json, which CLI
+// 0.4.4 and earlier read strictly. Turning it on also fills the goal cache
+// once, since the summary reads only that cache. A cache under fifteen minutes
+// old is kept. It is a side task, so no answer, an error or no config leaves
+// the cache as it was and says nothing. fetch defaults to the global one.
 export async function setNudge(
   on: boolean,
   p: Paths = paths(),
@@ -233,13 +228,12 @@ export async function setNudge(
   if (on) await loadGoal({ fetch, paths: p }).catch(() => null);
 }
 
-// Refreshes the goal cache the summary reads, while the nudge is on. The
-// one way the cache is kept, at SealKeeper moments only (VOU-627). status
-// and the terminal run call it beside their own read, the task commands and
-// post after their write (afterTaskWork in tasks.ts), and a routine run at
-// its end. A cache under fifteen minutes old is kept, else one request with
-// the score's timeout. A side task, so it never throws and says nothing.
-// fetch defaults to the global one.
+// Refreshes the goal cache the summary reads, while the nudge is on. status and
+// the terminal run call it beside their own read, the task commands and post
+// after their write (afterTaskWork in tasks.ts), and a routine run at its end.
+// A cache under fifteen minutes old is kept, else one request with the score's
+// timeout. A side task, so it never throws and says nothing. fetch defaults to
+// the global one.
 export async function keepNudgeFresh(
   fetch?: typeof globalThis.fetch,
   p: Paths = paths(),

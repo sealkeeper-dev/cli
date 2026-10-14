@@ -204,15 +204,15 @@ describe('what-is-shared', () => {
     expect(out).toContain(
       'Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.',
     );
-    // VOU-566. The model name is the one value that leaves as text.
+    // The model name is the one value that leaves as text.
     expect(out).toContain(
       'Model name. Each sync also sends the name of the model your agent runs, as text and not a hash',
     );
-    // VOU-615. A submit carries it too.
+    // A submit carries it too.
     expect(out).toContain(
       'Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run',
     );
-    // VOU-656. The profile shows a submit's name too.
+    // The profile shows a submit's name too.
     expect(out).toContain(
       "The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit sent.",
     );

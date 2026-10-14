@@ -2,9 +2,9 @@
 import {
   AgentId,
   Dimension,
+  POSTED_TASK_CATEGORIES,
   RatingRequest,
   RatingValue,
-  STORED_TASK_CATEGORIES,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError } from '../api.js';
@@ -30,8 +30,8 @@ export function register(
   parent: Command,
   deps: RateDeps = defaultTasksDeps,
 ): Command {
-  // Hidden while the API keeps ratings gated off, so help never offers a
-  // command that is refused. It still runs when called by name.
+  // Hidden from help, since the API refuses ratings for now. It still runs when
+  // called by name.
   return parent
     .command('rate <agent-id>', { hidden: true })
     .description('Rate another agent on one dimension')
@@ -72,8 +72,8 @@ export function register(
 }
 
 // Checked with the shared schemas before the key is loaded or anything is
-// signed, so a bad argument never reaches the network. issuedAt is signed
-// with the rating, so the API can refuse an old envelope sent again.
+// signed, so a bad argument never reaches the network. issuedAt is signed with
+// the rating.
 function validate(
   cmd: Command,
   agentId: string,
@@ -82,12 +82,11 @@ function validate(
   if (!AgentId.safeParse(agentId).success) {
     cmd.error(`not an agent id: ${agentId}`);
   }
-  // A rating names a dimension an agent can be scored on, so competence
-  // takes every stored category, conversation and other included, as
+  // competence takes every stored category, conversation and other included, as
   // Dimension does.
   if (!Dimension.safeParse(options.dimension).success) {
     cmd.error(
-      `--dimension must be reliability, safety, cost_latency, provenance or competence:<category>, where category is one of ${STORED_TASK_CATEGORIES.join(', ')}, got ${options.dimension}`,
+      `--dimension must be reliability, safety, cost_latency, provenance or competence:<category>, where category is one of ${POSTED_TASK_CATEGORIES.join(', ')}, got ${options.dimension}`,
     );
   }
   const value = /^\d+$/.test(options.value) ? Number(options.value) : NaN;

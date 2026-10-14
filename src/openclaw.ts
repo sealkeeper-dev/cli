@@ -2,20 +2,15 @@
 // The OpenClaw adapter, imported as sealkeeper/openclaw. OpenClaw loads plugins
 // into the Gateway process and calls register(api) once, where the plugin
 // subscribes to typed hooks with api.on(name, handler). This file is such a
-// plugin entry. It writes no event (VOU-627). The agent's own sessions are
-// its operator's work, so only a routine run, which is SealKeeper work,
-// records a session and its usage, see routine-run.ts. The plugin reads the
-// fingerprint parts OpenClaw shows and adds the session nudge. A CLI before
-// 0.5.0 also wrote session.start, session.end and usage here. It swallows
-// every failure so it never throws into the agent.
+// plugin entry. It writes no event. Only a routine run records a session and
+// its usage, see routine-run.ts. The plugin reads the fingerprint parts
+// OpenClaw shows and adds the session nudge. It swallows every failure so it
+// never throws into the agent.
 //
 // OpenClaw is typed by shape only, so this file imports nothing from it. The
-// hook names and fields match OpenClaw's source (src/plugins/hook-types.ts
-// and the plugin loader) at openclaw/openclaw main cbcd4df, version
-// 2026.9.6, where the built plugin was also run through OpenClaw's own
-// registration and hook runner. It has not yet run inside a live Gateway.
-// Types are in types/openclaw.d.ts, which openclaw-types.test.ts keeps in
-// step.
+// hook names and fields match OpenClaw's src/plugins/hook-types.ts and plugin
+// loader. Types are in types/openclaw.d.ts, which openclaw-types.test.ts keeps
+// in step.
 import { adapterNudge } from './adapter-core.js';
 import { openClawVersion } from './adapter-fingerprint.js';
 import {
@@ -51,11 +46,10 @@ function field(value: unknown, key: string): unknown {
     : undefined;
 }
 
-// The fingerprint parts OpenClaw shows (VB-2). The framework version once,
-// at register, and each model id llm_output reports. The tool set is not
-// declared, since OpenClaw shows tools one call at a time. Hashes are
-// written, and the model id also as the model name, in text, see
-// fingerprint-observer.ts.
+// The fingerprint parts OpenClaw shows. The framework version once, at
+// register, and each model id llm_output reports. The tool set is not declared,
+// since OpenClaw shows tools one call at a time. Hashes are written, and the
+// model id also as the model name, in text, see fingerprint-observer.ts.
 function observeFramework(observer: FingerprintObserver): void {
   void quietly(async () => {
     try {
@@ -97,20 +91,15 @@ function register(api: OpenClawPluginApiLike): void {
   }
 }
 
-// The session nudge (VOU-137). session_start returns nothing in OpenClaw,
-// so it cannot add context. before_prompt_build runs before each run's
-// prompt is built and may return appendSystemContext, which OpenClaw
-// appends to the system prompt, where providers can cache it. OpenClaw's
-// other prompt hooks, agent_turn_prepare and the periodic
-// heartbeat_prompt_contribution, are not used. OpenClaw treats it as a prompt injection and a
-// conversation hook, so a plugin installed from npm gets it only with
-// plugins.entries.sealkeeper.hooks.allowConversationAccess true, and not
-// with hooks.allowPromptInjection false. The summary comes from the cached
-// goal only, so a prompt never waits on the network, and only once the
-// operator turned the nudge on. Anything else returns nothing, which leaves
-// the prompt as it was. The agent is told to run run --json, which
-// claims only seed tasks unasked, and gets the sealkeeper skill's body,
-// since OpenClaw has no slash commands (adapterNudge).
+// The session nudge. before_prompt_build runs before each run's prompt is built
+// and may return appendSystemContext, which OpenClaw appends to the system
+// prompt. A plugin installed from npm gets it only with
+// plugins.entries.sealkeeper.hooks.allowConversationAccess true, and not with
+// hooks.allowPromptInjection false. The summary comes from the cached goal
+// only, so a prompt never waits on the network, and only once the operator
+// turned the nudge on. Anything else returns nothing, which leaves the prompt
+// as it was. The text carries the sealkeeper skill's body, since OpenClaw has
+// no slash commands (adapterNudge).
 
 function registerNudge(api: OpenClawPluginApiLike): void {
   try {

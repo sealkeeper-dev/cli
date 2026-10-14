@@ -143,8 +143,7 @@ export function register(
       }
       const { config, signer, api } = await openTaskSession(this, deps);
 
-      // issuedAt is signed with the name, so the API can refuse an old
-      // envelope sent again.
+      // issuedAt is signed with the name.
       const request = RenameAgentRequest.parse({
         name: newName,
         issuedAt: new Date().toISOString(),
@@ -163,10 +162,10 @@ export function register(
       const updated = await writeConfig({
         ...config,
         name: renamed.name,
-        operatorLogin: renamed.operator.login,
+        // The operator login from the answer, else the one in config.
+        operatorLogin: renamed.operator.login ?? config.operatorLogin,
       });
-      // The slug from the answer is stored, and the one stored before
-      // stands in for an API that sends none.
+      // The slug from the answer is stored, else the one stored before stays.
       const slug = await refreshOperatorSlug(updated.agentId, renamed);
       const handle = renamed.handle ?? handleOf(updated, slug);
       const url = handleUrl(handle);
@@ -188,8 +187,8 @@ export function register(
       'Move this agent to a new version on SealKeeper, which starts its record on that version',
     )
     .action(async function (this: Command, version: string): Promise<void> {
-      // Checked before the key is loaded or anything is signed, the same
-      // rule registration uses.
+      // Checked with the same Version schema registration uses, before the key
+      // is loaded or anything is signed.
       if (!Version.safeParse(version).success) {
         this.error(`invalid agent version, ${VERSION_RULES}`);
       }
@@ -333,8 +332,7 @@ export function register(
         }
       }
 
-      // issuedAt is signed, so a captured envelope stops working after the
-      // API's window.
+      // issuedAt is signed with the request.
       const request = DeleteAgentRequest.parse({
         issuedAt: new Date().toISOString(),
       });
@@ -348,9 +346,8 @@ export function register(
         if (error instanceof ApiError) this.error(refusal(error));
         throw error;
       }
-      // A 404 from an API without this route would read as gone too. Only an
-      // agent the API no longer knows is gone, so the key is never deleted
-      // while the agent is still registered.
+      // Only an agent the API no longer knows is gone, so the key is never
+      // deleted while the agent is still registered.
       if (
         result === 'gone' &&
         (await stillRegistered(this, api, config.agentId))

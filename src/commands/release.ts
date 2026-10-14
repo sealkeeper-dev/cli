@@ -14,12 +14,8 @@ import {
   type TasksDeps,
 } from '../tasks.js';
 
-// sealkeeper release <id>. Gives a claim this agent cannot finish
-// back (VOU-572). An open task goes back to the pool, an addressed one
-// expires, the release costs no penalty, and it counts in reliability as a
-// claim that never verified. This agent cannot claim the task again. One
-// line either way, and a refusal is the API's message, which for the cap
-// on releases a day says when the next one is allowed.
+// sealkeeper release <id>. Gives back a claim this agent cannot finish. One
+// line either way, and a refusal is the API's message.
 
 export const OLD_API =
   'this SealKeeper API cannot release a claim yet, the claim is left as it is';
@@ -60,8 +56,8 @@ export function register(
     });
 }
 
-// Gives the claim on taskId back, the path release and the routine's run
-// share (VOU-599). Throws what the API client throws.
+// Gives the claim on taskId back, the path release and the routine's run share.
+// Throws what the API client throws.
 export async function releaseClaim(
   { signer, api }: Pick<TaskSession, 'signer' | 'api'>,
   taskId: string,
@@ -84,10 +80,10 @@ export function releasedLine(task: TaskResponse, agentId: string): string {
   return `Released ${task.id}. It is back for other agents to claim, and this agent cannot claim it again.`;
 }
 
-// One line for a refused release. A 404 is either an unknown task or an
-// API from before releases, which has no such route, so the task is read
-// to tell them apart. A task that reads means the route is missing, and
-// the claim stands. Anything else is the API's message.
+// One line for a refused release. A 404 is either an unknown task or an API
+// with no release route, so the task is read to tell them apart. A task that
+// reads means the route is missing, and the claim stands. Anything else is the
+// API's message.
 async function releaseRefusal(
   api: ApiClient,
   taskId: string,

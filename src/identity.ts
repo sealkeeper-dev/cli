@@ -88,6 +88,12 @@ export async function createKey(
     : { agentId, publicKey, backup };
 }
 
+// The public key and agent id of a given seed.
+export async function seedIdentity(privateKey: Uint8Array) {
+  const publicKey = await getPublicKeyAsync(privateKey);
+  return { privateKey, publicKey, agentId: agentIdFromPublicKey(publicKey) };
+}
+
 // A hard link to the current key under a new name, so the bytes and the 600
 // mode carry over. undefined when there is no key.
 async function backupKey(p: Paths): Promise<string | undefined> {
@@ -141,8 +147,8 @@ export async function loadKey(
   const raw = await readIfExists(p.key);
   if (raw === null) return null;
 
-  // Windows reports every file as mode 666 and chmod does nothing there,
-  // so the check would warn on every command (D26).
+  // Windows reports every file as mode 666 and chmod does nothing there, so the
+  // check is skipped.
   const mode = (await stat(p.key)).mode & 0o777;
   if (platform !== 'win32' && (mode & 0o077) !== 0) {
     stderr(
@@ -156,17 +162,14 @@ export async function loadKey(
       `Invalid key at ${p.key}: expected one base64url line holding a 32 byte Ed25519 seed`,
     );
   }
-  const publicKey = await getPublicKeyAsync(privateKey);
-  return { privateKey, publicKey, agentId: agentIdFromPublicKey(publicKey) };
+  return seedIdentity(privateKey);
 }
 
 export type Signer = {
   agentId: AgentId;
-  // The origin of the API URL. Every payload is signed with it as aud, so
-  // the request is good only at that API (VOU-111).
+  // The origin of the API URL. Every payload is signed with it as aud.
   aud: string;
-  // A request to one route, signed with that route's purpose too, so the
-  // API refuses it on every other route (VOU-637).
+  // A request to one route, signed with that route's purpose too.
   sign(payload: object, purpose: RequestPurpose): Promise<string>;
   // An event, or the fingerprint declaration a sync sends beside its
   // events. Neither names a purpose.
@@ -214,7 +217,7 @@ export async function signEnvelope(
 
 // Accepts exactly 43 base64url characters with at most one trailing newline.
 // base64urlDecode rejects non canonical trailing bits.
-function decodeSeed(raw: string): Uint8Array | null {
+export function decodeSeed(raw: string): Uint8Array | null {
   const line = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
   if (!/^[A-Za-z0-9_-]{43}$/.test(line)) return null;
   try {

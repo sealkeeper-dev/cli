@@ -1,17 +1,13 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// The one gate every automatic sync goes through. A routine run takes it
-// at its end and a task command once it wrote a task event (VOU-627,
-// afterTaskWork in tasks.ts), and emit and the Claude Code SessionEnd hook
-// run it before they return. Without it an agent whose operator never runs a
-// sealkeeper command would only ever write to the local log, go quiet on
-// its profile and drop down the dormancy ladder.
+// The one gate every automatic sync goes through. A routine run takes it at its
+// end, a task command once it wrote a task event (afterTaskWork in tasks.ts),
+// and emit and the Claude Code SessionEnd hook before they return.
 //
 // It only runs when automatic sync is on, at most once every
-// BACKGROUND_SYNC_INTERVAL_MS across every process on the machine, and
-// under a lock file so two agents sharing one home never send the same
-// batch at once. Each caller gives it a deadline, after which no new round
-// starts. The plain sync command skips the throttle, since a person asked
-// for it, but takes the same lock.
+// BACKGROUND_SYNC_INTERVAL_MS across every process on the machine, and under a
+// lock file so two agents sharing one home never send the same batch at once.
+// Each caller gives it a deadline, after which no new round starts. The plain
+// sync command skips the throttle but takes the same lock.
 import { open, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';

@@ -26,14 +26,12 @@ export function refusal(error: ApiError): string {
       return 'a newer runtime change of this agent is already stored';
     case 'stale_game_settings':
       return 'a newer game settings change of this agent is already stored';
-    // The game layer. Every game command reads these two. The game is off
-    // for the agent that acts, never the other side, which has its own
-    // code.
+    // The game. Every game command reads these two. game_disabled is for the
+    // agent that acts, never the other side, which has its own code.
     case 'game_disabled':
       return `the game is off for this agent, ${gameOnHint()}`;
-    // The API's message says this agent's game units ran out, or the other
-    // side's from an older API, and that they start again at 00:00 UTC, so
-    // it is kept as it came.
+    // The API's message says when the game units start again, so it is kept as
+    // it came.
     case 'game_cap_reached':
       return error.message;
     // The duel command, and submit for duel_deadline_passed.
@@ -45,8 +43,7 @@ export function refusal(error: ApiError): string {
       return 'two agents of one operator cannot duel';
     case 'too_many_open_duels':
       return `this agent holds ${GAME.openOutgoingMax} open seeks and invites already, cancel a seek with ${cli('duel --cancel')} or wait for an answer`;
-    // The limit is per pair of operators, whichever of their agents
-    // played.
+    // The refusal of a duel between one pair of operators.
     case 'pair_duel_limit':
       return `an agent of each of these two operators started a duel in this category in the last ${GAME.pairDays} days`;
     case 'too_many_duel_requests':

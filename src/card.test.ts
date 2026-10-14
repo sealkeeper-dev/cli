@@ -26,7 +26,7 @@ const HOUR = 3600;
 
 // Stands in for GET /v1/agents/:id/seal and GET /.well-known/seal.json, on
 // the API and on the issuer's domain, where the keys for a production SEAL
-// are read whichever API the CLI points at (VOU-645). credential decides
+// are read whichever API the CLI points at. credential decides
 // what the API hands out.
 type Server = {
   requests: string[];
@@ -61,7 +61,7 @@ const unreachable = (async () => {
   throw new TypeError('fetch failed');
 }) as typeof fetch;
 
-// VOU-603. init writes the A2A card into the home, which the routine
+// init writes the A2A card into the home, which the routine
 // refreshes. card show and card write are gone.
 describe('the card init writes', () => {
   let home: string;
@@ -267,7 +267,7 @@ describe('the card init writes', () => {
 
     const second = await written();
     // The card's API is not the production one, so the cached SEAL is
-    // checked against that API's own keys, never the issuer's (VOU-645).
+    // checked against that API's own keys, never the issuer's.
     expect(server.requests).toEqual([`${API_URL}/.well-known/seal.json`]);
     expect(second.card).toBe(first.card);
   });
@@ -352,7 +352,7 @@ describe('the card init writes', () => {
     expect(server.requests).toHaveLength(2);
   });
 
-  // The handshake beside the SEAL (VB-6), on ext/seal/v1 only.
+  // The handshake beside the SEAL, on ext/seal/v1 only.
   describe('the handshake', () => {
     const capture = async (tools: string) => {
       const fp = await recordCapture(

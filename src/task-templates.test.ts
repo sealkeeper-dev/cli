@@ -3,7 +3,7 @@ import { TASK_TEMPLATES } from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import { TEMPLATES, templateById } from './task-templates.js';
 
-// SealKeeper makes a template's task when the post names it (VOU-640), so
+// SealKeeper makes a template's task when the post names it, so
 // what this CLI holds of a template is its public part and the words the
 // operator reads.
 describe('task templates', () => {

@@ -44,7 +44,7 @@ import { MAX_RATE_LIMIT_WAIT_SEC } from '../sync.js';
 
 const API_URL = 'https://api.test';
 
-// Every signed payload names the API it is for (VOU-111). The fake takes
+// Every signed payload names the API it is for. The fake takes
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
@@ -74,7 +74,7 @@ type Server = {
   bodyBytes: number[];
   envelopes: string[];
   // The fingerprint JWS each request carried beside its envelopes, or
-  // undefined for a request without one (VB-4).
+  // undefined for a request without one.
   fingerprints: (string | undefined)[];
   reply: (events: Event[], fingerprint?: string) => Reply;
 };
@@ -365,7 +365,7 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
-    // VOU-451. Tool calls are not recorded. An adapter written for an older
+    // Tool calls are not recorded. An adapter written for an older
     // CLI that still emits tool.call keeps working.
     it('with the type tool.call records nothing, says so in one line and exits 0', async () => {
       await initialise();
@@ -654,7 +654,7 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
-    // VOU-451. The log is append only and keeps each line. No tool call
+    // The log is append only and keeps each line. No tool call
     // leaves the machine, and a skipped line never holds the cursor back.
     it('never sends the tool.call lines an older CLI logged and moves the cursor past them', async () => {
       await initialise();
@@ -727,7 +727,7 @@ describe('emit and sync', () => {
       });
     });
 
-    // VB-4. The fingerprint sync last wrote goes beside the envelopes as a
+    // The fingerprint sync last wrote goes beside the envelopes as a
     // JWS the agent signed over { fingerprint }, with the first batch only.
     it('sends the fingerprint from fingerprint.json with the first batch, signed by the agent', async () => {
       await initialise();
@@ -770,7 +770,7 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(0);
     });
 
-    // VOU-566. The model name goes beside the fingerprint in the same
+    // The model name goes beside the fingerprint in the same
     // signed declaration, as text.
     it('sends the model name the adapter read beside the fingerprint', async () => {
       await initialise();
@@ -1065,7 +1065,7 @@ describe('emit and sync', () => {
       });
 
       // The time left rounds up to the minute, and a whole number of hours
-      // is said without minutes (VOU-514). Only Date is faked, so the clock
+      // is said without minutes. Only Date is faked, so the clock
       // stands at each time below.
       it.each([
         ['the first minute of an hour', '2026-09-27T13:00:30.000Z', '11 hours'],

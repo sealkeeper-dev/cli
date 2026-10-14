@@ -17,28 +17,25 @@ import { z } from 'zod';
 import { ensureHome, type Paths, paths, type RoutineConfig } from './config.js';
 import { readEnv } from './env.js';
 
-// The local state of sealkeeper routine (VOU-138, VOU-599).
+// The local state of sealkeeper routine.
 //
-// A routine run is a plain loop the API drives (VOU-594). The CLI asks the
-// routine route for the next action, carries it out and asks again until
-// the answer is done. The agent gets a task's spec or a submission to judge
-// as a question with no tools, answers by text, and the CLI submits that
-// text or sends it back as a verdict. No command the agent could run takes
-// part, so the CLI keeps no routine rules of its own. The API holds the run
-// to the limits and the allowlist routine.json sends with every call. The
-// loop is in routine-run.ts, and a Mastra routine (VOU-601) runs the same
-// loop in the operator's process with the same files.
+// A routine run is a plain loop the API drives. The CLI asks the routine route
+// for the next action, carries it out and asks again until the answer is done.
+// The agent gets a task's spec or a submission to judge as a question with no
+// tools, answers by text, and the CLI submits that text or sends it back as a
+// verdict. No command the agent could run takes part, so the CLI keeps no
+// routine rules of its own. routine.json's limits and allowlist go with every
+// call. The loop is in routine-run.ts, and a Mastra routine runs the same loop
+// in the operator's process with the same files.
 //
 // routine-run.json holds the run id, its pid and a deadline. It is created
 // exclusively at the start of a run, so two runs never overlap.
 //
-// routine.jsonl under the CLI home is the routine's own log, one JSON object
-// a line. One run line per run, and a line for every step the API answered,
-// every submit, failed submit, verdict, answer the agent did not give,
-// limit that stopped the agent and failed sync at the end of a run. A
-// first run's watcher reads the lines of its run as they come, see
-// routine-watch.ts (RS-9). The API counts the day against the limits from
-// its own records, never from this log.
+// routine.jsonl under the CLI home is the routine's own log, one JSON object a
+// line. One run line per run, and a line for every step the API answered, every
+// submit, failed submit, verdict, answer the agent did not give, limit that
+// stopped the agent and failed sync at the end of a run. A first run's watcher
+// reads the lines of its run as they come, see routine-watch.ts.
 
 export type RoutinePaths = {
   log: string;
@@ -122,8 +119,8 @@ export const RunOutcome = z.enum([
   'failed',
   // Off, or another run was active. Nothing was asked.
   'skipped',
-  // The caller's signal stopped it, a Mastra routine only (VOU-620). An
-  // older CLI skips the line, as any line it does not read.
+  // The caller's signal stopped it, a Mastra routine only. An older CLI skips
+  // the line, as any line it does not read.
   'aborted',
 ]);
 export type RunOutcome = z.infer<typeof RunOutcome>;
@@ -136,35 +133,33 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     at: At,
     runId: z.string(),
     // The runtime the run put its questions to, claude-code, openclaw or
-    // mastra, a string so a value a newer CLI writes still reads. Absent on
-    // a run that was off and on lines written before VOU-601.
+    // mastra, a string so a value a newer CLI writes still reads. Absent on a
+    // run that was off and on older lines.
     runtime: z.string().optional(),
     outcome: RunOutcome,
     reason: z.string().optional(),
-    // What failed, a RunFailure of routine-run.ts, so the
-    // screen says the fix. A string, so a value a newer CLI writes still
-    // reads. Absent when nothing failed and on lines written before it.
+    // What failed, a RunFailure of routine-run.ts, so the screen says the fix.
+    // A string, so a value a newer CLI writes still reads. Absent when nothing
+    // failed and on older lines.
     failure: z.string().optional(),
     startedAt: At,
     agentStarted: z.boolean(),
-    // Tasks handed over that were not game tasks, answers submitted,
-    // verdicts sent and tasks posted. posted is absent on lines written
-    // before POST-7.
+    // Tasks handed over that were not game tasks, answers submitted, verdicts
+    // sent and tasks posted. posted is absent on older lines.
     claimed: Count,
     submitted: Count,
     confirmed: Count,
     posted: Count.optional(),
-    // Submits SealKeeper verified, and duel and challenge tasks handed
-    // over. Absent on lines written before VOU-599.
+    // Submits SealKeeper verified, and duel and challenge tasks handed over.
+    // Absent on older lines.
     verified: Count.optional(),
     duels: Count.optional(),
     challenge: Count.optional(),
     tokens: Count.nullable(),
     costUsd: z.number().nullable(),
-    // What the run did with the agent card init wrote, a value of
-    // CardRefresh in card.ts, a string so a value a newer CLI writes still
-    // reads (VOU-383). Absent when init wrote none, and on lines written
-    // before it.
+    // What the run did with the agent card init wrote, a value of CardRefresh
+    // in card.ts, a string so a value a newer CLI writes still reads. Absent
+    // when init wrote none, and on older lines.
     card: z.string().optional(),
   }),
   // One step the API answered. action is the API's, taskId the task the
@@ -181,9 +176,8 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskKind: z.string().optional(),
     label: z.string().optional(),
   }),
-  // An answer submitted, with the task's state after it, verified for a
-  // task SealKeeper checked and submitted for one that waits for its
-  // poster (RS-9).
+  // An answer submitted, with the task's state after it, verified for a task
+  // SealKeeper checked and submitted for one that waits for its poster.
   z.object({
     kind: z.literal('submit'),
     at: At,
@@ -203,7 +197,7 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskType: z.string().optional(),
     reason: z.string(),
   }),
-  // A verdict sent back with the next call, which the API reports.
+  // A verdict sent back with the next call.
   z.object({
     kind: z.literal('confirm'),
     at: At,
@@ -212,8 +206,8 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     taskType: z.string().optional(),
     outcome: z.enum(['success', 'failure']),
   }),
-  // A task or a submission the agent gave no answer for, with why.
-  // released is true when the claim was given back, so it costs nothing.
+  // A task or a submission the agent gave no answer for, with why. released is
+  // true when the claim was given back.
   z.object({
     kind: z.literal('unanswered'),
     at: At,
@@ -223,9 +217,9 @@ const RoutineEntry = z.discriminatedUnion('kind', [
     reason: z.string(),
     released: z.boolean(),
   }),
-  // The sync at the end of a run failed (VOU-627). The run's events stay
-  // in the local log and go with the next sync. An older CLI skips the
-  // line, as any line it does not read.
+  // The sync at the end of a run failed. The run's events stay in the local log
+  // and go with the next sync. An older CLI skips the line, as any line it does
+  // not read.
   z.object({
     kind: z.literal('sync_failed'),
     at: At,
@@ -290,8 +284,7 @@ export async function readRoutine(p: Paths = paths()): Promise<RoutineEntry[]> {
 export const normalLogin = (login: string): string =>
   login.trim().toLowerCase();
 
-// The allowlist as the routine route takes it. The API matches slugs by
-// slug and logins by login only, case ignored.
+// The allowlist as the routine route takes it, slugs and logins apart.
 export function routineAllow(routine: RoutineConfig): RoutineAllow {
   return { slugs: routine.allowSlugs, logins: routine.allow };
 }

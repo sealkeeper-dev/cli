@@ -361,8 +361,8 @@ export async function* pendingEvents(
     let start = 0;
     if (lastAcked && name === lastAcked.file) {
       const after = await resumeAt(path, lastAcked, holdsEvent(lastAcked));
-      // The acked event is missing from its file. Sending the whole file
-      // again is safe because the API treats a repeated event_id as a no-op.
+      // The acked event is missing from its file, so the whole file is sent
+      // again, each event with its own event_id.
       if (after === null) {
         warn(
           `warning: acked event ${lastAcked.eventId} not found in ${name}, resending that day`,

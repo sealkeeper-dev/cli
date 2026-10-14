@@ -18,21 +18,20 @@ import { SCORE_TIMEOUT_MS } from './score.js';
 // The verified count and the level come live from GET /v1/agents/<id>, the
 // same numbers the public profile shows.
 
-// The part of GET /v1/agents/<id> the CLI reads here. level is optional
-// on the answer, since a version the scoring job has not reached has
-// none. Read loosely, so a field that fails to parse costs
-// only that field.
+// The part of GET /v1/agents/<id> the CLI reads here. level is optional on the
+// answer, since an agent may have none yet. Read loosely, so a field that fails
+// to parse costs only that field.
 export const LiveAgent = z.object({
   counts: z
     .object({ verifiedTasks: z.int().min(0) })
     .optional()
     .catch(undefined),
   level: Level.optional().catch(undefined),
-  // The handle and the operator slug the API builds it from (VOU-174), for
-  // the first sign up, and the runtime, for the one time runtime question
-  // (VOU-176). A runtime this version does not know reads as absent.
-  // Both are printed and the handle goes into the profile URL, so each
-  // must have the shape the API builds, or it reads as absent.
+  // The handle and the operator slug it is built from, for the first sign up,
+  // and the runtime, for the one time runtime question. A runtime this version
+  // does not know reads as absent. Both are printed and the handle goes into
+  // the profile URL, so each must have the shape AgentHandle and OperatorSlug
+  // give, or it reads as absent.
   handle: z
     .string()
     .refine((handle) => {
@@ -50,11 +49,11 @@ export const LiveAgent = z.object({
     .optional()
     .catch(undefined),
   runtime: Runtime.optional().catch(undefined),
-  // The agent's current fingerprint as the API keeps it (VB-4), its hash,
-  // when it was captured and each part's state, never a part hash. null
-  // when the agent has declared none. Absent from an API before it, and
-  // when it does not parse, a state this version does not know included.
-  // A handshake check reads its hash (handshake.ts).
+  // The agent's current fingerprint as the API keeps it, its hash, when it was
+  // captured and each part's state, never a part hash. null when the agent has
+  // declared none. Absent when it is missing or does not parse, a state this
+  // version does not know included. A handshake check reads its hash
+  // (handshake.ts).
   fingerprint: z
     .object({
       hash: Sha256Base64url,

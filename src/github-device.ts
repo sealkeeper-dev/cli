@@ -5,10 +5,9 @@ import { cli } from './invocation.js';
 import { stderr } from './output.js';
 
 // GitHub OAuth device flow. The operator opens a URL, types a short code and
-// approves the app. The CLI polls until GitHub hands back an access token.
-// No scope is requested, so the token can read only public profile data,
-// which is all the API needs to find the operator's login and account age.
-// The token is returned to the caller and never printed or written here.
+// approves the app. The CLI polls until GitHub hands back an access token. No
+// scope is requested, so the token can read only public profile data. The token
+// is returned to the caller and never printed or written here.
 
 export const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 export const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token';

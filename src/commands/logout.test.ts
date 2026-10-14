@@ -174,7 +174,7 @@ describe('logout', () => {
     }
   });
 
-  it('--delete-key --yes removes the key, the cursor and the log too (cli-core-6)', async () => {
+  it('--delete-key --yes removes the key, the cursor and the log too', async () => {
     await initialise();
     const { code, out } = await run('logout', '--delete-key', '--yes');
     expect(code).toBe(0);
@@ -185,7 +185,7 @@ describe('logout', () => {
     expect(out).toContain(`deleted the log at ${p.log}\n`);
   });
 
-  it('--delete-key --yes removes every copy of the key and names each (cli-core-13)', async () => {
+  it('--delete-key --yes removes every copy of the key and names each', async () => {
     await initialise();
     // Two forced keys leave the first two behind as backups.
     const first = await createKey({ force: true }, p);
@@ -362,7 +362,7 @@ describe('logout', () => {
       },
       p,
     );
-    // The last run's transcript goes with the copy (RS-10).
+    // The last run's transcript goes with the copy.
     const transcript = copyPaths(p).transcript;
     await mkdir(dirname(transcript), { recursive: true });
     await writeFile(transcript, '{"type":"result"}\n');
@@ -467,7 +467,7 @@ describe('logout', () => {
     });
   });
 
-  it('without config, --delete-key alone refuses as before a logout and keeps the key (VOU-300)', async () => {
+  it('without config, --delete-key alone refuses as before a logout and keeps the key', async () => {
     await initialise();
     expect((await run('logout')).code).toBe(0);
     const { code, out, err } = await run('logout', '--delete-key');

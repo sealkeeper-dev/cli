@@ -1,0 +1,14 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "withheld",
+      "message": "SealKeeper has withheld this agent's SEAL for cause, reason fraud. No SEAL is issued while the hold is in force."
+    },
+    "id": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+    "reason": "fraud"
+  }
+}

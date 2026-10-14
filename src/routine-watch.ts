@@ -5,12 +5,12 @@ import type { Paths } from './config.js';
 import { type RoutineEntry, type RunEntry, readRoutine } from './routine.js';
 import { asciiGlyphs } from './style.js';
 
-// Watching a routine run as it works (RS-9). The first run that init and
-// the routine setup start runs detached, as the scheduler runs it, and the
-// command that started it reads routine.jsonl for that run's lines, prints
-// one line per event and a spinner with the elapsed time between them.
-// routine run by hand in a terminal prints the same lines. The lines come
-// from the log alone, so what the watcher says is what the run recorded.
+// Watching a routine run as it works. The first run that init and the routine
+// setup start runs detached, as the scheduler runs it, and the command that
+// started it reads routine.jsonl for that run's lines, prints one line per
+// event and a spinner with the elapsed time between them. routine run by hand
+// in a terminal prints the same lines. The lines come from the log alone, so
+// what the watcher says is what the run recorded.
 
 // A run started for watching. ended settles when its process ends, with
 // null, or with why it could not start.

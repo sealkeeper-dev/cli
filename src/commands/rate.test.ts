@@ -19,11 +19,11 @@ import { RATINGS_CLOSED } from './rate.js';
 
 const API_URL = 'https://api.test';
 
-// Every signed payload names the API it is for (VOU-111). The fake takes
+// Every signed payload names the API it is for. The fake takes
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
-// It names the route it is for too (VOU-637), checked and taken off the
+// It names the route it is for too, checked and taken off the
 // same way.
 const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);

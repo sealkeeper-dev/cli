@@ -22,21 +22,20 @@ import {
 import { StringDecoder } from 'node:string_decoder';
 import type { ScheduledAgent } from './config.js';
 
-// The agent of a routine run (VOU-136, VOU-599, VOU-601). The routine puts
-// one question to one agent and takes its answer back as text, a task's
-// spec to solve or a submission to judge, see routine-prompt.ts. The agent
-// has no tools, so whatever a spec written by another operator says, it
-// can run nothing, read nothing and write nothing. The CLI writes and
-// submits the text it answers.
+// The agent of a routine run. The routine puts one question to one agent and
+// takes its answer back as text, a task's spec to solve or a submission to
+// judge, see routine-prompt.ts. The agent has no tools, so whatever a spec
+// written by another operator says, it can run nothing, read nothing and write
+// nothing. The CLI writes and submits the text it answers.
 //
-// AgentRuntime is that one question, the one seam every runtime fills. It
-// holds no routine rules, the API decides every step (routine-run.ts).
-// For Claude Code it is claude -p with the question on stdin, no tools and
-// stream-json output, so the run can count tokens as they are reported and
-// stop the agent at the token cap or the wall clock, whichever comes
-// first. None of the operator's own Claude Code settings apply, see
-// claudeArgs. OpenClaw is in routine-openclaw.ts and Mastra, which runs in
-// the operator's own process, in routine-mastra.ts.
+// AgentRuntime is that one question, the one seam every runtime fills. It holds
+// no routine rules, the API decides every step (routine-run.ts). For Claude
+// Code it is claude -p with the question on stdin, no tools and stream-json
+// output, so the run can count tokens as they are reported and stop the agent
+// at the token cap or the wall clock, whichever comes first. None of the
+// operator's own Claude Code settings apply, see claudeArgs. OpenClaw is in
+// routine-openclaw.ts and Mastra, which runs in the operator's own process, in
+// routine-mastra.ts.
 
 // One question. timeoutMs and tokenCap are what the run has left.
 export type AgentQuestion = {
@@ -93,7 +92,7 @@ export type AgentSpec = {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   tokenCap: number;
-  // Where the agent's output goes as received (RS-10). Never printed.
+  // Where the agent's output goes as received. Never printed.
   transcript?: Transcript | null;
   // Reads what the agent prints on stdout. Claude Code's stream-json when
   // not given.
@@ -116,19 +115,17 @@ export type StdoutReader = {
   readonly problem?: AgentProblem;
 };
 
-// Why an agent that ran gave no usable answer, in one line that holds no
-// spec, answer or credential. auth is a provider credential missing or
-// refused, tools a tool call the routine never allows, model a model that
-// is not set or that OpenClaw or its provider did not find (VOU-623),
-// failed anything else.
+// Why an agent that ran gave no usable answer, in one line that holds no spec,
+// answer or credential. auth is a provider credential missing or refused, tools
+// a tool call the routine never allows, model a model that is not set or that
+// OpenClaw or its provider did not find, failed anything else.
 export type AgentProblem = {
   kind: 'auth' | 'tools' | 'model' | 'failed';
   reason: string;
 };
 
-// The tokens of one answer, in and out, as the runtime reported them, for
-// the answer's usage event (VOU-627). Each runtime says which of its
-// fields it maps to which.
+// The tokens of one answer, in and out, as the runtime reported them, for the
+// answer's usage event. Each runtime says which of its fields it maps to which.
 export type TokenSplit = { tokensIn: number; tokensOut: number };
 
 export type AgentResult = {
@@ -136,8 +133,8 @@ export type AgentResult = {
   text: string | null;
   // null when the agent was stopped or never started.
   exitCode: number | null;
-  // What stopped the agent, a limit of the run or, for a Mastra routine,
-  // the caller's signal (VOU-620).
+  // What stopped the agent, a limit of the run or, for a Mastra routine, the
+  // caller's signal.
   stoppedFor: 'minutesPerRun' | 'tokensPerRun' | 'caller' | null;
   // Input, output and cache write tokens as the agent reported them. Cache
   // reads are not counted. null when it reported none.
@@ -146,8 +143,8 @@ export type AgentResult = {
   split?: TokenSplit;
   costUsd: number | null;
   // The model id the runtime reported for the answer, as it came, when it
-  // reported one (VOU-614). What the agent says about itself, which the
-  // routine records for the fingerprint source and sync declares.
+  // reported one. The routine records it for the fingerprint source and sync
+  // declares it.
   model?: string;
   // Why it could not start.
   error?: string;
@@ -308,11 +305,11 @@ export const TRANSCRIPT_CUT_LINE = JSON.stringify({
   note: 'The transcript was cut at 8 MB. The rest of the run is not in it.',
 });
 
-// The last run's stream-json, every question of it, written as it arrives
-// to a file of mode 600 that each run replaces (RS-10). Once the next chunk would pass the cap, it
-// writes that chunk up to its last whole line that fits and the cut line,
-// then nothing more. A file that cannot be opened or written leaves the run
-// without a transcript, never stops it.
+// The last run's stream-json, every question of it, written as it arrives to a
+// file of mode 600 that each run replaces. Once the next chunk would pass the
+// cap, it writes that chunk up to its last whole line that fits and the cut
+// line, then nothing more. A file that cannot be opened or written leaves the
+// run without a transcript, never stops it.
 export class Transcript {
   private fd: number | null;
   private written = 0;
@@ -584,14 +581,13 @@ export async function runnable(
   }
 }
 
-// A project's own programs, which the daily job never runs (VOU-647).
-// npx puts its cache's node_modules/.bin first on PATH, then node_modules/.bin
-// of the current folder and of every folder above it, and the documented
-// install is npx sealkeeper init from a project folder. So a dependency of
-// a cloned project could ship a bin named claude or openclaw, or node, which
-// both launchers start through #!/usr/bin/env node, and an unattended job
-// would run it every day. cwd is the folder the setup runs in, null in a run,
-// which runs in the job's own folder. home is the user's home folder.
+// A project's own programs, which the daily job never runs. npx puts its
+// cache's node_modules/.bin first on PATH, then node_modules/.bin of the
+// current folder and of every folder above it. So a dependency of a cloned
+// project could ship a bin named claude or openclaw, or node, which both
+// launchers start through #!/usr/bin/env node, and an unattended job would run
+// it every day. cwd is the folder the setup runs in, null in a run, which runs
+// in the job's own folder. home is the user's home folder.
 export type ProjectWhere = { cwd: string | null; home: string };
 
 // A run, in the job's own folder, where no folder is the setup's project.

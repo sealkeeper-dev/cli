@@ -28,27 +28,24 @@ import { stderr } from './output.js';
 import { isSent } from './taxonomy.js';
 
 // Sends pending events from the local log to the API. Each round reads up to
-// 500 pending events, drops the ones too old for the API to accept, skips
-// the types this CLI never sends (UNSENT_TYPES in taxonomy.ts), signs the
-// rest, posts them to /v1/events and, on 200, moves the cursor past the
-// last one sent. It loops until nothing is pending. Once a run has finished
-// it deletes the day files the log no longer needs, see pruneLog. It runs
-// when sync, emit, a hook or an adapter's background sync calls it.
+// MAX_BATCH_EVENTS pending events, drops the ones older than the accepted
+// window, skips the types this CLI never sends (UNSENT_TYPES in taxonomy.ts),
+// signs the rest, posts them to /v1/events and, on 200, moves the cursor past
+// the last one sent. It loops until nothing is pending. Once a run has finished
+// it deletes the day files the log no longer needs, see pruneLog. It runs when
+// sync, emit, a hook or an adapter's background sync calls it.
 
-// The API caps a batch at 500 events and the request body at 256 KB.
+// The most events and request bytes one batch carries.
 const MAX_BATCH_EVENTS = MAX_EVENTS_PER_BATCH;
 const MAX_BATCH_BYTES = 256 * 1024;
 export const MAX_RATE_LIMIT_WAIT_SEC = 30;
 
-// How old an event's occurred_at may be for the API to accept it, and how
-// far ahead of the API clock, come from @sealkeeper/schema, the defaults
-// the API runs on.
-// Events are dropped before signing only when they are this much older than
-// the window, so a clock a little off never drops one the API would still
-// take. One that falls between the two is sent and, if the API rejects it,
-// skipped by the per event fallback below. A rejected event that is not
-// within this margin of the old edge was refused as ahead of the API clock,
-// which judgeRefusal below handles.
+// The accepted window of occurred_at comes from @sealkeeper/schema. Events are
+// dropped before signing only when they are this much older than the window, so
+// a clock a little off never drops one that would still be taken. One that
+// falls between the two is sent and, if it is refused, skipped by the per event
+// fallback below. A refused event that is not within this margin of the old
+// edge was refused as ahead of the API clock, which judgeRefusal below handles.
 const STALE_MARGIN_MS = 3600 * 1000;
 const DAY_MS = 24 * 3600 * 1000;
 // An event logged while this machine clock ran ahead, refused once the clock
@@ -68,7 +65,7 @@ type SyncResult = {
   duplicates: number;
   // Events the API rejected one by one and the cursor moved past.
   skipped: number;
-  // Events older than the API's window, dropped before signing without a
+  // Events older than the accepted window, dropped before signing without a
   // request.
   dropped: number;
 };
@@ -158,14 +155,12 @@ async function sendRounds(
   const maxWait = options.maxRateLimitWaitSec ?? MAX_RATE_LIMIT_WAIT_SEC;
   let waited = false;
 
-  // The first response of the run says what time the API has. When this
-  // machine is further ahead than the API accepts, every event it logs now
-  // carries a time the API refuses as future, so the sync stops there and
-  // moves the cursor past nothing it has not sent. A machine behind the API
-  // logs times the API still takes, since it accepts them up to
-  // EVENT_MAX_AGE_DAYS old, so that warns once and the sync goes on. A
-  // response without a Date header says nothing and the sync goes on.
-  // Checked once, after the first round is signed, since that request is
+  // The first response of the run carries the API's time. When this machine is
+  // further ahead than the window allows, every event it logs now would be
+  // refused as future, so the sync stops there and moves the cursor past
+  // nothing it has not sent. A machine behind the API warns once and the sync
+  // goes on. A response without a Date header says nothing and the sync goes
+  // on. Checked once, after the first round is signed, since that request is
   // the first response.
   let clockChecked = false;
   const checkClock = async () => {
@@ -216,15 +211,13 @@ async function sendRounds(
     }
   };
 
-  // The fingerprint this run declares (VB-4), fingerprint.json as sync or
-  // run last wrote it, never computed here, with the model name beside it
-  // as text when an adapter read one or one is set (VOU-566). Signed on its
-  // own when the first batch goes and sent beside the envelopes until a
-  // batch is accepted with it. When the API refuses it with a model name,
-  // as an API from before the name does, it is signed again without the
-  // name and the batch goes again. When the API refuses it without one, as
-  // an API from before the fingerprint does, the batch goes again without
-  // it and the rest of the run sends none.
+  // The fingerprint this run declares, fingerprint.json as sync or run last
+  // wrote it, never computed here, with the model name beside it as text when
+  // an adapter read one or one is set. Signed on its own when the first batch
+  // goes and sent beside the envelopes until a batch is accepted with it. When
+  // the API refuses it with a model name, it is signed again without the name
+  // and the batch goes again. When the API refuses it without one, the batch
+  // goes again without it and the rest of the run sends none.
   let fingerprintDue = true;
   let modelDue = true;
   let fingerprintJws: string | undefined;
@@ -270,13 +263,13 @@ async function sendRounds(
     const last = pending.events.length - 1;
     if (last < 0) return result;
 
-    // Events the API would refuse as out of window are not signed or sent.
-    // The cursor moves past them together with the fresh events around
-    // them, in the one move each round makes, or on its own when the whole
-    // round is stale. They are counted as dropped once the cursor is past
-    // them, so a round that stops early does not count them twice. A type
-    // never sent, such as a tool.call an older CLI logged, goes the same
-    // way and is not counted at all.
+    // Events outside the accepted window are not signed or sent. The cursor
+    // moves past them together with the fresh events around them, in the one
+    // move each round makes, or on its own when the whole round is stale. They
+    // are counted as dropped once the cursor is past them, so a round that
+    // stops early does not count them twice. A type never sent, such as a
+    // tool.call an older CLI logged, goes the same way and is not counted at
+    // all.
     const cutoff = staleCutoff(now());
     const fresh: { event: Event; at: number }[] = [];
     const stale: number[] = [];
@@ -396,19 +389,16 @@ async function sendRounds(
 // the sync and moves the cursor past nothing.
 type Refusal = { skip: number; warning: string } | { stop: string };
 
-// A version_limit is never skipped, it clears at the next UTC day. An
+// A version_limit is never skipped, since it clears at the next UTC day. An
 // occurred_at refusal is skipped when the event is near the old edge of the
-// window, where it is too old for the API. The edge is read from serverNow,
-// the Date of the refusal, when there is one, since the API judged the event
-// by its own clock and this one may be behind it. A younger one was refused
-// as ahead of the API clock. When serverNow is missing or this machine clock
-// is further ahead of it than the API accepts, the clock is the likely cause
-// and fixing it is what gets the event in. When this clock agrees with the
-// API or is behind it, it is not ahead now and the event was logged while it
-// ran ahead. The sync then waits
-// for the event's time to come if that is within FUTURE_WAIT_MS, and
-// otherwise skips it together with the events right after it that are as
-// far ahead, in one request.
+// window, read from serverNow, the Date of the refusal, when there is one. A
+// younger one was refused as ahead of the API clock. When serverNow is missing
+// or this machine clock is further ahead of it than the window allows, the
+// clock is the likely cause and fixing it is what gets the event in. When this
+// clock agrees with the API or is behind it, the event was logged while it ran
+// ahead. The sync then waits for the event's time to come if that is within
+// FUTURE_WAIT_MS, and otherwise skips it together with the events right after
+// it that are as far ahead, in one request.
 function judgeRefusal(
   error: ApiError,
   fresh: readonly { event: Event }[],
@@ -512,10 +502,10 @@ function fitBatch(envelopes: string[], fingerprint?: string): string[] {
   return envelopes;
 }
 
-// A 400 or 401 that names one envelope in issues[].path as
-// ['envelopes', i]. The lowest such index, or null.
-// wrong_audience never names one, and is null here too, so a misconfigured
-// apiUrl stops the sync rather than skipping every event (VOU-111).
+// A 400 or 401 that names one envelope in issues[].path as ['envelopes', i].
+// The lowest such index, or null. wrong_audience never names one, and is null
+// here too, so a misconfigured apiUrl stops the sync rather than skipping every
+// event.
 function rejectedIndex(error: ApiError, size: number): number | null {
   if (error.status !== 400 && error.status !== 401) return null;
   if (error.code === 'wrong_audience') return null;
@@ -530,9 +520,8 @@ function rejectedIndex(error: ApiError, size: number): number | null {
 }
 
 // maxWaitSec is the longest Retry-After this sync would wait for. A
-// rate_limited refusal past it is not a burst the next try gets through,
-// such as the daily event cap, so the API's own message says why and when
-// it clears.
+// rate_limited refusal past it stops the sync with the API's own message, which
+// says why and when it clears.
 function stopMessage(error: ApiError, now: number, maxWaitSec = 0): string {
   switch (error.code) {
     case 'occurred_at_out_of_window':

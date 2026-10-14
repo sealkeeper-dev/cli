@@ -65,34 +65,32 @@ import { actionLine, agentAnswer, levelLine } from './run.js';
 import { eventsWaitLine } from './sync.js';
 
 /*
- * sealkeeper status (VOU-596), the status verb of the core commands. One
- * screen of where the agent stands, top to bottom. The agent and its SEAL,
- * what the next level needs and the step that moves it most, today, what
- * waits, duels, this week's challenge, the routine and the agent card.
+ * sealkeeper status, the status verb of the core commands. One screen of where
+ * the agent stands, top to bottom. The agent and its SEAL, what the next level
+ * needs and the step that moves it most, today, what waits, duels, this week's
+ * challenge, the routine and the agent card.
  *
- * The API decides and words it. status signs StatusRequest and calls
- * POST /v1/agents/:id/status (status-answer.ts), which answers the core
- * answer with tasks empty plus status. Labels and words the API sent are
- * printed as they came, through the terminal escaping of stdout. status
- * writes only the lines about what this machine knows, sessions and events
- * in the local log, the routine and the agent card, which the API cannot
- * see.
+ * The API decides and words it. status signs StatusRequest and calls POST
+ * /v1/agents/:id/status (status-answer.ts), which answers the core answer with
+ * tasks empty plus status. Labels and words the API sent are printed as they
+ * came, through the terminal escaping of stdout. status writes only the lines
+ * about what this machine knows, sessions and events in the local log, the
+ * routine and the agent card.
  *
- * --json, or a stdout that is not a terminal as when an agent runs it,
- * prints the answer as it came, each action this CLI knows with the
- * command line it built, as run --json does (agentAnswer), plus source,
- * where the answer came from, and local, the parts of this machine.
+ * --json, or a stdout that is not a terminal as when an agent runs it, prints
+ * the answer as it came, each action this CLI knows with the command line it
+ * built, as run --json does (agentAnswer), plus source, where the answer came
+ * from, and local, the parts of this machine.
  *
- * Offline, or with an API from before the status route, the answer is the
- * last one kept, and one line says so. A failed read never fails the local
- * part.
+ * Offline, or when the status route answers 404, the answer is the last one
+ * kept, and one line says so. A failed read never fails the local part.
  */
 
 // env is what runtime detection reads, for the one time runtime question.
 export type StatusDeps = TasksDeps & { env?: () => NodeJS.ProcessEnv };
 
-// The hooks and adapters record nothing since VOU-627, so the CLI sees an
-// adapter only as the Claude Code hooks or a daily routine job.
+// The warning for a machine with no Claude Code hooks, no daily routine job and
+// no recent SealKeeper work in the log.
 export const NO_ADAPTER = `No Claude Code hooks or daily routine here, and no SealKeeper work recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${INSTALL_COMMAND} again, or npm i -g sealkeeper for a stable path.`;
 export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold hooks of an older sealkeeper, which record nothing now. Run ${INSTALL_COMMAND} again to remove them.`;
@@ -100,7 +98,8 @@ export const NOTHING_WAITS = 'Nothing waits for you.';
 const QUIET_DAYS = 7;
 const stdoutIsTTY = () => process.stdout.isTTY === true;
 const DAY_MS = 24 * 60 * 60 * 1000;
-// The scoring job runs every 15 minutes, on the quarter hours.
+// The status screen counts down to the next quarter hour, when the numbers are
+// scored again.
 const SCORING_EVERY_MS = 15 * 60 * 1000;
 
 // What this machine knows, from the files under the SealKeeper home.
@@ -120,8 +119,8 @@ type Local = {
   unsubmittedClaims: number;
   // Whole minutes until the next quarter hour, when scoring runs.
   nextScoringRunMinutes: number;
-  // The agent card init wrote and whether it holds the SEAL the CLI holds
-  // now (VOU-619), from the files alone.
+  // The agent card init wrote and whether it holds the SEAL the CLI holds now,
+  // from the files alone.
   card: CardView;
   // Today's events in full, only with --show.
   shown?: Event[];
@@ -190,8 +189,7 @@ export function register(
       if (await noAdapterAndQuiet(deps, now, p)) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
       if (await toolHooksLeft(deps)) stderr(TOOL_HOOKS_LEFT);
-      // The daily job's copy of the CLI, when it is out of date or gone
-      // (RS-2).
+      // The daily job's copy of the CLI, when it is out of date or gone.
       for (const line of routine.warnings) stderr(line);
       // An agent the API has as unknown is asked what it runs in, once,
       // and only where a person can answer. The agent is read only when
@@ -316,11 +314,10 @@ function standingSection(answer: StatusAnswerResponse): string[] {
   return lines;
 }
 
-// The score per dimension, in the order the API sent them, each
-// competence category with its task types indented under it, the values in
-// one column. A dimension or type without signal says so, never a number
-// made up for it. Nothing when the answer has no scores, as from an API
-// before them.
+// The score per dimension, in the order the API sent them, each competence
+// category with its task types indented under it, the values in one column. A
+// dimension or type without signal says so. Nothing when the answer has no
+// scores.
 function scoresSection(answer: StatusAnswerResponse | null): string[] {
   const rows = (answer?.status.scores ?? []).flatMap((s) => [
     { name: s.dimension, value: s.value },
@@ -524,14 +521,10 @@ async function toolHooksLeft(deps: StatusDeps): Promise<boolean> {
   return found.some(Boolean);
 }
 
-// True when neither Claude Code settings file holds our hooks, no daily
-// routine job is written, and the log has no event in the last seven UTC
-// days, today included. Since 0.5.0 the log holds SealKeeper work only,
-// tasks and routine runs, and no adapter writes an event for an agent's
-// own sessions (VOU-627). So the warning means this machine shows no way
-// in to SealKeeper work and none was done for a week. The CLI cannot see
-// the Mastra or OpenClaw adapters, which live in other code, and an agent
-// using them that did no SealKeeper work in a week is warned too.
+// True when neither Claude Code settings file holds our hooks, no daily routine
+// job is written, and the log has no event in the last seven UTC days, today
+// included. The CLI cannot see the Mastra or OpenClaw adapters, so an agent
+// using them with no event in a week is warned too.
 async function noAdapterAndQuiet(
   deps: StatusDeps,
   now: Date,
@@ -560,10 +553,8 @@ async function routineJobWritten(p: Paths): Promise<boolean> {
   }
 }
 
-// The first line of each event_id, in log order. A line written twice, as
-// by a retried hook, is still one event. sync sends both lines and the API
-// keeps the first and counts the repeat as a duplicate, so status counts
-// what the API will hold.
+// The first line of each event_id, in log order. A line written twice, as by a
+// retried hook, is still one event, so status counts each event once.
 function firstOfEach(events: Event[]): Event[] {
   const seen = new Set<string>();
   return events.filter((event) => {

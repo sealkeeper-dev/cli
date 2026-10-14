@@ -78,6 +78,37 @@ describe('mastra check', () => {
     expect(urls).toHaveLength(1);
   });
 
+  it('takes a listed agent handle, a domain key or its short form first', async () => {
+    const full = 'acme.ai/weather-bot';
+    const { fn, urls } = fakeFetch(() =>
+      urls.length === 1
+        ? Response.json({ ...answer(false), handle: full })
+        : Response.json(
+            {
+              error: { code: 'renamed', message: `This agent is now ${full}` },
+              id: answer(false).id,
+              handle: full,
+            },
+            { status: 404 },
+          ),
+    );
+    const options = { apiUrl: 'https://api.test', fetch: fn };
+    expect((await check('Acme.AI/weather-bot', {}, options)).handle).toBe(full);
+    // A short handle answers renamed with the full one, as the API does.
+    await expect(
+      check('my-agent-service~0123456789ab/weather-bot', {}, options),
+    ).rejects.toMatchObject({ code: 'renamed' });
+    expect(urls).toEqual([
+      'https://api.test/v1/check/acme.ai/weather-bot',
+      'https://api.test/v1/check/my-agent-service~0123456789ab/weather-bot',
+    ]);
+    for (const handle of ['.acme.ai/weather-bot', 'acme ai/weather-bot']) {
+      await expect(check(handle, {}, options)).rejects.toMatchObject({
+        code: 'invalid_handle',
+      });
+    }
+  });
+
   it('uses SEALKEEPER_API_URL and the global fetch by default', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', 'https://env.test');
     const { fn, urls } = fakeFetch(() => Response.json(answer(true)));
@@ -97,7 +128,7 @@ describe('mastra check', () => {
     ).resolves.toEqual(answer(true));
   });
 
-  // VOU-645. The API says ok, the SEAL it sent has 7 verified tasks, so a
+  // The API says ok, the SEAL it sent has 7 verified tasks, so a
   // caller asking for 10 is not let through on the API's word.
   it('assertTrusted rejects an ok the verified SEAL does not bear out', async () => {
     const { fn } = fakeFetch(() => Response.json(answer(true)));

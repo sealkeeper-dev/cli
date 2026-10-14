@@ -1,22 +1,18 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The fingerprint parts of a Claude Code agent. Read only in the SessionStart
-// and SessionEnd hooks, from the folder the hook payload names, and kept as
-// the claude-code source in fingerprint-sources.json, which sync and run
-// read from any folder. Hashes come out of here, and the one model id as
-// text, the model name sync declares (VOU-566), less an ARN's account and
-// region (modelNameOf). Server and tool names and the version stay on this
-// machine.
+// and SessionEnd hooks, from the folder the hook payload names, and kept as the
+// claude-code source in fingerprint-sources.json, which sync and run read from
+// any folder. Hashes come out of here, and the one model id as text, the model
+// name sync declares, less an ARN's account and region (modelNameOf). Server
+// and tool names and the version stay on this machine.
 //
-// The model id (VOU-614). Claude Code passes the active model to its
-// SessionStart hooks as model, the one hook input that carries it, and
-// leaves it out at times, after /clear, on a recovered session and, as seen
-// on Claude Code 2.1.289 on 4 October 2026, under claude -p. When it is
-// there it wins, since it is the model Claude Code runs and the settings
-// may only name an alias such as opus. When it is not, a model the runtime
-// reported earlier is kept, so a SessionEnd, which never carries it, does
-// not swap the real id back for the settings' alias. Else ANTHROPIC_MODEL
-// and the settings, as before (modelIdOf). A /model switch inside a
-// session is seen at the next SessionStart.
+// The model id. Claude Code passes the active model to its SessionStart hooks
+// as model, and leaves it out at times, such as after /clear or under claude
+// -p. When it is there it wins, since the settings may only name an alias such
+// as opus. When it is not, a model the runtime reported earlier is kept, so a
+// SessionEnd, which never carries it, does not swap the real id back for the
+// settings' alias. Else ANTHROPIC_MODEL and the settings (modelIdOf). A /model
+// switch inside a session is seen at the next SessionStart.
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
@@ -255,10 +251,9 @@ async function frameworkPart(
 
 const AI_AGENT = /^claude-code_(\d+)-(\d+)-(\d+)(?:_|$)/;
 
-// Claude Code 2.1.283 sets both in the shells it spawns, seen in the
-// environment of its Bash tool on 27 September 2026. CLAUDE_CODE_EXECPATH
-// is the running binary, which a native install keeps under
-// versions/<version>. AI_AGENT reads as claude-code_2-1-283_agent.
+// Claude Code sets both in the shells it spawns. CLAUDE_CODE_EXECPATH is the
+// running binary, which a native install keeps under versions/<version>.
+// AI_AGENT reads as claude-code_2-1-283_agent.
 export function versionFromEnv(env: NodeJS.ProcessEnv): string | null {
   const exec = readEnv('CLAUDE_CODE_EXECPATH', env);
   if (exec !== undefined && isVersion(basename(exec))) return basename(exec);

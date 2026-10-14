@@ -61,7 +61,7 @@ describe('mastra adapter', () => {
     return lines;
   }
 
-  // VOU-451. Tool calls are not recorded. withSealKeeper keeps its
+  // Tool calls are not recorded. withSealKeeper keeps its
   // signature and only reads the tool set for the fingerprint, see
   // fingerprint.test.ts.
   describe('withSealKeeper', () => {
@@ -131,7 +131,7 @@ describe('mastra adapter', () => {
     });
   });
 
-  // VOU-627. The agent's own sessions are its operator's work, so the
+  // The agent's own sessions are its operator's work, so the
   // adapter writes no event. Only a routine run records a session.
   describe('sealKeeperSession', () => {
     it('keeps its shape, reads the model of a step and writes no event', async () => {

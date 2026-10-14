@@ -130,7 +130,7 @@ const HOUR = 3_600_000;
 const SEED_AGENT = `${'S'.repeat(42)}A`;
 const BOB_AGENT = `${'B'.repeat(42)}A`;
 const PROGRAM = ['/usr/bin/node', '/opt/sealkeeper/dist/index.js'];
-// The bundle the fake CLI runs from, which an install copies (RS-2).
+// The bundle the fake CLI runs from, which an install copies.
 const BUNDLE = '#!/usr/bin/env node\n// the sealkeeper bundle\n';
 const INVOCATION = '"/usr/bin/node" "/opt/sealkeeper/dist/index.js"';
 const CLAUDE = '/usr/local/bin/claude';
@@ -138,7 +138,7 @@ const OPENCLAW = '/usr/local/bin/openclaw';
 const MODEL = 'google/gemini-3-flash-preview';
 
 const audErrors: unknown[] = [];
-// Each names the API and the route it is for (VOU-111, VOU-637).
+// Each names the API and the route it is for.
 const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
   const named = takePurpose(check.payload, method, path);
@@ -518,7 +518,7 @@ describe('routine', () => {
   // The programs found on PATH, by name.
   let onPath: Record<string, string>;
   // How the agent is looked for, onPath unless a test reads a real PATH,
-  // and the folder the command runs in (VOU-647).
+  // and the folder the command runs in.
   let finder: RoutineDeps['findAgent'];
   let cwd: string;
   let spawned: {
@@ -697,7 +697,7 @@ describe('routine', () => {
     await writeFile(source, BUNDLE);
     // A node that exists, so the screen never finds the job's node gone,
     // at a fixed place, so the project rule never reads where the runner's
-    // own node lives (VOU-647). No test spawns it.
+    // own node lives. No test spawns it.
     const node = join(home, 'bin', 'node');
     await mkdir(dirname(node));
     await writeFile(node, '#!/bin/sh\nexit 0\n');
@@ -761,7 +761,7 @@ describe('routine', () => {
       // config routine went to routine set.
       expect((await run('config', 'routine', 'show')).code).not.toBe(0);
       // game cap went to routine set --game-cap, and the game command is
-      // gone (VOU-603).
+      // gone.
       expect((await run('game', 'cap', '3')).code).not.toBe(0);
       expect((await run('game', 'off')).code).not.toBe(0);
     });
@@ -856,7 +856,7 @@ describe('routine', () => {
       expect(api.settings).toEqual([]);
     });
 
-    it('takes the time now on Enter for a new routine, so routines spread over the day (VOU-612)', async () => {
+    it('takes the time now on Enter for a new routine, so routines spread over the day', async () => {
       answers = ['', '', 'n', '', 'n'];
       const result = await run('routine');
       expect(result.code).toBe(0);
@@ -887,7 +887,7 @@ describe('routine', () => {
       expect((await readRoutineConfig()).time).toBe('10:00');
     });
 
-    it('installs on Enter and watches the first run, which solves a task (RS-9)', async () => {
+    it('installs on Enter and watches the first run, which solves a task', async () => {
       answers = ['', '', 'n', '', ''];
       const task = api.add({ taskType: 'text_dedupe' });
       api.steps = [api.task(task)];
@@ -957,7 +957,7 @@ describe('routine', () => {
     });
   });
 
-  // VOU-657. A routine-only agent sends nothing until its operator said
+  // A routine-only agent sends nothing until its operator said
   // yes, and the setup is where it is asked.
   describe('the sync question', () => {
     const WAITS = 'in the local log with automatic sync off';
@@ -1199,7 +1199,7 @@ describe('routine', () => {
       expect(crontab?.match(/BEGIN/g)).toHaveLength(1);
     });
 
-    it('on --yes takes the time now for a new routine, and on after off the time it had (VOU-612)', async () => {
+    it('on --yes takes the time now for a new routine, and on after off the time it had', async () => {
       expect((await run('routine', 'on', '--yes')).code).toBe(0);
       expect(crontab).toContain('37 14 * * *');
       expect((await run('routine', 'off', '--yes')).code).toBe(0);
@@ -1269,7 +1269,7 @@ describe('routine', () => {
       });
     });
 
-    it('copies the running CLI for the job, refreshes it when its version differs, and never copies over itself (RS-2)', async () => {
+    it('copies the running CLI for the job, refreshes it when its version differs, and never copies over itself', async () => {
       expect((await run('routine', 'on', '--yes')).code).toBe(0);
       const c = copyPaths(paths());
       expect(c.script).toBe(join(home, 'sk', 'routine', 'cli.js'));
@@ -1439,9 +1439,9 @@ describe('routine', () => {
   // npx sealkeeper init from a cloned project puts npx's cache and the
   // project's node_modules/.bin first on PATH, so a dependency's bin named
   // claude, openclaw or node would be what an unattended job runs every
-  // day. The job never stores one, and its PATH has none of those folders
-  // (VOU-647). These read a real PATH with findOnPath over real files.
-  describe("a project's own programs (VOU-647)", () => {
+  // day. The job never stores one, and its PATH has none of those folders.
+  // These read a real PATH with findOnPath over real files.
+  describe("a project's own programs", () => {
     let base: string;
     // The cloned project the setup runs in, under the user's home.
     let project: string;
@@ -1926,7 +1926,7 @@ describe('routine', () => {
       expect(crontab).toContain('0 7 * * *');
     });
 
-    it('takes operator slugs on the allowlist, never its own, and takes a login added before off (VOU-196)', async () => {
+    it('takes operator slugs on the allowlist, never its own, and takes a login added before off', async () => {
       await saveOperatorSlug(agentId, 'alice-ai');
       const own = await run('routine', 'set', '--allow', 'alice-ai', '--yes');
       expect(own.code).toBe(1);
@@ -2065,7 +2065,7 @@ describe('routine', () => {
       await installed({ allow: ['dave'], allowSlugs: ['bob'] });
     });
 
-    // VOU-627. A run is SealKeeper work, the one place a session and its
+    // A run is SealKeeper work, the one place a session and its
     // usage are recorded. claude -p reports input_tokens plus
     // cache_creation_input_tokens in and output_tokens out, never cache
     // reads, and the run times each answer with its clock.
@@ -2183,7 +2183,7 @@ describe('routine', () => {
       expect(api.synced).toBe((await events()).length);
     });
 
-    // VOU-627. The end of a run is a SealKeeper moment, so it refreshes
+    // The end of a run is a SealKeeper moment, so it refreshes
     // the goal the session summary reads while the nudge is on, and only
     // then.
     it('reads the goal at its end once the nudge is on, and never with it off', async () => {
@@ -2261,7 +2261,7 @@ describe('routine', () => {
       ]);
     });
 
-    // VOU-614. claude -p names its model in the init line, and the run
+    // claude -p names its model in the init line, and the run
     // records it for the claude-code source, so the next sync declares it.
     // A name that does not parse is dropped and the run goes on.
     it('records the model claude -p names for the next sync, and drops one that is no name', async () => {
@@ -2291,7 +2291,7 @@ describe('routine', () => {
         (await declaredModel({ paths: paths(), env: { CLAUDECODE: '1' } }))
           ?.name,
       ).toBe('claude-opus-5');
-      // The submit names the model that answered (VOU-615).
+      // The submit names the model that answered.
       expect(api.submitted[0]?.modelName).toBe('claude-opus-5');
 
       api.steps = [api.task(api.add())];
@@ -2314,7 +2314,7 @@ describe('routine', () => {
       expect(api.submitted[1]).not.toHaveProperty('modelName');
     });
 
-    // VOU-615. An answer whose runtime named no model is submitted with
+    // An answer whose runtime named no model is submitted with
     // the model sync declares.
     it('submits with the declared model when claude -p names none', async () => {
       await observeParts(
@@ -2337,7 +2337,7 @@ describe('routine', () => {
       expect(api.submitted[0]?.modelName).toBe('claude-sonnet-5');
     });
 
-    // VOU-655. A run recomputes the fingerprint from its own home at its
+    // A run recomputes the fingerprint from its own home at its
     // start, and again before a step or a submit only when the parts
     // changed, and every step and submit carries it.
     describe('the fingerprint', () => {
@@ -2502,7 +2502,7 @@ describe('routine', () => {
         "Routine run found nothing to do, no agent started. The routine's daily limit of 10 claims is reached, so it claims nothing more today.\n",
       );
       expect(spawned).toEqual([]);
-      // No agent asked, so no transcript is written (RS-10).
+      // No agent asked, so no transcript is written.
       await expect(stat(copyPaths(paths()).transcript)).rejects.toThrow();
     });
 
@@ -2657,7 +2657,7 @@ describe('routine', () => {
       });
     });
 
-    it('submits a duel or challenge answer with the final line feed its handed over spec asks for (VOU-635)', async () => {
+    it('submits a duel or challenge answer with the final line feed its handed over spec asks for', async () => {
       const spec = {
         instruction: 'Remove duplicate lines.',
         input: 'a\na\nb',
@@ -2693,7 +2693,7 @@ describe('routine', () => {
       expect(api.released).toEqual([]);
     });
 
-    it('submits the answer an earlier run kept for a game task, and asks the agent nothing (VOU-635)', async () => {
+    it('submits the answer an earlier run kept for a game task, and asks the agent nothing', async () => {
       const duel = api.add({
         origin: 'duel',
         verification: { kind: 'schema', jsonSchema: { type: 'object' } },
@@ -2716,7 +2716,7 @@ describe('routine', () => {
       ]);
     });
 
-    it('asks the agent again for a game task whose kept answer a check refuses, at most twice, then leaves it to the operator (VOU-635)', async () => {
+    it('asks the agent again for a game task whose kept answer a check refuses, at most twice, then leaves it to the operator', async () => {
       const duel = api.add({
         origin: 'duel',
         verification: { kind: 'schema', jsonSchema: { type: 'object' } },
@@ -2781,7 +2781,7 @@ describe('routine', () => {
       expect(api.submitted.map((p) => p.submission)).toEqual(['{"a":1}']);
     });
 
-    it('submits the new answer when the agent asked again gives a valid one (VOU-635)', async () => {
+    it('submits the new answer when the agent asked again gives a valid one', async () => {
       const challenge = api.add({
         origin: 'challenge',
         verification: { kind: 'schema', jsonSchema: { type: 'object' } },
@@ -2808,7 +2808,7 @@ describe('routine', () => {
       ).toBe('{"a":2}');
     });
 
-    it('gives back a task that is not a game task whose answer a check refuses, and asks afresh when it comes again (VOU-635)', async () => {
+    it('gives back a task that is not a game task whose answer a check refuses, and asks afresh when it comes again', async () => {
       const task = api.add({
         verification: { kind: 'schema', jsonSchema: { type: 'object' } },
       });
@@ -3007,7 +3007,7 @@ describe('routine', () => {
       expect(result.code).toBe(0);
       expect(api.routineCalls.map((p) => p.step)).toEqual([0, 0, 0]);
       expect((await runs())[0]?.outcome).toBe('nothing');
-      // A backoff that doubles, with up to half again at random (VOU-613).
+      // A backoff that doubles, with up to half again at random.
       expect(sleeps).toEqual([2_000, 4_000]);
       random = 1;
       busy = 2;
@@ -3016,7 +3016,7 @@ describe('routine', () => {
       expect(sleeps).toEqual([3_000, 6_000]);
     });
 
-    it('waits for the Retry-After of a rate limited step, plus jitter, and asks the same step again (VOU-613)', async () => {
+    it('waits for the Retry-After of a rate limited step, plus jitter, and asks the same step again', async () => {
       let limited = 1;
       random = 0.5;
       api.routineReply = () =>
@@ -3031,7 +3031,7 @@ describe('routine', () => {
       expect((await runs())[0]?.outcome).toBe('nothing');
     });
 
-    it('takes the backoff for a Retry-After of 0 and a 503 with none (VOU-613)', async () => {
+    it('takes the backoff for a Retry-After of 0 and a 503 with none', async () => {
       const replies = [
         error(429, 'rate_limited', undefined, { 'Retry-After': '0' }),
         error(503, 'unavailable'),
@@ -3042,7 +3042,7 @@ describe('routine', () => {
       expect((await runs())[0]?.outcome).toBe('nothing');
     });
 
-    it('ends the run as api_later when the API asks for a wait past its cap, never waiting (VOU-613)', async () => {
+    it('ends the run as api_later when the API asks for a wait past its cap, never waiting', async () => {
       for (const header of ['3600', '9'.repeat(400)]) {
         api.routineReply = () =>
           error(429, 'rate_limited', undefined, { 'Retry-After': header });
@@ -3066,7 +3066,7 @@ describe('routine', () => {
       );
     });
 
-    it('ends the run as api_later when a wait is past what is left of the run (VOU-613)', async () => {
+    it('ends the run as api_later when a wait is past what is left of the run', async () => {
       // A run of 15 minutes of 4 seconds, 60 seconds, which a Retry-After
       // of 61 is past.
       msPerMinute = 4_000;
@@ -3080,7 +3080,7 @@ describe('routine', () => {
       });
     });
 
-    it('ends the run at once on a 429 about the day, such as game_cap_reached (VOU-613)', async () => {
+    it('ends the run at once on a 429 about the day, such as game_cap_reached', async () => {
       api.routineReply = () =>
         error(429, 'game_cap_reached', undefined, { 'Retry-After': '43200' });
       await run('routine', 'run');
@@ -3093,7 +3093,7 @@ describe('routine', () => {
       });
     });
 
-    it('ends the run as api_later after the last try of a rate limited step (VOU-613)', async () => {
+    it('ends the run as api_later after the last try of a rate limited step', async () => {
       api.routineReply = () =>
         error(429, 'rate_limited', undefined, { 'Retry-After': '5' });
       await run('routine', 'run');
@@ -3106,7 +3106,7 @@ describe('routine', () => {
       });
     });
 
-    it('sends a rate limited submit again after the wait and keeps the claim (VOU-613)', async () => {
+    it('sends a rate limited submit again after the wait and keeps the claim', async () => {
       const task = api.add();
       api.steps = [api.task(task)];
       let limited = 1;
@@ -3128,7 +3128,7 @@ describe('routine', () => {
       });
     });
 
-    it('releases a submit still rate limited after its tries, and a wait that does not fit ends the run (VOU-613)', async () => {
+    it('releases a submit still rate limited after its tries, and a wait that does not fit ends the run', async () => {
       const task = api.add();
       api.steps = [api.task(task)];
       api.submitReply = () =>
@@ -3178,7 +3178,7 @@ describe('routine', () => {
       expect(api.routineCalls).toEqual([]);
     });
 
-    it('keeps every question of a run in one transcript, mode 600, replaced at the next run (RS-10)', async () => {
+    it('keeps every question of a run in one transcript, mode 600, replaced at the next run', async () => {
       api.steps = [api.task(api.add()), api.task(api.add())];
       await run('routine', 'run');
       const file = copyPaths(paths()).transcript;
@@ -3194,7 +3194,7 @@ describe('routine', () => {
       expect((await stat(file)).mode & 0o777).toBe(0o600);
     });
 
-    it('the watcher prints a line per event, the API notes among them (RS-9)', async () => {
+    it('the watcher prints a line per event, the API notes among them', async () => {
       stdoutTTY = true;
       const posted = api.add({
         posterAgentId: agentId,
@@ -3221,9 +3221,9 @@ describe('routine', () => {
     });
   });
 
-  // VOU-601. OpenClaw as the job's agent, through a fake openclaw process.
+  // OpenClaw as the job's agent, through a fake openclaw process.
   describe('OpenClaw', () => {
-    // Shaped as the live check saw it (VOU-600).
+    // Shaped as the live check saw it.
     const envelope = (final: string, over: Payload = {}) => ({
       ok: true,
       status: 'ok',
@@ -3271,7 +3271,7 @@ describe('routine', () => {
     it('the setup asks which agent when both are here and installs OpenClaw on 2', async () => {
       tty = true;
       onPath = { claude: CLAUDE, openclaw: OPENCLAW };
-      // Enter takes the default model OpenClaw says (VOU-623).
+      // Enter takes the default model OpenClaw says.
       nextAgents = [() => defaultModel({ primary: MODEL })];
       answers = ['2', '', '', '', 'n', '', 'n'];
       const result = await run('routine');
@@ -3399,8 +3399,8 @@ describe('routine', () => {
       expect((await readRoutineConfig()).model).toBe(MODEL);
     });
 
-    it('an OpenClaw routine from before VOU-623 still reads, and its run fails before its first step with the fix', async () => {
-      // routine.json as a CLI from before VOU-623 wrote it, with no model.
+    it('an OpenClaw routine with no model still reads, and its run fails before its first step with the fix', async () => {
+      // routine.json as an older CLI wrote it, with no model.
       await writeFile(
         paths().routine,
         `${JSON.stringify({
@@ -3491,7 +3491,7 @@ describe('routine', () => {
       expect((await readRoutineConfig()).schedule?.agent).toBe('openclaw');
     });
 
-    // VOU-627. usage.input in and usage.output out, as the live adapter
+    // usage.input in and usage.output out, as the live adapter
     // read them, and nothing when one is missing.
     it('records the session and the usage OpenClaw reports for each answer', async () => {
       await installedOpenClaw();
@@ -3578,7 +3578,7 @@ describe('routine', () => {
         costUsd: 0.01,
       });
       // The envelope's model goes to the OpenClaw source, as the live
-      // adapter reads it, without the provider (VOU-614).
+      // adapter reads it, without the provider.
       expect(await readSource('openclaw', paths())).toMatchObject({
         model_name: 'gpt-x',
         model_reported: true,
@@ -3710,7 +3710,7 @@ describe('routine', () => {
     });
   });
 
-  // VOU-601. routine(agent) from sealkeeper/mastra, in this process.
+  // routine(agent) from sealkeeper/mastra, in this process.
   describe('Mastra', () => {
     beforeEach(() => {
       vi.stubGlobal('fetch', api.fetch);
@@ -3754,7 +3754,7 @@ describe('routine', () => {
       expect(spawned).toEqual([]);
       expect(api.submitted.map((p) => p.submission)).toEqual(['a\nb']);
       expect((await runs())[0]).toMatchObject({ runtime: 'mastra' });
-      // The result's model id goes to the Mastra source (VOU-614).
+      // The result's model id goes to the Mastra source.
       expect((await readSource('mastra', paths()))?.model_name).toBe('gpt-4.1');
       expect(api.submitted[0]?.modelName).toBe('gpt-4.1');
 
@@ -3776,7 +3776,7 @@ describe('routine', () => {
       });
     });
 
-    // VOU-627. inputTokens in and outputTokens out, in either naming, and
+    // inputTokens in and outputTokens out, in either naming, and
     // the run syncs at its end once automatic sync is on.
     it('records the session and the usage of each generate, and syncs at its end', async () => {
       await autoSyncOn();
@@ -3840,7 +3840,7 @@ describe('routine', () => {
       );
     });
 
-    // VOU-623. A Gemini result as @mastra/core 1.74.0 gives it, no
+    // A Gemini result as @mastra/core 1.74.0 gives it, no
     // response.modelId and the id in response.modelMetadata.
     it('reads the model id from response.modelMetadata when the result has no modelId', async () => {
       const result = await mastraRuntime({
@@ -3884,7 +3884,7 @@ describe('routine', () => {
       expect(signal?.aborted).toBe(true);
     });
 
-    // The caller's signal (VOU-620). Each abort is made by the test at a
+    // The caller's signal. Each abort is made by the test at a
     // known point, and no wait is real.
     describe("the caller's signal", () => {
       it('aborts a generate in flight, gives the task back, frees the lock and the screen says so', async () => {
@@ -4159,7 +4159,7 @@ describe('routine', () => {
       expect(stopped).toMatchObject({ text: null, stoppedFor: 'tokensPerRun' });
     });
 
-    it('cuts a transcript at the cap on a whole line, with a last line saying so (RS-10)', async () => {
+    it('cuts a transcript at the cap on a whole line, with a last line saying so', async () => {
       const path = join(home, 'cut', 'last-run.jsonl');
       const line = `${JSON.stringify(assistant('m1', 50))}\n`;
       const cap = line.length * 3 + TRANSCRIPT_CUT_LINE.length + 2;
@@ -4201,6 +4201,32 @@ describe('routine', () => {
       expect(answerOf(` ${NO_ANSWER}\n`, spec)).toBeNull();
       expect(answerOf('  \n', spec)).toBeNull();
       expect(answerOf(null, spec)).toBeNull();
+      // The answer between the tags, working before them dropped, the
+      // line break after the opening tag gone, the last pair when there
+      // are two, and the fence and line feed rules on the marked text.
+      expect(
+        answerOf(
+          '(98.3-32)=66.3*5=331.5/9=36.8333 → 36.83\n\n<answer>\n36.83\n</answer>\n',
+          spec,
+        ),
+      ).toBe('36.83');
+      expect(answerOf('<answer>905.74</answer>', spec)).toBe('905.74');
+      expect(
+        answerOf('<answer>draft</answer> no, <answer>a\nb</answer>', spec),
+      ).toBe('a\nb');
+      expect(answerOf('<answer>\n```\na\nb\n```\n</answer>', spec)).toBe(
+        'a\nb',
+      );
+      expect(
+        answerOf('<answer>a\nb</answer>', {
+          ...spec,
+          output: 'End with exactly one line feed.',
+        }),
+      ).toBe('a\nb\n');
+      expect(answerOf(`<answer>${NO_ANSWER}</answer>`, spec)).toBeNull();
+      expect(answerOf('<answer>\n</answer>', spec)).toBeNull();
+      // A reply that ignores the rule reads as before.
+      expect(answerOf('36.83', spec)).toBe('36.83');
       expect(verdictOf('Success.')).toBe('success');
       expect(verdictOf(' FAILURE\n')).toBe('failure');
       expect(verdictOf('unsure')).toBeNull();
@@ -4208,7 +4234,7 @@ describe('routine', () => {
       expect(verdictOf(null)).toBeNull();
     });
 
-    it('asks a task with its rules and the spec as data that cannot close its tag (VOU-229)', () => {
+    it('asks a task with its rules and the spec as data that cannot close its tag', () => {
       const prompt = taskPrompt({
         id: 't1',
         type: 'text_dedupe',
@@ -4366,7 +4392,7 @@ describe('routine', () => {
       expect(lines.join('\n')).toContain('sealkeeper routine set --allow');
     });
 
-    it('reads a routine.json from before VOU-599, its time from its schedule and its old log lines skipped', async () => {
+    it('reads a routine.json an older CLI wrote, its time from its schedule and its old log lines skipped', async () => {
       await writeFile(
         paths().routine,
         JSON.stringify({

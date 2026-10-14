@@ -162,7 +162,7 @@ describe('identity', () => {
     expect(line.split('\n')).toHaveLength(2);
   });
 
-  it('skips the mode check on Windows, where every file reads as 666 (D26)', async () => {
+  it('skips the mode check on Windows, where every file reads as 666', async () => {
     const { agentId } = await createKey();
     await chmod(paths().key, 0o666);
     const loaded = await loadKey(paths(), 'win32');
@@ -204,7 +204,7 @@ describe('identity', () => {
     });
   });
 
-  // VOU-637. An event and the sync's fingerprint declaration name no
+  // An event and the sync's fingerprint declaration name no
   // purpose, and every request names its route's.
   it('signs an event with aud and no purpose', async () => {
     await createKey();

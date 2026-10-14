@@ -3,22 +3,19 @@ import { readFileSync } from 'node:fs';
 import { defineConfig, type Options } from 'tsup';
 
 // The version is read here at build time and injected as __VERSION__, so the
-// bundle never embeds package.json and its devDependencies. The GitHub OAuth
-// client id comes from GITHUB_CLIENT_ID at build time and defaults to empty,
-// in which case the CLI needs SEALKEEPER_GITHUB_CLIENT_ID at runtime.
+// bundle never embeds package.json. The GitHub OAuth client id comes from
+// GITHUB_CLIENT_ID at build time and defaults to empty, in which case the CLI
+// needs SEALKEEPER_GITHUB_CLIENT_ID at runtime.
 //
-// Four entries. index is the bin. lib is the importable API ("." in the
-// package exports), mastra is the Mastra adapter ("./mastra") and openclaw
-// is the OpenClaw plugin entry ("./openclaw"). Without splitting each is one
-// self-contained file. The banner lands on all four, which is harmless for
-// the modules since Node skips a leading #! line in a module. Their types
-// are in types/lib.d.ts, types/mastra.d.ts and types/openclaw.d.ts.
+// Four entries. index is the bin. lib is the importable API ("." in the package
+// exports), mastra is the Mastra adapter ("./mastra") and openclaw is the
+// OpenClaw plugin entry ("./openclaw"). Without splitting each is one
+// self-contained file. The banner lands on all four, which is harmless for the
+// modules since Node skips a leading #! line in a module. Their types are in
+// types/lib.d.ts, types/mastra.d.ts and types/openclaw.d.ts.
 //
-// Every package is bundled, not only @sealkeeper/schema. @noble/ed25519,
-// commander and zod are devDependencies and end up inside dist, so the
-// published package has no runtime dependencies and an install never
-// resolves a newer version of them than the one built and tested here. Only
-// node builtins stay imports. bundle.test.ts checks both.
+// Every package is bundled, so the published package has no runtime
+// dependencies and only node builtins stay imports. bundle.test.ts checks both.
 const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };

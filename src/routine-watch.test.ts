@@ -31,7 +31,7 @@ const step = (
   ...over,
 });
 
-describe('event lines (RS-9)', () => {
+describe('event lines', () => {
   it('has one line per task, judged submission, note of the API, submit, failed submit, verdict and answer not given', () => {
     const lines = (
       [
@@ -126,7 +126,7 @@ describe('event lines (RS-9)', () => {
   });
 });
 
-describe('the spinner (RS-9)', () => {
+describe('the spinner', () => {
   it('rewrites one line with the elapsed time, ASCII in a Windows console on code page 437', () => {
     let written = '';
     const stream = { write: (text: string) => (written += text) };
@@ -162,7 +162,7 @@ describe('the spinner (RS-9)', () => {
   });
 });
 
-describe('watchRun (RS-9)', () => {
+describe('watchRun', () => {
   let home: string;
   let p: Paths;
 
@@ -277,7 +277,7 @@ describe('watchRun (RS-9)', () => {
   });
 });
 
-describe('startDetached (RS-9)', () => {
+describe('startDetached', () => {
   let dir: string;
 
   beforeEach(async () => {

@@ -1,23 +1,22 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 // The Mastra adapter, imported as sealkeeper/mastra. It runs in the agent's own
-// process and writes no event (VOU-627). The agent's own sessions are its
-// operator's work, so only a routine run, routine(agent) below, which is
-// SealKeeper work, records a session and its usage. withSealKeeper and
-// sealKeeperSession read the fingerprint parts this process sees, the
-// tools, the framework and the model of each step. A CLI before 0.5.0 also
-// wrote session.start, session.end and usage here, and sealKeeperSession
-// keeps its shape so code that calls it keeps working. A failure is
-// swallowed so it never throws into the agent.
-// sealKeeperContext gives the session nudge for the agent's instructions.
-// Mastra is typed by shape only, so this file imports nothing from Mastra.
-// Types are in types/mastra.d.ts, which mastra-types.test.ts keeps in step.
+// process and writes no event. Only a routine run, routine(agent) below,
+// records a session and its usage. withSealKeeper and sealKeeperSession read
+// the fingerprint parts this process sees, the tools, the framework and the
+// model of each step, and keep the shapes earlier versions had. A failure is
+// swallowed so it never throws into the agent. sealKeeperContext gives the
+// session nudge for the agent's instructions. Mastra is typed by shape only, so
+// this file imports nothing from Mastra. Types are in types/mastra.d.ts, which
+// mastra-types.test.ts keeps in step.
 //
 // Before delegating to another agent, gate on its track record.
+//
 //   await assertTrusted('alice/claude-code', { minVerified: 5 })
+//
 // throws unless every check passes. check() returns the answer instead.
 //
-// routine(agent) runs one daily routine run with the agent, the same loop
-// as sealkeeper routine run, see routine-mastra.ts (VOU-601).
+// routine(agent) runs one daily routine run with the agent, the same loop as
+// sealkeeper routine run, see routine-mastra.ts.
 import { createHash, randomUUID } from 'node:crypto';
 import { adapterNudge } from './adapter-core.js';
 import {
@@ -65,14 +64,14 @@ export type SealKeeperSession = {
   // Pass to agent.generate or agent.stream as onStepFinish. It reads the
   // step's model id for the fingerprint.
   onStepFinish: (step: unknown) => Promise<void>;
-  // Records nothing since 0.5.0 and resolves at once.
+  // Records nothing and resolves at once.
   end: () => Promise<void>;
 };
 
-// The fingerprint parts this process sees (VB-2). Model ids from steps,
-// the names and schemas of every tool passed to withSealKeeper and the
-// @mastra/core version. Their hashes are written, and the model id also as
-// the model name, in text, see fingerprint-observer.ts.
+// The fingerprint parts this process sees. Model ids from steps, the names and
+// schemas of every tool passed to withSealKeeper and the @mastra/core version.
+// Their hashes are written, and the model id also as the model name, in text,
+// see fingerprint-observer.ts.
 const observer = createObserver('mastra');
 let frameworkLooked = false;
 
@@ -106,9 +105,8 @@ function observeTools(tools: readonly MastraToolLike[]): void {
 }
 
 // Hashes the names and schemas of the tools in a record or an array for the
-// fingerprint and returns the tools themselves, unchanged. Their calls are
-// not recorded. Before 0.4.14 it wrapped each execute to emit tool.call, and
-// it keeps its signature so code that calls it keeps working.
+// fingerprint and returns the tools themselves, unchanged. Their calls are not
+// recorded.
 export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
 >(tools: T): T {
@@ -138,9 +136,9 @@ function sessionIdOf(id: string): string {
     : createHash('sha256').update(id, 'utf8').digest('hex');
 }
 
-// A session for the fingerprint. It reads the model id of each step and
-// writes no event. The id defaults to a new UUID. sessionId in the result
-// is the id as a CLI before 0.5.0 logged it, see sessionIdOf.
+// A session for the fingerprint. It reads the model id of each step and writes
+// no event. The id defaults to a new UUID. sessionId in the result is the id as
+// sessionIdOf makes it.
 export function sealKeeperSession(
   given: string = randomUUID(),
 ): SealKeeperSession {
@@ -161,25 +159,26 @@ export function sealKeeperSession(
   };
 }
 
-// The session nudge (VOU-137). Mastra has no hook that adds context when a
-// session starts, but an agent's instructions may be a function that
-// Mastra calls for each generate or stream. Call this from it.
+// The session nudge. Mastra has no hook that adds context when a session
+// starts, but an agent's instructions may be a function that Mastra calls for
+// each generate or stream. Call this from it.
+//
 //   instructions: async () => `${base}\n${await sealKeeperContext()}`
-// Resolves with the short SealKeeper summary and the sealkeeper skill's
-// body once the operator turned the nudge on with sealkeeper config nudge
-// on, else with ''. It reads the
-// cached goal only, so it never waits on the network, and never rejects.
+//
+// Resolves with the short SealKeeper summary and the sealkeeper skill's body
+// once the operator turned the nudge on with sealkeeper config nudge on, else
+// with ''. It reads the cached goal only, so it never waits on the network, and
+// never rejects.
 export function sealKeeperContext(): Promise<string> {
   return adapterNudge();
 }
 
-// GET /v1/check for handle, as in alice/claude-code. Resolves with the
-// answer whether it passed or not. Rejects when the check could not run, a
-// bad handle or threshold, an unknown agent or the network. seal in the
-// answer is the agent's SEAL, which can be verified offline with sealkeeper
-// seal verify, see https://sealkeeper.run/verify. credential is the same
-// string under its old name. Both are null when the SEAL is withheld after
-// 90 dormant days, and the answer then fails.
+// GET /v1/check for handle, as in alice/claude-code. Resolves with the answer
+// whether it passed or not. Rejects when the check could not run, a bad handle
+// or threshold, an unknown agent or the network. seal in the answer is the
+// agent's SEAL, which can be verified offline with sealkeeper seal verify, see
+// https://sealkeeper.run/verify. credential is the same string under its old
+// name. Both are null when the SEAL is withheld, and the answer then fails.
 export function check(
   handle: string,
   thresholds?: CheckThresholds,
@@ -216,13 +215,13 @@ export async function assertTrusted(
   return result;
 }
 
-// One routine run with agent, for the agent set up under SEALKEEPER_HOME.
-// Call it from a Mastra scheduled workflow or your own cron. SealKeeper
-// decides every step, and agent answers each task through one generate
-// call with no tools. Resolves with what the run did, a failed run
-// included, and rejects only when no agent is set up here or routine.json
-// does not read. It never prints. options.signal stops the run at its next
-// safe point, and it then resolves with outcome aborted (VOU-620).
+// One routine run with agent, for the agent set up under SEALKEEPER_HOME. Call
+// it from a Mastra scheduled workflow or your own cron. SealKeeper decides
+// every step, and agent answers each task through one generate call with no
+// tools. Resolves with what the run did, a failed run included, and rejects
+// only when no agent is set up here or routine.json does not read. It never
+// prints. options.signal stops the run at its next safe point, and it then
+// resolves with outcome aborted.
 export function routine(
   agent: MastraAgentLike,
   options?: RoutineOptions,

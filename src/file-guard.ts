@@ -6,16 +6,17 @@ import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 
-// Which files submit --file and post --input @file may read
-// (VOU-229). What they read leaves the machine as a submission or a spec,
-// and the path may come from an agent that a task spec told what to do.
+// Which files submit --file and post --input @file may read. What they read
+// leaves the machine as a submission or a spec, and the path may come from an
+// agent that a task spec told what to do.
 //
-// Every path is resolved with realpath first, so a symlink is judged by
-// where it points, and a symlink out of the answers folder is refused like
-// the file it points to. Then, in order
+// Every path is resolved with realpath first, so a symlink is judged by where
+// it points, and a symlink out of the answers folder is refused like the file
+// it points to. Then, in order
+//
 // - nothing whose name, as given or as resolved, matches
 //   SECRET_FILE_NAMES, in any folder, the answers folder included, and
-//   whatever the flags (VOU-649)
+//   whatever the flags
 // - nothing inside the SealKeeper home, which holds the private key
 // - nothing inside the SealKeeper root, ~/.sealkeeper, which holds the
 //   homes of every other agent on this machine, so no agent's key is read

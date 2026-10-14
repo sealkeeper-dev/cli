@@ -90,16 +90,11 @@ export function register(
         return;
       }
 
-      // Best effort. Whatever goes wrong, the event is already in the log and
-      // the next sync sends it, so the command still succeeds. It goes
-      // through the gate the background sync uses, so an agent that emits
-      // often sends at most once every 5 minutes across all its processes,
-      // never sends one batch twice from parallel emits and never holds up
-      // the hook that called it for more than a few seconds. emit runs it
-      // here rather than starting it in the background, since the process
-      // exits as soon as the command returns and would cut a background sync
-      // off mid request. A throttled or locked emit prints nothing. sync
-      // sends now, whatever the throttle.
+      // Best effort. The event is already in the log and the next sync sends
+      // it, so the command still succeeds whatever goes wrong. It goes through
+      // the gate in background-sync.ts and waits for it, since the process
+      // exits as soon as the command returns. A throttled or locked emit prints
+      // nothing.
       try {
         await gatedSync({ fetch: deps.fetch, ...WAITING_CALLER_LIMITS });
       } catch (error) {

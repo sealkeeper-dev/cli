@@ -400,7 +400,7 @@ describe('Claude Code capture', () => {
       });
     });
 
-    // VOU-451, VOU-627. The hooks are SessionStart and SessionEnd. A tool
+    // The hooks are SessionStart and SessionEnd. A tool
     // event or Stop from an older install reads nothing.
     it('is captured by the two hooks install writes, and by no retired hook', async () => {
       expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
@@ -424,7 +424,7 @@ describe('Claude Code capture', () => {
       });
     });
 
-    // VOU-566. The one model id goes as text, the model name sync
+    // The one model id goes as text, the model name sync
     // declares. Everything else stays a hash.
     it('keeps hashes and the model name only in the sources file', async () => {
       await hook('SessionStart', 's1');
@@ -437,7 +437,7 @@ describe('Claude Code capture', () => {
       expect(text.split('claude-sonnet-4-5')).toHaveLength(2);
     });
 
-    // VOU-614. SessionStart names the model Claude Code runs. It wins over
+    // SessionStart names the model Claude Code runs. It wins over
     // the settings, SessionEnd and a SessionStart that name none keep it,
     // and the last one named wins.
     it('declares the model SessionStart names over the settings, and keeps it', async () => {
@@ -561,7 +561,7 @@ describe('the Mastra adapter', () => {
     );
     await session.end();
     const text = await readFile(p.fingerprintSources, 'utf8');
-    // The model id as the model name, as text (VOU-566), and nothing else.
+    // The model id as the model name, as text, and nothing else.
     expect((await sources())?.model_name).toBe('gpt-alice');
     expect(text.split('gpt-alice')).toHaveLength(2);
     expect(text).not.toContain('lookup');
@@ -636,7 +636,7 @@ describe('the OpenClaw adapter', () => {
   });
 });
 
-// VOU-655. What a routine run calls before each step and submit.
+// What a routine run calls before each step and submit.
 describe('recompute on change', () => {
   const captures = async (): Promise<unknown[]> =>
     JSON.parse(await readFile(p.fingerprint, 'utf8')).captures;

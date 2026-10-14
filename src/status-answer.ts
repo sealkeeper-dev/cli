@@ -15,18 +15,15 @@ import { saveOperatorSlug, slugOfAnswer } from './operator-slug.js';
 import { refusal } from './refusal.js';
 import { StatusAnswerResponse } from './responses.js';
 
-// The status answer (VOU-596), POST /v1/agents/<id>/status, which status
-// prints and the terminal run reads for where the agent stands. The last
-// answer is kept in status.json, so status still shows it offline, labelled
-// with the time it came. The API decides and words what status shows, so
-// this is the only read of it. A fresh answer also refreshes the stored
-// operator slug from its handle, as the agent answer of the old status did.
+// The status answer, POST /v1/agents/<id>/status, which status prints and the
+// terminal run reads for where the agent stands. The last answer is kept in
+// status.json, so status still shows it offline, labelled with the time it
+// came. A fresh answer also refreshes the stored operator slug from its handle.
 
 const STATUS_CACHE_VERSION = 1;
 
-// How long status waits for the API before it shows the cache. The route
-// makes about a dozen bounded reads, so it gets a little longer than the
-// two seconds of a quick read, and a person still waits only seconds.
+// How long status waits for the API before it shows the cache, a little longer
+// than the two seconds of a quick read.
 export const STATUS_TIMEOUT_MS = 5_000;
 
 const StatusCache = z.object({
@@ -37,10 +34,9 @@ const StatusCache = z.object({
 type StatusCache = z.infer<typeof StatusCache>;
 
 /*
- * What a status read got. api is a fresh answer, cache the last one kept
- * when the API could not give one, and none neither. noRoute says the API
- * answered 404, an API from before the status route, else why is the
- * reason in plain words.
+ * What a status read got. api is a fresh answer, cache the last one kept when
+ * the API could not give one, and none neither. noRoute says the API answered
+ * 404, else why is the reason in plain words.
  */
 export type StatusRead =
   | { from: 'api'; answer: StatusAnswerResponse; fetchedAt: string }

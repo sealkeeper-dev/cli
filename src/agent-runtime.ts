@@ -30,12 +30,10 @@ import { promptStyled, stderrStyled } from './output.js';
 import { refusal } from './refusal.js';
 import { createStyle, type Styled } from './style.js';
 
-// What an agent runs in, as the operator declares it (VOU-176). init
-// detects a likely runtime from the environment and the installed Claude
-// Code hooks, and the operator confirms it or picks one. --runtime sets it
-// without a question. An agent the API has as unknown, registered before
-// runtimes or without a terminal, gets the question once on its next
-// interactive run, and the answer goes out as the signed PATCH.
+// What an agent runs in, as the operator declares it. init detects a likely
+// runtime and the operator confirms it or picks one, and --runtime sets it
+// without a question. An agent whose runtime is unknown gets the question once
+// on its next interactive run, and the answer goes out as a signed PATCH.
 
 // What the operator can pick. unknown is what not answering leaves.
 export const RUNTIME_CHOICES: readonly Runtime[] = RUNTIMES.filter(
@@ -46,36 +44,16 @@ export const RUNTIME_CHOICES: readonly Runtime[] = RUNTIMES.filter(
 // question. Only a hint, the operator confirms it.
 export type DetectedRuntime = { runtime: Runtime; from: string };
 
-// Variables the runtimes set in the shells they spawn, each read in the
-// source or official docs of the named release (VOU-189, 26 September 2026).
-// Checked in this order, the first one set wins. CLAUDECODE comes last.
-// The Claude Code IDE extensions set it in every integrated terminal, so a
-// Codex, Cursor or Gemini agent started from one inherits it. Its own
-// variable, set only in the shells it runs, says more, and wins.
+// Variables the runtimes set in the shells they spawn, checked in this order,
+// the first one set wins. CLAUDECODE comes last, since the Claude Code IDE
+// extensions set it in every integrated terminal and an agent started from one
+// inherits it.
 //
-// Codex CLI rust-v0.157.1 sets CODEX_THREAD_ID for every command the model
-// runs (unified exec) and every command the user runs with !, sandboxed or
-// not. CODEX_SANDBOX=seatbelt is set only under the macOS Seatbelt sandbox
-// and CODEX_SANDBOX_NETWORK_DISABLED=1 only when network is restricted.
-// Both stay as backups for a Codex shell without CODEX_THREAD_ID.
-// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/unified_exec/process_manager.rs
-// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/tasks/user_shell.rs
-// https://github.com/openai/codex/blob/rust-v0.157.1/codex-rs/core/src/sandboxing/mod.rs
-//
-// Cursor Agent CLI 2026.09.26-dd393fe sets CURSOR_AGENT=1 for the shell
-// commands it runs (read in its bundled index.js, the CLI is closed
-// source). The Cursor editor's agent sets it too, which is still Cursor.
-// https://cursor.com/docs/agent/tools/terminal
-// https://downloads.cursor.com/lab/2026.09.26-dd393fe/darwin/arm64/agent-cli-package.tar.gz
-//
-// Gemini CLI v0.61.0 sets GEMINI_CLI=1 for run_shell_command.
-// https://github.com/google-gemini/gemini-cli/blob/v0.61.0/packages/core/src/services/shellExecutionService.ts
-// https://github.com/google-gemini/gemini-cli/blob/v0.61.0/docs/tools/shell.md
-//
-// Claude Code 2.1.283 sets CLAUDECODE=1 for its Bash and PowerShell tools,
-// hooks, status line and stdio MCP servers, and its IDE extensions set it
-// in their integrated terminals.
-// https://code.claude.com/docs/en/env-vars
+// Codex CLI sets CODEX_THREAD_ID, and CODEX_SANDBOX or
+// CODEX_SANDBOX_NETWORK_DISABLED under its sandbox.
+// Cursor Agent sets CURSOR_AGENT=1.
+// Gemini CLI sets GEMINI_CLI=1.
+// Claude Code sets CLAUDECODE=1.
 export const RUNTIME_ENV: readonly (readonly [string, Runtime])[] = [
   ['CODEX_THREAD_ID', 'codex'],
   ['CODEX_SANDBOX', 'codex'],
@@ -229,8 +207,8 @@ export async function recordRuntimeAsked(
   }
 }
 
-// Sends the runtime as the signed PATCH /v1/agents/:id. issuedAt is signed
-// with it, so the API can refuse an old envelope sent again.
+// Sends the runtime as the signed PATCH /v1/agents/:id, with issuedAt inside
+// the signed payload.
 export async function changeRuntime(options: {
   api: ApiClient;
   signer: Signer;
@@ -258,12 +236,12 @@ export const RUNTIME_UNKNOWN_INTRO =
   'SealKeeper does not know what this agent runs in yet. You are asked once.';
 export const RUNTIME_LATER = `Runtime left unknown. Run ${cli('agent runtime <runtime>')} to set it later.`;
 
-// The one time question for an agent the API has as unknown, on an
-// interactive run of init or status. readRuntime gives what the API
-// answered, undefined when it did not say, which asks nothing. It is read
-// only after the cheap checks, so a run that will not ask sends nothing.
-// The question is recorded as asked whatever the answer, so it never comes
-// back. A refusal or a missing key ends only this, the command goes on.
+// The one time question for an agent whose runtime is unknown, on an
+// interactive run of init or status. readRuntime gives the runtime the API
+// holds, undefined when it did not say, which asks nothing. It is read only
+// after the local checks, so a run that will not ask sends nothing. The
+// question is recorded as asked whatever the answer. A refusal or a missing key
+// ends only this, and the command goes on.
 export async function offerRuntime(options: {
   config: Pick<Config, 'agentId' | 'apiUrl'>;
   readRuntime: () => Promise<string | undefined>;
@@ -282,9 +260,8 @@ export async function offerRuntime(options: {
   if (await wasAskedRuntime(config.agentId, p)) return;
   const current = await options.readRuntime();
   if (current !== 'unknown') {
-    // An agent that already says what it runs in never needs the
-    // question, so recording that spares every later run the agent read.
-    // No answer from the API asks next time.
+    // An agent that already has a runtime is recorded as asked, so later runs
+    // skip the read. No answer from the API asks next time.
     if (current !== undefined) {
       await recordRuntimeAsked(config.agentId, new Date(), p);
     }

@@ -1,7 +1,6 @@
 # Stages the CLI on npm when a GitHub release is published on this
 # repository. A maintainer then approves the stage on npmjs.com, and only
-# then is the version public. See docs/release.md in the monorepo, Moving
-# to Trusted Publishing.
+# then is the version public.
 #
 # There is no npm token. npm accepts the upload through a short lived OIDC
 # token from this workflow (Trusted Publishing), and attaches a provenance
@@ -15,7 +14,7 @@
 # holds id-token write. It checks out nothing, installs nothing and runs no
 # package script, and stages the tarball build packed. Before approving,
 # the maintainer compares the staged tarball with a local build of the same
-# source, scripts/check-staged-cli.sh in the monorepo.
+# source.
 # src/release-workflow.test.ts guards this shape.
 name: Release
 

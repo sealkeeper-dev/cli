@@ -28,7 +28,7 @@ type Sent = { method: string; path: string; payload: Record<string, unknown> };
 // name this API. The status starts on with the full cap, and a settings
 // change moves it as the API does. refuse answers every request with that
 // error instead, and gone answers 404 as an API from before the game does.
-// status starts as an API before VOU-618 answers it, with no duels started
+// status starts as an older API answers it, with no duels started
 // and no closed, and closed is what a settings change answers beside it.
 class FakeGame {
   status: Record<string, unknown> & {
@@ -157,7 +157,7 @@ describe('the game settings', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  // game cap went to routine set --game-cap (VOU-599).
+  // game cap went to routine set --game-cap.
   describe('routine set --game-cap', () => {
     it('sends the cap alone and says the cap and the units used', async () => {
       const result = await run('routine', 'set', '--game-cap', '3', '--yes');
@@ -220,9 +220,9 @@ describe('the game settings', () => {
       );
     });
 
-    // VOU-603. The game command is gone. init sets the switch and the
+    // The game command is gone. init sets the switch and the
     // cap, challenge and duel turn the game on, routine set changes the cap
-    // and config game the switch (VOU-611).
+    // and config game the switch.
     it.each([['on'], ['off'], ['cap', '3'], ['status']])(
       'game %s is gone',
       async (...args) => {
@@ -232,7 +232,7 @@ describe('the game settings', () => {
     );
   });
 
-  // VOU-611. The switch is a config setting, read and changed with a
+  // The switch is a config setting, read and changed with a
   // signed request, and every line prints what the API answered.
   describe('config game', () => {
     it('with no word reads the switch and sends only the time', async () => {
@@ -266,7 +266,7 @@ describe('the game settings', () => {
       ]);
       expect(game.sent[0]?.payload.enabled).toBe(false);
       expect(game.status.enabled).toBe(false);
-      // An API before VOU-618 sends no counts, so only Game off.
+      // An older API sends no counts, so only Game off.
       expect(result.out).toBe('Game off.\n');
     });
 

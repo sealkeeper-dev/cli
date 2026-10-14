@@ -24,11 +24,10 @@ import {
   systemdDir,
 } from './routine-scheduler.js';
 
-// TRUST-4. The What init does section of the README lists every file the
+// The What init does section of the README lists every file the
 // CLI writes, every job it installs and every host it contacts, from the
-// code that names them, so a new file or host cannot go unlisted. The web
-// page /docs/init carries the same section word for word, which
-// apps/web/lib/init-inventory.test.ts checks against this README.
+// code that names them, so a new file or host cannot go unlisted. The page
+// https://sealkeeper.run/docs/init carries the same section word for word.
 
 const README = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 
@@ -75,13 +74,13 @@ describe('the What init does inventory', () => {
     for (const file of rest) {
       expect(text, file).toContain(`\`${file.slice(ROOT.length + 1)}\``);
     }
-    // The copy of the CLI the daily job runs, and its version (RS-2).
+    // The copy of the CLI the daily job runs, and its version.
     const copy = copyPaths(paths(ROOT));
     expect(text).toContain(
       `- \`${tilde(copy.script)}\` and \`${copy.meta.slice(ROOT.length + 1)}\`, `,
     );
     expect(text).toContain(`\`${tilde(copy.script)}\`, a copy of this CLI`);
-    // The last run's transcript beside it (RS-10).
+    // The last run's transcript beside it.
     expect(text).toContain(`- \`${tilde(copy.transcript)}\`, `);
   });
 
@@ -101,7 +100,7 @@ describe('the What init does inventory', () => {
     expect(text).toContain('`CLAUDE_CONFIG_DIR`');
   });
 
-  // VOU-649. The project scope writes only the hooks. The commands and the
+  // The project scope writes only the hooks. The commands and the
   // skill an earlier install wrote there move to the user scope.
   it('lists the files project scope writes, the ones it moves out and the shared settings it rewrites', () => {
     const cwd = '/c';
@@ -124,12 +123,12 @@ describe('the What init does inventory', () => {
 
   it('lists the file seal write puts where you ask', () => {
     expect(text).toContain('- `seal.txt` from `seal write`');
-    // init writes the card into the home (VOU-603), card write is gone.
+    // init writes the card into the home, card write is gone.
     expect(text).not.toContain('card write');
   });
 
   it('says status reads the card record and sends nothing for it', () => {
-    // status shows the card's state from the files alone (VOU-619).
+    // status shows the card's state from the files alone.
     expect(text).toMatch(
       /^- `~\/\.sealkeeper\/card-write\.json`, .*`status` reads it to show the card's state, sending nothing\.$/m,
     );
@@ -146,7 +145,7 @@ describe('the What init does inventory', () => {
     );
   });
 
-  // VOU-624. what-is-shared prints the same list, so the README and the
+  // what-is-shared prints the same list, so the README and the
   // CLI cannot say different things. The README adds backticks only.
   it('says what each command sends as what-is-shared prints it', () => {
     const sends = text.slice(text.indexOf('### What each command sends'));
@@ -199,7 +198,7 @@ describe('the What init does inventory', () => {
   });
 });
 
-// VOU-453. What leaves your machine names the header every API request
+// What leaves your machine names the header every API request
 // carries as the schema spells it.
 describe('What leaves your machine', () => {
   it('names the CLI version header', () => {

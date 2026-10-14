@@ -49,8 +49,8 @@ function importOf(module: string): RegExp {
   );
 }
 
-// Modules no bundle may import at runtime. @sealkeeper/schema is inlined,
-// and its /db entry, Drizzle and the Postgres driver belong to the API.
+// Modules no bundle may import at runtime. @sealkeeper@sealkeeper/schema is inlined,
+// and its /db entry and any database driver are never bundled.
 const FORBIDDEN = [
   '@sealkeeper/schema',
   '@sealkeeper/schema/db',
@@ -108,7 +108,7 @@ function bundledPackages(code: string): Map<string, Set<string>> {
 // esbuild writes those paths relative to the working directory, src/x.ts
 // from packages/cli and packages/cli/src/x.ts from the repo root, so each
 // is resolved against cwd and kept only when it is under this package's
-// src (VOU-651).
+// src.
 function cliSources(code: string, cwd = process.cwd()): Set<string> {
   const src = join(packageDir, 'src');
   const found = new Set<string>();
@@ -171,10 +171,10 @@ describe('bundle scanners', () => {
       '// ../schema/src/index.ts',
       '// src/routine-run.ts',
     ].join('\n');
-    // A build two folders up, the repo root in the monorepo. The comments
+    // A build two folders up, as in the source repository. The comments
     // are written relative to that folder from this package's real place,
     // so the case holds in the mirror too, where the package is the repo
-    // and two folders up is wherever the mirror was unpacked (VOU-651).
+    // and two folders up is wherever the mirror was unpacked.
     const root = resolve(packageDir, '..', '..');
     const fromThere = (file: string) =>
       `// ${relative(root, join(packageDir, file)).split(sep).join('/')}`;
@@ -299,7 +299,7 @@ describe('cli bundle', () => {
     }
   });
 
-  // The template solver and generators stay on the server (VOU-640), so
+  // The template solver and generators stay on the server, so
   // the public package hands nobody a script that solves a template task.
   // solveTemplate is the solver's own name, the rule is the wording only a
   // generator writes into a spec, and kestrel is in a generator's word list.
@@ -341,7 +341,7 @@ describe('cli bundle', () => {
     expect(mastra).not.toMatch(importOf('@sealkeeper/schema'));
     expect(mastra).not.toMatch(/from ['"]commander['"]/);
     expect(bundledPackages(mastra).has('commander')).toBe(false);
-    // A routine run syncs at its end through the gate (VOU-627), and the
+    // A routine run syncs at its end through the gate, and the
     // adapter itself starts no sync.
     expect(mastra).toContain('gatedSync');
     expect(mastra).not.toContain('kickBackgroundSync');
@@ -350,10 +350,10 @@ describe('cli bundle', () => {
     expect(mastra).toMatch(/export\s*\{[^}]*\broutine\b/);
   });
 
-  // routine(agent) carries the routine's loop (VOU-601), never the code
+  // routine(agent) carries the routine's loop, never the code
   // that installs a job, copies the CLI, installs Claude Code files or
   // starts a process. The OpenClaw plugin entry carries no routine at all.
-  // The nudge carries the skill's text (VOU-602), so the modules that hold
+  // The nudge carries the skill's text, so the modules that hold
   // that text are in the bundles, and only their install functions are
   // checked to be left out.
   it('keeps the install code and child processes out of the library bundles', () => {
@@ -392,7 +392,7 @@ describe('cli bundle', () => {
     expect(cliSources(openclaw).has('routine-run')).toBe(false);
   });
 
-  // VOU-627. The adapter writes no event, only a routine run does.
+  // The adapter writes no event, only a routine run does.
   it('the built adapter passes a tool through and records nothing', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-mastra-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
@@ -422,7 +422,7 @@ describe('cli bundle', () => {
     expect(openclaw).not.toMatch(importOf('@sealkeeper/schema'));
     expect(openclaw).not.toMatch(/from ['"]commander['"]/);
     expect(bundledPackages(openclaw).has('commander')).toBe(false);
-    // It writes no event, so it starts no sync (VOU-627).
+    // It writes no event, so it starts no sync.
     expect(openclaw).not.toContain('kickBackgroundSync');
     expect(openclaw).toMatch(/export\s*\{[^}]*\bsealKeeperPlugin\b/);
     expect(openclaw).toMatch(/export\s*\{[^}]*\bdefault\b/);
@@ -450,7 +450,7 @@ describe('cli bundle', () => {
     });
   });
 
-  // VOU-627. The plugin writes no event, only a routine run does.
+  // The plugin writes no event, only a routine run does.
   it('the built OpenClaw entry records nothing, whatever OpenClaw fires', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-openclaw-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
@@ -529,7 +529,7 @@ describe('cli bundle', () => {
     expect(bundle).not.toContain('__GITHUB_CLIENT_ID__');
   });
 
-  // VOU-453. The daily job runs a copy of this bin, so the copy says which
+  // The daily job runs a copy of this bin, so the copy says which
   // CLI sends each request, with the version the build injected.
   it("the routine's copy of the bin sends its version to the API", async () => {
     const home = await mkdtemp(join(tmpdir(), 'sealkeeper-bin-'));

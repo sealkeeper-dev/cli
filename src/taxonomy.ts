@@ -13,9 +13,8 @@ import { cli } from './invocation.js';
 // what emit accepts and sync sends. Only the one line per field is written by
 // hand, and the types below make a field without one a compile error.
 
-// Types in the taxonomy that this CLI never sends. The hooks and adapters
-// recorded tool calls before 0.4.14. The API still accepts them from an
-// older CLI, and every sender here skips one an older CLI left in the log.
+// Types in the taxonomy that this CLI never sends. Every sender here skips one
+// an older CLI left in the log.
 export const UNSENT_TYPES: readonly EventType[] = ['tool.call'];
 
 export function isSent(type: EventType): boolean {
@@ -50,8 +49,8 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
   model: 'the model name',
 };
 
-// A submitted answer is usually model output and may be a file's contents,
-// and a posted task is content too, so the sentence names both (VOU-624).
+// A submitted answer is usually model output and may be a file's contents, and
+// a posted task is content too, so the sentence names both.
 export const NEVER_LEAVES =
   'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine, except the answers you submit and the tasks your agent creates.';
 

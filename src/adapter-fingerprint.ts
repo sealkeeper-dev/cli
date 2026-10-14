@@ -1,8 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// What the in-process adapters read for their fingerprint parts, kept out
-// of the entry files so the published sealkeeper/mastra and
-// sealkeeper/openclaw exports stay as they are. Only the adapters' own
-// observers turn these into hashes, see fingerprint-observer.ts.
+// What the in-process adapters read for their fingerprint parts. The adapters'
+// observers in fingerprint-observer.ts turn these into hashes.
 import { realpath } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,12 +82,9 @@ export async function openClawVersion(
   return findPackageVersion('openclaw', dirname(real));
 }
 
-// The model id of a Mastra step or generate result, response.modelId, else
-// model.modelId, else model, else response.modelMetadata.modelId, the first
-// that gives a name, as it is written, so an empty string never wins. On
-// Gemini response.modelId is undefined on the result and empty on a step,
-// and the id is in response.modelMetadata (VOU-623, @mastra/core 1.74.0).
-// The live adapter reads it per step, the routine per answer (VOU-614).
+// The model id of a Mastra step or generate result. The first of
+// response.modelId, model.modelId, model and response.modelMetadata.modelId
+// that gives a name, as written, so an empty string never wins.
 export function rawModelIdOf(response: unknown, model: unknown): unknown {
   const r = response as
     | { modelId?: unknown; modelMetadata?: { modelId?: unknown } | null }

@@ -422,7 +422,7 @@ describe('duel', () => {
       expect(await claimedInLog()).toEqual([task.id]);
     });
 
-    it('keeps whether the spec it hands over asks for a final line feed, for submit (VOU-635)', async () => {
+    it('keeps whether the spec it hands over asks for a final line feed, for submit', async () => {
       const asks = duelTask({
         spec: { input: 'b\na', output: 'End with exactly one line feed.' },
       });
@@ -463,7 +463,7 @@ describe('duel', () => {
       expect(result.err).toBe('too many requests, try again in 30 seconds\n');
     });
 
-    it('never says routine, which only the routine route sends (VOU-599)', async () => {
+    it('never says routine, which only the routine route sends', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
       await run('duel', '--json');
       expect(api.payloads.map((p) => p.routine)).toEqual([false]);

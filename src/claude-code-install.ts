@@ -42,15 +42,12 @@ export type ClaudeCodeInstall = {
   skill: CommandResult | null;
 };
 
-// The hooks in one settings file, and the slash commands and the skill
-// beside the user settings, userFile. Like the hooks in a project's shared
-// settings.json, the commands and the skill hold this machine's absolute
-// paths, and a repo commits .claude/commands and .claude/skills, which have
-// no local file of their own. So the project scope writes only the hooks,
-// to settings.local.json, and the commands and the skill always go in the
-// user scope (VOU-649). Throws a SettingsError when the settings file
-// cannot be changed. The hooks are in once that worked, so a command or
-// skill file that cannot be written only goes to warn.
+// The hooks in one settings file, and the slash commands and the skill beside
+// the user settings, userFile. The commands and the skill hold this machine's
+// absolute paths, so the project scope writes only the hooks, to
+// settings.local.json, and the commands and the skill always go in the user
+// scope. Throws a SettingsError when the settings file cannot be changed. A
+// command or skill file that cannot be written only goes to warn.
 export async function installClaudeCode(
   file: string,
   userFile: string,
@@ -86,11 +83,10 @@ export type ClaudeCodeUninstall = {
   skill: boolean;
 };
 
-// Takes every hook of ours out of file and out of the shared settings an
-// older install wrote, then the slash commands and the skill of ours
-// beside file, which for the project scope are the ones an install before
-// VOU-649 wrote there. A file without the marker stays. Throws a SettingsError when a file cannot
-// be read or changed.
+// Takes every hook of ours out of file and out of the shared settings an older
+// install wrote, then the slash commands and the skill of ours beside file. A
+// file without the marker stays. Throws a SettingsError when a file cannot be
+// read or changed.
 export async function uninstallClaudeCode(
   file: string,
   shared: string | null,
@@ -125,10 +121,10 @@ export function uninstallLines(
   return lines;
 }
 
-// Every file of ours beside one settings file, the settings file, the
-// slash commands and the skill, for the guard that refuses a project
-// folder that links outside the project. Every project path init or agent
-// delete writes or removes goes through it (VOU-649).
+// Every file of ours beside one settings file, the settings file, the slash
+// commands and the skill, for the guard that refuses a project folder that
+// links outside the project. Every project path init or agent delete writes or
+// removes goes through it.
 export const installedPaths = (file: string): string[] => [
   file,
   ...commandPaths(file),

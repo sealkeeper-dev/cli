@@ -11,16 +11,13 @@ import {
 } from './claude-code-command.js';
 import { MANAGED_MARKER } from './managed.js';
 
-// The sealkeeper skill for Claude Code (VOU-137, VOU-602).
-// skills/sealkeeper/SKILL.md under the same dir as the slash commands. A
-// slash command only runs when a person types it. The skill's description
-// tells Claude to reach for it on its own, when the session nudge says
-// work is waiting or the user asks about SealKeeper. The body maps plain
-// words to the core commands and holds the loop once (coreLoop), plus
-// confirming outcomes and taking addressed tasks. It carries the same
-// managed-by marker, so a SKILL.md the operator wrote is never touched.
-// OpenClaw and Mastra have no skills, so their session nudge carries the
-// same body (adapterNudge).
+// The sealkeeper skill for Claude Code, skills/sealkeeper/SKILL.md under the
+// same dir as the slash commands. Its description tells Claude to reach for it
+// when the session nudge says work is waiting or the user asks about
+// SealKeeper. The body maps plain words to the core commands and holds the loop
+// once (coreLoop). It carries the same managed-by marker, so a SKILL.md the
+// operator wrote is never touched. The OpenClaw and Mastra session nudge
+// carries the same body (adapterNudge).
 
 const SKILL_DIR = 'sealkeeper';
 const SKILL_FILE = 'SKILL.md';

@@ -5,6 +5,8 @@ import {
   HANDSHAKE_NONCE_MAX,
   HandshakeAudience,
   HandshakeNonce,
+  SEAL_CLOCK_SKEW_SECONDS,
+  SealCheckTime,
   type SealPayload,
   WELL_KNOWN_PATH,
 } from '@sealkeeper/schema';
@@ -37,14 +39,14 @@ import {
 import { configApiUrl } from './check.js';
 import type { SealDeps } from './seal.js';
 
-// Exit codes. 0 a valid SEAL, 1 a broken or expired one, a SEAL for
-// another agent than --agent among them, 2 the keys could not be loaded,
-// which with --offline means the cache has no usable copy. With
-// --handshake, 0 only when it also reads Matches over the verifier's own
-// nonce, 1 when it is refused, 2 when the issuer's record could not be
-// read, 3 when it reads Changed or there is no fingerprint to compare
-// with, and 4 when it reads Matches but no --nonce was given, so it does
-// not show the presenter holds the key (VOU-645).
+// Exit codes. 0 a valid SEAL, valid at the time --at names when given, 1 a
+// broken or expired one, a SEAL for another agent than --agent among them, 2
+// the keys could not be loaded, which with --offline means the cache has no
+// usable copy. With --handshake, 0 only when it also reads Matches over the
+// verifier's own nonce, 1 when it is refused, 2 when the issuer's record could
+// not be read, 3 when it reads Changed or there is no fingerprint to compare
+// with, and 4 when it reads Matches but no --nonce was given, so it does not
+// show the presenter holds the key.
 const EXIT_BROKEN = 1;
 const EXIT_NO_KEYS = 2;
 const EXIT_NOT_MATCHED = 3;
@@ -85,6 +87,10 @@ export function register(parent: Command, deps: SealDeps): Command {
       '--for <verifier>',
       'your own name as you gave it to the agent, the handshake must be made for it',
     )
+    .option(
+      '--at <time>',
+      'check the SEAL at this past time, ISO 8601, for a SEAL kept beside a past event',
+    )
     .action(async function (
       this: Command,
       input: string,
@@ -95,6 +101,7 @@ export function register(parent: Command, deps: SealDeps): Command {
         handshake?: string;
         nonce?: string;
         for?: string;
+        at?: string;
       },
     ): Promise<void> {
       if (
@@ -123,14 +130,35 @@ export function register(parent: Command, deps: SealDeps): Command {
           );
         }
       }
-      const seal = (input === '-' ? await deps.readStdin() : input).trim();
       const nowMs = deps.now();
+      // --at checks the SEAL at that time in place of now. The same verifySeal
+      // decides, this only parses the time. A handshake still reads nowMs,
+      // since it is a live proof.
+      let atMs: number | undefined;
+      if (options.at !== undefined) {
+        if (!SealCheckTime.safeParse(options.at).success) {
+          this.error(
+            '--at must be an ISO 8601 date time, such as 2026-10-01T12:00:00Z',
+          );
+        }
+        atMs = Date.parse(options.at);
+        if (atMs > nowMs + SEAL_CLOCK_SKEW_SECONDS * 1000) {
+          this.error('--at must not be in the future');
+        }
+      }
+      const seal = (input === '-' ? await deps.readStdin() : input).trim();
 
       // A SEAL that is not even a JWS is broken without any keys.
       const kid = sealKid(seal);
       let result: SealCheck;
       if (kid === null) {
-        result = await checkSeal(seal, { keys: [] }, nowMs, options.agent);
+        result = await checkSeal(
+          seal,
+          { keys: [] },
+          nowMs,
+          options.agent,
+          atMs,
+        );
       } else {
         let wellKnown: WellKnown;
         // --keys wins over --offline, and neither touches the network.
@@ -160,7 +188,7 @@ export function register(parent: Command, deps: SealDeps): Command {
           }
           throw error;
         }
-        result = await checkSeal(seal, wellKnown, nowMs, options.agent);
+        result = await checkSeal(seal, wellKnown, nowMs, options.agent, atMs);
       }
 
       // The handshake beside a valid SEAL. A SEAL before version 3 carries
@@ -213,7 +241,13 @@ export function register(parent: Command, deps: SealDeps): Command {
           ),
         );
       } else {
-        stdout(result.valid ? 'valid SEAL' : `broken SEAL: ${result.reason}`);
+        stdout(
+          !result.valid
+            ? `broken SEAL: ${result.reason}`
+            : result.at === undefined
+              ? 'valid SEAL'
+              : `valid SEAL at ${result.at}`,
+        );
         // What it says only for a valid SEAL. A broken one shows the raw
         // payload and nothing that reads like a claim.
         if (result.valid) {
@@ -223,7 +257,11 @@ export function register(parent: Command, deps: SealDeps): Command {
           stdout(JSON.stringify(result.payload, null, 2));
         }
         if (result.valid && result.expiresAt !== null) {
-          stdout(expiresInText(result.expiresAt, nowMs));
+          stdout(
+            result.lapsed === true
+              ? `expired since ${result.expiresAt}, valid at the time checked only`
+              : expiresInText(result.expiresAt, nowMs),
+          );
         }
         for (const line of handshake?.lines ?? []) stdout(line);
       }

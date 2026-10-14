@@ -99,7 +99,7 @@ function throwOnExit(cmd: Command): void {
 describe('hook claude-code', () => {
   let home: string;
   let fetches: string[];
-  // The CLI version header of each request, in the same order (VOU-453).
+  // The CLI version header of each request, in the same order.
   let versions: (string | null)[];
   // The cached goal the session nudge reads, and every read of it.
   let goal: NudgeGoal | null | Error;
@@ -233,12 +233,12 @@ describe('hook claude-code', () => {
     const program = createProgram();
     const help = program.helpInformation();
     expect(help).not.toMatch(/^ {2}hook\b/m);
-    // init installs the hooks, there is no adapter command (VOU-603).
+    // init installs the hooks, there is no adapter command.
     expect(help).toMatch(/^ {2}init\b/m);
     expect(help).not.toMatch(/^ {2}adapter\b/m);
   });
 
-  // VOU-627. An interactive session is the operator's own work, so the
+  // An interactive session is the operator's own work, so the
   // hooks write no event. Only a routine run records a session.
   it('SessionStart and SessionEnd write no event and no marker', async () => {
     await initialise(false);
@@ -423,7 +423,7 @@ describe('hook claude-code', () => {
     expect(await countPending(paths(home))).toBe(2);
   }, 15_000);
 
-  // VOU-451, VOU-627. A machine keeps the tool hooks and Stop of an older
+  // A machine keeps the tool hooks and Stop of an older
   // install until the install runs again, and each of them records
   // nothing, prints nothing and exits 0.
   it.each([
@@ -588,7 +588,7 @@ describe('hook claude-code', () => {
       expect(goalReads).toEqual([]);
     });
 
-    // VOU-627. The goal is read at SealKeeper moments only, never at the
+    // The goal is read at SealKeeper moments only, never at the
     // end of a session, so an unrelated session leaves no trace in the
     // API's request log.
     it.each([true, false])(
@@ -605,7 +605,7 @@ describe('hook claude-code', () => {
       },
     );
 
-    // VOU-627. A sync sends only pending events, so the end of a session
+    // A sync sends only pending events, so the end of a session
     // with no SealKeeper work makes no request at all, with automatic sync
     // on and the nudge on or off.
     it.each([true, false])(
@@ -623,7 +623,7 @@ describe('hook claude-code', () => {
       },
     );
 
-    // VOU-453. The sync of a SessionEnd goes through the API client.
+    // The sync of a SessionEnd goes through the API client.
     it('SessionEnd sends the CLI version with the sync, and reads no goal', async () => {
       await initialise(true, true);
       await seedSessions(1);
@@ -684,7 +684,7 @@ describe('parseHookInput', () => {
   const payload = (cwd: unknown) =>
     JSON.stringify({ hook_event_name: 'Stop', session_id: 's1', cwd });
 
-  // VOU-627. The session id is no longer read, nothing needs it.
+  // The session id is no longer read, nothing needs it.
   it('reads only the event name, cwd and the model', () => {
     expect(parseHookInput(payload('/Users/alice/app'))).toEqual({
       event: 'Stop',
@@ -703,7 +703,7 @@ describe('parseHookInput', () => {
     expect(parseHookInput(payload(undefined))?.cwd).toBeNull();
   });
 
-  // VOU-614. The model id SessionStart names, as it came.
+  // The model id SessionStart names, as it came.
   it('takes the model only when it is a string', () => {
     const start = (model: unknown) =>
       parseHookInput(

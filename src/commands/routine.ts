@@ -116,38 +116,36 @@ import { VERSION } from '../version.js';
 import { AUTO_SYNC_OFF, AUTO_SYNC_ON, eventsWaiting } from './sync.js';
 
 /*
- * sealkeeper routine (VOU-136, VOU-138, VOU-599, VOU-601), the routine verb of the
- * core commands. An opt-in daily run that works toward the next level
- * unattended.
+ * sealkeeper routine, the routine verb of the core commands. An opt-in daily
+ * run of the agent, unattended.
  *
  *   routine      Not set up, the guided setup in a terminal: the agent
- *                found on this machine, Claude Code or OpenClaw, the time, tasks only or tasks and
- *                the game, the limits, then the job with the operator's
- *                own scheduler and one run now, watched (RS-9). Set up, the
- *                routine screen. --files prints the job in full.
+ *                found on this machine, Claude Code or OpenClaw, the time,
+ *                tasks only or tasks and the game, the limits, then the job
+ *                with the operator's own scheduler and one run now,
+ *                watched. Set up, the routine screen. --files prints the
+ *                job in full.
  *   routine on   Writes the job, or writes it again.
  *   routine off  Removes the job. Nothing runs until on.
  *   routine set  The time, a limit, whether to play the game, the game cap,
  *                the allowlist and the model of an OpenClaw routine.
  *   routine run  Hidden. The job runs it.
  *
- * Every form that changes something takes --yes, which stands for the
- * user's clear yes, so an agent may run it after that yes. Without --yes
- * and without a terminal it refuses and changes nothing.
+ * Every form that changes something takes --yes, which stands for the user's
+ * clear yes, so an agent may run it after that yes. Without --yes and without a
+ * terminal it refuses and changes nothing.
  *
- * The job runs a copy of this CLI under the home (RS-2) with routine run,
- * a plain loop over the routine route (VOU-594), which the API drives. The
- * CLI asks for the next action with the run id, the limits and the
- * allowlist, and carries out what is left for it. A task goes to the agent
- * as one question with no tools, its spec, its schema and the answer
- * rules, and the text it answers is written and submitted through the
- * submit path. A submission to judge goes to the agent the same way, and
- * its verdict goes back with the next call, which the API reports through
- * the outcome path. It stops when the API says done, at the wall clock or
- * at the token cap, whichever comes first. The agent never runs a command,
- * so a spec cannot make it run one. sealkeeper status shows the last run in
- * short (routineView). The loop is routineRun in routine-run.ts. A Mastra
- * routine runs it from the operator's own code and has no job, and the
+ * The job runs a copy of this CLI under the home with routine run, a plain loop
+ * over the routine route, routineRun in routine-run.ts. The CLI asks for the
+ * next action with the run id, the limits and the allowlist, and carries out
+ * what is left for it. A task goes to the agent as one question with no tools,
+ * its spec, its schema and the answer rules, and the text it answers is written
+ * and submitted through the submit path. A submission to judge goes to the
+ * agent the same way, and its verdict goes back with the next call. It stops
+ * when the API says done, at the wall clock or at the token cap, whichever
+ * comes first. The agent never runs a command, so a spec cannot make it run
+ * one. sealkeeper status shows the last run in short (routineView). A Mastra
+ * routine runs the loop from the operator's own code and has no job, and the
  * screen shows it from its runs.
  */
 
@@ -170,8 +168,8 @@ export type RoutineDeps = {
   // What times a run's session and each answer, in ms, see RunDeps. Tests
   // pass one that ticks.
   clock?: () => number;
-  // How the first run starts, detached by default (RS-9). Tests run it in
-  // this process with startInProcess.
+  // How the first run starts, detached by default. Tests run it in this process
+  // with startInProcess.
   startRun?: RunStarter;
   // Ctrl-C while a first run is watched, SIGINT by default.
   interrupt?: (stop: () => void) => () => void;
@@ -211,8 +209,8 @@ export const startInProcess: RunStarter = (spec, deps) => {
   };
 };
 
-// Set by init and the setup on the first run they start, so the run logs
-// under the id they watch (RS-9). Read by routine run only.
+// Set by init and the setup on the first run they start, so the run logs under
+// the id they watch. Read by routine run only.
 export const RUN_ID_ENV = 'SEALKEEPER_ROUTINE_RUN_ID';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -365,7 +363,7 @@ type PreparedInstall = {
   env: SchedulerEnv;
   run: Runner;
   p: Paths;
-  // The running CLI's script, copied to the home for the job (RS-2).
+  // The running CLI's script, copied to the home for the job.
   source: string;
   // What the job runs, node, the copy and routine run.
   program: string[];
@@ -386,11 +384,11 @@ const AGENT_PROGRAM: Record<ScheduledAgent, string> = {
 
 type FoundAgent = { agent: ScheduledAgent; command: string };
 
-// The agents found on this machine, in the order of SCHEDULED_AGENTS, and
-// those on PATH the job never runs, a project's own (VOU-647). Each is
-// looked for on the PATH the job gets, so npx's folders are passed over
-// and a global install further down PATH is found. One found there that
-// resolves into a project, or one found only on the full PATH, is refused.
+// The agents found on this machine, in the order of SCHEDULED_AGENTS, and those
+// on PATH the job never runs, a project's own. Each is looked for on the PATH
+// the job gets, so npx's folders are passed over and a global install further
+// down PATH is found. One found there that resolves into a project, or one
+// found only on the full PATH, is refused.
 type AgentsFound = { found: FoundAgent[]; refused: FoundAgent[] };
 
 async function findAgents(deps: RoutineDeps): Promise<AgentsFound> {
@@ -503,8 +501,8 @@ export async function prepareInstall(
     return `node at ${tildePath(node)} ${IN_PROJECT}, so the daily job will not run it. Run this with a node installed globally`;
   }
   const p = paths();
-  // The job runs the copy, never the script that runs now, which may sit
-  // in the npx cache (RS-2).
+  // The job runs the copy, never the script that runs now, which may sit in the
+  // npx cache.
   const program = [node, copyPaths(p).script, 'routine', 'run'];
   const job = defaultJob(p, env);
   const scheduler = await detectScheduler(env, run);
@@ -611,7 +609,7 @@ export async function refreshCopy(
 const installedLine = (time: string): string =>
   `Routine on. It runs every day at ${time}. See it with ${cli('routine')}, turn it off with ${cli('routine off')}.`;
 
-// The questions of the setup, yes by default (D-RS-1, D-RS-2).
+// The questions of the setup, yes by default.
 export const INSTALL_QUESTION = 'Install? [Y/n] ';
 export const FIRST_RUN_QUESTION =
   'Run the first one now, so you see it work? [Y/n] ';
@@ -629,10 +627,8 @@ export function localTime(now: Date): string {
   return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 }
 
-// The time a routine runs at, the one in routine.json, else for a new
-// routine the local time now, so routines spread over the day rather than
-// all run at one default hour (VOU-612). A routine that has a time keeps
-// it, also after off.
+// The time a routine runs at, the one in routine.json, else for a new routine
+// the local time now. A routine that has a time keeps it, also after off.
 export function routineTime(deps: RoutineDeps, routine: RoutineConfig): string {
   return routine.time ?? localTime(deps.now?.() ?? new Date());
 }
@@ -648,8 +644,8 @@ export const WORK_QUESTION = 'Tasks only, or tasks and the game? [T/g] ';
 // lists every field.
 export const syncHelp = (): string =>
   `Automatic sync sends the events in this agent's local log to SealKeeper as they are logged, each run's session, the tokens, time and model of each answer, the task claims, submits and outcomes and any event emit wrote, with the agent's fingerprint as SHA-256 hashes and its model name beside them, metadata only and never prompts, answers or file contents, and ${cli('sync --dry-run')} shows every one first.`;
-// The sync question, no by default (VOU-657). Events in the local log
-// already go with the first sync after a yes, so it says how many.
+// The sync question, no by default. Events in the local log already go with the
+// first sync after a yes, so it says how many.
 export function syncQuestion(pending: number): string {
   const waiting =
     pending === 0
@@ -725,7 +721,7 @@ export const seeRunsLine = (): string =>
 export const firstRunLine = (minutes: number): string =>
   `First run started. It stops within ${minutes} minutes.`;
 
-// Said once under the started line, on a terminal (RS-9).
+// Said once under the started line, on a terminal.
 export const watchHintLine = (): string =>
   `Ctrl-C stops watching, the run keeps going. See it with ${cli('routine')}.`;
 
@@ -748,11 +744,11 @@ type FirstRunPrint = {
   starting?: () => void;
 };
 
-// The first run after a setup, as init and routine start it (RS-3, RS-9).
-// It runs detached, the command the scheduler runs, so it keeps going when
-// the watching ends. The watcher prints a line per event as the run logs
-// it, a spinner with the elapsed time on a terminal, then the run line and
-// where to see every run. Ctrl-C ends the watching only.
+// The first run after a setup, as init and routine start it. It runs detached,
+// the command the scheduler runs, so it keeps going when the watching ends. The
+// watcher prints a line per event as the run logs it, a spinner with the
+// elapsed time on a terminal, then the run line and where to see every run.
+// Ctrl-C ends the watching only.
 async function firstRun(
   deps: RoutineDeps,
   routine: RoutineConfig,
@@ -799,7 +795,7 @@ async function firstRun(
   switch (watched.kind) {
     case 'done': {
       for (const line of reportLines(watched.entry)) print.line(line);
-      // The run sent nothing unless automatic sync is on (VOU-657).
+      // The run sent nothing unless automatic sync is on.
       const waiting = await eventsWaiting(p);
       if (waiting !== null) print.line(waiting);
       break;
@@ -822,11 +818,11 @@ async function firstRun(
 const defaultJob = (p: Paths, env: SchedulerEnv): string =>
   jobName(p.home, paths(join(env.homedir, '.sealkeeper')).home);
 
-// PATH so the agent's launcher finds node under a scheduler's bare
-// environment, and SEALKEEPER_HOME for any home but the root. The job does
-// not start in the folder that picked the agent, so for a named home or a
-// SEALKEEPER_HOME elsewhere it must say which one. PATH is the one of the
-// install without a project's own folders, see jobPath (VOU-647).
+// PATH so the agent's launcher finds node under a scheduler's bare environment,
+// and SEALKEEPER_HOME for any home but the root. The job does not start in the
+// folder that picked the agent, so for a named home or a SEALKEEPER_HOME
+// elsewhere it must say which one. PATH is the one of the install without a
+// project's own folders, see jobPath.
 function jobEnv(p: Paths, where: ProjectWhere): Record<string, string> {
   const env: Record<string, string> = {};
   const path = jobPath(process.env.PATH ?? '', where);
@@ -878,10 +874,9 @@ const AGENT_ASKS: Record<ScheduledAgent, (command: string) => string> = {
   openclaw: (command) => `${command} agent exec`,
 };
 
-// The one block init and the setup show before they ask (RS-1). A header
-// with the time, four short rows with the limits from routine.json, then
-// where to check it later. The scheduler and the job file are on the
-// routine screen only.
+// The one block init and the setup show before they ask. A header with the
+// time, four short rows with the limits from routine.json, then where to check
+// it later. The scheduler and the job file are on the routine screen only.
 export const BLOCK_TITLE = 'Daily routine';
 
 const blockHeadTail = (time: string): string =>
@@ -1050,12 +1045,12 @@ const plainPrint = (): SetupPrint => {
   };
 };
 
-// The guided setup (VOU-599), the one routine and init share. The agent
-// found on this machine, the time, tasks only or tasks and the game,
-// whether to sync while automatic sync was never turned on or off, the
-// block with the limits, then the install and one run now, watched. null
-// once it is installed, else why nothing was installed. A scheduler that
-// cannot be read or refuses is said as its reason.
+// The guided setup, the one routine and init share. The agent found on this
+// machine, the time, tasks only or tasks and the game, whether to sync while
+// automatic sync was never turned on or off, the block with the limits, then
+// the install and one run now, watched. null once it is installed, else why
+// nothing was installed. A scheduler that cannot be read or refuses is said as
+// its reason.
 export async function guidedSetup(
   deps: RoutineDeps,
   current: RoutineConfig,
@@ -1104,13 +1099,12 @@ export async function guidedSetup(
   return null;
 }
 
-// Asks whether to turn on automatic sync, only while autoSync is unset,
-// so an operator who said yes to a first sync or turned it off with config
-// auto-sync is never asked (VOU-657). A declined first sync leaves it
-// unset, so that operator is asked here. Without it a routine-only agent never
-// sends an event, since the gate at the end of a run sends only with
-// automatic sync on. No by default. null when it was not asked. The
-// answer is kept only once the install succeeded, see keepSyncAnswer.
+// Asks whether to turn on automatic sync, only while autoSync is unset, so an
+// operator who said yes to a first sync or turned it off with config auto-sync
+// is never asked. A declined first sync leaves it unset, so that operator is
+// asked here. The gate at the end of a run sends only with automatic sync on.
+// No by default. null when it was not asked. The answer is kept only once the
+// install succeeded, see keepSyncAnswer.
 async function askSync(
   input: Input,
   print: SetupPrint,
@@ -1248,8 +1242,8 @@ async function installJob(
   if (prepared.agentNote !== undefined) {
     (print?.line ?? stderr)(prepared.agentNote);
   }
-  // An OpenClaw routine with no model takes the operator's OpenClaw
-  // default, as routine on and --yes ask nothing (VOU-623).
+  // An OpenClaw routine with no model takes the operator's OpenClaw default, as
+  // routine on and --yes ask nothing.
   if (prepared.agent === 'openclaw' && prepared.current.model === undefined) {
     const model = await openclawDefaultModel({
       command: prepared.agentCommand,
@@ -1420,7 +1414,7 @@ async function off(
   }
   const { schedule: _, paused: __, ...rest } = routine;
   if (routine.schedule || routine.paused) await writeRoutineConfig(rest, p);
-  // The copy of the CLI the job ran goes with it (RS-2).
+  // The copy of the CLI the job ran goes with it.
   result.removed.push(...(await removeCopy(p)));
   if (wantsJson(cmd)) {
     stdout(JSON.stringify({ on: false, ...result }));
@@ -1629,12 +1623,12 @@ async function setRoutine(
   for (const line of lines) stdout(line);
 }
 
-// New entries are operator slugs (VOU-196), as posters are shown by their
-// handle, slug/name, and go to allowSlugs. Entries in allow are GitHub
-// logins added before, still matched by login, never by slug. None is
-// moved across, since a login and a slug of one spelling can belong to two
-// operators. disallow takes a name off both lists, a login that is no slug
-// included. Returns the settings with the change, unwritten.
+// New entries are operator slugs, as posters are shown by their handle,
+// slug/name, and go to allowSlugs. Entries in allow are GitHub logins added
+// before, still matched by login, never by slug. None is moved across, since a
+// login and a slug of one spelling can belong to two operators. disallow takes
+// a name off both lists, a login that is no slug included. Returns the settings
+// with the change, unwritten.
 async function changeAllow(
   cmd: Command,
   config: Config,
@@ -1682,8 +1676,8 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   const given = readEnv(RUN_ID_ENV);
   const runId = given !== undefined && UUID.test(given) ? given : randomUUID();
   const p = paths();
-  // By hand in a terminal, the run's events as they happen (RS-9). Ctrl-C
-  // stops the run itself here, as it always has.
+  // By hand in a terminal, the run's events as they happen. Ctrl-C stops the
+  // run itself here.
   const running = routineRun(
     deps,
     config,
@@ -1710,8 +1704,8 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (json) {
     stdout(JSON.stringify(entry));
   } else {
-    // The job writes this to its output file. The run's own sync has
-    // ended, so what waits is what it left (VOU-657).
+    // The job writes this to its output file. The run's own sync has ended, so
+    // what waits is what it left.
     for (const line of reportLines(entry)) stdout(line);
     const waiting = await eventsWaiting(p);
     if (waiting !== null) stdout(waiting);
@@ -1719,11 +1713,10 @@ async function runOnce(cmd: Command, deps: RoutineDeps): Promise<void> {
   if (entry.outcome === 'failed') process.exitCode = 1;
 }
 
-// The agent the job starts, by the schedule routine on wrote. null while
-// the routine is off. Every question of a run goes to one transcript,
-// which a run that asks nothing leaves as it was (RS-10). An OpenClaw
-// routine with no model, as one set up before VOU-623, is unready, and its
-// run fails before its first step.
+// The agent the job starts, by the schedule routine on wrote. null while the
+// routine is off. Every question of a run goes to one transcript, which a run
+// that asks nothing leaves as it was. An OpenClaw routine with no model is
+// unready, and its run fails before its first step.
 function scheduledAgent(
   deps: RoutineDeps,
   routine: RoutineConfig,
@@ -1756,11 +1749,11 @@ function scheduledAgent(
   };
 }
 
-// The agent's environment, the job's own, without the watcher's run id.
-// The agent has no tools, so nothing in it reaches a command. PATH goes
-// through jobPath, so the agent's #!/usr/bin/env node never finds a
-// project's node, also under a job an earlier CLI wrote (VOU-647). where
-// is the setup's folder, for the model question and the first run.
+// The agent's environment, the job's own, without the watcher's run id. The
+// agent has no tools, so nothing in it reaches a command. PATH goes through
+// jobPath, so the agent's #!/usr/bin/env node never finds a project's node,
+// also under a job an earlier CLI wrote. where is the setup's folder, for the
+// model question and the first run.
 function agentEnv(
   where: ProjectWhere,
   env: NodeJS.ProcessEnv = process.env,
@@ -1786,9 +1779,9 @@ async function lastRunOf(p: Paths): Promise<RunEntry | null> {
   );
 }
 
-// What went wrong in a failed run, by the failure its run line names and
-// the runtime it ran, and the fix said beside it. A run line from before
-// VOU-601 names no runtime, and was Claude Code.
+// What went wrong in a failed run, by the failure its run line names and the
+// runtime it ran, and the fix said beside it. A run line that names no runtime
+// was Claude Code.
 export const RUN_FAILURES: Record<
   RunFailure,
   (runtime: string | undefined) => string
@@ -1898,7 +1891,7 @@ export type RoutineView = {
   lines: string[];
   // The routine screen.
   screen: string[];
-  // The job's copy is out of date or gone (RS-2), said on stderr.
+  // The job's copy is out of date or gone, said on stderr.
   warnings: string[];
 };
 
@@ -1937,7 +1930,7 @@ export async function routineView(
   // The time the job was written with, which routine set keeps in step.
   const nextRun =
     s === undefined || routine.paused ? null : nextRunText(s.time, now);
-  // Without lingering systemd stops the timer at logout (RS-4).
+  // Without lingering systemd stops the timer at logout.
   const linger =
     s?.scheduler === 'systemd' &&
     !(await lingers(schedulerEnv(deps), deps.run ?? execRunner));
@@ -2042,10 +2035,9 @@ export async function routineView(
           row('Last run', lastRun.at),
           ...reportLines(lastRun).map((l) => row('', l)),
         ]),
-    // Where the last run's transcript is, never what it says (RS-10).
+    // Where the last run's transcript is, never what it says.
     ...(transcript === null ? [] : [row('Transcript', tildePath(transcript))]),
-    // The card init wrote, which each run refreshes (VOU-383), in the
-    // words status uses (VOU-619).
+    // The card init wrote, which each run refreshes, in the words status uses.
     ...(card === null || card.state === 'none'
       ? []
       : [row('Card', cardLine(card))]),
@@ -2104,8 +2096,7 @@ async function printFiles(
   });
 }
 
-// Where the job is (RS-4), one line for each file, the crontab entry or
-// the task.
+// Where the job is, one line for each file, the crontab entry or the task.
 function jobWhere(s: RoutineSchedule, env: SchedulerEnv): string[] {
   switch (s.scheduler) {
     case 'launchd':

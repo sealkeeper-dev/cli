@@ -10,6 +10,7 @@ import {
   type ApiClient,
   ApiError,
   createApiClient,
+  LISTED_MERGE_TIMEOUT_MS,
   redirectError,
   resolveApiUrl,
 } from './api.js';
@@ -88,7 +89,7 @@ describe('registerAgent', () => {
     });
   });
 
-  it('keeps the Retry-After of a 429 (cli-core-11)', async () => {
+  it('keeps the Retry-After of a 429', async () => {
     const api = createApiClient({
       apiUrl: 'https://api.test',
       fetch: respond(
@@ -502,7 +503,7 @@ describe('a redirect', () => {
 });
 
 describe('listTasksPage', () => {
-  it('sends the filters and the cursor and hands nextCursor back (VOU-208)', async () => {
+  it('sends the filters and the cursor and hands nextCursor back', async () => {
     const cursor = encodeTasksCursor({
       atMicros: '1790000000000000',
       id: '11111111-1111-4111-8111-111111111111',
@@ -549,7 +550,7 @@ describe('listTasksPage', () => {
   });
 });
 
-describe('the request helper (cli-core-11)', () => {
+describe('the request helper', () => {
   it('patches an agent through one patchAgent', async () => {
     const fetchFn = respond(Response.json(AGENT));
     const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
@@ -615,9 +616,33 @@ describe('the request helper (cli-core-11)', () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(seen).toHaveLength(1);
   });
+
+  // The merge answer can take longer than other requests, so the client
+  // waits LISTED_MERGE_TIMEOUT_MS for it, whatever its own timeout.
+  it('waits LISTED_MERGE_TIMEOUT_MS for the merge answer', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    try {
+      const api = createApiClient({
+        apiUrl: 'https://api.test',
+        fetch: respond(
+          new Response(JSON.stringify({ error: { code: 'x', message: 'x' } }), {
+            status: 409,
+          }),
+        ),
+        timeoutMs: 20,
+      });
+      await expect(
+        api.listedMerge('acme.ai', 'planner', 'a.b.c'),
+      ).rejects.toMatchObject({ status: 409 });
+      expect(timeout).toHaveBeenCalledWith(LISTED_MERGE_TIMEOUT_MS);
+      expect(LISTED_MERGE_TIMEOUT_MS).toBeGreaterThan(120_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
 });
 
-describe('the CLI version header (VOU-453)', () => {
+describe('the CLI version header', () => {
   // One call per method of the client, typed so a method added later fails
   // the type check until it is here too.
   const every: Record<
@@ -627,6 +652,7 @@ describe('the CLI version header (VOU-453)', () => {
     request: (api) => api.request('/v1/x'),
     call: (api) => api.call('/v1/x', z.unknown()),
     registerAgent: (api) => api.registerAgent('a.b.c'),
+    listedMerge: (api) => api.listedMerge('acme.ai', 'planner', 'a.b.c'),
     getAgent: (api) => api.getAgent(AGENT_ID),
     postEvents: (api) => api.postEvents(['a.b.c'], 'f.g.h'),
     getCredential: (api) => api.getCredential(AGENT_ID),

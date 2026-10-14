@@ -9,18 +9,17 @@ import type {
 } from './routine-agent.js';
 import { routineRun } from './routine-run.js';
 
-// Mastra as a routine runtime (VOU-601). Mastra has no CLI, so the routine
-// runs in the operator's own process, routine(agent) from sealkeeper/mastra,
-// which the operator schedules with a Mastra scheduled workflow or a cron
-// of their own. It is the same loop as sealkeeper routine run, with the
-// same routine.json, run log and lock, and each question is one
-// agent.generate call. Mastra is typed by shape only.
+// Mastra as a routine runtime. Mastra has no CLI, so the routine runs in the
+// operator's own process, routine(agent) from sealkeeper/mastra, which the
+// operator schedules with a Mastra scheduled workflow or a cron of their own.
+// It is the same loop as sealkeeper routine run, with the same routine.json,
+// run log and lock, and each question is one agent.generate call. Mastra is
+// typed by shape only.
 //
-// No tools. Each call passes toolChoice none, the documented way to turn
-// tool use off for one generate, with activeTools empty and maxSteps 1 so
-// no tool step can follow. https://mastra.ai/reference/agents/generate
-// The answer from a call whose result still reports a tool call is
-// dropped and fails the run.
+// No tools. Each call passes toolChoice none, the documented way to turn tool
+// use off for one generate, with activeTools empty and maxSteps 1 so no tool
+// step can follow. https://mastra.ai/reference/agents/generate The answer from
+// a call whose result still reports a tool call is dropped and fails the run.
 
 // What routine passes to agent.generate.
 export type MastraGenerateOptions = {
@@ -36,8 +35,8 @@ export type MastraAgentLike = {
   generate(prompt: string, options: MastraGenerateOptions): Promise<unknown>;
 };
 
-// What routine takes besides the agent. signal stops the run at its next
-// safe point, as its limits do (VOU-620).
+// What routine takes besides the agent. signal stops the run at its next safe
+// point, as its limits do.
 export type RoutineOptions = {
   signal?: AbortSignal | undefined;
 };

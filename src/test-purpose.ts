@@ -1,7 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// For tests. The purpose the API expects a signed request to name (VOU-637),
-// so a fake API checks the CLI signed each request for the route it sent it
-// to, and takes purpose off before it parses, as the API does.
+// For tests. The purpose a signed request names for its route, so a fake API
+// checks the CLI signed each request for the route it sent it to, and takes
+// purpose off before it parses.
 import { type RequestPurpose, readPurpose } from '@sealkeeper/schema';
 
 const ROUTES: [string, RegExp, RequestPurpose][] = [

@@ -112,7 +112,7 @@ describe('openclaw adapter', () => {
       expect(sealKeeperPlugin().id).toBe('sealkeeper');
     });
 
-    // VOU-627. The plugin writes no event, so it takes only the model
+    // The plugin writes no event, so it takes only the model
     // hook and the nudge.
     it('registers the model hook, plus the nudge', () => {
       const { handlers } = registered();
@@ -189,7 +189,7 @@ describe('openclaw adapter', () => {
     });
   });
 
-  // VOU-627. The agent's own sessions are its operator's work, so the
+  // The agent's own sessions are its operator's work, so the
   // plugin writes no session, usage or tool event, whatever OpenClaw
   // fires. Only a routine run records a session and its usage.
   describe('events', () => {

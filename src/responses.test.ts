@@ -106,7 +106,7 @@ const payloadV1 = {
   dormant_days: 0,
 };
 
-// A status answer (VOU-596), with every part of status.
+// A status answer, with every part of status.
 const statusAnswer = {
   tasks: [],
   waiting: [
@@ -259,7 +259,7 @@ describe('response schemas parse loosely', () => {
     expect(schema.safeParse(rest).success).toBe(false);
   });
 
-  it('the game answers take an API before VOU-618 and drop a malformed new field', () => {
+  it('the game answers take an older API and drop a malformed new field', () => {
     const before = { enabled: true, cap: 5, usedToday: 1, resetAt: AT };
     expect(GameStatusResponse.parse(before)).toEqual(before);
     expect(GameSettingsResponse.parse(before)).toEqual(before);
@@ -278,7 +278,7 @@ describe('response schemas parse loosely', () => {
     });
   });
 
-  it('StatusAnswerResponse leaves out a part of status it cannot read, never the answer (VOU-596)', () => {
+  it('StatusAnswerResponse leaves out a part of status it cannot read, never the answer', () => {
     const parsed = StatusAnswerResponse.parse({
       ...statusAnswer,
       status: {
@@ -316,7 +316,7 @@ describe('response schemas parse loosely', () => {
     ).toBe(false);
   });
 
-  it('TaskResponse reads seed when the API sends it and as unknown when it does not (VOU-208)', () => {
+  it('TaskResponse reads seed when the API sends it and as unknown when it does not', () => {
     expect(TaskResponse.parse(task).seed).toBeUndefined();
     expect(TaskResponse.parse({ ...task, seed: true }).seed).toBe(true);
     expect(TaskResponse.parse({ ...task, seed: false }).seed).toBe(false);
@@ -374,6 +374,30 @@ describe('response schemas parse loosely', () => {
         verification: { kind: 'hash', sha256: 'nope' },
       }).success,
     ).toBe(false);
+  });
+
+  // An endpoint check task, as GET /v1/tasks lists it. One in a page
+  // never fails the parse of the page.
+  it('TaskResponse takes an endpoint check task, alone and in a page', () => {
+    const endpoint = {
+      ...task,
+      taskType: 'endpoint_check',
+      state: 'verified',
+      origin: 'endpoint_check',
+      category: 'endpoint',
+      verification: publicVerification({
+        kind: 'endpoint',
+        checkId: '0b6f1d2e-5a4c-4e3b-8f7a-1c2d3e4f5a6b',
+      }),
+    };
+    expect(TaskResponse.parse(endpoint).verification).toEqual({
+      kind: 'endpoint',
+      checkId: '0b6f1d2e-5a4c-4e3b-8f7a-1c2d3e4f5a6b',
+    });
+    expect(
+      ListTasksResponse.parse({ tasks: [task, endpoint], nextCursor: null })
+        .tasks,
+    ).toHaveLength(2);
   });
 
   it('CredentialResponse prefers seal over credential', () => {
@@ -609,7 +633,7 @@ describe('runBySealKeeper', () => {
   });
 });
 
-describe('agentHandle and operatorSlugOf (VOU-196)', () => {
+describe('agentHandle and operatorSlugOf', () => {
   const name = 'scout';
   it('takes the handle the API sends', () => {
     expect(

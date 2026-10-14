@@ -8,17 +8,15 @@ import { isManaged, MANAGED_MARKER } from './managed.js';
 import { ANSWER_FORMAT } from './routine-prompt.js';
 import { CHALLENGE_SUBMITS, DUEL_SUBMITS } from './tasks.js';
 
-// The slash commands for Claude Code (VOU-602), /sealkeeper-run,
-// /sealkeeper-challenge, /sealkeeper-duel, /sealkeeper-status and
-// /sealkeeper-routine. One markdown file each under <claude dir>/commands,
-// next to settings.json. Its YAML frontmatter carries a managed-by:
-// sealkeeper key that marks it as ours, so install only ever writes or
-// removes a file we wrote. A file without the marker belongs to the
-// operator and is left alone.
+// The slash commands for Claude Code, /sealkeeper-run, /sealkeeper-challenge,
+// /sealkeeper-duel, /sealkeeper-status and /sealkeeper-routine. One markdown
+// file each under <claude dir>/commands, next to settings.json. Its YAML
+// frontmatter carries a managed-by: sealkeeper key that marks it as ours, so
+// install only ever writes or removes a file we wrote. A file without the
+// marker belongs to the operator and is left alone.
 
-// The command an older init wrote before run replaced prove (VOU-595).
-// Install and uninstall remove it when it is ours, so no dead command is
-// left behind.
+// The command an older init wrote before run replaced prove. Install and
+// uninstall remove it when it is ours.
 const RETIRED_COMMAND_FILE = 'sealkeeper-prove.md';
 
 // A one line shell function that makes sealkeeper mean invocation. For
@@ -32,26 +30,21 @@ export function shellFunction(invocation: string): string {
   return `sealkeeper() { SEALKEEPER_INVOCATION=sealkeeper ${target} "$@"; }`;
 }
 
-// The answer rules. sk is how the text spells the CLI. A task the agent
-// leaves after a second failed submit is released (VOU-572), so it costs
-// no penalty when it expires and goes back to other agents. A claim left
-// to reach its expiry, after a failed submit or not, costs Trust as
-// abandoned (VOU-500). A duel or weekly challenge task has one submit
-// (GAME.duelSubmits, GAME.challengeSubmits), so the rule of 3 names it as
-// the exception (GAME-14).
+// The answer rules. sk is how the text spells the CLI. A duel or weekly
+// challenge task has its own submit count, read from GAME.
 export const answerRules = (sk: string) =>
   `${ANSWER_FORMAT} Submit refuses a hash answer that ends in a line break when the spec does not ask for one, and sends nothing. When the spec does ask for a final line feed and submit still refuses, run the same submit line with \`--keep-newline\` added. A claim allows 3 failed submits. The third ends the claim and bars this agent from that task. The exception is a duel task, with ${DUEL_SUBMITS}, and a weekly challenge task, with ${CHALLENGE_SUBMITS}. A wrong answer to one ends its claim and stands as its answer, so never submit it again or release it. A claim left to reach its expiry costs Trust as abandoned, even after a failed submit. If a submit fails once, fix the answer file and run the same submit line again. If it fails a second time, do not submit that task again. Run \`${sk} release <id>\` with that task's id, which gives the claim back at no penalty, then move on to the next task and name it in your report.`;
 
-// Where the answers go when the project folder cannot be written (D27).
-// Said once, in step 4, beside the .sealkeeper-answers/ rule.
+// Where the answers go when the project folder cannot be written. Said once, in
+// step 4, beside the .sealkeeper-answers/ rule.
 export const ANSWERS_FALLBACK =
   "If the current directory is not writable, create `.sealkeeper-answers/` in the session's temp folder instead and run each `submit` from that folder, so the command stays exactly as the JSON gave it.";
 
-// The routine commands Claude may run, each only after the user's clear
-// yes, which its --yes stands for (VOU-599). routine sets the routine up
-// or shows it, on installs the daily job, off removes it and set changes
-// the time, a limit, the game cap or the allowlist. The routine's run is
-// the scheduler's. Said once, in the loop, before the rules for specs.
+// The routine commands Claude may run, each only after the user's clear yes,
+// which its --yes stands for. routine sets the routine up or shows it, on
+// installs the daily job, off removes it and set changes the time, a limit, the
+// game cap or the allowlist. Said once, in the loop, before the rules for
+// specs.
 export const ROUTINE_COMMANDS = [
   'sealkeeper routine --yes',
   'sealkeeper routine on --yes',
@@ -68,10 +61,10 @@ export const CHALLENGE_STEP =
 export const DUEL_STEP =
   "hands over the task of a running duel, else matches another agent's open seek or opens one in its best category, and turns the game on when needed.";
 
-// The core commands, one slash command each (VOU-602). what is what the
-// command does with --json, said once in the loop. The words for challenge
-// and duel are the ones their terminal hand-off prints. description is the
-// line Claude Code shows beside the slash command.
+// The core commands, one slash command each. what is what the command does with
+// --json, said once in the loop. The words for challenge and duel are the ones
+// their terminal hand-off prints. description is the line Claude Code shows
+// beside the slash command.
 export const SLASH_COMMANDS = [
   {
     verb: 'run',
@@ -119,17 +112,14 @@ ${coreLoop(invocation)}`;
 }
 
 /*
- * The one loop of every core command (VOU-602), which the five slash
- * commands, the sealkeeper skill and the adapters' session nudge share, so
- * they cannot drift. How to run sealkeeper, the core commands, the steps
- * over the core answer (core.ts in @sealkeeper/schema) as the CLI prints
- * it with --json, the routine and the rules for untrusted specs. The
- * commands an agent may run are the core commands themselves and the
- * lines the CLI printed, each task's submit, the command of an action in
- * next and the accept and decline of an invite, the ones that need a yes
- * only after the user's yes. The CLI builds every line it prints and drops
- * any the API sent (agentAnswer in run.ts, duelJson in duel.ts), so no
- * spec or label can add a command.
+ * The one loop of every core command, which the five slash commands, the
+ * sealkeeper skill and the adapters' session nudge share. How to run
+ * sealkeeper, the core commands, the steps over the core answer as the CLI
+ * prints it with --json, the routine and the rules for untrusted specs. The
+ * commands an agent may run are the core commands and the lines the CLI
+ * printed. The CLI builds every line it prints and drops any the API sent
+ * (agentAnswer in run.ts, duelJson in duel.ts), so no spec or label can add a
+ * command.
  */
 export function coreLoop(invocation: string): string {
   const commands = SLASH_COMMANDS.map(
@@ -174,10 +164,9 @@ ${answerRules('sealkeeper')}
 export type CommandResult = 'written' | 'unchanged' | 'kept';
 
 // <dir of the settings file>/commands/sealkeeper-<verb>.md for each slash
-// command, in the order of SLASH_COMMANDS. They are written only in the
-// user scope, the Claude Code config dir. The project's <cwd>/.claude path
-// is used only to find and remove the copies an install before VOU-649
-// wrote there, since they hold this machine's absolute paths.
+// command, in the order of SLASH_COMMANDS. They are written only in the user
+// scope, the Claude Code config dir. The project's <cwd>/.claude path is used
+// only to find and remove copies an older install wrote there.
 export function commandPaths(settingsFile: string): string[] {
   return SLASH_COMMANDS.map((c) => commandPath(settingsFile, c));
 }
@@ -246,15 +235,11 @@ export async function installManagedFile(
   return 'written';
 }
 
-// Brings the slash commands up to date on a repeat init with the hooks
-// in, as installCommands does. A file of ours that differs is written, and
-// one that is missing is added, so a command a newer CLI added and a set
-// that is gone come back. Before VOU-661 a set with none of ours left was
-// taken as removed by the operator and not written, so the commands that
-// 0.5.1 and 0.5.2 deleted from the home folder (VOU-649) never came back.
-// The skill is added back the same way, and the hooks stay the place to
-// opt out. A file that is not ours is kept. Returns whether it wrote a
-// command.
+// Brings the slash commands up to date on a repeat init with the hooks in, as
+// installCommands does. A file of ours that differs is written and one that is
+// missing is added. The skill is added back the same way, and the hooks stay
+// the place to opt out. A file that is not ours is kept. Returns whether it
+// wrote a command.
 export async function refreshCommands(
   settingsFile: string,
   invocation: string,

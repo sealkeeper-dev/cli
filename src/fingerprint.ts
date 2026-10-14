@@ -1,19 +1,20 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// The agent's fingerprint on this machine (VB-2). A second axis beside the
-// version, never the version. Each part is a hash of something the CLI read
-// here, and only the hashes are kept, see Fingerprint in @sealkeeper/schema.
+// The agent's fingerprint on this machine. A second axis beside the version,
+// never the version. Each part is a hash of something the CLI read here, and
+// only the hashes are kept, see Fingerprint in @sealkeeper/schema.
 //
 // fingerprint.json in the home holds the last FINGERPRINT_WINDOW captures and
-// the current fingerprint made from them. It is recomputed at sync, run,
-// each duel or challenge step and each routine run only (refreshFingerprint),
-// and only once config.json exists. A routine run recomputes it at its start
-// and again before a step or a submit only when the parts changed
-// (refreshFingerprintOnChange, VOU-655). Anything that needs the fingerprint
-// reads the cached file with currentFingerprint.
+// the current fingerprint made from them. It is recomputed at sync, run, each
+// duel or challenge step and each routine run only (refreshFingerprint), and
+// only once config.json exists. A routine run recomputes it at its start and
+// again before a step or a submit only when the parts changed
+// (refreshFingerprintOnChange). Anything that needs the fingerprint reads the
+// cached file with currentFingerprint.
 //
-// Where the parts come from. Each source writes the hashes of what it sees
-// to fingerprint-sources.json, and the recompute reads them from there, so
-// sync and run give the same parts from any folder.
+// Where the parts come from. Each source writes the hashes of what it sees to
+// fingerprint-sources.json, and the recompute reads them from there, so sync
+// and run give the same parts from any folder.
+//
 // - claude-code, written by the SessionStart and SessionEnd hooks from the
 //   folder Claude Code runs in, see fingerprint-claude-code.ts.
 // - mastra and openclaw, written by the adapters in the agent's own process
@@ -23,8 +24,8 @@
 // - Prompt is not declared by any source yet.
 //
 // Each source also keeps the model name it read, as text, never hashed and
-// never a part (VOU-566). Sync sends the chosen source's name beside the
-// fingerprint, see model-name.ts.
+// never a part. Sync sends the chosen source's name beside the fingerprint, see
+// model-name.ts.
 import {
   FINGERPRINT_NOT_DECLARED,
   FINGERPRINT_PARTS,
@@ -42,7 +43,7 @@ import { readEnv } from './env.js';
 import { exists, readIfExists } from './files.js';
 
 // A part whose hash differed from the capture before it on each of the last
-// this many captures reads unstable (D-VB-4). The file keeps this many.
+// this many captures reads unstable. The file keeps this many.
 export const FINGERPRINT_WINDOW = FINGERPRINT_UNSTABLE_CAPTURES;
 
 // A part as captured, its hash or not_declared. unstable is never captured,
@@ -114,11 +115,10 @@ async function readFingerprintFile(p: Paths): Promise<FingerprintFile | null> {
   }
 }
 
-// The fingerprint as last computed, from fingerprint.json, or null when it
-// was never computed or the file does not parse. Never recomputes, never
-// throws. What a task claim, submit and outcome report send (VB-3, see
-// sendWithFingerprint in tasks.ts), and what sync sends (VB-4), both
-// through declared-fingerprint.ts.
+// The fingerprint as last computed, from fingerprint.json, or null when it was
+// never computed or the file does not parse. Never recomputes, never throws.
+// What a task claim, submit and outcome report send (sendWithFingerprint in
+// tasks.ts), and what sync sends, both through declared-fingerprint.ts.
 export async function currentFingerprint(
   p: Paths = paths(),
 ): Promise<Fingerprint | null> {
@@ -145,12 +145,12 @@ export async function recordCapture(
   return current;
 }
 
-// What an in-process adapter observed, as part hashes. A part it has not
-// seen is left out. model_name is the one model id the source last read, as
-// text, not a part (VOU-566). model_reported says the model part and name
-// came from the model id the runtime itself reported, a session hook's
-// payload or a model step, not from the settings (VOU-614). A value this
-// CLI cannot read drops alone, so it never costs the source its hashes.
+// What an in-process adapter observed, as part hashes. A part it has not seen
+// is left out. model_name is the one model id the source last read, as text,
+// not a part. model_reported says the model part and name came from the model
+// id the runtime itself reported, a session hook's payload or a model step, not
+// from the settings. A value this CLI cannot read drops alone, so it never
+// costs the source its hashes.
 const Observed = z.object({
   at: z.number().int().min(0),
   model_set: Sha256Base64url.optional(),
@@ -331,15 +331,11 @@ export async function refreshFingerprintQuietly(
 }
 
 // Records one capture only when the parts the chosen source gives now differ
-// from the newest capture's, or there is no capture yet. A routine run calls
-// it before each step and each submit (VOU-655), so what the agent's own
-// start wrote, a Claude Code SessionStart hook or the model the runtime
-// reported, is in the next request it signs. Before step 0 it finds no
-// change, since the run captured at its start. A run so
-// adds one capture at its start and one more only for a real change, and the
-// unstable rule, FINGERPRINT_WINDOW differing captures in a row, still means
-// a part that kept changing, never one that was captured often. Never
-// throws, a failure loses the capture only.
+// from the newest capture's, or there is no capture yet. A routine run calls it
+// before each step and each submit, so what the agent's own start wrote, a
+// Claude Code SessionStart hook or the model the runtime reported, is in the
+// next request it signs. A run so adds one capture at its start and one more
+// only for a real change. Never throws, a failure loses the capture only.
 export async function refreshFingerprintOnChange(
   options: CaptureOptions = {},
 ): Promise<void> {
@@ -373,14 +369,13 @@ const PART_TEXT: Record<FingerprintPartName, string> = {
     'the framework and its version, for example Claude Code 2.1.283 or the installed @mastra/core',
 };
 
-// Which requests carry the fingerprint, every caller of
-// sendWithFingerprint in tasks.ts and sync (VOU-624), each step of a routine
-// run among them since VOU-655. what-is-shared.test.ts fails when a command
-// that sends it is missing here.
+// Which requests carry the fingerprint, every caller of sendWithFingerprint in
+// tasks.ts and sync, each step of a routine run among them.
+// what-is-shared.test.ts fails when a command that sends it is missing here.
 export const FINGERPRINT_SENDS =
   'claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.';
 
-// The model name block of what-is-shared (VOU-566).
+// The model name block of what-is-shared.
 export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A routine run sends the id the runtime reported for its answers. Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run. The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit sent. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
 
 export function describeFingerprint(): string {

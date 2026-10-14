@@ -9,15 +9,20 @@ import { specAsksFinalLineFeed } from './line-break.js';
 export const ANSWER_FORMAT =
   'Answers must match the spec exactly. No extra keys, no commentary, no code fences, no trailing line feed unless the spec asks for one. A hash task is checked byte for byte, so a single extra character fails it.';
 
-// The questions a routine run puts to its agent (VOU-599), one at a time
-// through the runtime seam in routine-agent.ts, and how their text answers
-// are read. A task's spec and a submission are written by other operators,
-// so each goes in as data, marked as such, and the agent has no tools to
-// act on anything they say. Whatever it answers, the CLI only submits the
-// text or sends the verdict.
+// The questions a routine run puts to its agent, one at a time through the
+// runtime seam in routine-agent.ts, and how their text answers are read. A
+// task's spec and a submission are written by other operators, so each goes in
+// as data, marked as such, and the agent has no tools to act on anything they
+// say. Whatever it answers, the CLI only submits the text or sends the verdict.
 
 // What the agent answers when a spec asks for anything but the task.
 export const NO_ANSWER = 'NO_ANSWER';
+
+// The tags the answer goes between, so any working the agent writes before the
+// answer stays out of a submission checked byte for byte.
+export const ANSWER_OPEN = '<answer>';
+export const ANSWER_CLOSE = '</answer>';
+const MARKED = /<answer>\r?\n?([\s\S]*?)<\/answer>/g;
 
 // A task as the routine route hands it over.
 export type RoutineTask = {
@@ -50,6 +55,7 @@ export function taskPrompt(task: RoutineTask): string {
       `${NO_ANSWER}.`,
     '',
     ANSWER_FORMAT,
+    `Write the answer between ${ANSWER_OPEN} and ${ANSWER_CLOSE}, with nothing after the closing tag. Only the text between the tags is submitted. Any working goes before the opening tag, never between them.`,
     ...(task.schema === null
       ? []
       : ['The answer is JSON that matches the JSON Schema in the schema tag.']),
@@ -86,17 +92,21 @@ export function judgePrompt(item: RoutineJudgeItem): string {
   return `${lines.join('\n')}\n`;
 }
 
-// The answer to submit from the agent's text, or null when it gave none
-// or said NO_ANSWER. A code fence around the whole answer goes. A hash
-// answer is checked byte for byte, so the answer ends in exactly one line
-// feed when the spec asks for one, else in none.
+// The answer to submit from the agent's text, or null when it gave none or said
+// NO_ANSWER. The text between the last ANSWER_OPEN and ANSWER_CLOSE pair when
+// the agent wrote one, so working before the tags is dropped, else the whole
+// text. A line break right after the opening tag goes. A code fence around the
+// whole answer goes. The answer ends in exactly one line feed when the spec
+// asks for one, else in none.
 export function answerOf(
   text: string | null,
   spec: Record<string, unknown>,
 ): string | null {
   if (text === null) return null;
-  const fenced = /^\s*```[\w-]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(text);
-  const body = (fenced?.[1] ?? text).replace(/(\r?\n)+$/, '');
+  const marked = [...text.matchAll(MARKED)].at(-1)?.[1];
+  const given = marked ?? text;
+  const fenced = /^\s*```[\w-]*\r?\n([\s\S]*?)\r?\n```\s*$/.exec(given);
+  const body = (fenced?.[1] ?? given).replace(/(\r?\n)+$/, '');
   if (body.trim() === '' || body.trim() === NO_ANSWER) return null;
   return specAsksFinalLineFeed(spec) ? `${body}\n` : body;
 }
@@ -112,9 +122,9 @@ export function verdictOf(text: string | null): TaskOutcome | null {
 }
 
 // Untrusted data as JSON for the prompt, with every < written as <.
-// JSON.stringify alone keeps a < as it is, so a spec or a submission that
-// holds </submission> could close its tag and write outside it (VOU-229).
-// The escape is plain JSON and reads back as the same text.
+// JSON.stringify alone keeps a < as it is, so a spec or a submission that holds
+// </submission> could close its tag and write outside it. The escape is plain
+// JSON and reads back as the same text.
 export function asData(value: unknown, indent?: number): string {
   return JSON.stringify(value, null, indent).replace(/</g, '\\u003c');
 }

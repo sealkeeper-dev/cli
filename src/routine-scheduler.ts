@@ -9,14 +9,14 @@ import { readIfExists } from './files.js';
 import { isManaged, MANAGED_MARKER } from './managed.js';
 
 // The daily job of sealkeeper routine, written with the operator's own
-// scheduler (VOU-136). launchd on macOS, a systemd user timer on Linux when
-// the user manager answers and the user lingers, cron otherwise, Task
-// Scheduler on Windows.
+// scheduler. launchd on macOS, a systemd user timer on Linux when the user
+// manager answers and the user lingers, cron otherwise, Task Scheduler on
+// Windows.
 //
-// Every file carries the managed-by: sealkeeper marker the Claude Code
-// command file uses, and the cron entry sits between marker lines, so remove
-// only ever takes out what install wrote. Scheduler calls go through a
-// Runner, which tests replace.
+// Every file carries the managed-by: sealkeeper marker the Claude Code command
+// file uses, and the cron entry sits between marker lines, so remove only ever
+// takes out what install wrote. Scheduler calls go through a Runner, which
+// tests replace.
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type Runner = (
@@ -69,14 +69,12 @@ export const LINGER_NOTE =
 // the operator should know about it.
 export type SchedulerChoice = { kind: SchedulerKind; note?: string };
 
-// launchd on macOS, Task Scheduler on Windows. On anything else a systemd
-// user timer when the user manager answers and the user lingers, else
-// cron. The user manager answers in any SSH session, but without linger
-// systemd stops it, and every user timer, once the user logs out
-// (cli-adapters-tasks-10). So without linger cron is used when there is a
-// crontab command and a cron daemon runs, and otherwise the systemd timer
-// with LINGER_NOTE. A crontab binary with no daemon would take the job and
-// never fire it.
+// launchd on macOS, Task Scheduler on Windows. On anything else a systemd user
+// timer when the user manager answers and the user lingers, else cron. Without
+// linger systemd stops the user manager, and every user timer, once the user
+// logs out. So without linger cron is used when there is a crontab command and
+// a cron daemon runs, and otherwise the systemd timer with LINGER_NOTE. A
+// crontab binary with no daemon would take the job and never fire it.
 export async function detectScheduler(
   env: SchedulerEnv,
   run: Runner,

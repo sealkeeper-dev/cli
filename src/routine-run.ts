@@ -63,19 +63,19 @@ import {
 import { durationText } from './sync.js';
 import { recordClaims, sendWithFingerprint } from './tasks.js';
 
-// One routine run, the loop the API drives (VOU-599). sealkeeper routine
-// run starts it from the scheduler's job with Claude Code or OpenClaw, and
-// routine(agent) from sealkeeper/mastra in the operator's own process
-// (VOU-601). Every runtime gets the same loop, and the runtime only puts
-// one question to one agent, see routine-agent.ts. This file is part of
-// the Mastra bundle, so it imports nothing that installs a job.
+// One routine run, the loop the API drives. sealkeeper routine run starts it
+// from the scheduler's job with Claude Code or OpenClaw, and routine(agent)
+// from sealkeeper/mastra in the operator's own process. Every runtime gets the
+// same loop, and the runtime only puts one question to one agent, see
+// routine-agent.ts. This file is part of the Mastra bundle, so it imports
+// nothing that installs a job.
 
 // What a run needs besides the agent. Tests shorten the wall clock with
 // msPerMinute, pass a sleep that does not wait and a random source for the
-// jitter of a wait (VOU-613). signal is the caller's of a Mastra routine,
-// which stops the run as its limits do (VOU-620). sleep ends at once when
-// it aborts. clock, in milliseconds, times the run's session and each
-// answer for their events (VOU-627), performance.now by default.
+// jitter of a wait. signal is the caller's of a Mastra routine, which stops the
+// run as its limits do. sleep ends at once when it aborts. clock, in
+// milliseconds, times the run's session and each answer for their events,
+// performance.now by default.
 export type RunDeps = {
   fetch: typeof fetch;
   msPerMinute?: number;
@@ -85,20 +85,18 @@ export type RunDeps = {
   clock?: () => number;
 };
 
-// The agent of a run, made at the first question in the run's working
-// folder. close runs when the run ends, for a transcript. unready is why
-// the agent cannot be asked at all, which fails the run before its first
-// step, as an OpenClaw routine with no model (VOU-623).
+// The agent of a run, made at the first question in the run's working folder.
+// close runs when the run ends, for a transcript. unready is why the agent
+// cannot be asked at all, which fails the run before its first step, as an
+// OpenClaw routine with no model.
 export type RunAgent = {
   runtime: RoutineRuntimeName;
   unready?: AgentProblem;
   start(workDir: string): { agent: AgentRuntime; close?: () => void };
 };
 
-// What failed in a failed run, kept in its run line as failure. The
-// routine screen says the fix beside it (RUN_FAILURES in
-// commands/routine.ts). agent_auth and agent_tools since VOU-601,
-// api_later since VOU-613, agent_model since VOU-623.
+// What failed in a failed run, kept in its run line as failure. The routine
+// screen says the fix beside it (RUN_FAILURES in commands/routine.ts).
 export type RunFailure =
   | 'key'
   | 'api'
@@ -122,10 +120,9 @@ const PROBLEM_FAILURE: Record<AgentProblem['kind'], RunFailure> = {
 // the last call. A lock whose process is gone is stale sooner.
 const LOCK_MARGIN_MS = 10 * 60_000;
 
-// How often a step is asked again after the API said it is busy, rate
-// limited or could not be reached, and the first wait between, which
-// doubles with each try (VOU-613). A step asked again carries the same run
-// id and step, which the API answers as a no-op, so this is safe.
+// How often a step is asked again after the API said it is busy, rate limited
+// or could not be reached, and the first wait between, which doubles with each
+// try. A step asked again carries the same run id and step.
 const STEP_TRIES = 3;
 const STEP_RETRY_MS = 2_000;
 // The longest one wait of a run for the API, Retry-After included. A
@@ -151,45 +148,40 @@ const realSleep = (ms: number, signal?: AbortSignal) =>
 type StopFor = NonNullable<AgentResult['stoppedFor']>;
 
 /*
- * One routine run, as the job runs it. Logs every step and the run line
- * and returns the run line. Prints nothing. runId is the id its lines
- * carry, a new one unless a watcher chose it (RS-9).
+ * One routine run, as the job runs it. Logs every step and the run line and
+ * returns the run line. Prints nothing. runId is the id its lines carry, a new
+ * one unless a watcher chose it.
  *
- * The loop. Ask the routine route for step n with the run id, the limits,
- * the allowlist, the game choice and the verdict of the step before, if
- * any. Log the step. done ends the run. task puts the task to the agent
- * and submits the text it answers through the submit path, and gives a
- * task it could not answer back through the release path, unless it is a
- * duel or challenge task, which has no release. judge puts the submission
- * to the agent and keeps its verdict for the next call. Every other action
- * is something the API did. Then step n + 1. The wall clock, the token
- * cap and the caller's signal are checked before each call, and the agent
- * gets what is left of both limits. An abort stops the run the way a limit
- * does, and also ends a wait for the API at once with no step asked after
- * it. A signal aborted before the call starts nothing and takes no lock.
+ * The loop. Ask the routine route for the next step with the run id, the
+ * limits, the allowlist, the game choice and the verdict of the step before, if
+ * any. Log the step. done ends the run. task puts the task to the agent and
+ * submits the text it answers through the submit path, and gives a task it
+ * could not answer back through the release path, unless it is a duel or
+ * challenge task, which has no release. judge puts the submission to the agent
+ * and keeps its verdict for the next call. Every other action is something the
+ * API did. The wall clock, the token cap and the caller's signal are checked
+ * before each call, and the agent gets what is left of both limits. An abort
+ * stops the run the way a limit does, and also ends a wait for the API at once
+ * with no step asked after it. A signal aborted before the call starts nothing
+ * and takes no lock.
  *
- * A run is SealKeeper work, so it records its activity in the local log
- * (VOU-627), the one place the CLI writes a session or a usage event. A
- * session.start, with the run id as the session id, when the run first
- * asks its agent, so a run that asks nothing records no session, and a
- * session.end with its duration when the run ends, whatever ends it. A
- * usage event for each answer the runtime reported tokens in and out for,
- * with the time the answer took and the model, see recordUsage. Once the
- * lock is released a run that held it syncs through the gate every
- * automatic sync takes, unless its caller aborted it, so nothing leaves
- * before automatic sync is on (a confirmed first sync, a yes in the
- * routine setup or config auto-sync on) and nothing with it off. A sync
- * that fails is a sync_failed line and never fails the run.
+ * A run records its activity in the local log, the one place the CLI writes a
+ * session or a usage event. A session.start, with the run id as the session id,
+ * when the run first asks its agent, so a run that asks nothing records no
+ * session, and a session.end with its duration when the run ends, whatever ends
+ * it. A usage event for each answer the runtime reported tokens in and out for,
+ * with the time the answer took and the model, see recordUsage. Once the lock
+ * is released a run that held it syncs through the gate every automatic sync
+ * takes, unless its caller aborted it, so nothing leaves before automatic sync
+ * is on. A sync that fails is a sync_failed line and never fails the run.
  *
- * The fingerprint (VOU-655). The run recomputes it from its own home's
- * files before its first step, so an agent whose only work is its routine
- * declares one. Each step and each submit carries the fingerprint on disk
- * the way a claim does (sendWithFingerprint), and goes again without it
- * when the API refuses the field. Before each of them the run recomputes
- * it once more only when the parts changed, as when the agent's own start
- * wrote its Claude Code hook capture or the runtime reported a new model,
- * so the first submit of a first run carries what that start wrote. None
- * of it can fail, print or hold up the run.
+ * The fingerprint. The run recomputes it from its own home's files before its
+ * first step. Each step and each submit carries the fingerprint on disk the way
+ * a claim does (sendWithFingerprint), and goes again without it when the API
+ * refuses the field. Before each of them the run recomputes it once more only
+ * when the parts changed, as when the agent's own start wrote its Claude Code
+ * hook capture or the runtime reported a new model. None of it can fail, print
+ * or hold up the run.
  */
 export async function routineRun(
   deps: RunDeps,
@@ -217,9 +209,9 @@ export async function routineRun(
   let costUsd: number | null = null;
   let entry: Omit<RunEntry, 'at'> | null = null;
   // The model the runtime reports for an answer goes to the runtime's
-  // fingerprint source, as the live adapters write it, so the run's next
-  // step or submit and the next sync declare it (VOU-614, VOU-655).
-  // Written when the run sees a new id, never fails the run.
+  // fingerprint source, as the live adapters write it, so the run's next step
+  // or submit and the next sync declare it. Written when the run sees a new id,
+  // never fails the run.
   const observer =
     agent === null ? null : createObserver(agent.runtime, () => p);
 
@@ -366,9 +358,9 @@ export async function routineRun(
 
   // The rest of the run, while this run holds the lock.
   async function lockedRun(): Promise<void> {
-    // The card first, so a run with nothing to do still refreshes it
-    // (VOU-383). In this process, never by the agent, and it takes no
-    // step. It never fails the run.
+    // The card first, so a run with nothing to do still refreshes it. In this
+    // process, never by the agent, and it takes no step. It never fails the
+    // run.
     card = await refreshCard(config, { fetch: deps.fetch }, p);
     const session = await openSession(deps, p, config);
     if ('error' in session) {
@@ -505,9 +497,9 @@ export async function routineRun(
       step = r.step + 1;
     }
 
-    // Asks for one step, again after a busy step or an API it could not
-    // reach, which the API answers as a no-op. null when the caller aborted
-    // during the wait, and then no step is asked again.
+    // Asks for one step, again after a busy step or an API it could not reach.
+    // null when the caller aborted during the wait, and then no step is asked
+    // again.
     async function askStep(
       s: LiveSession,
       n: number,
@@ -668,18 +660,17 @@ export async function routineRun(
       return result;
     }
 
-    // A task to solve. The text the agent answers is kept in the working
-    // folder and submitted, checked against the spec the step handed over,
-    // since a game task's public read shows {} (VOU-635). A task it gave no
-    // answer for, or whose answer was refused, is given back unless it is a
-    // game task. A game task has no release, so every later run is handed
-    // it again until it is submitted or its duel or challenge ends. One an
-    // earlier run already answered gets the answer that run kept, and the
-    // agent is not asked again. When a check here refuses that kept answer
-    // before anything is sent, the agent is asked again and its new answer
-    // replaces the kept one, at most GAME_ASKS_AGAIN times for a task
-    // across runs, noted in handed.ts. Past that the run asks no more and
-    // says the task needs the operator, and the kept answer stays.
+    // A task to solve. The text the agent answers is kept in the working folder
+    // and submitted, checked against the spec the step handed over, since a
+    // game task's public read shows {}. A task it gave no answer for, or whose
+    // answer was refused, is given back unless it is a game task. A game task
+    // has no release, so a later run may be handed it again. One an earlier run
+    // already answered gets the answer that run kept, and the agent is not
+    // asked again. When a check here refuses that kept answer before anything
+    // is sent, the agent is asked again and its new answer replaces the kept
+    // one, at most GAME_ASKS_AGAIN times for a task across runs, noted in
+    // handed.ts. Past that the run asks no more and says the task needs the
+    // operator, and the kept answer stays.
     async function solve(
       s: LiveSession,
       task: RoutineTask & { kind: string },
@@ -733,15 +724,14 @@ export async function routineRun(
       solvedBy: string | null,
     ): Promise<'stop' | 'local' | null> {
       // A submit the API rate limited is sent again after the wait a step
-      // takes, since the API refused it before reading it (VOU-613). Past
-      // the tries, or when the wait does not fit, it fails as any refused
-      // submit, and a wait that does not fit or that the caller aborts ends
-      // the run.
+      // takes. Past the tries, or when the wait does not fit, it fails as any
+      // refused submit, and a wait that does not fit or that the caller aborts
+      // ends the run.
       await refreshFingerprintOnChange({ paths: p });
       for (let tries = 1; ; tries++) {
         try {
-          // The model the runtime reported for this answer, else the
-          // one sync declares (VOU-615).
+          // The model the runtime reported for this answer, else the one sync
+          // declares.
           const sent = await submitAnswer(s, task.id, text, {
             routine: true,
             spec: task.spec,
@@ -846,10 +836,9 @@ export async function routineRun(
 
 const DAY_SEC = 24 * 60 * 60;
 
-// A refusal the next try may get through, a busy step, a network failure,
-// a 5xx and a 429 rate_limited, the burst answer of a quota. A 429 with a
-// code of its own, such as game_cap_reached with Retry-After at the next
-// 00:00 UTC, is about the day and is never asked again (VOU-613).
+// A refusal the next try may get through, a busy step, a network failure, a 5xx
+// and a 429 rate_limited. A 429 with a code of its own, such as
+// game_cap_reached, is never asked again.
 const askAgain = (error: ApiError): boolean =>
   error.code === 'routine_step_busy' ||
   error.status === 0 ||
@@ -861,10 +850,9 @@ const askAgain = (error: ApiError): boolean =>
 const askedLater = (error: ApiError): boolean =>
   error.status === 429 || error.retryAfterSec !== null;
 
-// How often the agent is asked again for one game task whose kept answer
-// a check refuses before submit, across runs (VOU-635). Small, since a game
-// task has one submit and no release, so a later run is handed it again
-// until it is submitted or ends.
+// How often the agent is asked again for one game task whose kept answer a
+// check refuses before submit, across runs. Small, since a game task has no
+// release.
 const GAME_ASKS_AGAIN = 2;
 
 const isGame = (task: { kind: string }) =>
@@ -937,9 +925,9 @@ function doneReason(
 export type LiveSession = { api: ApiClient; signer: Signer };
 type Session = LiveSession | { error: string; failure: 'key' | 'api' };
 
-// The key is loaded here rather than through openTaskSession, which ends
-// the command on a missing or broken key. That exit would skip the finally
-// that removes the run lock and leave no run line (cli-adapters-tasks-5).
+// The key is loaded here rather than through openTaskSession, which ends the
+// command on a missing or broken key. That exit would skip the finally that
+// removes the run lock and leave no run line.
 export async function openSession(
   deps: Pick<RunDeps, 'fetch'>,
   p: Paths,

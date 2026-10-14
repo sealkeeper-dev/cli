@@ -28,13 +28,10 @@ import { SealClaims, WellKnown } from './responses.js';
 // signs over an agent's scores and counts. This file checks one offline
 // against the SealKeeper public keys and keeps a copy of those keys.
 
-// The path the keys are served at, from the schema, so the CLI, the API and
-// the web never name different ones.
-// Cached keys are fetched again once they are older than the keys
-// document's own max-age, five minutes, or sooner when a SEAL names a kid
-// they do not have. So a key SealKeeper withdraws from the list after a
-// compromise stops verifying within five minutes (VOU-645). A failed fetch
-// never falls back to the cache.
+// Cached keys are fetched again once they are older than the keys document's
+// own max-age, five minutes, or sooner when a SEAL names a kid they do not
+// have, so a key withdrawn from the list stops verifying within five minutes. A
+// failed fetch never falls back to the cache.
 export const KEYS_MAX_AGE_MS = WELL_KNOWN_MAX_AGE_SECONDS * 1000;
 // Only seal verify --offline reads cached keys past KEYS_MAX_AGE_MS, until
 // they are this old, and says how old they are. A key SealKeeper has since
@@ -52,6 +49,11 @@ export type SealCheck = {
   // unverified claim is never shown.
   payload: unknown;
   expiresAt: string | null;
+  // Only when a time to check against was given (--at). at is that time in UTC.
+  // lapsed is set for a valid SEAL only, true when it has expired since, by the
+  // real clock.
+  at?: string;
+  lapsed?: boolean;
 };
 
 // The iss a SEAL's payload names, read before any check and used only to
@@ -75,8 +77,8 @@ export function sealKid(jws: string): string | null {
   }
 }
 
-// The API's name for each reason, spelled with spaces. expired adds how
-// long ago, below.
+// The words for each reason, spelled with spaces. expired adds how long ago,
+// below.
 const WORDS: Record<SealBrokenReason, string> = {
   malformed: 'malformed',
   unknown_kid: 'unknown kid',
@@ -89,27 +91,38 @@ const WORDS: Record<SealBrokenReason, string> = {
 };
 
 // Checks a SEAL with verifySeal from @sealkeeper/schema, the steps of the
-// standard in order: the header, the key the kid names, the signature over
-// the exact bytes of header.payload, then the issuer, the version, the
-// shape, expiry and iat. Verify first, parse second. The API's POST
-// /v1/seal/verify and the web's checkSeal call the same function, and the
-// SEAL conformance cases in @sealkeeper/schema hold all three to the same
-// answers. agent is the agent the caller expected, so a valid SEAL for
-// another agent is wrong agent. This adds how long ago an expired SEAL ran
-// out, and keeps the signed payload of a broken SEAL for what it prints.
+// standard in order: the header, the key the kid names, the signature over the
+// exact bytes of header.payload, then the issuer, the version, the shape,
+// expiry and iat. Verify first, parse second. agent is the agent the caller
+// expected, so a valid SEAL for another agent is wrong agent. This adds how
+// long ago an expired SEAL ran out, and keeps the signed payload of a broken
+// SEAL for what it prints. nowMs is the real clock. atMs, when given, is the
+// time to check against in its place, the clock verifySeal runs with, and the
+// answer adds at and, for a valid SEAL, lapsed, read against nowMs. How long
+// ago an expired SEAL ran out is always counted from nowMs.
 export async function checkSeal(
   jws: string,
   wellKnown: WellKnown,
   nowMs: number,
   agent?: string,
+  atMs?: number,
 ): Promise<SealCheck> {
-  const r = await verifySeal(wellKnown.keys, jws, nowMs / 1000, agent);
+  const r = await verifySeal(
+    wellKnown.keys,
+    jws,
+    (atMs ?? nowMs) / 1000,
+    agent,
+  );
+  const at = atMs === undefined ? {} : { at: new Date(atMs).toISOString() };
   if (r.ok) {
     return {
       valid: true,
       reason: null,
       payload: r.payload,
       expiresAt: new Date(r.payload.exp * 1000).toISOString(),
+      ...(atMs === undefined
+        ? {}
+        : { ...at, lapsed: r.payload.exp * 1000 <= nowMs }),
     };
   }
   const payload = r.signed ?? null;
@@ -125,9 +138,10 @@ export async function checkSeal(
       reason: `expired ${minutes} ${minutes === 1 ? 'minute' : 'minutes'} ago`,
       payload,
       expiresAt,
+      ...at,
     };
   }
-  return { valid: false, reason: WORDS[r.reason], payload, expiresAt };
+  return { valid: false, reason: WORDS[r.reason], payload, expiresAt, ...at };
 }
 
 // The expiry of a payload of any shape, when it carries one in Unix seconds.
@@ -142,14 +156,14 @@ function expiresAtOf(payload: unknown): string | null {
 }
 
 // What a verified SEAL says, one line each, for seal show and seal verify.
-// Level, the eight counts (with the counted value beside each task count
-// from version 2 on, VOU-140), the three posted counts (with the counted
-// value beside posted tasks and posted confirmed tasks), fingerprint and
-// state of version 3 on, the Trust Score and the top categories of version
-// 4, operator verified, last active as a date, dormant
-// days and any identity references. A legacy SEAL, issued before
-// version 1, has only some of these, so a line is left out when its field
-// is. Nothing for a payload that is not a SEAL.
+// Level, the eight counts (with the counted value beside each task count from
+// version 2 on), the three posted counts (with the counted value beside posted
+// tasks and posted confirmed tasks), fingerprint and state of version 3 on, the
+// Trust Score and the top categories of version 4 on, operator verified, a
+// listed agent's handle, owner and endpoint checks of version 5, last active as
+// a date, dormant days and any identity references. A legacy SEAL, issued
+// before version 1, has only some of these, so a line is left out when its
+// field is. Nothing for a payload that is not a SEAL.
 const COUNT_LINES = [
   ['events', 'events'],
   ['history_days', 'history days'],
@@ -194,7 +208,7 @@ export function sealSummary(payload: unknown): string[] {
     );
   }
   // Only version 3 on defines fingerprint and state.
-  if (c.ver === 3 || c.ver === 4) {
+  if (c.ver !== undefined && c.ver >= 3) {
     if (c.fingerprint !== undefined) {
       lines.push(
         c.fingerprint === null
@@ -204,9 +218,8 @@ export function sealSummary(payload: unknown): string[] {
     }
     if (c.state !== undefined) lines.push(`state ${c.state}`);
   }
-  // Only version 4 defines trust and top_categories. What the agent has
-  // earned, never a level and never a permission.
-  if (c.ver === 4) {
+  // Only version 4 on defines trust and top_categories.
+  if (c.ver !== undefined && c.ver >= 4) {
     if (c.trust !== undefined) lines.push(`Trust Score ${c.trust}`);
     if (c.top_categories !== undefined) {
       lines.push(
@@ -220,6 +233,23 @@ export function sealSummary(payload: unknown): string[] {
   }
   if (c.operator !== undefined) {
     lines.push(`operator verified ${c.operator.verified ? 'yes' : 'no'}`);
+  }
+  // A listed agent's SEAL, version 5. Whether its owner is verified, never who
+  // it is.
+  if (c.listing !== undefined) lines.push(`listed as ${c.listing.handle}`);
+  if (c.owner !== undefined) {
+    lines.push(
+      c.owner.status === 'verified'
+        ? `owner verified by ${c.owner.method ?? 'claim'}${c.owner.verified_at ? ` on ${c.owner.verified_at.slice(0, 10)}` : ''}`
+        : `owner ${c.owner.status}`,
+    );
+  }
+  for (const e of c.evidence ?? []) {
+    if (e.type === 'endpoint_check') {
+      lines.push(
+        `endpoint checks ${e.task_ok ?? 0} of ${e.task_total ?? 0} OK`,
+      );
+    }
   }
   if (c.last_active !== undefined) {
     lines.push(
@@ -331,15 +361,13 @@ export const isProductionIssuer = (iss: string | null): boolean =>
 export const isProductionApi = (apiUrl: string): boolean =>
   originOf(apiUrl) === originOf(DEFAULT_API_URL);
 
-// The base URL the keys for a SEAL are fetched from, WELL_KNOWN_PATH
-// appended. A SEAL from the production issuer gets its keys from
-// WELL_KNOWN_URL on the issuer's own domain, the URL the standard
-// documents, wherever the CLI points (VOU-645). A local or staging API
-// signs its SEALs with its own key under the same iss, so its keys never
-// check a production SEAL here. To check a SEAL such an API signed, pass a
-// saved copy of its keys with --keys. The keys for a SEAL of any other
-// issuer come from the API the CLI points at, and verifySeal then names it
-// a wrong issuer.
+// The base URL the keys for a SEAL are fetched from, WELL_KNOWN_PATH appended.
+// A SEAL from the production issuer gets its keys from WELL_KNOWN_URL on the
+// issuer's own domain, wherever the CLI points. So the keys of a local or
+// staging API never check a production SEAL here. To check a SEAL such an API
+// signed, pass a saved copy of its keys with --keys. The keys for a SEAL of any
+// other issuer come from the API the CLI points at, and verifySeal then names
+// it a wrong issuer.
 export function keysBaseUrl(apiUrl: string, iss: string | null): string {
   return isProductionIssuer(iss) ? ISSUER_ORIGIN : apiUrl;
 }
@@ -364,12 +392,12 @@ export function keysOrigin(apiUrl: string, iss: string | null): string {
   return originOf(keysBaseUrl(apiUrl, iss));
 }
 
-// The API whose agent answer is the record a handshake is compared with
-// beside a SEAL before version 3 (VB-6), paired with the origin the SEAL's
-// keys came from, keysOrigin, so the record and the keys come from one
-// issuer. The issuer's own domain pairs with the production API, any other
-// keys origin with that API itself. null when that API is not the one this
-// CLI points at, and seal verify then refuses to read a record.
+// The API whose agent answer is the record a handshake is compared with beside
+// a SEAL before version 3, paired with the origin the SEAL's keys came from,
+// keysOrigin, so the record and the keys come from one issuer. The issuer's own
+// domain pairs with the production API, any other keys origin with that API
+// itself. null when that API is not the one this CLI points at, and seal verify
+// then refuses to read a record.
 export function recordApiUrl(
   apiUrl: string,
   iss: string | null,
@@ -391,15 +419,13 @@ function ageText(ms: number): string {
 }
 
 // The cached keys while they came from the same origin, are younger than
-// KEYS_MAX_AGE_MS, the keys document's max-age, and know the kid.
-// Otherwise fetches them from keysBaseUrl and caches them with its origin.
-// When the fetch fails it throws KeysError, never falling back to an older
-// copy, so a key withdrawn from the list is not trusted on a copy kept
-// through an outage (VOU-645). With offline it never fetches and uses
-// cached keys from the same origin that know the kid and are under
-// KEYS_OFFLINE_MAX_AGE_MS old, with one line naming how old they are. A
-// copy dated later than now is never used. Throws KeysError when there are
-// no usable keys.
+// KEYS_MAX_AGE_MS, the keys document's max-age, and know the kid. Otherwise
+// fetches them from keysBaseUrl and caches them with its origin. When the fetch
+// fails it throws KeysError, never falling back to an older copy. With offline
+// it never fetches and uses cached keys from the same origin that know the kid
+// and are under KEYS_OFFLINE_MAX_AGE_MS old, with one line naming how old they
+// are. A copy dated later than now is never used. Throws KeysError when there
+// are no usable keys.
 export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   const base = keysBaseUrl(options.apiUrl, options.iss);
   const origin = keysOrigin(options.apiUrl, options.iss);
@@ -445,8 +471,8 @@ export async function loadKeys(options: LoadKeysOptions): Promise<WellKnown> {
   }
   if (cached && age < KEYS_MAX_AGE_MS) return cached.wellKnown;
 
-  // The issuer's own site is not the SealKeeper API, so it is not told
-  // which CLI asks (VOU-453). A local or staging API is.
+  // The issuer's own site is not the SealKeeper API, so it gets no CLI version
+  // header. A local or staging API does.
   const api = createApiClient({
     apiUrl: base,
     fetch: options.fetch,

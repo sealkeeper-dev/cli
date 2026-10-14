@@ -53,11 +53,11 @@ const HOOK = hookCommand(
   '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
 );
 
-// Every signed payload names the API it is for (VOU-111). The fake takes
+// Every signed payload names the API it is for. The fake takes
 // aud off before it parses, and a payload without the right aud fails the
 // test that sent it.
 const audErrors: unknown[] = [];
-// It names the route it is for too (VOU-637), checked and taken off the
+// It names the route it is for too, checked and taken off the
 // same way.
 const unsigned = (payload: unknown, method: string, path: string) => {
   const check = readAudience(payload, [API_URL]);
@@ -343,7 +343,7 @@ describe('sealkeeper agent delete', () => {
       used: 15,
       cap: 15,
     });
-    // The last run's transcript goes with the copy (RS-10).
+    // The last run's transcript goes with the copy.
     const transcript = copyPaths(p).transcript;
     await mkdir(dirname(transcript), { recursive: true });
     await writeFile(transcript, '{"type":"result"}\n');
@@ -404,7 +404,7 @@ describe('sealkeeper agent delete', () => {
     expect(await remaining()).toEqual([]);
   });
 
-  it('deletes every copy of the key and names each (cli-core-13)', async () => {
+  it('deletes every copy of the key and names each', async () => {
     const p = paths(home);
     const bak = join(home, 'key.2026-09-20T10-00-00-000Z.bak');
     const tmp = join(home, `key.${'0'.repeat(8)}.tmp`);
@@ -582,7 +582,7 @@ describe('sealkeeper agent delete', () => {
     expect(err).toContain('could not be removed');
   });
 
-  // VOU-603. agent delete runs the Claude Code uninstall init's install is
+  // agent delete runs the Claude Code uninstall init's install is
   // undone by, once no other agent on this machine is left. Only what
   // SealKeeper wrote goes.
   describe('the Claude Code files', () => {
@@ -596,8 +596,8 @@ describe('sealkeeper agent delete', () => {
         file,
         JSON.stringify({ hooks: { Stop: [{ hooks: [FOREIGN] }] } }),
       );
-      // The commands and the skill beside file too, as an install before
-      // VOU-649 wrote them in the project, so delete is seen taking those
+      // The commands and the skill beside file too, as an older install
+      // wrote them in the project, so delete is seen taking those
       // out as well.
       await installClaudeCode(file, file, HOOK, () => {});
     }

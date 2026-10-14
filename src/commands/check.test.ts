@@ -300,7 +300,7 @@ describe('sealkeeper check', () => {
     expect(help?.replace(/\s+/g, ' ')).toContain('default bronze');
   });
 
-  // VOU-436. The help of --min-safety says what the answer below shows.
+  // The help of --min-safety says what the answer below shows.
   it('says in the help that --min-safety fails for every agent while safety is not measured', () => {
     const help = createProgram()
       .commands.find((c) => c.name() === 'check')
@@ -310,7 +310,7 @@ describe('sealkeeper check', () => {
     );
   });
 
-  // VOU-436. Safety is not measured, so the API answers minSafety with a
+  // Safety is not measured, so the API answers minSafety with a
   // null actual for every agent, and the SEAL it carries has no safety key.
   it('prints a minSafety check with no safety score as none yet, exit 1', async () => {
     reply = () =>
@@ -409,7 +409,7 @@ describe('sealkeeper check', () => {
     expect(r.err).toContain(`not trusting alice/claude-code, ${why}`);
   });
 
-  // VOU-645. An API that says ok is held to the SEAL it sent. minLevel,
+  // An API that says ok is held to the SEAL it sent. minLevel,
   // minVerified and maxIncidents are worked out again from the verified
   // payload, which has level bronze, 7 verified tasks and no incident.
   it.each([

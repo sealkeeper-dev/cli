@@ -6,6 +6,9 @@ import {
   isRuntimeName,
   LEVEL_THRESHOLDS,
   type Level,
+  type ListedHandleParams,
+  type ListedMergePayload,
+  parseListedHandle,
   type RegisterAgentRequest,
   RUNTIME_LABELS,
   RUNTIMES,
@@ -24,6 +27,7 @@ import {
 } from '../agent-runtime.js';
 import {
   API_URL_ENV,
+  type ApiClient,
   ApiError,
   createApiClient,
   resolveApiUrl,
@@ -134,6 +138,11 @@ import {
   wantsJson,
 } from '../output.js';
 import { refusal } from '../refusal.js';
+import {
+  type AgentResponse,
+  agentHandle,
+  type ListedMergeResponse,
+} from '../responses.js';
 import { projectAgentWarning } from '../routine-copy.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
@@ -179,9 +188,8 @@ import {
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
 // taxonomy block. The human output says less, see below.
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
-// Said right before the GitHub device code, in every form, and on stderr
-// with --json. Full https links, so terminals make them clickable. The API
-// records which versions were accepted, the CLI never sends them (VOU-121).
+// Said right before the GitHub device code, in every form, and on stderr with
+// --json. Full https links, so terminals make them clickable.
 export const CONSENT =
   'Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).';
 
@@ -190,23 +198,20 @@ export function leftBehindLine(n: number): string {
   return `${n} unsent event${n === 1 ? '' : 's'} of the old key ${n === 1 ? 'stays' : 'stay'} in the log and ${n === 1 ? 'is' : 'are'} never sent under the new key.`;
 }
 
-// Said on stderr before the device flow when the API is not the SealKeeper
-// one, since the GitHub token goes to it (cli-core-3).
+// Said on stderr before the device flow when the API is not the SealKeeper one,
+// since the GitHub token goes to it.
 export function otherApiLine(apiUrl: string): string {
   return `This sign in sends your GitHub token to the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
 }
 
 // A URL from SEALKEEPER_API_URL alone, with no --api-url, can come from a
-// project's .claude/settings.json, whose env block Claude Code passes to
-// every shell and hook once the folder is trusted. So can SEALKEEPER_HOME,
-// and with it the config.json the URL of --force is read from. So when the
-// URL comes from either and is neither SealKeeper's nor on this machine,
-// init asks for a yes before anything is created, with no as the default,
-// and refuses without a terminal. --api-url is the say so, since it is
-// typed on the command line where a person sees it. The refusal names no
-// flag, since without a terminal its reader is usually the agent, and the
-// person should see the question (VOU-649). Those project settings can run
-// code once trusted anyway, so this is defense in depth.
+// project's .claude/settings.json, whose env block Claude Code passes to every
+// shell and hook. So can SEALKEEPER_HOME, and with it the config.json the URL
+// of --force is read from. So when the URL comes from either and is neither
+// SealKeeper's nor on this machine, init asks for a yes before anything is
+// created, with no as the default, and refuses without a terminal. --api-url is
+// typed on the command line where a person sees it, so it is not asked about.
+// The refusal names no flag, so the person sees the question.
 export type ApiSource = 'SEALKEEPER_API_URL' | 'SEALKEEPER_HOME';
 const sourceText = (source: ApiSource): string =>
   source === 'SEALKEEPER_API_URL'
@@ -240,45 +245,42 @@ export const NUDGE_INTRO =
   'The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.';
 export const NUDGE_NOT_ON = `Session nudge off. Run ${cli('config nudge on')} to turn it on later.`;
 export const HOOKS_NOT_INSTALLED = `Hooks not installed. Run ${INSTALL_COMMAND} to install them later.`;
-// Said on stderr when the hooks went in without a question, since Claude
-// Code runs this init with no terminal (RS-8).
+// Said on stderr when the hooks went in without a question, since Claude Code
+// runs this init with no terminal.
 export const HOOKS_BY_CLAUDE =
   'The Claude Code hooks went in without a question, since Claude Code is running this init.';
 // The first Next step then, for Claude to run on the user's yes.
 export const ROUTINE_STEP = 'Set up the daily routine';
 export const NEXT_ROUTINE = `${ROUTINE_STEP} with ${cli('routine --yes')}, only after the user's clear yes`;
-// Said when stdin closes at a question, so init ends rather than waits
-// (D6).
+// Said when stdin closes at a question, so init ends rather than waits.
 export const INPUT_CLOSED = `init stopped, stdin closed before an answer. There is no terminal to ask, so run ${cli('init')} again in a terminal.`;
 // The daily routine, offered after the hooks when claude or openclaw is on
-// PATH, as one block the routine setup shows too, with yes as the default
-// (RS-1). The limits are on the screen before the question.
+// PATH, as one block the routine setup shows too, with yes as the default. The
+// limits are on the screen before the question.
 export const ROUTINE_NOT_INSTALLED = `Routine not installed. Run ${cli('routine')} to set it up later.`;
 export const routinePresentLine = (time: string): string =>
   `Daily routine at ${time}`;
-// Said on a repeat init when the job was installed by a CLI from before
-// RS-2, which pointed it at the script that ran install.
+// Said on a repeat init when the job was installed by an earlier CLI that
+// pointed it at the script that ran install.
 export const ROUTINE_EARLIER_LINE = `An earlier CLI installed this job. Run ${cli('routine on')} to give it a copy of the CLI that npm cannot clear.`;
 export const ADAPTERS_URL = 'https://sealkeeper.run/docs/init#adapters';
-// What bronze asks for, from the thresholds the scoring job applies.
+// What bronze asks for, shown in the summary.
 export const BRONZE = LEVEL_THRESHOLDS.bronze;
 
 // Asked on a repeat init when the version on this machine is not the one
 // SealKeeper has. No is the default, since a new version starts a new record.
 export const versionQuestion = (server: string, local: string): string =>
   `SealKeeper has this agent on version ${server} and this machine on ${local}. Move SealKeeper to ${local}? [y/N] `;
-// The game layer, duels and weekly challenges (D-GAME-2). Asked in a
-// terminal after the Claude Code hooks, as the fifth step, with yes as the
-// default. Without a terminal, or when Claude Code runs init, nobody is
-// asked and the default goes. The agent registers with the game on and a
-// no is sent as the signed settings change right after. The daily cap of
-// game units is not asked, it stays at the most and routine set changes
-// it. The Game line of the summary says what SealKeeper has and how to
-// change it, and the step line says on or off.
+// The game question, duels and weekly challenges. Asked in a terminal after the
+// Claude Code hooks, as the fifth step, with yes as the default. Without a
+// terminal, or when Claude Code runs init, nobody is asked and the default
+// goes. The agent registers with the game on and a no is sent as the signed
+// settings change right after. The daily cap is not asked, routine set changes
+// it. The Game line of the summary says what SealKeeper has and how to change
+// it, and the step line says on or off.
 export const GAME_QUESTION = 'Play duels and weekly challenges? [Y/n] ';
-// The cap counts the duels the agent creates and the challenge tasks it
-// claims, never an invite it accepts, so only the switch stops invites,
-// and the line names config game off for that (VOU-611, VOU-617).
+// The Game line of the summary, which names config game off for stopping
+// invites.
 export function gameLine(game: { enabled: boolean; cap: number | null }) {
   const stop = `stop playing with ${cli('config game off')}`;
   if (!game.enabled) return `off, ${cli('config game on')} turns it on`;
@@ -303,13 +305,12 @@ export const nudgeLine = (on: boolean): string =>
 export const NEXT_RUN = `Run ${cli('run')} to earn your first verified tasks`;
 export const NEXT_WHAT_IS_SHARED = `Run ${cli('what-is-shared')} to see exactly what leaves this machine`;
 export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code sessions`;
-// Every level needs tasks the agent posted that other operators' agents
-// completed (POST-3), which exist only when it posts them. Said once there
-// are verified tasks, and as what comes after them before that.
+// The step after the first verified tasks. Said once there are verified tasks,
+// and as what comes after them before that.
 export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('post')}`;
 export const POST_STEP = `Post a task for other agents with ${cli('post')}, every level needs posted tasks other agents completed`;
-// Said when init moved the slash commands and the skill of an earlier
-// install out of a project's .claude (VOU-649).
+// Said when init moved the slash commands and the skill of an earlier install
+// out of a project's .claude.
 export const movedOutLine = (dir: string): string =>
   `Moved the slash commands and the skill out of ${dir} to your user scope, since they hold absolute paths on this machine and a repo commits that folder`;
 export const NEXT_NPX =
@@ -356,7 +357,26 @@ type InitOptions = {
   apiUrl?: string;
   force?: boolean;
   runtime?: string;
+  listed?: string;
 };
+
+// init --listed <handle>. The handle is the one the dashboard's invite names,
+// <domain key>/<name>.
+export const listedHandleInvalid = (handle: string): string =>
+  `invalid listed handle ${handle}, use the <domain>/<name> the dashboard shows`;
+export const listedHomeTaken = (home: string): string =>
+  `${home} already holds an agent, run ${cli('init --listed <handle> --force')} to replace it, the old key is kept beside it`;
+// Said once the merge went through, the listed agent's handle and the one
+// it now leads to.
+export const tookOverLine = (listed: string, handle: string): string =>
+  `Took over ${listed}, which now leads to ${handle}`;
+// Said after the reason when the merge is refused once the registration
+// went through. The key stays and no config is written, so the same
+// command again registers the same key, a repeat, and merges. --force
+// would make a new key, whose registration finds the name taken by this
+// agent.
+export const mergeRefusedLine = (handle: string): string =>
+  `agent ${handle} is registered, run the same command again without --force once this is fixed`;
 
 export const VERSION_RULES = 'use 1 to 32 characters';
 
@@ -370,8 +390,8 @@ export const nameQuestion = (suggestion: string | null): string =>
 // Asked again after an answer that is not a valid name, up to this many
 // questions in all.
 export const NAME_MAX_ASKS = 3;
-// The name is public, so without a terminal nobody picks it for the
-// operator, not even from the git remote or the folder (VOU-649).
+// The name is public, so without a terminal nobody picks it for the operator,
+// not even from the git remote or the folder.
 export const NAME_REQUIRED = `there is no terminal to ask the agent name, which is public, so pass --name with ${NAME_RULES}`;
 // Said once, in the question, for a name on the soft list of runtime names.
 // Keeping it is allowed.
@@ -429,6 +449,11 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
     `the API answers as another address, check the API URL, ${m}`,
   github_token_rejected: () =>
     `the API could not verify your GitHub login, run ${cli('init')} again`,
+  // The merge of init --listed, which answers the same for an agent that
+  // is not yours and one that does not exist.
+  not_found: () =>
+    'no listed agent of yours has this handle, claim it on its SealKeeper page first',
+  agent_listed: (m) => m,
   network_error: (m) => m,
   bad_response: (m) => m,
 };
@@ -461,6 +486,10 @@ export function register(
     .option('--version <version>', 'agent version', DEFAULT_AGENT_VERSION)
     .option('--api-url <url>', 'SealKeeper API base URL')
     .option('--force', 'regenerate the key and register again')
+    .option(
+      '--listed <handle>',
+      'register this agent with a key of its own and merge it into a listed agent you claimed',
+    )
     .action(async function (this: Command, options: InitOptions) {
       try {
         await init(this, options, deps, routineDeps);
@@ -497,12 +526,12 @@ const startStep = (ui: Ui | null, key: StepKey, text?: string) =>
 const finishStep = (ui: Ui | null, key: StepKey, text: string) =>
   ui?.list?.finish(key, text);
 
-// deps whose stdin guards every question init asks, its own and the
-// runtime, nudge and routine questions it borrows. A closed input throws
-// InputClosed, so init ends with INPUT_CLOSED instead of reading the close
-// as an answer (D6), and an answer is told to the pinned list, so the
-// question area is cleared after it. The list may not exist yet when the
-// input is made, so it is looked up at each answer.
+// deps whose stdin guards every question init asks, its own and the runtime,
+// nudge and routine questions it borrows. A closed input throws InputClosed, so
+// init ends with INPUT_CLOSED instead of reading the close as an answer, and an
+// answer is told to the pinned list, so the question area is cleared after it.
+// The list may not exist yet when the input is made, so it is looked up at each
+// answer.
 function guardInput(deps: InitDeps, ui: Ui | null): InitDeps {
   const stdin = deps.stdin;
   if (stdin === undefined) return deps;
@@ -617,13 +646,12 @@ async function chooseHome(
   return choose(cmd, options, deps, ui, claudeCode, cwd, root, agents);
 }
 
-// The choice, for an unbound folder on a machine with agents. The name
-// comes from --name, from the question, or without a terminal from the
-// suggestion only when one of the agents has it, and a new agent without
-// a terminal needs --name (VOU-649). A name one of the agents has binds
-// the folder to it, which is how a worktree of a project picks up the
-// project's agent on Enter. A new name registers another agent in its own
-// home under agents/.
+// The choice, for an unbound folder on a machine with agents. The name comes
+// from --name, from the question, or without a terminal from the suggestion
+// only when one of the agents has it, and a new agent without a terminal needs
+// --name. A name one of the agents has binds the folder to it, which is how a
+// worktree of a project picks up the project's agent on Enter. A new name
+// registers another agent in its own home under agents/.
 async function choose(
   cmd: Command,
   options: InitOptions,
@@ -702,6 +730,15 @@ async function init(
         list: null,
       };
   deps = guardInput(deps, ui);
+  // init --listed. A new agent with a key of its own, named as the listed one
+  // unless --name says otherwise, registered as any init registers one and then
+  // merged into the listed agent.
+  let listed: ListedHandleParams | null = null;
+  if (options.listed !== undefined) {
+    listed = parseListedHandle(options.listed);
+    if (listed === null) cmd.error(listedHandleInvalid(options.listed));
+    options = { ...options, name: options.name ?? listed.name };
+  }
   const claudeCode = await hasClaudeCode(deps);
   const target = await chooseHome(cmd, options, deps, ui, claudeCode);
   const p = target.p;
@@ -718,17 +755,18 @@ async function init(
   } else {
     const existing = await readConfig(p);
     if (existing !== null) {
+      // A home that holds an agent merges nothing without --force.
+      if (listed !== null) cmd.error(listedHomeTaken(tildePath(p.home)));
       await initRegistered(existing, target, deps, routineDeps, ui, claudeCode);
       return;
     }
   }
 
   // An explicit --name must already be a valid name. The suggestion, the
-  // repository name of the git remote and then the directory name, is only
-  // the default of the question, so it is made into one. Nobody to ask and
-  // no --name ends the command here, before anything is created, since the
-  // name is public (VOU-649). terminal is where a person answers, undefined
-  // when nobody can.
+  // repository name of the git remote and then the directory name, is only the
+  // default of the question, so it is made into one. Nobody to ask and no
+  // --name ends the command here, before anything is created. terminal is where
+  // a person answers, undefined when nobody can.
   const stdin = ui === null ? undefined : deps.stdin?.();
   const terminal = stdin?.isTTY ? stdin : undefined;
   if (
@@ -806,7 +844,7 @@ async function init(
   // The same holds for a plain init that makes a key on the spot, as in a
   // home an older logout --delete-key left with the log and no cursor. A
   // key made here never owns events already in the log.
-  let agentId: string;
+  let agentId = '';
   let backup: string | undefined;
   let leftBehind = 0;
   if (options.force) {
@@ -814,9 +852,6 @@ async function init(
     agentId = created.agentId;
     backup = created.backup;
     leftBehind = await cursorToEnd(p);
-    if (ui === null && backup !== undefined) {
-      stderr(`the old key is kept at ${backup}`);
-    }
     await rm(p.config, { force: true });
   } else {
     const loaded = await loadKey(p);
@@ -827,22 +862,11 @@ async function init(
       leftBehind = await cursorToEnd(p);
     }
   }
-  if (ui === null && leftBehind > 0) stderr(leftBehindLine(leftBehind));
   finishStep(ui, 'key', tildePath(p.key));
   startStep(ui, 'sign-in');
+  keyNotes(ui, backup, leftBehind);
 
   let prompt: ((url: string, code: string) => void) | undefined;
-  if (ui !== null) {
-    const s = ui.err;
-    if (backup !== undefined) {
-      note();
-      note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
-    }
-    if (leftBehind > 0) {
-      note();
-      note(s.line`${leftBehindLine(leftBehind)}`);
-    }
-  }
 
   // The name and the runtime, asked where a person can answer, before the
   // sign in. Otherwise the suggestion, and the runtime only from --runtime,
@@ -903,30 +927,30 @@ async function init(
     prompt,
   });
 
-  // unknown is what the API stores when runtime is left out, so it is.
-  // issuedAt is taken after the device flow, right before signing, so a
-  // captured envelope stops working after the API's window.
-  const request: RegisterAgentRequest = {
-    publicKey: agentId,
+  const api = createApiClient({ apiUrl, fetch: deps.fetch });
+  const registered = await registerNew(api, p, {
+    agentId,
     githubToken,
     name,
     version: options.version,
-    ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
-    // On, and a no to the game question, asked after the hooks, is sent
-    // as a settings change.
-    gameEnabled: true,
-    issuedAt: new Date().toISOString(),
-  };
-  const api = createApiClient({ apiUrl, fetch: deps.fetch });
-  const envelope = await signEnvelope(request, api.apiUrl, 'agent.register', p);
-  const agent = await api.registerAgent(envelope);
-  if (agent.id !== agentId) {
-    throw new ApiError(
-      0,
-      'bad_response',
-      'the API registered a different agent id than the local key',
-    );
+    runtime,
+  });
+  // init --listed. The merge before the config, so a failed one leaves the key
+  // and no config, and a rerun picks up from the key.
+  let merged: ListedMergeResponse | null = null;
+  if (listed !== null) {
+    try {
+      merged = await mergeListed(api, p, listed, registered.id);
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      trackOutput(null);
+      cmd.error(
+        `${apiErrorMessage(error)}, ${mergeRefusedLine(agentHandle(registered))}`,
+      );
+    }
   }
+  const agent: Registered =
+    merged === null ? registered : { ...registered, handle: merged.handle };
 
   const config = await writeConfig(
     {
@@ -952,25 +976,24 @@ async function init(
     await recordRuntimeAsked(config.agentId, new Date(), p);
   }
 
-  // The handle is built from the operator slug, which the registration
-  // answer leaves out for CLI 0.1.0, so it comes from the agent read. The
-  // slug is stored for the commands that build the handle offline. With no
-  // answer the one stored for this agent before stands in, from a repeat
-  // registration, and the login only when there is none.
+  // The handle is built from the operator slug, read from the agent and stored
+  // for the commands that build the handle offline. With no answer the slug
+  // stored for this agent before stands in, and the login only when there is
+  // none.
   const live = await readLiveAgent(config, deps.fetch);
   const slug = await refreshOperatorSlug(config.agentId, live, p);
-  const handle = live?.handle ?? handleOf(config, slug);
+  // The merge answer names the handle when the agent read does not answer.
+  const known = live?.handle ?? agent.handle;
+  const handle = known ?? handleOf(config, slug);
   const profileUrl =
-    live?.handle === undefined
-      ? profileUrlOf(config, slug)
-      : handleUrl(live.handle);
-  // What the API has, which differs from what was sent when the key was
-  // registered already, since a repeat registration changes nothing.
+    known === undefined ? profileUrlOf(config, slug) : handleUrl(known);
+  // The runtime the API has, which differs from what was sent when the key was
+  // registered already.
   const registeredRuntime =
     live?.runtime ??
     (runtime === undefined || runtime === 'unknown' ? 'unknown' : runtime);
   // The A2A card, with the SEAL once there is one, which the routine keeps
-  // fresh (VOU-603).
+  // fresh.
   const card = await writeCard(config, { fetch: deps.fetch }, p);
   if (ui === null) {
     const hooks = await offerHooks(deps, null, claudeCode);
@@ -985,6 +1008,7 @@ async function init(
         apiUrl: api.apiUrl,
         profileUrl,
         ...(card === null ? {} : { card }),
+        ...(merged === null ? {} : { redirectFrom: merged.redirectFrom }),
         ...(folder === null ? {} : { folder, home: p.home }),
         nextSteps: nextSteps(
           hooks,
@@ -1017,6 +1041,9 @@ async function init(
 
   say();
   say(s.line`${s.tick()} Registered ${s.bold(handle)}`);
+  if (merged !== null) {
+    say(s.line`${s.tick()} ${tookOverLine(merged.redirectFrom, handle)}`);
+  }
   say(profileLine(s, profileUrl));
   if (registeredRuntime !== 'unknown') {
     say(s.line`  ${s.dim('Runtime')}  ${RUNTIME_LABELS[registeredRuntime]}`);
@@ -1035,6 +1062,102 @@ async function init(
     nextStateOf(await configNow(config, p), live),
     await routineStepFirst(hooks, deps, p),
   );
+}
+
+// The notes after the key is in place, the old key's backup and the
+// events the old key logged and never sent.
+function keyNotes(
+  ui: Ui | null,
+  backup: string | undefined,
+  leftBehind: number,
+): void {
+  if (ui === null) {
+    if (backup !== undefined) stderr(`the old key is kept at ${backup}`);
+    if (leftBehind > 0) stderr(leftBehindLine(leftBehind));
+    return;
+  }
+  const s = ui.err;
+  if (backup !== undefined) {
+    note();
+    note(s.line`${s.tick()} The old key is kept at ${tildePath(backup)}`);
+  }
+  if (leftBehind > 0) {
+    note();
+    note(s.line`${leftBehindLine(leftBehind)}`);
+  }
+}
+
+// The registration of the key made above. runtime is sent as unknown when left
+// out. issuedAt is taken after the device flow, right before signing.
+async function registerNew(
+  api: ApiClient,
+  p: Paths,
+  reg: {
+    agentId: string;
+    githubToken: string;
+    name: string;
+    version: string;
+    runtime: Runtime | undefined;
+  },
+): Promise<Registered> {
+  const { runtime } = reg;
+  const request: RegisterAgentRequest = {
+    publicKey: reg.agentId,
+    githubToken: reg.githubToken,
+    name: reg.name,
+    version: reg.version,
+    ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
+    // On, and a no to the game question, asked after the hooks, is sent
+    // as a settings change.
+    gameEnabled: true,
+    issuedAt: new Date().toISOString(),
+  };
+  const envelope = await signEnvelope(request, api.apiUrl, 'agent.register', p);
+  const agent = await api.registerAgent(envelope);
+  if (agent.id !== reg.agentId) {
+    throw new ApiError(
+      0,
+      'bad_response',
+      'the API registered a different agent id than the local key',
+    );
+  }
+  return agent;
+}
+
+// What the rest of init reads of the agent, from the registration, with
+// the handle the merge names for init --listed.
+type Registered = Pick<
+  AgentResponse,
+  'id' | 'name' | 'version' | 'operator' | 'createdAt' | 'handle'
+>;
+
+/*
+ * The merge of init --listed. The agent just registered takes the place of the
+ * listed agent the operator claimed, through the merge route, signed with the
+ * agent's own key, so no second sign in is needed. issuedAt is taken right
+ * before signing, as at registration.
+ */
+async function mergeListed(
+  api: ApiClient,
+  p: Paths,
+  listed: ListedHandleParams,
+  agentId: string,
+): Promise<ListedMergeResponse> {
+  const request: ListedMergePayload = {
+    domain: listed.domain,
+    name: listed.name,
+    issuedAt: new Date().toISOString(),
+  };
+  const envelope = await signEnvelope(request, api.apiUrl, 'listed.merge', p);
+  const merged = await api.listedMerge(listed.domain, listed.name, envelope);
+  if (merged.agentId !== agentId) {
+    throw new ApiError(
+      0,
+      'bad_response',
+      'the API merged a different agent than the local key',
+    );
+  }
+  return merged;
 }
 
 // The game question, in a terminal, after the hooks. The agent registered
@@ -1084,9 +1207,9 @@ async function gameSession(
   return { api, signer: await loadSigner(api.apiUrl, p) };
 }
 
-// The game as SealKeeper has it, from one signed status read. A key
-// registered before keeps its switch, as it keeps its runtime, so this may
-// differ from the answer. null when SealKeeper does not answer.
+// The game as SealKeeper has it, from one signed status read. It may differ
+// from the registration answer for a key registered before. null when
+// SealKeeper does not answer.
 async function readGame(
   apiUrl: string,
   deps: InitDeps,
@@ -1215,13 +1338,13 @@ async function initRegistered(
   );
 }
 
-// Thrown when stdin closes at a question, caught by the action (D6).
+// Thrown when stdin closes at a question, caught by the action.
 class InputClosed extends Error {
   override name = 'InputClosed';
 }
 
-// Whether Claude Code runs this init for the user, stdin not a terminal
-// and CLAUDECODE set (RS-8).
+// Whether Claude Code runs this init for the user, stdin not a terminal and
+// CLAUDECODE set.
 function claudeDriven(deps: InitDeps, input: Input | undefined): boolean {
   if (input?.isTTY === true) return false;
   return (
@@ -1229,8 +1352,8 @@ function claudeDriven(deps: InitDeps, input: Input | undefined): boolean {
   );
 }
 
-// Whether Next starts with the routine, when Claude Code runs this init,
-// the hooks are in and no job is installed yet (RS-8).
+// Whether Next starts with the routine, when Claude Code runs this init, the
+// hooks are in and no job is installed yet.
 async function routineStepFirst(
   hooks: HooksResult,
   deps: InitDeps,
@@ -1378,19 +1501,15 @@ async function offerNudge(
   say(on ? s.line`${s.tick()} Session nudge on` : s.line`${NUDGE_NOT_ON}`);
 }
 
-// Offers the daily routine when a person can answer, after the Claude
-// Code section, through the same guided setup as sealkeeper routine (RS-1),
-// so the agent, the time, tasks only or the game, whether to sync, the
-// block with the limits, the install and one run now are asked the same
-// way. Its sync question is the only one init asks about sync (VOU-657).
-// One with a job installed already is named, its copy of the CLI
-// refreshed when its version is not this one (RS-2), a stored agent
-// inside a project named in one line, and nothing is asked. No is not
-// stored, so a repeat init asks again the way it asks about the hooks. A
-// machine where the routine cannot be installed, neither claude nor
-// openclaw on PATH or a scheduler that cannot be read, hears nothing,
-// since init has nothing to offer it. One whose only agent is inside a
-// project hears why, in one line (VOU-647).
+// Offers the daily routine when a person can answer, after the Claude Code
+// section, through the same guided setup as sealkeeper routine. Its sync
+// question is the only one init asks about sync. A job installed already is
+// named, its copy of the CLI refreshed when its version is not this one, a
+// stored agent inside a project named in one line, and nothing is asked. No is
+// not stored, so a repeat init asks again. A machine where the routine cannot
+// be installed, neither claude nor openclaw on PATH or a scheduler that cannot
+// be read, hears nothing. One whose only agent is inside a project hears why,
+// in one line.
 async function offerRoutine(
   deps: InitDeps,
   routineDeps: RoutineDeps,
@@ -1422,8 +1541,8 @@ async function offerRoutine(
     } else {
       await refreshCopy(current.schedule, routineDeps, p);
     }
-    // The refreshed copy keeps the agent the job starts, so one an earlier
-    // CLI stored from a project under npx is named here (VOU-647).
+    // The refreshed copy keeps the agent the job starts, so one stored from a
+    // project under npx is named here.
     const warning = await projectAgentWarning(current.schedule);
     if (warning !== undefined) note(e.line`${warning}`);
     return;
@@ -1436,8 +1555,7 @@ async function offerRoutine(
     );
     if (typeof planned === 'string') {
       // An agent only a project has is named, so the person knows why no
-      // routine is offered (VOU-647). Anything else stays as quiet as no
-      // agent at all.
+      // routine is offered. Anything else stays as quiet as no agent at all.
       if (planned.includes(IN_PROJECT)) {
         note(e.line`${planned}`);
         say(o.line`${ROUTINE_NOT_INSTALLED}`);
@@ -1503,9 +1621,9 @@ export type NextState = {
   autoSync: boolean;
 };
 
-// The config as Next reads it, after the routine setup, whose sync
-// question may have turned automatic sync on (VOU-657). The one init read
-// before when it cannot be read again.
+// The config as Next reads it, after the routine setup, whose sync question may
+// have turned automatic sync on. The one init read before when it cannot be
+// read again.
 async function configNow(before: Config, p: Paths): Promise<Config> {
   return (await readConfig(p).catch(() => null)) ?? before;
 }
@@ -1676,15 +1794,14 @@ async function offerVersionMove(
 // were there already, installed that this run wrote them.
 type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
 
-// Asks whether to install the Claude Code hooks when Claude Code is set up
-// here and a person can answer. Yes, or just Enter, runs installClaudeCode,
-// the hooks, the slash commands and the skill.
-// Hooks already there, in the user or the project settings, count as
-// installed and nothing is asked. Current hooks in the shared project
-// settings.json move to settings.local.json on the way. The slash commands
-// and the skill always go in the user scope, and ours in the project's
-// .claude move there (VOU-649). A --json run, ui null, never asks, and
-// prints any install lines on stderr.
+// Asks whether to install the Claude Code hooks when Claude Code is set up here
+// and a person can answer. Yes, or just Enter, runs installClaudeCode, the
+// hooks, the slash commands and the skill. Hooks already there, in the user or
+// the project settings, count as installed and nothing is asked. Current hooks
+// in the shared project settings.json move to settings.local.json on the way.
+// The slash commands and the skill always go in the user scope, and ours in the
+// project's .claude move there. A --json run, ui null, never asks, and prints
+// any install lines on stderr.
 async function offerHooks(
   deps: InitDeps,
   ui: Ui | null,
@@ -1755,9 +1872,8 @@ async function offerHooks(
     (await hasHooks(project)) || (await hasHooks(shared)) ? project : user;
 
   const input = deps.stdin?.();
-  // Claude Code running init for the user, the hooks are for the tool that
-  // runs it, so they go in without a question (RS-8). Anywhere else a
-  // missing terminal is a no.
+  // When Claude Code runs init for the user, the hooks go in without a
+  // question. Anywhere else a missing terminal is a no.
   const driven = claudeDriven(deps, input);
   const notInstalled = (): HooksResult => {
     finishStep(ui, 'hooks', NOT_INSTALLED);
@@ -1776,8 +1892,7 @@ async function offerHooks(
   const warn = (message: string) =>
     ui === null ? stderr(message) : note(ui.err.line`${message}`);
   if (file === project) {
-    // Every project path this install writes or removes, the skill
-    // included (VOU-649).
+    // Every project path this install writes or removes, the skill included.
     try {
       await refuseOutsideProject(dirs.cwd, [...installedPaths(file), shared]);
     } catch (error) {
@@ -1868,14 +1983,12 @@ async function moveFromShared(
   return installed;
 }
 
-// Takes the slash commands and the skill of ours out of the project's
-// .claude, where an install before VOU-649 wrote them beside
-// settings.local.json. They hold this machine's absolute paths and a repo
-// commits .claude/commands and .claude/skills, so they live in the user
-// scope now, as the hooks moved out of the shared settings.json. Callers
-// run it only once the user scope copies are written, so a failed write
-// never leaves the commands in neither scope. A path outside the project,
-// or a file that cannot be removed, is left as it is with a warning.
+// Takes the slash commands and the skill of ours out of the project's .claude,
+// where an older install wrote them beside settings.local.json. They hold this
+// machine's absolute paths, so they live in the user scope. Callers run it only
+// once the user scope copies are written, so a failed write never leaves the
+// commands in neither scope. A path outside the project, or a file that cannot
+// be removed, is left as it is with a warning.
 async function leaveProject(
   project: string,
   user: string,
@@ -1964,16 +2077,15 @@ async function askHooks(input: Input, ui: Ui): Promise<'yes' | 'no'> {
   return 'no';
 }
 
-// Brings the slash commands up to date on a run that finds the hooks
-// already in, so a newer CLI's commands reach Claude Code without a
-// reinstall, and a set that is missing comes back, see refreshCommands.
-// Only a file of ours that differs or is missing is written, and the
-// skill below follows the same rule. They live beside the user settings,
-// user. When the hooks are in the project's settings.local.json, project,
-// the commands and the skill an install before VOU-649 wrote beside them
-// are written in the user scope first and then taken out of the project,
-// see leaveProject. A write that fails leaves the project copies where
-// they are.
+// Brings the slash commands up to date on a run that finds the hooks already
+// in, so a newer CLI's commands reach Claude Code without a reinstall, and a
+// set that is missing comes back, see refreshCommands. Only a file of ours that
+// differs or is missing is written, and the skill below follows the same rule.
+// They live beside the user settings, user. When the hooks are in the project's
+// settings.local.json, project, the commands and the skill an older install
+// wrote beside them are written in the user scope first and then taken out of
+// the project, see leaveProject. A write that fails leaves the project copies
+// where they are.
 async function refreshCommand(
   user: string,
   project: string | null,

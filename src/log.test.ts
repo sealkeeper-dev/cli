@@ -261,7 +261,7 @@ describe('log', () => {
     expect(await countPending()).toBe(5);
   });
 
-  // VOU-451. A tool.call line an older CLI logged is never sent, so it is
+  // A tool.call line an older CLI logged is never sent, so it is
   // never pending, in either count, and init --force does not name it.
   it('counts no tool.call line as pending', async () => {
     const tool = (n: number): Event => ({
@@ -387,7 +387,7 @@ describe('log', () => {
     // A thousand file appends, slow on a busy machine.
   }, 30_000);
 
-  describe('day files and the clock (VOU-220)', () => {
+  describe('day files and the clock', () => {
     it('appends to the newest day file when the clock is behind it', async () => {
       const ahead = '2026-09-27';
       // Written by an earlier process while the clock was three days ahead.
@@ -459,7 +459,7 @@ describe('log', () => {
     });
   });
 
-  describe('old day files (VOU-221)', () => {
+  describe('old day files', () => {
     // The newest day whose file is still read, and the one before it.
     const lastLive = daysBefore(EVENT_MAX_AGE_DAYS + 1);
     const firstStale = daysBefore(EVENT_MAX_AGE_DAYS + 2);
@@ -563,7 +563,7 @@ describe('log', () => {
     });
   });
 
-  describe('the cursor offset (VOU-221)', () => {
+  describe('the cursor offset', () => {
     async function seedMany(n: number): Promise<Event[]> {
       const all = Array.from({ length: n }, (_, i) => event(TODAY, i));
       // One write, not n appends, to keep the test quick.

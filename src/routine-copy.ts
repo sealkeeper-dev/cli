@@ -15,17 +15,16 @@ import { cli } from './invocation.js';
 import { projectProgram, RUN_WHERE } from './routine-agent.js';
 import { VERSION } from './version.js';
 
-// The copy of this CLI the daily job runs (RS-2). routine on copies the
-// running bundle, one file with no runtime dependencies since VOU-227, to
-// <home>/routine/cli.js and points the job at it, so the job keeps working
-// when npm clears the npx cache or a global install moves. A package.json
-// beside it says the file is an ES module and records the version copied,
-// so status can compare without running it. A repeat init or routine on
-// refreshes the copy when that version differs from the running CLI, and
-// routine off deletes it.
+// The copy of this CLI the daily job runs. routine on copies the running
+// bundle, one file with no runtime dependencies, to <home>/routine/cli.js and
+// points the job at it, so the job keeps working when npm clears the npx cache
+// or a global install moves. A package.json beside it says the file is an ES
+// module and records the version copied, so status can compare without running
+// it. A repeat init or routine on refreshes the copy when that version differs
+// from the running CLI, and routine off deletes it.
 //
-// The same folder keeps last-run.jsonl, the last run's Claude Code
-// transcript, which goes with the copy (RS-10).
+// The same folder keeps last-run.jsonl, the last run's Claude Code transcript,
+// which goes with the copy.
 
 export type CopyPaths = {
   dir: string;
@@ -33,7 +32,7 @@ export type CopyPaths = {
   // The package.json beside the script, with type module and the version.
   meta: string;
   // The last routine run's stream-json as Claude Code wrote it, mode 600,
-  // replaced at each run and never printed (RS-10).
+  // replaced at each run and never printed.
   transcript: string;
 };
 
@@ -138,8 +137,8 @@ export const copyOutdatedLine = (copy: string, running: string): string =>
 export const jobMissingLine = (): string =>
   `The daily routine job points at a sealkeeper that is no longer there. Run ${cli('routine on')} again.`;
 
-// Said while the job starts an agent in a node_modules or an _npx folder,
-// as one an earlier CLI stored from a setup under npx can (VOU-647).
+// Said while the job starts an agent in a node_modules or an _npx folder, as
+// one an earlier CLI stored from a setup under npx can.
 export const projectAgentLine = (command: string): string =>
   `The daily routine job starts ${tildePath(command)}, a project's own program or one in the npx cache. Run ${cli('routine on')} again so it starts one installed globally.`;
 

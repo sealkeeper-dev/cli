@@ -12,7 +12,7 @@ const LATER = '2026-10-05T12:00:00.000Z';
 const ASKS = { output: 'End with exactly one line feed.' };
 const NOT_ASKED = { output: 'Do not end with a line feed.' };
 
-describe('the handed over game task specs (VOU-635)', () => {
+describe('the handed over game task specs', () => {
   let home: string;
   let p: Paths;
 

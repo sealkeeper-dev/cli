@@ -37,10 +37,10 @@ export const defaultSyncDeps: SyncDeps = {
 export const AUTO_SYNC_ON = `automatic sync is on, emit now sends new events as they happen. Turn it off with ${cli('config auto-sync off')}`;
 export const AUTO_SYNC_OFF = `automatic sync is off, events wait in the local log. See them with ${cli('sync --dry-run')} and send them with ${cli('sync')}`;
 
-// The one sentence that says events wait while automatic sync is not on,
-// and how to send them. status prints it, emit, and the routine after a
-// first run, on its screen and in the job's output (VOU-657). null when
-// the count could not be read, which only emit says.
+// The one sentence that says events wait while automatic sync is not on, and
+// how to send them. status prints it, emit, and the routine after a first run,
+// on its screen and in the job's output. null when the count could not be read,
+// which only emit says.
 export function eventsWaitLine(pending: number | null): string {
   const one = pending === 1;
   const count =

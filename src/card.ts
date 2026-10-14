@@ -52,8 +52,8 @@ const CARD_FILE_MODE = 0o644;
 const cardText = (card: AgentCard): string =>
   `${JSON.stringify(card, null, 2)}\n`;
 
-// handshake is the agent's signed handshake (VB-6), carried beside the SEAL
-// in the current extension's params, or null when there is none.
+// handshake is the agent's signed handshake, carried beside the SEAL in the
+// current extension's params, or null when there is none.
 function buildCard(
   config: Config,
   credential: Credential | null,
@@ -78,12 +78,11 @@ function buildCard(
   });
 }
 
-// init writes the card into the home (VOU-603), once for each agent, and
-// records it so the daily routine keeps its SEAL fresh. A card recorded
-// already is the routine's to refresh, so a repeat init leaves it alone.
-// The card carries no SEAL when the API cannot be reached or issues none
-// yet, and the routine adds it once there is one. Never throws, the card is
-// a side task of init. The path written, or null when nothing was written.
+// init writes the card into the home, once for each agent, and records it so
+// the daily routine keeps its SEAL fresh. A card recorded already is the
+// routine's to refresh, so a repeat init leaves it alone. The card carries no
+// SEAL when none can be fetched, and the routine adds it later. Never throws.
+// Returns the path written, or null when nothing was written.
 export async function writeCard(
   config: Config,
   deps: CardDeps,
@@ -156,13 +155,12 @@ export async function loadSeal(
   return { config, credential };
 }
 
-// Where init wrote the card, in card-write.json (VOU-383), so the daily
-// routine refreshes that file and writes no card anywhere else. It names
-// the agent, so after init --force the new agent writes a card of its own.
-// sha256 is of the bytes last written there, so the routine rewrites the
-// file only while it still holds that card, and never a card the operator
-// put there since. url is kept for a record an earlier CLI wrote with one.
-// Read loosely.
+// Where init wrote the card, in card-write.json, so the daily routine refreshes
+// that file and writes no card anywhere else. It names the agent, so after init
+// --force the new agent writes a card of its own. sha256 is of the bytes last
+// written there, so the routine rewrites the file only while it still holds
+// that card. url is kept for a record an earlier CLI wrote with one. Read
+// loosely.
 const CardRecord = z.looseObject({
   v: z.literal(1),
   agentId: z.string().min(1),
@@ -226,13 +224,13 @@ export type CardRefresh =
   | 'failed';
 
 /*
- * The card's state on this machine (VOU-619), which status and the routine
- * screen show in one line with the same words. Local only, it reads
- * card-write.json, the card file and the cached SEAL, and calls nothing.
- * current holds the SEAL the CLI holds now, stale does not, unsealed holds
- * none while the CLI holds none either. gone, changed and unreadable are a
- * file the routine would not refresh, as refreshCard says them. none is an
- * agent init wrote no card for. Never throws, so it never fails status.
+ * The card's state on this machine, which status and the routine screen show in
+ * one line with the same words. Local only, it reads card-write.json, the card
+ * file and the cached SEAL, and calls nothing. current holds the SEAL the CLI
+ * holds now, stale does not, unsealed holds none while the CLI holds none
+ * either. gone, changed and unreadable are a file the routine would not
+ * refresh, as refreshCard says them. none is an agent init wrote no card for.
+ * Never throws.
  */
 export type CardState =
   | 'current'
@@ -317,26 +315,14 @@ function sealOnCard(text: string): string | null {
   }
 }
 
-// The daily routine's refresh of the card init wrote (VOU-383).
-// null when init never wrote one for this agent, and then nothing is
-// written. A file whose bytes are not the ones last written there is left
-// alone. Never throws, a card is a side task of the run.
+// The daily routine's refresh of the card init wrote. null when init never
+// wrote one for this agent, and then nothing is written. A file whose bytes are
+// not the ones last written there is left alone. Never throws.
 //
-// A SEAL lives 24 hours at most and the job runs once a day, so every SEAL
-// on a card expires before the next run, and no margin short of a whole
-// day would keep a daily card fresh. So the routine looks at the card on
-// every run and rewrites it whenever the SEAL the CLI holds now, from the
-// cache or the API as init gets it, is not the one on the card. The
-// cache is reused while it has more than two hours left, and the API
-// serves its stored SEAL until two hours before it expires. So after a run
-// the card carries a SEAL with more than two hours left, and one the API
-// issued for the run's own read lasts until about the next run. One the
-// API issued for another read, earlier in the day, may leave the card with
-// an expired SEAL for up to 22 hours before the next run. A card that must
-// never carry an expired SEAL needs a refresh every hour or so.
-//
-// A withheld SEAL leaves the card as it was. So does an API that cannot be
-// reached with no usable SEAL cached.
+// The card is rewritten whenever the SEAL the CLI holds now, from the cache or
+// the API as init gets it, is not the one on the card. A withheld SEAL leaves
+// the card as it was, and so does an API that cannot be reached with no usable
+// SEAL cached.
 export async function refreshCard(
   config: Config,
   deps: CardDeps,

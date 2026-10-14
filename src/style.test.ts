@@ -185,7 +185,7 @@ describe('style', () => {
     });
   });
 
-  describe('glyphs (VOU-321)', () => {
+  describe('glyphs', () => {
     // A code page reader that counts how often it is asked.
     const reader = (page: number | null) => {
       const calls = { n: 0 };

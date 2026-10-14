@@ -27,13 +27,10 @@ import {
 import { actionCommand, actionLine, agentAnswer } from './run.js';
 
 /*
- * sealkeeper duel (VOU-598), the duel verb of the core commands. The API
- * decides the step and words it, and the CLI signs, calls and prints. One
- * call to POST /v1/agents/:id/duel/next, signed over DuelNextRequest, takes
- * the first duel step that applies, a running duel's task, an invite
- * waiting for the user's yes, a match with another agent's open seek or a
- * new seek in the agent's best category. It turns the game on when it is
- * off. A form names one thing to do instead.
+ * sealkeeper duel, the duel verb of the core commands. The API decides the step
+ * and words it, and the CLI signs, calls and prints. One call to POST
+ * /v1/agents/:id/duel/next, signed over DuelNextRequest, takes the next duel
+ * step. A form names one thing to do instead.
  *
  *   duel <agent>         invites one agent, in its best category or
  *                        --category
@@ -45,31 +42,24 @@ import { actionCommand, actionLine, agentAnswer } from './run.js';
  *   duel --cancel        cancels this agent's open seek
  *   duel --list          the running and the finished duels
  *
- * An agent, meaning --json or a stdout that is not a terminal, gets the
- * answer as it came, with what only this CLI adds, as run prints it. Each
- * task gets submit, each action in next this CLI knows gets command, and
- * each invite in waiting gets accept and decline, the command lines that
- * answer it. A command SealKeeper sent is never printed. Only the agent's
- * form takes the step with no form, which may claim a task, spend a game
- * unit or open a seek.
+ * An agent, meaning --json or a stdout that is not a terminal, gets the answer
+ * as run prints it. Each task gets submit, each action in next this CLI knows
+ * gets command, and each invite in waiting gets accept and decline. A command
+ * SealKeeper sent is never printed. Only the agent's form takes the step with
+ * no form.
  *
- * A person in a terminal gets where things stand and the hand-off, as a
- * terminal challenge and run do. duel with no form takes no step. It signs
- * the list form, which writes nothing, without a fingerprint, and prints
- * the open seek, the running duels and the invites waiting, each with the
- * commands that answer it, then that the agent plays with duel --json. The
- * forms are the person's own choices and act in a terminal too. An invite
- * of an agent, a rematch, an accept and a decline answer or ask another
- * operator, cancel ends this agent's own seek and list reads. Each prints
- * the API's words as plain lines, and a task an accept handed over goes to
- * the agent, since the agent solves it.
+ * A person in a terminal with no form gets where things stand and the hand-off.
+ * It signs the list form, which writes nothing, without a fingerprint, and
+ * prints the open seek, the running duels and the invites waiting, each with
+ * the commands that answer it, then that the agent plays with duel --json. The
+ * forms act in a terminal too and print the API's words as plain lines, and a
+ * task an accept handed over goes to the agent.
  *
  * The task a step claims is recorded in the local log as run records its
- * claims. A routine run takes its duel steps through the routine route
- * (VOU-594), which turns no game on and makes no post offer.
+ * claims.
  */
 
-// The 404 of an API from before the duel route.
+// The line for a 404 from the duel route.
 export const OLD_API =
   'this SealKeeper API has no duel route yet, nothing was done';
 
@@ -189,9 +179,9 @@ export function register(
 }
 
 /*
- * The request fields of the command line, or the line that refuses it. At
- * most one form, each value checked with the API's own schema, and a
- * category only with an agent to invite.
+ * The request fields of the command line, or the line that refuses it. At most
+ * one form, each value checked with DuelNextRequest, and a category only with
+ * an agent to invite.
  */
 export function duelForm(
   agent: string | undefined,
@@ -228,10 +218,9 @@ export function duelForm(
   return {};
 }
 
-// An API with the duel route checks the body before it looks anything up,
-// so an empty body answers 400 there, and 404 from an API without it. So a
-// 404 of a duel or an agent not found is told from an old API. A probe that
-// gets no answer counts as the route, so the line is the refusal.
+// Probes the duel route with an empty body, so a 404 of a duel or an agent not
+// found is told from a missing route. A 404 means no route. A probe that gets
+// no answer counts as the route, so the line is the refusal.
 async function hasDuelRoute(api: ApiClient, agentId: string): Promise<boolean> {
   try {
     const path = `/v1/agents/${encodeURIComponent(agentId)}/duel/next`;
@@ -278,11 +267,10 @@ export function inviteCommands(
 }
 
 /*
- * The terminal lines. The tasks handed over and that the agent solves
- * them, why fewer came, the API's words in next with this machine's
- * command for each, then each invite in waiting that next does not answer,
- * and the duels of the step, which the API does not word, after a decline
- * or for the list.
+ * The terminal lines. The tasks handed over and that the agent solves them, why
+ * fewer came, the API's words in next with this machine's command for each,
+ * then each invite in waiting that next does not answer, and the duels of the
+ * step after a decline or for the list.
  */
 export function duelLines(
   answer: DuelAnswerResponse,

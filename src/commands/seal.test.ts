@@ -392,7 +392,7 @@ describe('sealkeeper seal', () => {
       expect(JSON.parse(json.out)).toEqual({ path: target });
     });
 
-    it('files a local API keys under its own origin, so they never check a production SEAL in seal verify (VOU-645)', async () => {
+    it('files a local API keys under its own origin, so they never check a production SEAL in seal verify', async () => {
       // The local API signs its own SEAL with a dev key under the
       // production iss, as a stack run from the public .env.example does.
       // The issuer's domain lists only the production key.
@@ -460,7 +460,7 @@ describe('sealkeeper seal', () => {
 
   describe('verify', () => {
     // A production SEAL gets its keys from the issuer's domain wherever the
-    // CLI points (VOU-645), so these point at the production API, where
+    // CLI points, so these point at the production API, where
     // seal verify prints no line about where the keys came from.
     beforeEach(() => {
       vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
@@ -479,7 +479,7 @@ describe('sealkeeper seal', () => {
       expect(requests).toEqual([WELL_KNOWN_URL]);
     });
 
-    // VOU-436. While safety is not measured the issuer leaves the safety
+    // While safety is not measured the issuer leaves the safety
     // key out of scores and keeps safety_incidents_90d in the counts.
     it('a SEAL with no safety score is valid and prints the same summary', async () => {
       const seal = await sign(
@@ -609,7 +609,7 @@ describe('sealkeeper seal', () => {
       expect(lines).toContain('state matches');
     });
 
-    // VOU-560. A version 4 SEAL carries the Trust Score and the top
+    // A version 4 SEAL carries the Trust Score and the top
     // categories, printed in the plain output, and --json prints them in
     // the payload as signed.
     it('a version 4 SEAL is valid and shows the Trust Score and the top categories', async () => {
@@ -688,7 +688,84 @@ describe('sealkeeper seal', () => {
       expect(extra.out.split('\n')[0]).toBe('broken SEAL: malformed');
     });
 
-    it.each([5, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    // A listed agent's version 5 SEAL prints its handle, its owner
+    // status and its endpoint checks beside the version 4 lines.
+    it('a version 5 SEAL of a listed agent is valid and shows its owner and endpoint checks', async () => {
+      const { version: _version, ...rest } = claims();
+      const v5 = {
+        ...rest,
+        ver: 5,
+        counts: {
+          ...rest.counts,
+          posted_tasks: 0,
+          posted_distinct_operators: 0,
+          posted_confirmed_tasks: 0,
+        },
+        counted: {
+          verified_tasks: 17,
+          seed_tasks: 17,
+          server_checked_tasks: 0,
+          confirmed_tasks: 0,
+          posted_tasks: 0,
+          posted_confirmed_tasks: 0,
+        },
+        fingerprint: null,
+        state: 'matches',
+        trust: 0,
+        top_categories: [],
+        owner: { status: 'unverified' },
+        listing: {
+          handle: 'acme.ai/helper',
+          domain_key: 'acme.ai',
+          card_url: 'https://acme.ai/.well-known/agent-card.json',
+        },
+        evidence: [
+          {
+            type: 'endpoint_check',
+            window_start: '2026-09-01T00:00:00.000Z',
+            window_end: '2026-10-01T00:00:00.000Z',
+            task_total: 12,
+            task_ok: 11,
+            uptime_pct: 99.5,
+            p95_ms: 820,
+            last_checked_at: null,
+          },
+        ],
+      };
+      const unverified = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign(v5, serverKey.privateKey, KID),
+      );
+      expect(unverified.code).toBe(0);
+      const lines = unverified.out.trimEnd().split('\n');
+      expect(lines[0]).toBe('valid SEAL');
+      expect(lines).toContain('Trust Score 0');
+      expect(lines).toContain('listed as acme.ai/helper');
+      expect(lines).toContain('owner unverified');
+      expect(lines).toContain('endpoint checks 11 of 12 OK');
+      const verified = await run(
+        fetchFn,
+        'seal',
+        'verify',
+        await sign(
+          {
+            ...v5,
+            owner: {
+              status: 'verified',
+              verified_at: '2026-10-12T08:00:00.000Z',
+              method: 'email',
+            },
+          },
+          serverKey.privateKey,
+          KID,
+        ),
+      );
+      expect(verified.out).toContain('owner verified by email on 2026-10-12');
+    });
+
+    it.each([6, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
@@ -860,6 +937,174 @@ describe('sealkeeper seal', () => {
       expect(out).not.toContain('Expires in');
     });
 
+    // --at checks a SEAL kept beside a past event at that time,
+    // with the same verifySeal as the API, and says when it has lapsed
+    // since.
+    describe('--at', () => {
+      const DAY = 24 * HOUR;
+      const T = NOW_SEC - 3 * DAY;
+      const iso = (sec: number) => new Date(sec * 1000).toISOString();
+      const old = () =>
+        sign(claims({ iat: T, exp: T + DAY }), serverKey.privateKey, KID);
+
+      it('a SEAL expired now but within its lifetime at --at exits 0 and says it lapsed', async () => {
+        const seal = await old();
+        const { code, out, err } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          iso(T + HOUR),
+        );
+        expect(err).toBe('');
+        expect(code).toBe(0);
+        const lines = out.trimEnd().split('\n');
+        expect(lines[0]).toBe(`valid SEAL at ${iso(T + HOUR)}`);
+        expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
+        expect(lines.at(-1)).toBe(
+          `expired since ${iso(T + DAY)}, valid at the time checked only`,
+        );
+        // An offset is read and the time printed in UTC.
+        const offset = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          '2026-09-21T15:00:00+02:00',
+        );
+        expect(offset.out.split('\n')[0]).toBe(
+          'valid SEAL at 2026-09-21T13:00:00.000Z',
+        );
+        // Without --at the same SEAL is expired.
+        const nowCheck = await run(fetchFn, 'seal', 'verify', seal);
+        expect(nowCheck.code).toBe(1);
+        expect(nowCheck.out.split('\n')[0]).toMatch(/^broken SEAL: expired /);
+      });
+
+      it('a SEAL still live at --at prints the usual time to expiry', async () => {
+        const seal = await currentSeal();
+        const { code, out } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          iso(NOW_SEC + 60),
+        );
+        expect(code).toBe(0);
+        const lines = out.trimEnd().split('\n');
+        expect(lines[0]).toBe(`valid SEAL at ${iso(NOW_SEC + 60)}`);
+        expect(lines.at(-1)).toBe('Expires in 24 hours 0 minutes');
+      });
+
+      it('--at before iat is not yet valid, exit 1', async () => {
+        const { code, out } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await old(),
+          '--at',
+          iso(T - HOUR),
+        );
+        expect(code).toBe(1);
+        expect(out.split('\n')[0]).toBe('broken SEAL: not yet valid');
+      });
+
+      it('--at with a bad signature is a broken SEAL, exit 1, never valid', async () => {
+        const { code, out } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          tamper(await old()),
+          '--at',
+          iso(T + HOUR),
+        );
+        expect(code).toBe(1);
+        expect(out).toBe('broken SEAL: bad signature\n');
+      });
+
+      it('--json carries at and lapsed', async () => {
+        const seal = await old();
+        const json = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          iso(T + HOUR),
+          '--json',
+        );
+        expect(json.code).toBe(0);
+        expect(JSON.parse(json.out)).toEqual({
+          valid: true,
+          reason: null,
+          payload: claims({ iat: T, exp: T + DAY }),
+          expiresAt: iso(T + DAY),
+          at: iso(T + HOUR),
+          lapsed: true,
+        });
+        const live = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          await currentSeal(),
+          '--at',
+          iso(NOW_SEC + 60),
+          '--json',
+        );
+        expect(JSON.parse(live.out)).toMatchObject({
+          valid: true,
+          at: iso(NOW_SEC + 60),
+          lapsed: false,
+        });
+        // Without --at neither is there.
+        const plain = JSON.parse(
+          (await run(fetchFn, 'seal', 'verify', seal, '--json')).out,
+        );
+        expect(plain).not.toHaveProperty('lapsed');
+        expect(plain).not.toHaveProperty('at');
+      });
+
+      it('refuses --at in the future or not ISO 8601, with nothing fetched', async () => {
+        const seal = await currentSeal();
+        const future = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          iso(NOW_SEC + DAY),
+        );
+        expect(future.code).toBe(1);
+        expect(future.out).toBe('');
+        expect(future.err).toContain('--at must not be in the future');
+        // Inside the five minute skew it is taken.
+        expect(
+          (
+            await run(
+              fetchFn,
+              'seal',
+              'verify',
+              seal,
+              '--at',
+              iso(NOW_SEC + 300),
+            )
+          ).code,
+        ).toBe(0);
+        requests = [];
+        for (const at of ['yesterday', '2026-09-24', '2026-09-24T12:00:00']) {
+          const bad = await run(fetchFn, 'seal', 'verify', seal, '--at', at);
+          expect(bad.code).toBe(1);
+          expect(bad.err).toContain(
+            '--at must be an ISO 8601 date time, such as 2026-10-01T12:00:00Z',
+          );
+        }
+        expect(requests).toEqual([]);
+      });
+    });
+
     it('--keys reads the keys from a file and never fetches', async () => {
       const file = join(home, 'sealkeeper.json');
       await writeFile(file, JSON.stringify(published()));
@@ -877,7 +1122,7 @@ describe('sealkeeper seal', () => {
       expect(requests).toEqual([]);
     });
 
-    it('--agent refuses a copied SEAL for another agent as a broken SEAL, exit 1 (VOU-645)', async () => {
+    it('--agent refuses a copied SEAL for another agent as a broken SEAL, exit 1', async () => {
       const seal = await currentSeal();
       const other = await generateKeypair();
       const copied = await run(
@@ -998,7 +1243,7 @@ describe('sealkeeper seal', () => {
       expect(cache.wellKnown.keys).toHaveLength(2);
     });
 
-    it('refetches the keys after their five minute max-age and never falls back when the fetch fails (VOU-645)', async () => {
+    it('refetches the keys after their five minute max-age and never falls back when the fetch fails', async () => {
       expect(KEYS_MAX_AGE_MS).toBe(WELL_KNOWN_MAX_AGE_SECONDS * 1000);
       expect(KEYS_MAX_AGE_MS).toBe(300_000);
       await run(fetchFn, 'seal', 'verify', await currentSeal());
@@ -1038,7 +1283,7 @@ describe('sealkeeper seal', () => {
       );
     });
 
-    it('never uses keys cached from another API origin (cli-core-7)', async () => {
+    it('never uses keys cached from another API origin', async () => {
       await run(fetchFn, 'seal', 'verify', await currentSeal());
       const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
       await writeFile(
@@ -1191,7 +1436,7 @@ describe('sealkeeper seal', () => {
         expect(cache.origin).toBe('https://sealkeeper.run');
       });
 
-      // VOU-453. The issuer's site is not the SealKeeper API, so it is not
+      // The issuer's site is not the SealKeeper API, so it is not
       // told which CLI asks. A local API is, like every other API request.
       it('sends the CLI version to an API for the keys and never to the issuer site', async () => {
         const versions: Record<string, string | null> = {};
@@ -1268,7 +1513,7 @@ describe('sealkeeper seal', () => {
         expect(requests).toEqual([WELL_KNOWN_URL]);
       });
 
-      it('checks a production SEAL with the issuer keys when the CLI points at a local API, and says so on every result (VOU-645)', async () => {
+      it('checks a production SEAL with the issuer keys when the CLI points at a local API, and says so on every result', async () => {
         vi.stubEnv('SEALKEEPER_API_URL', API_URL);
         // A local API serves its own keys, which never check a production
         // SEAL, so a SEAL signed with a known dev key and the production
@@ -1426,7 +1671,7 @@ describe('sealkeeper seal', () => {
         expect(requests).toEqual([]);
       });
 
-      it('says the cache lacks the kid when the cache is there without it (VOU-301)', async () => {
+      it('says the cache lacks the kid when the cache is there without it', async () => {
         await run(fetchFn, 'seal', 'verify', await currentSeal());
         const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
         await writeFile(
@@ -1520,7 +1765,7 @@ describe('sealkeeper seal', () => {
     }
   });
 
-  // The handshake (VB-6). seal handshake signs the fingerprint sync last
+  // The handshake. seal handshake signs the fingerprint sync last
   // wrote, and seal verify --handshake checks it beside the SEAL. The
   // issuer writes version 1, which carries no fingerprint, so the check
   // reads the agent answer from the API and says so.
@@ -1584,7 +1829,7 @@ describe('sealkeeper seal', () => {
 
     const NOTE =
       "compared with the issuer's current record, the SEAL carries no fingerprint until version 3";
-    // What a handshake shows, by what the verifier asked for (VOU-645).
+    // What a handshake shows, by what the verifier asked for.
     const NO_NONCE =
       'no nonce of yours, so it does not show the presenter holds the key, a copy replays for 24 hours';
     const NONCE_ONLY =
@@ -1801,6 +2046,65 @@ describe('sealkeeper seal', () => {
       });
     });
 
+    // --at moves the SEAL's clock only. A handshake is a live
+    // proof of who presents the SEAL, so it is checked against the real
+    // clock whatever --at names.
+    it('checks a handshake beside --at against the real clock, not --at', async () => {
+      recordHash = (await capture('mcp:github')).hash;
+      const key = await loadKey();
+      if (key === null) throw new Error('no key');
+      const signedAt = (iat: number) =>
+        signHandshake(
+          key.privateKey,
+          agentId,
+          { hash: recordHash ?? '', captured_at: NOW_SEC - 2 * HOUR },
+          iat,
+          'check-1',
+        );
+      const seal = await sign(
+        claims({ iat: NOW_SEC - 2 * HOUR, exp: NOW_SEC + 22 * HOUR }),
+        serverKey.privateKey,
+        KID,
+      );
+      const at = new Date((NOW_SEC - HOUR) * 1000).toISOString();
+      const verifyWith = async (hs: string) =>
+        run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--at',
+          at,
+          '--handshake',
+          hs,
+          '--nonce',
+          'check-1',
+          '--json',
+        );
+      // Signed now, so live by the real clock, an hour off --at.
+      const live = await verifyWith(await signedAt(NOW_SEC));
+      expect(live.code).toBe(0);
+      expect(JSON.parse(live.out)).toMatchObject({
+        valid: true,
+        at,
+        lapsed: false,
+        handshake: {
+          valid: true,
+          result: 'matches',
+          against: 'record',
+          proof: 'nonce',
+        },
+      });
+      // Signed at --at, so stale by the real clock.
+      const then = await verifyWith(await signedAt(NOW_SEC - HOUR));
+      expect(then.code).toBe(1);
+      expect(JSON.parse(then.out)).toMatchObject({
+        valid: true,
+        at,
+        handshake: { valid: false, reason: 'stale' },
+      });
+    });
+
     it('takes a card copy 6 hours old and refuses one 25 hours old or a nonce 6 minutes old', async () => {
       const fp = await capture('mcp:github');
       recordHash = fp.hash;
@@ -1901,7 +2205,7 @@ describe('sealkeeper seal', () => {
       expect(recordApiUrl(API_URL, 'other.test')).toBe(API_URL);
     });
 
-    it('refuses a relayed handshake made for another verifier when --for names this one (VOU-645)', async () => {
+    it('refuses a relayed handshake made for another verifier when --for names this one', async () => {
       recordHash = (await capture('mcp:github')).hash;
       // M passed V's nonce to the agent and asked for a handshake made for
       // M, then relays it to V.

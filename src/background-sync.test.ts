@@ -126,7 +126,7 @@ describe('background sync', () => {
     expect(await countPending(p)).toBe(0);
   });
 
-  // VOU-453. The one gate every automatic sync goes through makes its
+  // The one gate every automatic sync goes through makes its
   // client with createApiClient, so the batch says which CLI sends it.
   it('sends the CLI version with the batch', async () => {
     await initialise(true);

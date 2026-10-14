@@ -13,7 +13,7 @@ import { declaredModel } from './model-name.js';
 import { modelNameOf, toolNameOf } from './names.js';
 import { createProgram } from './program.js';
 
-// VOU-566. The model name the next sync declares, the one an adapter reads.
+// The model name the next sync declares, the one an adapter reads.
 
 const AGENT_ID = 'A'.repeat(43);
 const NOW = 1_790_812_800;
@@ -84,7 +84,7 @@ describe('declaredModel', () => {
     expect(await declared()).toBeNull();
   });
 
-  // VOU-603. model set and model show are gone, the adapter's name is the
+  // model set and model show are gone, the adapter's name is the
   // only one.
   it('model is no command', async () => {
     const program = createProgram();

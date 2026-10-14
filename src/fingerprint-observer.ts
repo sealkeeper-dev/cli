@@ -1,13 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// What the in-process adapters (Mastra, OpenClaw) see of the fingerprint
-// parts, held for the life of the process, and the model a routine run's
-// runtime reported, held for the run (VOU-614). The hashes go to
-// fingerprint-sources.json only when a part changes, a new model id, a new
-// tool set or the framework version found once, never per model step that
-// shows nothing new. The model name of the first model id goes too, as
-// text, the one value here that is not a hash (VOU-566). The fingerprint
-// itself is recomputed at sync, run, duel, challenge and during a routine
-// run from that file, see fingerprint.ts.
+// What the in-process adapters (Mastra, OpenClaw) see of the fingerprint parts,
+// held for the life of the process, and the model a routine run's runtime
+// reported, held for the run. The hashes go to fingerprint-sources.json only
+// when a part changes, a new model id, a new tool set or the framework version
+// found once, never per model step that shows nothing new. The model name of
+// the first model id goes too, as text, the one value here that is not a hash.
+// The fingerprint itself is recomputed at sync, run, duel, challenge and during
+// a routine run from that file, see fingerprint.ts.
 import { partHash } from '@sealkeeper/schema';
 import { paths as defaultPaths, type Paths, readConfig } from './config.js';
 import {
@@ -73,14 +72,12 @@ export function createObserver(
   };
 
   return {
-    // The model name goes with the set, as text (VOU-566), the name of the
-    // first model id this process sees, kept for the life of the process.
-    // A process that runs two models, one to plan and one for the steps,
-    // so names the same one at every sync and never records a change of
-    // model it did not make. When the first id gives no name, none is
-    // written and an earlier process's name is cleared. Written only when
-    // the set grows, never per step. The runtime reported the id, so a
-    // Claude Code hook later keeps it over the settings (VOU-614).
+    // The model name goes with the set, as text, the name of the first model id
+    // this process sees, kept for the life of the process. A process that runs
+    // two models so names the same one at every sync. When the first id gives
+    // no name, none is written and an earlier process's name is cleared.
+    // Written only when the set grows, never per step. The runtime reported the
+    // id, so a Claude Code hook later keeps it over the settings.
     model: (id, idName) => {
       if (models.has(id)) return queue;
       models.add(id);

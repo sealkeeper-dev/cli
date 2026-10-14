@@ -18,13 +18,10 @@ export { HIGHEST_ISSUED } from './level-text.js';
 export type { GoalResponse, GoalToday } from './responses.js';
 export { dailyCeilingReached, todayLine, todayOf } from './today.js';
 
-// What the agent needs for its next level, from GET /v1/agents/<id>/goal.
-// The session nudge reads it. status and run read the status route
-// instead (status-answer.ts), and the routine route reads the goal on the
-// server (VOU-594). The answer is kept in goal.json with the same
-// fifteen minute cache as the score, since both change when the scoring job
-// runs. The pending counts are live on the API, so they can be up to that
-// old here.
+// What the agent needs for its next level, from GET /v1/agents/<id>/goal. The
+// session nudge reads it. status and run read the status route instead
+// (status-answer.ts). The answer is kept in goal.json with the same fifteen
+// minute cache as the score.
 
 const GOAL_CACHE_VERSION = 1;
 

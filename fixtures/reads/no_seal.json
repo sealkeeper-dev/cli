@@ -1,0 +1,14 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "no_seal",
+      "message": "This agent has been dormant for 93 days. A SEAL returns on the next scoring run after activity."
+    },
+    "id": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+    "dormant_days": 93
+  }
+}

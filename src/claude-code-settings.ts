@@ -15,9 +15,8 @@ const HOOK_ARGS = 'hook claude-code';
 // The hooks write no event, see claude-code.ts. SessionStart reads the
 // model and prints the nudge, SessionEnd syncs what is pending.
 export const HOOK_EVENTS = ['SessionStart', 'SessionEnd'] as const;
-// The tool call hooks a CLI before 0.4.14 installed, and Stop, which a CLI
-// before 0.5.0 installed to close a session that never ended. They record
-// nothing now, and install takes ours out of each file it writes.
+// The tool call hooks and the Stop hook an older CLI installed. Install takes
+// ours out of each file it writes.
 export const RETIRED_HOOK_EVENTS = [
   'Stop',
   'PreToolUse',
@@ -45,9 +44,8 @@ export function claudeConfigDir(
 
 // <claude dir>/settings.json for the user, <cwd>/.claude/settings.local.json
 // for the project. The claude dir defaults to <home>/.claude. A hook command
-// holds this machine's absolute node and script paths, so project scope
-// writes the local file, which stays on this machine, and never the shared
-// settings.json a repo commits (cli-adapters-tasks-9).
+// holds this machine's absolute paths, so project scope writes the local file
+// and never the shared settings.json a repo commits.
 export function settingsPath(
   scope: Scope,
   dirs: { home: string; cwd: string; claudeDir?: string },

@@ -20,11 +20,10 @@ import {
   originOf,
 } from './seal.js';
 
-// The agent's current SEAL, Signed Evidence of Agent Legitimacy. In code it
-// keeps its first name, the credential. It is cached in
-// ~/.sealkeeper/credential.json so the card and seal write can run on a
-// schedule without a round trip each time. The cache holds only what the API
-// already made public.
+// The agent's current SEAL. In code it keeps its first name, the credential. It
+// is cached in ~/.sealkeeper/credential.json so the card and seal write can run
+// on a schedule without a round trip each time. The cache holds only the public
+// SEAL.
 
 // A cached SEAL is reused while it has more than this left.
 const REFRESH_MARGIN_SEC = 2 * 3600;
@@ -62,15 +61,11 @@ type GetCredentialOptions = {
   paths?: Paths;
 };
 
-// False when the keys of the API the cached SEAL came from, cached for five
-// minutes as seal verify keeps them and fetched again once older, no longer
-// list the kid the cached SEAL was signed with, as after a key is dropped at
-// the end of a rotation or at once after a compromise. True when they list
-// it or cannot be loaded, since then nothing says the key is gone. On the
+// False when the keys of the API the cached SEAL came from no longer list the
+// kid the cached SEAL was signed with. The keys are cached for five minutes as
+// seal verify keeps them. True when they list it or cannot be loaded. On the
 // production API a production SEAL's keys come from the issuer's domain, as
-// seal verify reads them. On any other API they come from that API, whose
-// own SEALs carry the production iss but are signed with its own key, so
-// the issuer's keys would never list it.
+// seal verify reads them. On any other API they come from that API.
 async function keyStillListed(
   options: GetCredentialOptions,
   cached: Credential,
@@ -208,12 +203,11 @@ async function fetchVerified(
       'the SEAL from the API has expired, not using it',
     );
   }
-  // The keys it verified against go to the cache keyStillListed and seal
-  // verify read. The production API serves the same document the issuer's
-  // domain does, so its keys are filed under the origin loadKeys would
+  // The keys it verified against go to the cache keyStillListed and seal verify
+  // read. The production API's keys are filed under the origin loadKeys would
   // fetch them from. Any other API's keys are filed under that API's own
-  // origin, never the issuer's, so a local or hostile API's keys never
-  // check a production SEAL in seal verify or check (VOU-645).
+  // origin, never the issuer's, so a local or hostile API's keys never check a
+  // production SEAL in seal verify or check.
   await cacheKeys(
     p,
     isProductionApi(api.apiUrl)
@@ -234,10 +228,9 @@ function unreachable(error: unknown): boolean {
   );
 }
 
-// null when there is no cache, it does not parse, it belongs to another
-// agent id (after init --force) or its version is not one this CLI
-// understands, such as a SEAL without ver from before version 1. The next
-// fetch rewrites it. The card's state reads it too, to compare the SEAL on
+// null when there is no cache, it does not parse, it belongs to another agent
+// id (after init --force) or its version is not one this CLI understands. The
+// next fetch rewrites it. The card's state reads it too, to compare the SEAL on
 // the card with the one the CLI holds, without a network call.
 export async function readCache(
   p: Paths,

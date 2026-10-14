@@ -86,7 +86,7 @@ const FIXTURES: [string, unknown][] = [
       scores: { ...base.scores, charisma: 1 },
     },
   ],
-  // Competence rolled up to category in RT-3. A SEAL issued before carries
+  // Competence is per category. A SEAL issued before that carries
   // a task type key, and both verifiers still take it.
   [
     'competence by category',
@@ -96,7 +96,7 @@ const FIXTURES: [string, unknown][] = [
     'competence by task type, issued before categories',
     { ...base, scores: { ...base.scores, 'competence:csv_normalise': 0.8 } },
   ],
-  // D-UI-12. math can be chosen, and a SEAL issued before still names
+  // math can be chosen, and a SEAL issued before still names
   // conversation or other, which are no longer offered.
   [
     'competence in math',
@@ -329,7 +329,7 @@ describe('seal verify against the SEAL conformance cases', () => {
   });
 });
 
-// The handshake conformance cases (VB-6), each beside the suite's version 3
+// The handshake conformance cases, each beside the suite's version 3
 // SEAL, through checkSeal and then checkHandshakeLine, what seal verify
 // --handshake runs. The API and the web run the same cases.
 describe('seal verify --handshake against the handshake conformance cases', () => {

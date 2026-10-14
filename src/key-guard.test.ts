@@ -7,7 +7,7 @@ import { paths } from './config.js';
 import { loadKey } from './identity.js';
 import { containsPrivateKey, holdsPrivateKey } from './key-guard.js';
 
-describe('containsPrivateKey (cli-core-8)', () => {
+describe('containsPrivateKey', () => {
   let home: string;
   let line: string;
   let seed: Buffer;

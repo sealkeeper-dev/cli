@@ -17,21 +17,19 @@ import {
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 
-// The schemas the CLI reads API answers with. @sealkeeper/schema defines
-// the same answers strictly, which is right for the API that sends them but
-// wrong for a CLI already on people's machines. A strict CLI refuses an
-// answer the moment the API adds a field, so every object here is z.object,
-// which drops keys it does not know. Requests the CLI sends keep the strict
-// schemas from @sealkeeper/schema. Values keep their exact checks, only
-// unknown keys are let through.
+// The schemas the CLI reads API answers with. @sealkeeper/schema defines the
+// same answers strictly. A strict CLI would refuse an answer that has a new
+// field, so every object here is z.object, which drops keys it does not know.
+// Requests the CLI sends keep the strict schemas from @sealkeeper/schema.
+// Values keep their exact checks, only unknown keys are let through.
 
 const Timestamp = z.iso.datetime();
 const Count = z.int().min(0);
 const Seconds = z.int().min(0);
 const Name = z.string().min(1).max(64);
-// slug from an API that sends it (VOU-174). The CLI keeps the last one for
-// the handle offline, see operator-slug.ts. A slug that does not have the
-// shape the API builds reads as absent.
+// slug when the answer sends it. The CLI keeps the last one for the handle
+// offline, see operator-slug.ts. A slug that does not have the OperatorSlug
+// shape reads as absent.
 const Operator = z.object({
   login: z.string().min(1).max(39),
   slug: OperatorSlug.optional().catch(undefined),
@@ -54,25 +52,32 @@ export const AgentResponse = z.object({
   operator: Operator,
   createdAt: Timestamp,
   operatedBySealKeeper: z.boolean().optional(),
-  // The old name, still sent by the API beside the new one. Read when the
-  // new one is missing, which an API from before VOU-118 does.
+  // The old name of operatedBySealKeeper, read when the new one is missing.
   operatedByVouched: z.boolean().optional(),
   handle: AgentHandle.optional(),
   previousName: Name.nullable().optional(),
   counts: AgentCounts.optional(),
   lastSeenAt: Timestamp.nullable().optional(),
-  // The current version's level from the last scoring run, absent until it
-  // is scored. A level this CLI does not know reads as absent, so it never
-  // fails the parse. The routine takes template tasks only from posters at
-  // bronze or above (RT-8).
+  // The current version's level, absent until it has one. A level this CLI does
+  // not know reads as absent, so it never fails the parse.
   level: Level.optional().catch(undefined),
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
 
-// The agent's handle, slug/name. The live API always sends it. An older
-// API that does not is covered by building it from the operator and the
-// name, with operator.slug when the answer carries one, else the login
-// lowercased, the slug every operator starts with.
+// POST /v1/me/listed/:domain/:name/merge, init --listed's merge of the agent it
+// registered into the listed agent. agentId is the agent init registered,
+// handle its handle now and redirectFrom the listed agent's handle, which leads
+// to it from now on.
+export const ListedMergeResponse = z.object({
+  agentId: AgentId,
+  handle: AgentHandle,
+  redirectFrom: AgentHandle,
+});
+export type ListedMergeResponse = z.infer<typeof ListedMergeResponse>;
+
+// The agent's handle, slug/name. When an answer does not send it, it is built
+// from the operator and the name, with operator.slug when the answer carries
+// one, else the login lowercased.
 export function agentHandle(
   agent: Pick<AgentResponse, 'handle' | 'operator' | 'name'>,
 ): string {
@@ -80,9 +85,9 @@ export function agentHandle(
 }
 
 // The slug of the agent's operator, to name it, as in routine skip lines.
-// operator.slug, else the first half of the handle, else the login
-// lowercased from an API before slugs. The routine allowlist never matches
-// on this, since the last fallback is a login, see isAllowed.
+// operator.slug, else the first half of the handle, else the login lowercased.
+// The routine allowlist never matches on this, since the last fallback is a
+// login, see isAllowed.
 export function operatorSlugOf(
   agent: Pick<AgentResponse, 'handle' | 'operator'>,
 ): string {
@@ -110,9 +115,10 @@ export const EventsBatchResponse = z.object({
 });
 export type EventsBatchResponse = z.infer<typeof EventsBatchResponse>;
 
-// Size limits are the API's business when it stores a task. Reading one
-// back only needs the shape. A hash task carries its sha256 only in the
-// poster's own post and submission read, every other read leaves it out.
+// Reading a task back only needs the shape of its verification. A hash task
+// carries its sha256 only in the poster's own post and submission read, every
+// other read leaves it out. endpoint is a kind the CLI only reads in a task
+// list or a task read, and never claims, submits or reports on.
 const VerificationSpec = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('hash'), sha256: Sha256Hex.optional() }),
   z.object({
@@ -120,6 +126,7 @@ const VerificationSpec = z.discriminatedUnion('kind', [
     jsonSchema: z.record(z.string(), z.unknown()),
   }),
   z.object({ kind: z.literal('counterparty') }),
+  z.object({ kind: z.literal('endpoint'), checkId: z.string() }),
 ]);
 
 export const TaskResponse = z.object({
@@ -135,30 +142,26 @@ export const TaskResponse = z.object({
   submittedAt: Timestamp.nullable(),
   verifiedAt: Timestamp.nullable(),
   expiresAt: Timestamp,
-  // Set when the poster let its response time lapse and the claimant's
-  // success report verified the task (POST-4). Absent from an API before
-  // it, and then a verified task reads as verified alone.
+  // Set when the claimant's success report verified the task after the poster's
+  // response time lapsed. When absent a verified task reads as verified alone.
   posterLapsedAt: Timestamp.nullable().optional(),
   submission: z.string().optional(),
-  // True when the seed agent posted the task (VOU-208). Absent from an API
-  // before it, and then unknown, so a routine run looks the poster up.
+  // True when the seed agent posted the task. When absent it is unknown, so a
+  // routine run looks the poster up.
   seed: z.boolean().optional(),
-  // Where the post came from, manual, template or routine (RT-8). Any
-  // string, so a new origin never fails the parse of a whole page. Absent
-  // from an API before it, and then the routine takes no such task.
+  // Where the post came from, manual, template or routine. Any string, so a new
+  // origin never fails the parse of a whole page. When absent the routine takes
+  // no such task.
   origin: z.string().optional(),
-  // The real task fields (RT-1) post reads back. Any string, so a
-  // value added later never fails the parse of a whole page, and absent
-  // from an API before them.
+  // The task fields post reads back. Any string, so a value added later never
+  // fails the parse of a whole page.
   category: z.string().optional(),
   size: z.string().optional(),
-  // How hard the task is, 1 to 5 (D-TS-3). Any number, for the same
-  // reason, and absent from an API before it.
+  // How hard the task is, 1 to 5. Any number, for the same reason.
   difficulty: z.number().optional(),
-  // The poster with its handle and level, in list answers from an API
-  // since RT-8, so the routine tells a poster's operator and level without
-  // a lookup. A shape this CLI cannot read counts as absent, and then the
-  // routine looks the poster up.
+  // The poster with its handle and level, in list answers, so the routine tells
+  // a poster's operator and level without a lookup. A shape this CLI cannot
+  // read counts as absent, and then the routine looks the poster up.
   poster: z
     .object({
       handle: AgentHandle,
@@ -167,9 +170,8 @@ export const TaskResponse = z.object({
     })
     .optional()
     .catch(undefined),
-  // The one agent that can claim an addressed task. Null for an open task
-  // and after the assignee was deleted, absent from an API before
-  // addressed tasks.
+  // The one agent that can claim an addressed task. Null for an open task and
+  // after the assignee was deleted.
   assignee: z
     .object({ id: AgentId, handle: AgentHandle })
     .nullable()
@@ -177,8 +179,7 @@ export const TaskResponse = z.object({
 });
 export type TaskResponse = z.infer<typeof TaskResponse>;
 
-// nextCursor is the next page's cursor, null on the last page and absent
-// from an API before paging (VOU-208).
+// nextCursor is the next page's cursor, null on the last page.
 export const ListTasksResponse = z.object({
   tasks: z.array(TaskResponse),
   nextCursor: z.string().nullable().optional(),
@@ -199,8 +200,8 @@ export const TaskSubmissionResponse = z.object({
 });
 export type TaskSubmissionResponse = z.infer<typeof TaskSubmissionResponse>;
 
-// Dimensions read as AcceptedDimension, so competence by task type from an
-// API before RT-3 still parses. Requests name a Dimension, categories only.
+// Dimensions read as AcceptedDimension, so competence by task type still
+// parses. Requests name a Dimension, categories only.
 export const RatingResponse = z.object({
   rateeAgentId: AgentId,
   dimension: AcceptedDimension,
@@ -221,7 +222,7 @@ const IdentityClaim = z.object({
 });
 export type IdentityClaim = z.infer<typeof IdentityClaim>;
 
-// The claims inside a SEAL, version 1, 2, 3 or 4 or the legacy shape
+// The claims inside a SEAL, version 1, 2, 3, 4 or 5 or the legacy shape
 // without ver. iss is any text here so seal verify can name a wrong issuer
 // instead of calling the SEAL malformed. scores takes any dimension name and level any
 // text, so a dimension or level added later does not break an older CLI.
@@ -234,7 +235,7 @@ const sealClaims = {
   iat: Seconds,
   exp: Seconds,
   agent_version: StoredVersion.optional(),
-  // agent_version under its old name, sent beside it for one release.
+  // agent_version under its old name.
   version: StoredVersion.optional(),
   level: z.string().optional(),
   // Each score 0 to 1 or null, as the standard says.
@@ -255,8 +256,8 @@ const sealClaims = {
     posted_distinct_operators: Count.optional(),
     posted_confirmed_tasks: Count.optional(),
   }),
-  // The counted evidence the level read, version 2 on (VOU-139), and the
-  // counted twins of posted_tasks and posted_confirmed_tasks, version 3 on.
+  // The counted evidence the level read, version 2 on, and the counted twins of
+  // posted_tasks and posted_confirmed_tasks, version 3 on.
   counted: z
     .object({
       verified_tasks: Count,
@@ -286,6 +287,26 @@ const sealClaims = {
   identity: z.array(IdentityClaim).optional(),
   last_active: Seconds.nullable().optional(),
   dormant_days: Count.nullable().optional(),
+  // A listed agent's owner, its listing and its endpoint check evidence,
+  // version 5 on. Text here, so a status, method or evidence type added later
+  // does not break an older CLI.
+  owner: z
+    .object({
+      status: z.string(),
+      verified_at: z.string().optional(),
+      method: z.string().optional(),
+    })
+    .optional(),
+  listing: z.object({ handle: z.string() }).optional(),
+  evidence: z
+    .array(
+      z.object({
+        type: z.string(),
+        task_total: Count.optional(),
+        task_ok: Count.optional(),
+      }),
+    )
+    .optional(),
 };
 // exp after iat and at most 24 hours after it, standard section 2.
 const expAfterIat = (c: { iat: number; exp: number }) =>
@@ -313,11 +334,10 @@ export const CredentialPayload = z
   .refine(hasAgentVersion, 'expected agent_version or version');
 export type CredentialPayload = z.infer<typeof CredentialPayload>;
 
-// GET /v1/agents/:id/seal, and /credential, its old path. Both answers
-// carry the same compact JWS as seal and as credential for one release,
-// then credential goes. The CLI takes seal when it is there, else
-// credential, and hands on the one string under both names, so code that
-// reads either keeps working through the change.
+// GET /v1/agents/:id/seal, and /credential, its old path. The answer may carry
+// the same compact JWS as seal and as credential. The CLI takes seal when it is
+// there, else credential, and hands on the one string under both names, so code
+// that reads either keeps working.
 export const CredentialResponse = z
   .object({
     credential: Jws.optional(),
@@ -366,11 +386,11 @@ export const Check: z.ZodType<Check> = z.object({
   ok: z.boolean(),
 });
 
-// GET /v1/check/:slug/:name. The agent's SEAL comes as seal and, for one
-// release, as credential too. Either is enough, and the answer
-// hands the one string on under both names, like CredentialResponse. After
-// 90 dormant days the API withholds the SEAL. Both are then null and a
-// failing check named seal, actual withheld, says why, so ok is false.
+// GET /v1/check/:slug/:name. The agent's SEAL comes as seal and maybe as
+// credential too. Either is enough, and the answer hands the one string on
+// under both names, like CredentialResponse. When the SEAL is withheld both are
+// null and a failing check named seal, actual withheld, says why, so ok is
+// false.
 export type CheckResponse = {
   ok: boolean;
   id: string;
@@ -424,11 +444,11 @@ export const ErrorResponse = z.object({
   }),
 });
 
-// Why a SEAL route answered 404 with no SEAL (VOU-85). withheld carries the
-// reason class of a hold in force on the agent or its operator, no_seal the
-// dormant days. Read loosely, so a class this version does not know still
-// prints as the API sent it. A reason that is not a plain class word, or
-// days that are not a whole number, read as unknown rather than failing.
+// Why a SEAL route answered 404 with no SEAL. withheld carries the reason class
+// of a hold on the agent or its operator, no_seal the dormant days. Read
+// loosely, so a class this version does not know still prints as the API sent
+// it. A reason that is not a plain class word, or days that are not a whole
+// number, read as unknown rather than failing.
 export type SealWithheld =
   | { kind: 'held'; reason: string | null }
   | { kind: 'dormant'; dormantDays: number | null };
@@ -477,16 +497,15 @@ export const GoalThreshold = z.looseObject({
   current: z.number(),
   required: z.number(),
   met: z.boolean(),
-  // The raw count beside a counted one (VOU-139), from an API that sends
-  // it. Absent or null for the other rules.
+  // The raw count beside a counted one, when the answer sends it. Absent or
+  // null for the other thresholds.
   raw: z.number().nullable().optional().catch(undefined),
 });
 export type GoalThreshold = z.infer<typeof GoalThreshold>;
 
-// A count that does not read, such as a fraction, reads as none rather
-// than failing the whole answer.
-// until, from an API that sends it, is when the step clears by itself,
-// such as the day an operator silver slot frees.
+// A count that does not read, such as a fraction, reads as none rather than
+// failing the whole answer. until, when the answer sends it, is when the step
+// clears by itself.
 export const GoalAction = z.looseObject({
   code: z.string(),
   count: Count.nullable().catch(null),
@@ -511,10 +530,10 @@ export const GoalResponse = z.looseObject({
     outcomes: Count,
     posterOutcomes: Count.optional().catch(undefined),
   }),
-  // The UTC day's counted tasks against the daily ceiling (VOU-139), from
-  // an API that sends it. Kept as it came, and read through GoalToday
-  // (todayOf in today.ts), so a shape
-  // this CLI does not know is ignored rather than failing the answer.
+  // The UTC day's counted tasks against the daily ceiling, when the answer
+  // sends it. Kept as it came, and read through GoalToday (todayOf in
+  // today.ts), so a shape this CLI does not know is ignored rather than failing
+  // the answer.
   today: z.unknown().optional(),
   asOf: Timestamp.nullable(),
 });
@@ -528,14 +547,12 @@ export const GoalToday = z.looseObject({
 });
 export type GoalToday = z.infer<typeof GoalToday>;
 
-// POST /v1/game/status, the agent's own game
-// settings and the game units it used in the current UTC day, which start
-// again from 0 at resetAt, also part of the status answer. Loose, unknown
-// keys kept, so a field a later API adds still parses. cap is any count,
-// so a higher cap a later API allows still parses. duelsStartedToday and
-// duelsPerDay, the duels started today against the ceiling (VOU-618), are
-// optional and dropped when malformed, so an answer from an API before
-// them still parses and prints without them.
+// POST /v1/game/status, the agent's own game settings and the game units it
+// used in the current UTC day, which start again from 0 at resetAt, also part
+// of the status answer. Loose, unknown keys kept, so a field added later still
+// parses. cap is any count. duelsStartedToday and duelsPerDay, the duels
+// started today against the ceiling, are optional and dropped when malformed,
+// so an answer without them still parses and prints without them.
 export const GameStatusResponse = z.looseObject({
   enabled: z.boolean(),
   cap: Count,
@@ -547,9 +564,8 @@ export const GameStatusResponse = z.looseObject({
 export type GameStatusResponse = z.infer<typeof GameStatusResponse>;
 
 // PUT /v1/game/settings, the status after the change and, when the change
-// turned the game off, closed, the counts of what it closed (VOU-618).
-// Optional and dropped when malformed, so an API before it, or a change
-// that closed nothing, answers no closed.
+// turned the game off, closed, the counts of what it closed. Optional and
+// dropped when malformed, so a change that closed nothing answers no closed.
 export const GameSettingsResponse = GameStatusResponse.extend({
   closed: z
     .looseObject({
@@ -562,12 +578,11 @@ export const GameSettingsResponse = GameStatusResponse.extend({
 });
 export type GameSettingsResponse = z.infer<typeof GameSettingsResponse>;
 
-// The duels of the duel and status answers (D-GAME-4, D-GAME-7), loose all
-// the way down, so duel --json prints the API answer as it came. category,
-// state, origin and
-// result are any string, so a value a later API adds never fails the parse
-// of a whole list. taskId is the side's own task, in a signed answer to
-// that side only once the duel started.
+// The duels of the duel and status answers, loose all the way down, so duel
+// --json prints the API answer as it came. category, state, origin and result
+// are any string, so a value added later never fails the parse of a whole list.
+// taskId is the side's own task, in a signed answer to that side only once the
+// duel started.
 export const DuelSideView = z.looseObject({
   agentId: AgentId,
   handle: AgentHandle,
@@ -600,10 +615,9 @@ const DuelSeekResponse = z.looseObject({
   duelId: z.uuid().nullable(),
 });
 
-// The weekly challenge answers (D-GAME-11), loose all the way down, so
-// challenge --json prints the API answer as it came. category, state and a
-// task's state are any string, so a value a later API adds never fails
-// the parse.
+// The weekly challenge answers, loose all the way down, so challenge --json
+// prints the API answer as it came. category, state and a task's state are any
+// string, so a value added later never fails the parse.
 
 // The current week as the agent sees it, as POST /v1/challenges/current
 // answers it and the challenge and status routes carry it. tasks are its own, empty without an entry, and rank is its
@@ -644,11 +658,11 @@ export const ChallengeBoardResponse = z.looseObject({
 });
 export type ChallengeBoardResponse = z.infer<typeof ChallengeBoardResponse>;
 
-// The one answer of the core routes (VOU-589), run first, CoreAnswer in
+// The one answer of the core routes, run first, CoreAnswer in
 // @sealkeeper/schema, loose all the way down, so run --json prints the API
 // answer as it came. A task kind, a waiting kind, an action, a level and a
-// limited code are any string, so a value a later API adds never fails the
-// parse. A client shows an action it does not know by its label.
+// limited code are any string, so a value added later never fails the parse. A
+// client shows an action it does not know by its label.
 const CoreTaskResponse = z.looseObject({
   id: z.uuid(),
   kind: z.string(),
@@ -694,13 +708,12 @@ export const CoreAnswerResponse = z.looseObject({
 });
 export type CoreAnswerResponse = z.infer<typeof CoreAnswerResponse>;
 
-// POST /v1/agents/:id/status (VOU-591), StatusAnswer in @sealkeeper/schema,
-// the core answer with tasks empty plus status, what the status screen
-// needs beside it. Loose all the way down, so status --json prints the API
-// answer as it came. Each part of status reads on its own, so a part this
-// CLI cannot read is left out of the screen rather than failing the
-// answer. today is read through GoalToday (todayOf in today.ts), as on
-// the goal answer.
+// POST /v1/agents/:id/status, StatusAnswer in @sealkeeper/schema, the core
+// answer with tasks empty plus status, what the status screen needs beside it.
+// Loose all the way down, so status --json prints the API answer as it came.
+// Each part of status reads on its own, so a part this CLI cannot read is left
+// out of the screen rather than failing the answer. today is read through
+// GoalToday (todayOf in today.ts), as on the goal answer.
 const StatusSealResponse = z.looseObject({
   state: z.string(),
   reason: z.string().nullable(),
@@ -715,11 +728,11 @@ const StatusRecentDuel = z.looseObject({
   decidedAt: Timestamp,
 });
 
-// One score of the status answer (VOU-607), a ScoreEntry in
-// @sealkeeper/schema. dimension is any name, so a dimension this CLI does
-// not know yet is still shown. value is null with no signal. types is the
-// task types under a competence category, a CompetenceTypeScore each, any
-// type name, and a breakdown this CLI cannot read is left out on its own.
+// One score of the status answer, a ScoreEntry in @sealkeeper/schema. dimension
+// is any name, so a dimension this CLI does not know yet is still shown. value
+// is null with no signal. types is the task types under a competence category,
+// a CompetenceTypeScore each, any type name, and a breakdown this CLI cannot
+// read is left out on its own.
 const StatusScore = z.looseObject({
   dimension: z.string(),
   value: z.number().min(0).max(1).nullable(),
@@ -763,23 +776,22 @@ export const StatusAnswerResponse = z.looseObject({
 });
 export type StatusAnswerResponse = z.infer<typeof StatusAnswerResponse>;
 
-// POST /v1/agents/:id/challenge/next (VOU-592), ChallengeAnswer in
-// @sealkeeper/schema, the core answer plus challenge, the week after the
-// step, and board, the top places on a board look. Loose all the way down,
-// so challenge --json prints the API answer as it came. challenge and
-// board each read on their own, so one this CLI cannot read is left out of
-// the terminal lines rather than failing the answer.
+// POST /v1/agents/:id/challenge/next, ChallengeAnswer in @sealkeeper/schema,
+// the core answer plus challenge, the week after the step, and board, the top
+// places on a board look. Loose all the way down, so challenge --json prints
+// the API answer as it came. challenge and board each read on their own, so one
+// this CLI cannot read is left out of the terminal lines rather than failing
+// the answer.
 export const ChallengeAnswerResponse = z.looseObject({
   ...CoreAnswerResponse.shape,
   challenge: CurrentChallengeResponse.nullable().optional().catch(undefined),
   board: ChallengeBoardResponse.nullable().optional().catch(undefined),
 });
 export type ChallengeAnswerResponse = z.infer<typeof ChallengeAnswerResponse>;
-// POST /v1/agents/:id/duel/next (VOU-593), DuelAnswer in @sealkeeper/schema,
-// the core answer plus duel, what the step did, this agent's open seek and
-// the duels the step is about. Loose all the way down, so duel --json
-// prints the API answer as it came, and a step a later API adds never
-// fails the parse.
+// POST /v1/agents/:id/duel/next, DuelAnswer in @sealkeeper/schema, the core
+// answer plus duel, what the step did, this agent's open seek and the duels the
+// step is about. Loose all the way down, so duel --json prints the API answer
+// as it came, and a step added later never fails the parse.
 export const DuelAnswerResponse = z.looseObject({
   ...CoreAnswerResponse.shape,
   duel: z.looseObject({
@@ -790,11 +802,11 @@ export const DuelAnswerResponse = z.looseObject({
 });
 export type DuelAnswerResponse = z.infer<typeof DuelAnswerResponse>;
 
-// POST /v1/agents/:id/routine/next (VOU-594), RoutineAnswer in
-// @sealkeeper/schema, the core answer plus routine, the one action of the
-// step. Loose, so an action, a reason or a field a later API adds never
-// fails the parse. taskId reads as null from an API that sends none. A
-// judge the CLI cannot read is null, and then no verdict goes back.
+// POST /v1/agents/:id/routine/next, RoutineAnswer in @sealkeeper/schema, the
+// core answer plus routine, the one action of the step. Loose, so an action, a
+// reason or a field added later never fails the parse. taskId reads as null
+// when none is sent. A judge the CLI cannot read is null, and then no verdict
+// goes back.
 export const RoutineAnswerResponse = z.looseObject({
   ...CoreAnswerResponse.shape,
   routine: z.looseObject({

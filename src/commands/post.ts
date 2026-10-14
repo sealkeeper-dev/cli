@@ -51,25 +51,21 @@ import {
 
 // sealkeeper post. Four ways in.
 //
-// --type, --spec and --verify post exactly what they say, as before, for
-// scripts.
+// --type, --spec and --verify post exactly what they say, for scripts.
 //
-// --template <id> posts a ready made template, with --input when the
-// template takes one, only with --yes or after a yes in a terminal.
-// Without a terminal and without --yes it refuses before anything is read
-// or sent. SealKeeper makes the task from the template and the input and
-// works out its answer (VOU-640), so this CLI sends the template and the
-// input and prints the task that comes back.
+// --template <id> posts a ready made template, with --input when the template
+// takes one, only with --yes or after a yes in a terminal. Without a terminal
+// and without --yes it refuses before anything is read or sent. This CLI sends
+// the template and the input and prints the task SealKeeper made from them.
 //
-// --adopt <category> adopts a ready made task in that category, one
-// SealKeeper made and knows the answer to, and posts it as this agent's own
-// template task (RT-12). On --yes or after a yes in a terminal, as
-// --template. SealKeeper picks the task and checks the answer.
+// --adopt <category> adopts a ready made task in that category and posts it as
+// this agent's own template task. On --yes or after a yes in a terminal, as
+// --template.
 //
 // No options at all in a terminal walks the operator through it. Pick a
 // template, give its input, optionally name one agent, read what will be
-// posted, then post it only on a yes and read the task SealKeeper made.
-// Without a terminal, no options is an error and nothing is sent.
+// posted, then post it only on a yes and read the task SealKeeper made. Without
+// a terminal, no options is an error and nothing is sent.
 
 const MAX_EXPIRES_HOURS = TASK_MAX_TTL_DAYS * 24;
 // How many times the guided flow asks one question before it gives up.
@@ -103,8 +99,7 @@ export const KEY_IN_TASK =
   "refusing to post, the task contains this agent's private key";
 export const templateNeedsYes = (id: string): string =>
   `nothing posted. There is no terminal to ask, so run ${cli(`post --template ${id}`)} again with --yes to post it`;
-// SealKeeper's refusal of an input it made no task from, such as lines
-// with nothing to remove or sort, which takes the solver to know.
+// The line for SealKeeper's refusal of an input it made no task from.
 export const inputMisfit = (id: string, message: string): string =>
   `nothing posted. The input does not fit ${id}, ${message}`;
 export const API_TOO_OLD_FOR_TEMPLATE =
@@ -144,7 +139,7 @@ const difficultyOf = (value: string): TaskDifficulty | null => {
   return /^\d+$/.test(value) && parsed.success ? parsed.data : null;
 };
 
-// The refusals and lines of --adopt (RT-12), one line each.
+// The refusals and lines of --adopt, one line each.
 export const badAdopt = (value: string): string =>
   `--adopt must be one of ${TASK_CATEGORIES.join(', ')}, got ${value}`;
 export const ADOPT_ALONE =
@@ -161,9 +156,8 @@ export const API_TOO_OLD_FOR_ADOPT =
   'nothing posted. This API is older than this CLI and does not take adoptions yet';
 export const ADOPTED_CHECK =
   'SealKeeper knows the answer to this task and checks it on submit, so nothing waits on you.';
-// Before an adoption, since SealKeeper picks the task and now and then
-// posts it as a counterparty task this agent judges (RT-16). After it, the
-// line follows the task's verification.
+// Said before an adoption, since the task may come back as a counterparty task
+// this agent judges. After it, the line follows the task's verification.
 export const ADOPT_PREVIEW_CHECK =
   'SealKeeper knows the answer. It checks most adopted tasks on submit, and for the rest you judge the result.';
 // The options of a post as scripts give it, each with its flag as commander
@@ -322,7 +316,7 @@ function noInput(): Input {
   return { isTTY: false, readLine: async () => null };
 }
 
-// The post from --type, --spec and --verify, as before.
+// The post from --type, --spec and --verify.
 async function explicitPost(
   cmd: Command,
   deps: TasksDeps,
@@ -351,10 +345,9 @@ async function explicitPost(
     options.verify,
     options.allowOutsideCwd,
   );
-  // Always sent, so the post says what it is (D-TS-8). Without the flag, the
-  // template's for a template task type, which the API holds it to, else
-  // the default. From DIFFICULTY_CONFIRM_MIN up the API refuses it on a
-  // hash or schema task, said here so nothing is signed for it.
+  // Always sent. Without the flag, the template's difficulty for a template
+  // task type, else the default. From DIFFICULTY_CONFIRM_MIN up it is refused
+  // here on a hash or schema task, so nothing is signed for it.
   const difficulty =
     options.difficulty === undefined
       ? (templateById(options.type)?.difficulty ?? TASK_DIFFICULTY_DEFAULT)
@@ -386,16 +379,15 @@ type Draft = {
   verification: VerificationSpec;
   expiresHours?: string;
   assignee?: string;
-  // Left out when not given, and the API derives the category from the
-  // task type and takes size s.
+  // Left out when not given.
   category?: TaskCategory;
   size?: TaskSize;
-  // Every way in gives one (D-TS-3), and an API before it refuses the post.
+  // Set by every way in.
   difficulty?: TaskDifficulty;
 };
 
-// The expiry and the assignee of a post, as the API will validate them.
-// Ends the command on a bad one.
+// The expiry and the assignee of a post, checked with the request schema. Ends
+// the command on a bad one.
 function whenAndWho(
   cmd: Command,
   expiresHours: string | undefined,
@@ -415,8 +407,8 @@ function whenAndWho(
   };
 }
 
-// The request for a draft, validated as the API will validate it. Ends the
-// command on anything the API would refuse at the edge.
+// The request for a draft, checked with PostTaskRequest. Ends the command on
+// anything it refuses.
 function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
   // The id is ours, so a retried post returns the same task.
   const request = PostTaskRequest.safeParse({
@@ -433,9 +425,9 @@ function requestOf(cmd: Command, draft: Draft): PostTaskRequest {
   return request.data;
 }
 
-// The request of a template post (VOU-640), validated as the API will
-// validate it. input is what cleanTemplateInput gave. Every template post,
-// guided or --template, carries origin template (VOU-134).
+// The request of a template post, checked with TemplatePostRequest. input is
+// what cleanTemplateInput gave. Every template post, guided or --template,
+// carries origin template.
 function templateRequestOf(
   cmd: Command,
   template: Template,
@@ -466,7 +458,7 @@ async function postAndPrint(
   // Every way in ends here, so no spec, schema or input carries the key.
   await refuseKeyInTask(cmd, request);
   const { config, signer, api } = await openTaskSession(cmd, deps);
-  // The API refuses these too. Said here, nothing is signed for them.
+  // Refused here, so nothing is signed for them.
   if (
     assignee !== undefined &&
     ownAgent(assignee, await ownSlug(config), signer.agentId)
@@ -606,8 +598,8 @@ async function adoptPost(
   }
 }
 
-// What an adoption will do, for the operator to read before saying yes.
-// SealKeeper picks the task, so there is no spec to show yet.
+// What an adoption will do, for the operator to read before saying yes. There
+// is no spec to show yet.
 export function adoptPreviewLines(category: string): string[] {
   return [
     '',
@@ -617,19 +609,19 @@ export function adoptPreviewLines(category: string): string[] {
   ];
 }
 
-// SealKeeper's daily cap of adoptions, from the message of its 429, as in
-// at most 5 candidates a day. null when the message does not say.
+// The daily cap of adoptions, read from the message of a 429, as in at most 5
+// candidates a day. null when the message does not say.
 function capOf(error: ApiError): number | null {
   const found = /at most (\d+)/.exec(error.message)?.[1];
   return found === undefined ? null : Number(found);
 }
 
-// The fields only a post has, which an API from before adoptions asks for
-// when it reads an adoption as a post.
+// The fields only a post has, named when an older API reads an adoption as a
+// post.
 const POST_FIELDS = new Set(['taskType', 'spec', 'verification']);
 
-// True when an API from before adoptions read the adoption as a post and
-// asked for its task type, spec or verification.
+// True when an older API read the adoption as a post and asked for its task
+// type, spec or verification.
 function apiTooOldForAdopt(error: ApiError): boolean {
   return (
     error.code === 'validation_failed' &&
@@ -944,9 +936,8 @@ const CHECKS: Record<Template['kind'], string> = {
 };
 
 // What will be posted, for the operator to read before saying yes. The
-// template, its input in full, who can claim it, when it expires and who
-// checks it. SealKeeper makes the spec (VOU-640), so the task in full
-// prints once it is posted.
+// template, its input in full, who can claim it, when it expires and who checks
+// it. The task in full prints once it is posted.
 export function previewLines(
   template: Template,
   request: TemplatePostRequest,
@@ -1009,9 +1000,8 @@ export function postLines(
   return lines;
 }
 
-// The slug of this agent's operator, the first half of its handles. The
-// one the API last sent, stored in operator-slug.json (VOU-187), else the
-// login lowercased, which is the slug every operator starts with.
+// The slug of this agent's operator, the first half of its handles. The one
+// stored in operator-slug.json, else the login lowercased.
 async function ownSlug(config: {
   operatorLogin: string;
   agentId: string;
@@ -1023,11 +1013,8 @@ async function ownSlug(config: {
 }
 
 // True when ref names this agent, by id, or any agent of its operator, by a
-// handle with the operator's slug. Case does not matter, as in a handle
-// lookup. The slug is the one stored when the API last sent it, so right
-// after a slug change on the web this check can miss until the next answer
-// stores the new one, and the API's same_operator refusal still catches it.
-// That refusal is the real check, this one only saves a signature.
+// handle with the stored operator slug. Case does not matter. It only saves a
+// signature, the API's same_operator refusal still applies.
 function ownAgent(ref: string, slug: string, agentId: string): boolean {
   if (ref === agentId) return true;
   const slash = ref.indexOf('/');
@@ -1036,10 +1023,9 @@ function ownAgent(ref: string, slug: string, agentId: string): boolean {
   );
 }
 
-// True when a validation_failed names category, size or difficulty, which
-// an API from before RT-2, or before VOU-496 for difficulty, refuses as
-// unrecognized keys of the payload, path [] and the keys in the message,
-// and a newer one would name by path.
+// True when a validation_failed names category, size or difficulty as
+// unrecognized keys of the payload, path [] and the keys in the message, as an
+// older API refuses them.
 function namesNewFields(error: ApiError): boolean {
   if (error.code !== 'validation_failed') return false;
   const field = /^(category|size|difficulty)$/;
@@ -1051,8 +1037,8 @@ function namesNewFields(error: ApiError): boolean {
   );
 }
 
-// True when an API from before VOU-640 read a template post as an
-// adoption and refused the template as a key it does not know.
+// True when an older API read a template post as an adoption and refused the
+// template as a key it does not know.
 function apiTooOldForTemplate(error: ApiError): boolean {
   return (
     error.code === 'validation_failed' &&

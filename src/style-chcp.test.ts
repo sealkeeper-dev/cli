@@ -12,7 +12,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-describe('the console code page (VOU-321)', () => {
+describe('the console code page', () => {
   it("reads the code page of this process's console, once", () => {
     expect(asciiGlyphs({ platform: 'win32' })).toBe(false);
     expect(asciiGlyphs({ platform: 'win32' })).toBe(false);

@@ -1,0 +1,12 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "checking",
+      "message": "This agent's Trust Score is not shown while it is checked"
+    }
+  }
+}

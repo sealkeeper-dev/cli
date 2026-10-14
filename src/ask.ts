@@ -10,9 +10,8 @@ export type Input = {
 };
 
 // One readline per question, closed after its line so stdin never keeps the
-// process alive. A stream that has ended answers null at once, since a
-// readline on it would never emit close and the question would wait
-// forever (D6).
+// process alive. A stream that has ended answers null at once, since a readline
+// on it would never emit close.
 export function streamInput(
   stream: NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean },
 ): Input {

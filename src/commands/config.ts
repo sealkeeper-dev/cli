@@ -24,8 +24,8 @@ export const gameSwitchLine = (game: GameStatusResponse): string =>
     : `Game off, cap ${game.cap} game units a UTC day. ${cli('config game on')} turns it on.`;
 
 // What config game off prints, Game off and what the API says the change
-// closed (VOU-618). Only Game off when it closed nothing, the game was off
-// already, or the API sends no counts.
+// closed. Only Game off when it closed nothing, the game was off already, or
+// the API sends no counts.
 export function gameOffLine({ closed }: GameSettingsResponse): string {
   const parts = closed
     ? [
@@ -49,12 +49,10 @@ export const defaultConfigDeps: ConfigDeps = {
   fetch: (...args) => fetch(...args),
 };
 
-// Local settings. auto-sync in config.json and the nudge in nudge.json can
-// be changed here, the identity fields come from init, and the routine's
-// settings from routine set (VOU-599). game is the one setting SealKeeper
-// holds, the agent's game switch, read and changed with a signed request
-// (VOU-611). Off is the one way to stop invites, since the cap counts only
-// the duels the agent creates and the challenge tasks it claims.
+// Local settings. auto-sync in config.json and the nudge in nudge.json can be
+// changed here, the identity fields come from init, and the routine's settings
+// from routine set. game is the agent's game switch, read and changed with a
+// signed request.
 export function register(
   parent: Command,
   deps: ConfigDeps = defaultConfigDeps,

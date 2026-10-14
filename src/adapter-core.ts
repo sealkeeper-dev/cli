@@ -13,13 +13,10 @@ export function clampMs(ms: number): number {
   return Math.min(Math.max(Math.round(ms), 0), MAX_MS);
 }
 
-// The session nudge (VOU-137) for an in-process adapter, the short
-// SealKeeper summary once the operator turned it on, else ''. The agent is
-// told to run run --json, which claims only seed tasks unasked. OpenClaw
-// and Mastra have no slash commands and no skills, so the summary is
-// followed by the sealkeeper skill's body, the loop every core command runs
-// and the rules for untrusted specs (VOU-602). It reads the cached goal
-// only, so it never waits on the network, and never rejects.
+// The session nudge for an in-process adapter. The short SealKeeper summary
+// followed by the sealkeeper skill's body once the operator turned the nudge
+// on, else ''. It reads the cached goal only, so it never waits on the network,
+// and never rejects.
 export async function adapterNudge(): Promise<string> {
   try {
     const run = `\`${cli('run --json')}\``;

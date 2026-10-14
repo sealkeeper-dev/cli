@@ -49,14 +49,12 @@ function submitsLeft(origin: string | undefined): string {
 }
 
 /*
- * Whether the task's spec asks the answer to end in a line feed, null when
- * no spec of it can be seen here (VOU-635). From the spec the caller was
- * handed with the task when it gives one, as the routine does, else from
- * the public read. A duel or challenge task's public read shows {}, since
- * its spec reaches its claimant only in the answer that handed it over, so
- * for one of those it is what this machine kept from that answer
- * (handed.ts), null for a task handed over by an older CLI or on another
- * machine.
+ * Whether the task's spec asks the answer to end in a line feed, null when no
+ * spec of it can be seen here. From the spec the caller was handed with the
+ * task when it gives one, as the routine does, else from the public read. A
+ * duel or challenge task's public read shows {}, so for one of those it is what
+ * this machine kept from the answer that handed it over (handed.ts), null when
+ * nothing was kept.
  */
 async function asksFinalLineFeed(
   task: TaskResponse,
@@ -76,15 +74,13 @@ type SubmitOptions = {
   allowOutsideCwd?: boolean;
 };
 
-// Why a submit sent nothing, or what SealKeeper refused. message is the
-// line to show, code the API's error code, or the check here that refused
-// it, verification the verification failure when SealKeeper checked the
-// answer and found it wrong. rateLimited is the API's 429, kept so the
-// routine waits for its Retry-After before the next step (VOU-613). local
-// is true for a check here that refused the answer before anything was
-// signed or sent, which has neither a verification nor an API error, so
-// the routine asks its model again rather than send a kept answer that
-// fails it (VOU-635).
+// Why a submit sent nothing, or what SealKeeper refused. message is the line to
+// show, code the API's error code, or the check here that refused it,
+// verification the verification failure when SealKeeper checked the answer and
+// found it wrong. rateLimited is the API's 429, kept so the routine waits for
+// its Retry-After before the next step. local is true for a check here that
+// refused the answer before anything was signed or sent, so the routine asks
+// its model again rather than send a kept answer that fails it.
 export class SubmitRefused extends Error {
   override name = 'SubmitRefused';
   readonly rateLimited?: ApiError;
@@ -109,21 +105,19 @@ export type Submitted = {
 };
 
 /*
- * One answer submitted, the path submit and the routine's run share
- * (VOU-599). Refuses an answer that holds this agent's key, a hash answer
- * that ends in a line break the spec does not ask for, or whose spec cannot
- * be seen here, unless keepNewline, and a schema answer that is not JSON,
- * before anything is signed. spec is the spec the caller was handed with
- * the task, which the routine passes, since a game task's public read
- * shows {} (asksFinalLineFeed). Then
- * signs and sends it with the declared fingerprint, read from the home
- * paths names when given, the routine run's own (VOU-655), and the model
- * name, and notes it in the local log. modelName is the model that solved the task
- * (VOU-615), none when it is null or not a ModelName. An API that refuses
- * the name gets the submit again without it (refusesModelName). For a
- * counterparty task the claimant's success report follows, with origin
- * routine when routine is true. Throws SubmitRefused with the line to
- * show, and what the API client throws otherwise.
+ * One answer submitted, the path submit and the routine's run share. Before
+ * anything is signed it refuses an answer that holds this agent's key, a hash
+ * answer that ends in a line break the spec does not ask for or whose spec
+ * cannot be seen here, unless keepNewline, and a schema answer that is not
+ * JSON. spec is the spec the caller was handed with the task, which the routine
+ * passes (asksFinalLineFeed). Then it signs and sends it with the declared
+ * fingerprint, read from the home paths names when given, and the model name,
+ * and notes it in the local log. modelName is the model that solved the task,
+ * none when it is null or not a ModelName. When the API refuses the name the
+ * submit is sent again without it (refusesModelName). For a counterparty task
+ * the claimant's success report follows, with origin routine when routine is
+ * true. Throws SubmitRefused with the line to show, and what the API client
+ * throws otherwise.
  */
 export async function submitAnswer(
   session: Pick<TaskSession, 'signer' | 'api'>,
@@ -150,15 +144,11 @@ export async function submitAnswer(
   const { signer, api } = session;
   const task = await api.getTask(id);
 
-  // A schema task needs JSON, checked first so a submission that is not
-  // JSON is never signed or sent. A hash task's digest goes only to its
-  // poster, so the server alone checks a hash answer and says so with a
-  // 422. Each failed submit costs one of the tries a claim allows, the
-  // one submit of a duel side or a challenge task ends it, so a hash answer
-  // with the line break most editors add is refused here unless the spec
-  // asks for one or keepNewline says to send it. A spec that cannot be seen
-  // here is never read as one that does not ask, so the refusal then never
-  // says to remove the line break.
+  // A schema answer that is not JSON is never signed or sent. A hash answer
+  // with a trailing line break is refused here unless the spec asks for one or
+  // keepNewline says to send it. A spec that cannot be seen here is never read
+  // as one that does not ask, so the refusal then never says to remove the line
+  // break.
   const { verification } = task;
   if (
     verification.kind === 'hash' &&
@@ -231,8 +221,8 @@ export async function submitAnswer(
           reason,
         );
       }
-      // A duel side past its 48 hours gets the duel's line, and a
-      // challenge task from the week's close on the challenge's.
+      // A duel task past its deadline gets the duel's line, and a challenge
+      // task after the week's close the challenge's.
       throw new SubmitRefused(
         error.code === 'duel_deadline_passed' ||
           error.code === 'challenge_closed'
@@ -249,8 +239,8 @@ export async function submitAnswer(
     });
   }
 
-  // Counterparty tasks count only when both sides agree. The claimant
-  // reports success now, and the poster confirms on their side.
+  // For a counterparty task the claimant reports success now, and the poster
+  // gives its verdict with outcome.
   if (verification.kind === 'counterparty') {
     const outcome = TaskOutcomeRequest.parse({
       taskId: id,
@@ -329,8 +319,7 @@ export function register(
       try {
         done = await submitAnswer(session, id, submission, {
           keepNewline: options.keepNewline === true,
-          // The name sync declares, from the session hook or the adapter
-          // (VOU-614).
+          // The name sync declares, from the session hook or the adapter.
           modelName: (await declaredModel())?.name ?? null,
         });
       } catch (error) {

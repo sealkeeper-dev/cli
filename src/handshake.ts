@@ -14,12 +14,12 @@ import { declaredFingerprint } from './declared-fingerprint.js';
 import { loadKey } from './identity.js';
 import { LiveAgent } from './live-agent.js';
 
-// The handshake (VB-6). The agent signs its current fingerprint hash with
-// its own key, so whoever holds its SEAL can check the presenter holds the
-// key the SEAL names and whether it still runs what the SEAL records. The
-// signing and the checks are the schema's, signHandshake and
-// checkHandshake. This file finds the key and the fingerprint, and reads
-// the issuer's record for a SEAL before version 3.
+// The handshake. The agent signs its current fingerprint hash with its own key,
+// so whoever holds its SEAL can check the presenter holds the key the SEAL
+// names and whether it still runs what the SEAL records. The signing and the
+// checks are the schema's, signHandshake and checkHandshake. This file finds
+// the key and the fingerprint, and reads the issuer's record for a SEAL before
+// version 3.
 
 // How long the record lookup may take.
 const RECORD_TIMEOUT_MS = 10_000;

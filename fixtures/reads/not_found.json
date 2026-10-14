@@ -1,0 +1,12 @@
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "not_found",
+      "message": "Agent not found"
+    }
+  }
+}

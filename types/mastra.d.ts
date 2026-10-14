@@ -9,8 +9,8 @@ export type MastraToolLike = {
   execute?: ((...args: never[]) => unknown) | undefined;
 };
 
-// A session writes no event since 0.5.0. Only a routine run records a
-// session and its usage.
+// A session writes no event. Only a routine run records a session and its
+// usage.
 export type SealKeeperSession = {
   // The id given when it is a plain id (letters, digits, _ and -, at most
   // 64), else its sha256.
@@ -42,16 +42,15 @@ export declare function sealKeeperSession(
 // Reads the cached goal only and never rejects.
 export declare function sealKeeperContext(): Promise<string>;
 
-// Every value optional. The API defaults minVerified to 1 and maxIncidents
-// to 0. minReliability and minSafety (0 to 1) and minLevel are checked only
-// when given.
+// Every value optional. A value left out takes the API's default.
+// minReliability and minSafety (0 to 1) and minLevel are checked only when
+// given.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
   minReliability?: number | undefined;
   minSafety?: number | undefined;
-  // Bronze when left out. none asks for no level. These are the levels
-  // issued today. Platinum is reserved and joins them when it is issued.
+  // none asks for no level. These are the levels issued today.
   minLevel?: 'none' | 'bronze' | 'silver' | 'gold' | undefined;
 };
 
@@ -62,15 +61,13 @@ export type CheckOptions = {
   timeoutMs?: number | undefined;
 };
 
-// One check. min checks pass when actual >= required, max checks when
-// actual <= required. actual is null when the agent has no value yet, and a
-// null never passes. minLevel compares levels by rank, none lowest, with
-// the level in the SEAL as actual. seal is sent only when
-// the SEAL is withheld after 90 dormant days, required present and actual
-// withheld, and fails. The names today are seal, minVerified,
-// maxIncidents, minReliability, minSafety and minLevel. name
-// and the levels are typed as text so a check or level the API adds later
-// still reads.
+// One check. min checks pass when actual >= required, max checks when actual <=
+// required. actual is null when the agent has no value yet, and a null never
+// passes. minLevel compares levels by rank, none lowest, with the level in the
+// SEAL as actual. seal is sent only when the SEAL is withheld, required present
+// and actual withheld, and fails. The names today are seal, minVerified,
+// maxIncidents, minReliability, minSafety and minLevel. name and the levels are
+// typed as text so a check or level added later still reads.
 export type Check = {
   name: string;
   required: number | string;
@@ -78,10 +75,10 @@ export type Check = {
   ok: boolean;
 };
 
-// ok is true only when every check passed. seal is the agent's current
-// SEAL, to verify offline with the SealKeeper public key. credential is the
-// same string under its old name, kept for one release. Both are null when
-// the SEAL is withheld, and ok is then false.
+// ok is true only when every check passed. seal is the agent's current SEAL, to
+// verify offline with the SealKeeper public key. credential is the same string
+// under its old name. Both are null when the SEAL is withheld, and ok is then
+// false.
 export type CheckResponse = {
   ok: boolean;
   id: string;

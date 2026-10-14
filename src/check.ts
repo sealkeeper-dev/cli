@@ -5,6 +5,8 @@
 import {
   AgentName,
   CheckQuery,
+  HandleAlias,
+  HandleDomain,
   LEVEL_RANK,
   type Level,
   OperatorSlug,
@@ -23,9 +25,8 @@ import {
 } from './responses.js';
 import { checkSeal, loadKeys, sealIssuer, sealKid } from './seal.js';
 
-// Every value optional. The API defaults minVerified to 1, maxIncidents
-// to 0 and minLevel to bronze. minLevel none asks for no level.
-// minReliability and minSafety are checked only when given.
+// Every value optional. A value left out takes the API's default. minLevel none
+// asks for no level.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
@@ -41,32 +42,36 @@ export type CheckOptions = {
   timeoutMs?: number | undefined;
 };
 
-// Splits slug/name and checks both parts. The slug is lowercased first, as
-// the API does, so a handle written with a login in capitals still works.
-// Throws an ApiError with code invalid_handle, before anything is sent.
+// Splits first/name and checks both parts. The first segment is an operator
+// slug or a listed agent's domain key, lowercased first, so a handle written in
+// capitals still works. Throws an ApiError with code invalid_handle before
+// anything is sent.
 function parseHandle(handle: string): { slug: string; name: string } {
   const [first, name, ...rest] = handle.split('/');
   const slug = first?.toLowerCase();
   if (
     rest.length > 0 ||
-    !OperatorSlug.safeParse(slug).success ||
+    !(
+      OperatorSlug.safeParse(slug).success ||
+      HandleDomain.safeParse(slug).success ||
+      HandleAlias.safeParse(slug).success
+    ) ||
     !AgentName.safeParse(name).success
   ) {
     throw new ApiError(
       0,
       'invalid_handle',
-      `invalid handle ${handle}, use <operator>/<agent name>, as in alice/claude-code`,
+      `invalid handle ${handle}, use <operator>/<agent name>, as in alice/claude-code, or <domain>/<agent name> for a listed agent`,
     );
   }
   return { slug: slug as string, name: name as string };
 }
 
-// The query string for the thresholds that are set, and the thresholds as
-// the API reads them, defaults filled in. Each value goes through
-// CheckQuery, the same schema the API uses, so a bad one fails here with
-// code invalid_threshold instead of reaching the network. The CLI passes
-// its flags as the text that was typed, so an empty flag is refused rather
-// than read as 0.
+// The query string for the thresholds that are set, and the thresholds with
+// defaults filled in. Each value goes through CheckQuery, so a bad one fails
+// here with code invalid_threshold instead of reaching the network. The CLI
+// passes its flags as the text that was typed, so an empty flag is refused
+// rather than read as 0.
 type RawThresholds = {
   [K in keyof CheckThresholds]?: string | undefined;
 };
@@ -151,11 +156,10 @@ export async function fetchCheck(
   throw error;
 }
 
-// Why the SEAL is withheld, for a check answer with a failing seal check.
-// The check answer says withheld and not why, and the SEAL route by handle
-// carries the reason class or the dormant days (VOU-85). null when that
-// route answers anything else or cannot be reached, so the check still
-// prints, only without the reason.
+// Why the SEAL is withheld, for a check answer with a failing seal check. It
+// reads the SEAL route by handle, which carries the reason class or the dormant
+// days. null when that route answers anything else or cannot be reached, so the
+// check still prints, only without the reason.
 export async function fetchWithheld(
   handle: string,
   options: CheckOptions = {},
@@ -182,10 +186,9 @@ export async function fetchWithheld(
 export const sealIsWithheld = (result: CheckResponse): boolean =>
   result.checks.some((c) => c.name === 'seal' && c.actual === 'withheld');
 
-// The checks a verified SEAL can answer for itself, the same comparisons
-// as the API's runChecks. minVerified reads counts.verified_tasks,
-// maxIncidents counts.safety_incidents_90d and minLevel level by rank. One
-// line per check that fails, empty when all three pass.
+// The checks a verified SEAL can answer for itself. minVerified reads
+// counts.verified_tasks, maxIncidents counts.safety_incidents_90d and minLevel
+// the level by rank. One line per check that fails, empty when all three pass.
 export function sealChecksFailing(
   payload: SealPayload,
   query: CheckQuery,
@@ -212,17 +215,13 @@ export function sealChecksFailing(
 }
 
 // A pass that callers act on, as assertTrusted does, needs more than the
-// API's ok. The answer must be about the handle asked for, and its SEAL
-// must verify against the SealKeeper keys, be current and name the agent
-// the API found for that handle. Then minVerified, maxIncidents and
-// minLevel are worked out again from the verified SEAL, never taken on the
-// API's word (VOU-645). The handle to id mapping is the API's. A SEAL
-// carries no handle, so the mapping cannot be checked offline, and an API
-// that lied about it could hand over another real agent's SEAL. Only the
-// API the CLI points at is trusted for it. minReliability and minSafety read the API's
-// scores, which the SEAL does not carry the same way, so they stay the
-// API's word. Throws ApiError with code seal_invalid when any of that
-// fails. A failing answer needs no proof and is returned as it is.
+// answer's ok. The answer must be about the handle asked for, and its SEAL must
+// verify against the SealKeeper keys, be current and name the agent the answer
+// found for that handle. Then minVerified, maxIncidents and minLevel are worked
+// out again from the verified SEAL. The handle to id mapping cannot be checked
+// offline, so it is taken from the API this CLI points at. minReliability and
+// minSafety are read from the answer. Throws ApiError with code seal_invalid
+// when any of that fails. A failing answer is returned as it is.
 async function trustedPass(
   result: CheckResponse,
   handle: string,
@@ -289,7 +288,7 @@ export function describeCheck(
         ? `${status} no SEAL, ${withheld === null ? 'withheld' : withheldText(withheld)}, need a current SEAL`
         : `${status} SEAL ${actual}, need ${check.required}`;
     default:
-      // A check added to the API after this version.
+      // A check this version does not know.
       return `${status} ${check.name} ${actual}, required ${check.required}`;
   }
 }

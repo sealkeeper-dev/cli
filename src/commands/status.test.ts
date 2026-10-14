@@ -498,7 +498,7 @@ describe('status', () => {
       expect(out).not.toContain('Challenge');
     });
 
-    it('says the duels started against the ceiling the API sent (VOU-618)', async () => {
+    it('says the duels started against the ceiling the API sent', async () => {
       const base = statusAnswer(agentId);
       api.answer = {
         ...base,
@@ -659,7 +659,7 @@ describe('status', () => {
       expect(out).toContain(
         'Routine run found nothing to do, no agent started.',
       );
-      // The status line names the routine screen for the rest (VOU-599).
+      // The status line names the routine screen for the rest.
       expect(out).toContain(
         '           See all of it with npx sealkeeper routine\n',
       );
@@ -989,7 +989,7 @@ describe('status', () => {
       expect((await run('status')).err).toBe('');
     });
 
-    // VOU-627. The log holds SealKeeper work only, so a written daily job
+    // The log holds SealKeeper work only, so a written daily job
     // counts as a way in, as the hooks do.
     it('does not warn when the daily routine job is written', async () => {
       await writeRoutineConfig({
@@ -1008,7 +1008,7 @@ describe('status', () => {
     });
   });
 
-  // VOU-451, VOU-627. An install before 0.4.14 also wrote PreToolUse,
+  // An install before 0.4.14 also wrote PreToolUse,
   // PostToolUse and PostToolUseFailure, and one before 0.5.0 Stop, which
   // record nothing now.
   describe('tool call hooks an older install left', () => {
@@ -1124,7 +1124,7 @@ describe('status', () => {
     });
   });
 
-  describe("the daily job's copy of the CLI (RS-2)", () => {
+  describe("the daily job's copy of the CLI", () => {
     // A job as routine on records it, running the copy in the home.
     async function installed(version: string): Promise<void> {
       const c = copyPaths(paths());

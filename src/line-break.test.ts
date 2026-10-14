@@ -15,7 +15,7 @@ describe('endsInLineBreak', () => {
 describe('specAsksFinalLineFeed', () => {
   // The hash templates word their output so, and the counterparty ones say
   // no line feed at the end, both read below. The templates themselves are
-  // made by the API (VOU-640).
+  // made by the API.
   it('reads the seed and template wording as asking for one', () => {
     expect(
       specAsksFinalLineFeed({

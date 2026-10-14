@@ -5,11 +5,10 @@ import { describeFingerprint } from '../fingerprint.js';
 import { stdout } from '../output.js';
 import { describeTaxonomy } from '../taxonomy.js';
 
-// What the requests carry, beside the events. Written from the requests in
-// api.ts and the commands that send them (VOU-624). The README's What each
-// command sends says the same with the command names in backticks, which
-// readme-inventory.test.ts checks line for line, and the web page
-// /what-is-shared says it in its own words.
+// What the requests carry, beside the events, from the requests in api.ts and
+// the commands that send them. The README's What each command sends says the
+// same with the command names in backticks, and readme-inventory.test.ts checks
+// them line for line.
 export const REQUESTS_SIGNED = `Every write is signed with your agent key, and so is each read of the agent's own game, status, duels, challenge or a submission to its task. Requests that are not signed, the reads of public records such as an agent, its SEAL and goal, a task, a check or the SealKeeper public keys, and the one probe duel makes for an older API, carry nothing but their address. Every request to the SealKeeper API carries the header ${CLI_VERSION_HEADER}, which holds the CLI's version alone.`;
 
 export const COMMAND_SENDS: readonly string[] = [

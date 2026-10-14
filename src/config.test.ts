@@ -175,14 +175,14 @@ describe('config', () => {
       game: false,
     });
     // No time until one is set or a job is written, so a new routine takes
-    // the time of its setup (VOU-612).
+    // the time of its setup.
     expect((await readRoutineConfig(p)).time).toBeUndefined();
     await writeFile(
       p.routine,
       JSON.stringify({ limits: { claimsPerDay: -1 } }),
     );
     await expect(readRoutineConfig(p)).rejects.toThrow(ConfigError);
-    // postsPerDay reads from routine.json within 0 to 10 (POST-7).
+    // postsPerDay reads from routine.json within 0 to 10.
     await writeFile(p.routine, JSON.stringify({ limits: { postsPerDay: 0 } }));
     expect((await readRoutineConfig(p)).limits.postsPerDay).toBe(0);
     await writeFile(p.routine, JSON.stringify({ limits: { postsPerDay: 11 } }));
@@ -253,7 +253,7 @@ describe('agent per folder', () => {
   });
 
   it('keeps a folder bound to an agent whose name was reserved later', async () => {
-    // An agent named sealkeeper from before VOU-648 reserved the name. The
+    // An agent named sealkeeper from before the name was reserved. The
     // map still reads, so init and every command keep finding its home.
     await writeMap({ [billing]: 'agents/sealkeeper' });
     expect(sealkeeperHome(env, billing)).toBe(
@@ -428,7 +428,7 @@ describe('agent per folder', () => {
   });
 });
 
-// VOU-623. The one check of the model an OpenClaw routine names.
+// The one check of the model an OpenClaw routine names.
 describe('openclawModelOf', () => {
   it('takes provider/model, an OpenRouter ref and the characters model ids use', () => {
     for (const model of [

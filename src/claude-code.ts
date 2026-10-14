@@ -15,37 +15,26 @@ import { type NudgeDeps, nudgeLines } from './nudge.js';
 import { stderr, stdout } from './output.js';
 
 // The Claude Code hooks adapter. Claude Code runs `sealkeeper hook claude-code`
-// for each hook event with one JSON object on stdin. It writes no event
-// (VOU-627). An interactive session is the operator's own work, so only a
-// routine run, which is SealKeeper work, records a session and its usage,
-// see routine-run.ts. The hooks keep what is not an event. SessionStart
-// reads the model id for the fingerprint source and prints the session
-// nudge, SessionEnd reads the fingerprint parts again and syncs what the
-// log holds. A CLI before 0.5.0 also
-// wrote session.start and session.end and installed a Stop hook to close a
-// session that never ended. Stop, and the tool events of the PreToolUse,
-// PostToolUse and PostToolUseFailure hooks a CLI before 0.4.14 installed,
-// record nothing until the install runs again and removes them. It never
-// throws. Claude Code adds what a SessionStart hook prints on stdout to the
-// session's context, so stdout carries only the session nudge (nudge.ts),
-// and only on SessionStart once the operator turned it on. Every other hook
-// prints nothing there.
+// for each hook event with one JSON object on stdin. It writes no event.
+// SessionStart reads the model id for the fingerprint source and prints the
+// session nudge, SessionEnd reads the fingerprint parts again and syncs what
+// the log holds. Any other hook, such as one an older CLI installed, records
+// nothing. It never throws. Claude Code adds what a SessionStart hook prints on
+// stdout to the session's context, so stdout carries only the session nudge
+// (nudge.ts), and only on SessionStart once the operator turned it on.
 
-// Only the SessionEnd hook may go to the network, and only for SealKeeper
-// work. It tries a sync once autoSync is on, through the gate every
-// automatic sync takes (see background-sync.ts), and a sync sends only
-// pending events, so a session with no SealKeeper work, whose log holds
-// nothing new, sends nothing (VOU-627). SessionStart reads only the cached
-// goal, which the task commands, status and a routine run refresh
-// (keepNudgeFresh in nudge.ts), never a hook.
+// Only the SessionEnd hook may go to the network. It tries a sync once autoSync
+// is on, through the gate in background-sync.ts, and a sync sends only pending
+// events, so a log with nothing new sends nothing. SessionStart reads only the
+// cached goal (keepNudgeFresh in nudge.ts).
 
 type HookInput = {
   event: string;
   // The folder Claude Code runs in, which picks the agent, see
   // sealkeeperHome. null when the payload has no absolute path there.
   cwd: string | null;
-  // The model id SessionStart names, as it came, for the fingerprint source
-  // (VOU-614). null when the payload has no string there.
+  // The model id SessionStart names, as it came, for the fingerprint source.
+  // null when the payload has no string there.
   model: string | null;
 };
 
@@ -168,9 +157,8 @@ async function runHook(
   }
 }
 
-// A CLI before 0.5.0 kept a start time marker per session here. None is
-// written now, so the folder goes once a session ends. Never fails the
-// hook.
+// Removes the per session start time markers an older CLI kept here. Never
+// fails the hook.
 async function removeSessionMarkers(p: Paths): Promise<void> {
   try {
     await rm(p.sessions, { recursive: true, force: true });

@@ -317,7 +317,7 @@ describe('sealkeeper challenge', () => {
       });
     });
 
-    it('never signs routine, which only the routine route sends (VOU-599)', async () => {
+    it('never signs routine, which only the routine route sends', async () => {
       vi.stubEnv('SEALKEEPER_ROUTINE_RUN', 'run-1');
       expect((await run('challenge', '--json')).code).toBe(0);
       expect((await run('challenge', '--board', '--json')).code).toBe(0);
@@ -349,7 +349,7 @@ describe('sealkeeper challenge', () => {
       // A retry answers the held task, which is not recorded again.
       await run('challenge', '--json');
       expect(await claimedInLog()).toEqual([task.id]);
-      // What submit needs of its spec is kept (VOU-635).
+      // What submit needs of its spec is kept.
       expect(await handedFinalLineFeed(task.id)).toBe(false);
     });
 

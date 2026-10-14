@@ -32,47 +32,34 @@ import { actionLine, agentAnswer } from './run.js';
 import { challengeLine } from './status.js';
 
 /*
- * sealkeeper challenge (VOU-597), the challenge verb of the core commands.
- * One week, one category, ten fresh tasks for each entrant, ranked by
- * correct answers and then by server time. The API decides and the CLI
- * signs, calls and prints.
+ * sealkeeper challenge, the challenge verb of the core commands. The API
+ * decides and the CLI signs, calls and prints.
  *
- * challenge signs ChallengeNextRequest and calls
- * POST /v1/agents/:id/challenge/next, which takes the first step that
- * applies. It turns the game on when it is off, enters this week's
- * challenge when the agent has not entered, and hands over the challenge
- * task the agent holds, else claims the next one, which uses one game
- * unit. When no task is left, or today's game units are spent, limited
- * says so and when it lifts. Run it again for the next task. A retry
- * answers the held task, so it never claims a second one.
+ * challenge signs ChallengeNextRequest and calls POST
+ * /v1/agents/:id/challenge/next, which takes the next step. It may turn the
+ * game on, enter this week's challenge, hand over the challenge task the agent
+ * holds or claim the next one. limited says when no step can be taken and when
+ * that lifts. Run it again for the next task.
  *
  * Only an agent takes the step, meaning --json or a stdout that is not a
- * terminal. It gets the answer as it came, as run --json prints it
- * (agentAnswer), each task with its submit line and each action this CLI
- * knows with the command line it built. A claim is recorded in the local
- * log, as run records its claims.
+ * terminal. It gets the answer as run --json prints it (agentAnswer), each task
+ * with its submit line and each action this CLI knows with the command line it
+ * built. A claim is recorded in the local log, as run records its claims.
  *
- * A routine run takes its challenge steps through the routine route
- * (VOU-594), which turns no game on and leaves the post offer to a person.
+ * A person in a terminal gets where things stand and the hand-off. It takes no
+ * step. It signs the request with board, the look that writes nothing, and
+ * prints the week, the task the agent holds and that the agent plays it with
+ * challenge --json, plus the post offer for a person.
  *
- * A person in a terminal gets where things stand and the hand-off, as a
- * terminal run does. It takes no step, so it turns nothing on, enters
- * nothing and claims nothing. It signs the request with board, the look
- * that writes nothing, and prints the week, the task the agent holds and
- * that the agent plays it with challenge --json, plus the post offer for
- * a person.
- *
- * --board signs the same look, for a person and an agent alike, and the
- * answer carries the top places and the agent's rank. A challenge never
- * moves a score, a level or the SEAL.
+ * --board signs the same look, for a person and an agent alike, and the answer
+ * carries the top places and the agent's rank.
  */
 
-// The 404 of an API from before the challenge route.
+// The line for a 404 from the challenge route.
 export const OLD_API =
   'this SealKeeper API has no challenge route yet, nothing was claimed';
 
-// seed_unavailable from an entry, whose tasks the seed agent posts. The
-// line in refusal.ts names a duel.
+// The line for seed_unavailable from an entry.
 export const NO_TASKS =
   'SealKeeper cannot make challenge tasks right now, try again later';
 
@@ -173,9 +160,8 @@ async function send(
     : call(await signer.sign(request, 'challenge.next'));
 }
 
-// The answer, or the command ended with one line. 404 is an API from
-// before the challenge route. Every other refusal is its line in
-// refusal.ts.
+// The answer, or the command ended with one line. A 404 is OLD_API. Every other
+// refusal is its line in refusal.ts.
 async function attempt<T>(cmd: Command, request: () => Promise<T>): Promise<T> {
   try {
     return await request();
@@ -231,10 +217,7 @@ export function serverTimeText(ms: number): string {
   return parts.join(' ');
 }
 
-// The agent's place, or why it has none. An entry ranks from its first
-// submit, and an operator holds one place, its best entry's, so an entry
-// that has submitted and has none is behind another agent of its
-// operator.
+// The agent's place, or why it has none.
 function rankText(
   current: CurrentChallengeResponse | null | undefined,
   of: number,

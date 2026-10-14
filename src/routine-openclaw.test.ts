@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-// OpenClaw as a routine runtime (VOU-601), against a fake openclaw program
+// OpenClaw as a routine runtime, against a fake openclaw program
 // started as a real process, and the envelope reader on its own. No real
 // OpenClaw and no network.
 
@@ -30,7 +30,7 @@ import {
 const MODEL = 'google/gemini-3-flash-preview';
 
 // Records what it was started with, then prints a pretty printed envelope
-// shaped as the live check saw it (VOU-600), with a log line on stderr, or
+// shaped as the live check saw it, with a log line on stderr, or
 // hangs. config get answers as OpenClaw 2026.9.8 does, by FAKE_DEFAULT.
 const FAKE_OPENCLAW = `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -128,13 +128,13 @@ describe.skipIf(process.platform === 'win32')('a fake openclaw', () => {
     expect(seen.config).toEqual(OPENCLAW_CONFIG);
     expect(seen.args[seen.args.indexOf('--cwd') + 1]).toBe(seen.cwd);
     expect(seen.cwd.endsWith('/work')).toBe(true);
-    // The model as its own argument after --model (VOU-623).
+    // The model as its own argument after --model.
     expect(seen.args[seen.args.indexOf('--model') + 1]).toBe(MODEL);
     // The folder and its config are gone after the question.
     expect(await readdir(tmp)).toEqual([]);
   });
 
-  // VOU-649. An operator's OPENCLAW_CONFIG_PATH names their own config,
+  // An operator's OPENCLAW_CONFIG_PATH names their own config,
   // with its tools, so the question never carries it.
   it('points OPENCLAW_CONFIG_PATH at the pinned config and keeps where the credentials are', async () => {
     const result = await openclawRuntime({
@@ -184,7 +184,7 @@ describe.skipIf(process.platform === 'win32')('a fake openclaw', () => {
     expect(await readdir(tmp)).toEqual([]);
   });
 
-  // VOU-623. The operator's own default, read loosely, never failing.
+  // The operator's own default, read loosely, never failing.
   it('reads the default model OpenClaw says, as a string or its primary, and null on anything else', async () => {
     const said = (mode: string, timeoutMs?: number) =>
       openclawDefaultModel({
@@ -229,7 +229,7 @@ describe('the envelope reader', () => {
     expect(envelopeOf('[1,2]')).toBeNull();
   });
 
-  // VOU-623. usage.cost.total as the live check saw it, else costUsd.
+  // usage.cost.total as the live check saw it, else costUsd.
   it('reads the cost from usage.cost.total, else costUsd', () => {
     const live = read(
       JSON.stringify({
@@ -276,7 +276,7 @@ describe('the envelope reader', () => {
     expect(c.problem).toBeUndefined();
   });
 
-  // VOU-614. model as it came, the provider is not read. Read on any
+  // model as it came, the provider is not read. Read on any
   // outcome, and loosely.
   it('reads the model the envelope names, without the provider', () => {
     const named = read(
@@ -318,7 +318,7 @@ describe('the envelope reader', () => {
     expect([zeros.text, zeros.problem]).toEqual(['x', undefined]);
   });
 
-  // VOU-623. The message the live check saw, matched and never kept.
+  // The message the live check saw, matched and never kept.
   it('says a model the provider did not find as a failure of its own', () => {
     const r = read(
       JSON.stringify({
@@ -359,7 +359,7 @@ describe('the envelope reader', () => {
   });
 
   it('says a failure in one line with no message, and auth by its kind or message', () => {
-    // The live wording of a missing credential (VOU-600).
+    // The live wording of a missing credential.
     expect(
       read(
         JSON.stringify({

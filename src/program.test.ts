@@ -60,7 +60,7 @@ async function run(...args: string[]): Promise<RunResult> {
   }
 }
 
-// VOU-603. sealkeeper --help shows the six core commands first, then the
+// sealkeeper --help shows the six core commands first, then the
 // rest under More. Hidden commands run when called by name and are in
 // neither group.
 const CORE = ['init', 'run', 'challenge', 'duel', 'status', 'routine'];
@@ -146,7 +146,7 @@ describe('sealkeeper cli', () => {
     }
   });
 
-  // VOU-611. The game switch is a config setting, game stays removed.
+  // The game switch is a config setting, game stays removed.
   it('config --help lists the config commands, game among them', async () => {
     const { code, out } = await run('config', '--help');
     expect(code).toBe(0);
