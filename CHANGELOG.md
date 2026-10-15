@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.7, 15 October 2026
+
+### Fixes
+
+- `init --name <name>` in a folder below one set up for another agent now sets this folder up for the agent named, binding it to that agent or registering a new one, instead of answering for the other agent. The same name as the other agent keeps it.
+- `init` no longer prints a verified task count past its target, such as `87 of 25 verified tasks toward bronze`. Once the count is met, the step says what bronze still needs.
+
 ## 0.5.6, 14 October 2026
 
 ### Changes

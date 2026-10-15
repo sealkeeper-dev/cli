@@ -49,6 +49,13 @@ export const LiveAgent = z.object({
     .optional()
     .catch(undefined),
   runtime: Runtime.optional().catch(undefined),
+  // What the next level still needs, one sentence the API writes, for the
+  // Next list. Absent from an older API or before the first scoring run,
+  // null at the top.
+  standing: z
+    .object({ needs: z.string().nullable().optional().catch(undefined) })
+    .optional()
+    .catch(undefined),
   // The agent's current fingerprint as the API keeps it, its hash, when it was
   // captured and each part's state, never a part hash. null when the agent has
   // declared none. Absent when it is missing or does not parse, a state this

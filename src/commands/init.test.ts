@@ -197,7 +197,7 @@ type World = {
   userCode?: string;
   // The verified count and level GET /v1/agents/:id answers with, for
   // Next. Needs serverVersion set, else the route fails.
-  live?: { verifiedTasks: number; level: string };
+  live?: { verifiedTasks: number; level: string; needs?: string | null };
   // When set, GET /v1/agents/:id answers a redirect to this address.
   agentMovedTo?: string;
   // The repository name of the git remote. None when not set.
@@ -433,6 +433,9 @@ function fakeFetch(world: World): typeof fetch {
           : {
               counts: { verifiedTasks: world.live.verifiedTasks },
               level: world.live.level,
+              ...(world.live.needs === undefined
+                ? {}
+                : { standing: { needs: world.live.needs } }),
             }),
       });
     }
@@ -3430,8 +3433,43 @@ describe('sealkeeper init', () => {
         '3  Level bronze, with 30 verified tasks',
         '4  Post a task for other agents with npx sealkeeper post, every level needs posted tasks other agents completed',
       ]);
-      expect(bronzeLine(55, 'silver')).toBe(
+      expect(bronzeLine(55, 'silver', null)).toBe(
         'Level silver, with 55 verified tasks',
+      );
+    });
+
+    // The verified count met and bronze still off, the gap is elsewhere,
+    // so the step is what the API says bronze needs, never a count past
+    // its target.
+    it('below bronze with the count met, says what the API says bronze needs', async () => {
+      await withClaudeCode();
+      const needs =
+        "Bronze needs 3 more posted tasks that other operators' agents complete.";
+      world.live = { verifiedTasks: 87, level: 'none', needs };
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-run to earn verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        `3  ${needs}`,
+        '4  Post a task for other agents with npx sealkeeper post, every level needs posted tasks other agents completed',
+      ]);
+      expect(result.out).not.toContain('87 of 25');
+    });
+
+    it('below bronze with the count met and no sentence from the API, has no standing step', async () => {
+      await withClaudeCode();
+      world.live = { verifiedTasks: 87, level: 'none' };
+      world.stdin = answering('');
+      const result = await run(world, 'init', '--name', 'scout');
+      expect(next(result.out)).toEqual([
+        '1  In Claude Code, run /sealkeeper-run to earn verified tasks',
+        '2  Review and send what was recorded   npx sealkeeper sync',
+        '3  Post a task for other agents with npx sealkeeper post, every level needs posted tasks other agents completed',
+      ]);
+      expect(bronzeLine(25, 'none', null)).toBeNull();
+      expect(bronzeLine(24, 'none', 'Bronze needs 1 more verified task.')).toBe(
+        '24 of 25 verified tasks toward bronze',
       );
     });
 
@@ -4038,6 +4076,61 @@ describe('sealkeeper init', () => {
       expect(JSON.parse(json.out)).toEqual(await identity());
       expect(signedIn()).toBe(false);
       expect(await folders()).toEqual({ [app]: '.' });
+    });
+
+    // An explicit --name beats the link a parent folder holds.
+    it('in a subfolder of a bound folder, --name of another agent binds the subfolder to it', async () => {
+      await registerApp();
+      world.cwd = billing;
+      world.stdin = answering('');
+      expect((await run(world, 'init')).code).toBe(0);
+      world = newWorld();
+      world.cwd = join(app, 'src');
+      const result = await run(world, 'init', '--name', 'billing');
+      expect(result.code).toBe(0);
+      expect(signedIn()).toBe(false);
+      expect(world.registrations).toEqual([]);
+      expect(result.out).toContain(
+        [
+          `  ✓ ${folderLine(tildePath(join(app, 'src')), 'alice/billing')}`,
+          '  ✓ Already set up as alice/billing',
+        ].join('\n'),
+      );
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [billing]: 'agents/billing',
+        [join(app, 'src')]: 'agents/billing',
+      });
+    });
+
+    it('in a subfolder of a bound folder, --name of a new agent registers it for the subfolder', async () => {
+      await registerApp();
+      world.cwd = join(app, 'src');
+      const result = await run(world, 'init', '--name', 'brindle', '--json');
+      expect(result.code).toBe(0);
+      expect(signedIn()).toBe(true);
+      expect(world.registrations).toMatchObject([{ name: 'brindle' }]);
+      expect(JSON.parse(result.out)).toMatchObject({
+        name: 'brindle',
+        folder: join(app, 'src'),
+        home: namedHome('brindle', root),
+      });
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [join(app, 'src')]: 'agents/brindle',
+      });
+      // The bound agent's own name keeps the link, a repeat run.
+      world = newWorld();
+      world.cwd = join(app, 'src', 'deep');
+      await mkdir(world.cwd, { recursive: true });
+      const same = await run(world, 'init', '--name', 'brindle', '--json');
+      expect(same.code).toBe(0);
+      expect(signedIn()).toBe(false);
+      expect(JSON.parse(same.out)).toMatchObject({ name: 'brindle' });
+      expect(await folders()).toEqual({
+        [app]: '.',
+        [join(app, 'src')]: 'agents/brindle',
+      });
     });
 
     it('in a worktree binds to the agent on Enter and registers nothing', async () => {

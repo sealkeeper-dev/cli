@@ -598,7 +598,7 @@ export async function listMachineAgents(
   return agents;
 }
 
-async function readConfigOrNull(p: Paths): Promise<Config | null> {
+export async function readConfigOrNull(p: Paths): Promise<Config | null> {
   try {
     return await readConfig(p);
   } catch (error) {

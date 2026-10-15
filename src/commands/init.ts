@@ -90,6 +90,7 @@ import {
   profileUrl as profileUrlOf,
   type RoutineConfig,
   readConfig,
+  readConfigOrNull,
   readNudge,
   readRoutineConfig,
   sealkeeperRoot,
@@ -635,7 +636,9 @@ async function chooseHome(
   const cwd = (deps.cwd ?? process.cwd)();
   const root = sealkeeperRoot();
   const bound = boundHome(cwd, root);
-  if (bound !== null) return { p: paths(bound), folder: null, welcomed: false };
+  if (bound !== null && !(await nameDiffers(options.name, bound))) {
+    return { p: paths(bound), folder: null, welcomed: false };
+  }
   const agents = (await listMachineAgents(root)).filter(
     (agent): agent is MachineAgent & { config: Config } =>
       agent.config !== null,
@@ -644,6 +647,21 @@ async function chooseHome(
     return { p: paths(root), folder: cwd, welcomed: false };
   }
   return choose(cmd, options, deps, ui, claudeCode, cwd, root, agents);
+}
+
+// Whether --name asks for another agent than the one a folder at or above
+// cwd is bound to. An explicit name beats an inherited link, so the run
+// goes to the choice as for an unbound folder, which binds this folder to
+// the agent of that name or registers a new one, and says so with the
+// folder line. Without --name, or with the bound agent's own name, or when
+// the bound home has no config to read, the link stands.
+async function nameDiffers(
+  name: string | undefined,
+  bound: string,
+): Promise<boolean> {
+  if (name === undefined) return false;
+  const config = await readConfigOrNull(paths(bound));
+  return config !== null && config.name !== name;
 }
 
 // The choice, for an unbound folder on a machine with agents. The name comes
@@ -1618,6 +1636,9 @@ function printShared(s: Style): void {
 export type NextState = {
   verifiedTasks: number;
   level: Level | null;
+  // What the next level still needs, as the API says it, null when the
+  // answer has no sentence.
+  needs: string | null;
   autoSync: boolean;
 };
 
@@ -1636,6 +1657,7 @@ function nextStateOf(config: Config, live: LiveAgent | null): NextState | null {
   return {
     verifiedTasks,
     level: live?.level ?? null,
+    needs: live?.standing?.needs ?? null,
     autoSync: config.autoSync === true,
   };
 }
@@ -1667,10 +1689,23 @@ function printNext(
   say();
 }
 
-export function bronzeLine(verifiedTasks: number, level: Level | null): string {
-  return atBronzeOrAbove(level)
-    ? `Level ${level}, with ${verifiedTasks} verified tasks`
-    : `${verifiedTasks} of ${BRONZE.verifiedTasks} verified tasks toward bronze`;
+// The standing step. At bronze or above the level and the count. Below,
+// the count toward bronze while it is under the mark, and once it is met
+// what the API says bronze still needs, since the gap is then elsewhere,
+// such as posted tasks. Nothing when the API gives no sentence, so a count
+// never shows past its target as progress.
+export function bronzeLine(
+  verifiedTasks: number,
+  level: Level | null,
+  needs: string | null,
+): string | null {
+  if (atBronzeOrAbove(level)) {
+    return `Level ${level}, with ${verifiedTasks} verified tasks`;
+  }
+  if (verifiedTasks < BRONZE.verifiedTasks) {
+    return `${verifiedTasks} of ${BRONZE.verifiedTasks} verified tasks toward bronze`;
+  }
+  return needs;
 }
 
 function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
@@ -1695,7 +1730,8 @@ function stateSteps(s: Style, hooks: HooksResult, state: NextState): Styled[] {
       s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
     );
   }
-  steps.push(s.line`${bronzeLine(state.verifiedTasks, state.level)}`);
+  const standing = bronzeLine(state.verifiedTasks, state.level, state.needs);
+  if (standing !== null) steps.push(s.line`${standing}`);
   steps.push(s.line`${state.verifiedTasks > 0 ? POST_STEP : NEXT_POST}`);
   return steps;
 }
