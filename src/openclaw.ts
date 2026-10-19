@@ -48,8 +48,11 @@ function field(value: unknown, key: string): unknown {
 
 // The fingerprint parts OpenClaw shows. The framework version once, at
 // register, and each model id llm_output reports. The tool set is not declared,
-// since OpenClaw shows tools one call at a time. Hashes are written, and the
-// model id also as the model name, in text, see fingerprint-observer.ts.
+// since OpenClaw shows tools one call at a time. The prompt is not declared
+// either. The OpenClaw shapes this plugin is pinned to, types/openclaw.d.ts,
+// name no field of before_prompt_build's event that holds the system prompt,
+// so the plugin never reads that event. Hashes are written, and the model id
+// also as the model name, in text, see fingerprint-observer.ts.
 function observeFramework(observer: FingerprintObserver): void {
   void quietly(async () => {
     try {

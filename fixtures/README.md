@@ -1,6 +1,6 @@
 # SEAL reader fixtures
 
-Test inputs for a SEAL reader, each with the answer a correct reader gives. They cover a valid SEAL, an expired one, a bad signature, an unknown key, a version 4 SEAL with a handshake beside it, and every 404, 400 and 429 answer the SEAL read gives. A reader should treat every broken SEAL and every one of those answers as no SEAL.
+Test inputs for a SEAL reader, each with the answer a correct reader gives. They cover a valid SEAL, an expired one, a bad signature, an unknown key, a version 4 SEAL with a handshake beside it, a version 6 SEAL with a routine handshake beside it, and every 404, 400 and 429 answer the SEAL read gives. A reader should treat every broken SEAL and every one of those answers as no SEAL.
 
 The format is in the [SEAL Standard](https://sealkeeper.run/seal/standard) and the [format reference](../docs/seal.md). [Build a SEAL reader](https://sealkeeper.run/docs/seal-reader) walks through a reader from the first fetch.
 
@@ -21,9 +21,9 @@ A handshake is always checked against the real clock, and one with a nonce must 
 ## The files
 
 - `keys.json`. The key document, in the shape of `/.well-known/seal.json`, with the one test key.
-- `agent.json`. The fixture agent, its id `gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q`, its did:key, its handle `alice/fixture` and the fingerprint hash the version 4 SEAL carries.
+- `agent.json`. The fixture agent, its id `gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q`, its did:key, its handle `alice/fixture`, the session fingerprint hash the version 4 and 6 SEALs carry and the routine fingerprint hash the version 6 SEAL carries.
 - `seals/`. Each file is a bare compact JWS with no trailing newline, so the SHA-256 of the file is the hash of the SEAL.
-- `handshake/handshake.txt`. A handshake signed by the fixture agent at FIXTURE_NOW, with nonce `fixture-nonce` and verifier `fixture-verifier`.
+- `handshake/`. Two handshakes signed by the fixture agent at FIXTURE_NOW, with nonce `fixture-nonce` and verifier `fixture-verifier`. `handshake.txt` names the session setup and signs the session fingerprint. `handshake-routine.txt` names the routine setup and signs the routine fingerprint, so it is compared with the `routine_fingerprint` of the version 6 SEAL.
 - `reads/`. The answers of `GET /v1/agents/<agent id>/seal` besides the SEAL, each `{ status, headers, body }` as the API writes it.
 - `index.json`. Every case, machine readable, with its file, its command, its exit code and the answer at each clock.
 
@@ -38,7 +38,9 @@ The answers are those of `POST /v1/seal/verify` against `keys.json`, and the exi
 | v1-bad-signature | `seals/v1-bad-signature.txt` | `bad_signature`, exit 1 | `bad_signature`, exit 1 |
 | v1-unknown-kid | `seals/v1-unknown-kid.txt` | `unknown_kid`, exit 1 | `unknown_kid`, exit 1 |
 | v4-valid | `seals/v4-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
-| handshake | `handshake/handshake.txt` beside `seals/v4-valid.txt` | handshake `matches`, against `seal`, proof `verifier` | handshake `stale`, exit 1 |
+| v6-valid | `seals/v6-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
+| handshake | `handshake/handshake.txt` beside `seals/v4-valid.txt` | handshake `matches`, against `seal`, setup `session`, proof `verifier` | handshake `stale`, exit 1 |
+| handshake-routine | `handshake/handshake-routine.txt` beside `seals/v6-valid.txt` | handshake `matches`, against `seal`, setup `routine`, proof `verifier` | handshake `stale`, exit 1 |
 
 The handshake cannot read Matches through the CLI, which checks a handshake against the real clock. A reader that pins its own clock to FIXTURE_NOW gets Matches.
 
@@ -88,4 +90,4 @@ sealkeeper:seal:1:subject:35886f79f3a6e302e52f05e7fe10c3e9253605498052dc63c29ff0
 
 ## Versions
 
-Production issues version 1 today, and the published `@sealkeeper/schema` reads versions 1 to 4. So the fixtures carry version 1 and version 4. A version 5 fixture follows with the schema release that reads it.
+The fixtures carry version 1, version 4 and version 6. The version 6 SEAL and the two handshakes, which name their setup, need the `@sealkeeper/schema` and CLI release that read version 6. An earlier one reads the version 6 SEAL as `unsupported_version` and a handshake that names its setup as malformed. A version 5 fixture follows with the schema release that reads it.

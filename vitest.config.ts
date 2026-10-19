@@ -10,9 +10,9 @@ const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };
 
-// HOME points at an empty temp directory, so no test ever reads or migrates
-// the real ~/.vouched or ~/.sealkeeper of the machine it runs on. Tests that
-// need a home stub SEALKEEPER_HOME or HOME themselves.
+// HOME points at an empty temp directory, so no test ever reads or writes the
+// real ~/.sealkeeper or ~/.claude of the machine it runs on. Tests that need a
+// home stub SEALKEEPER_HOME or HOME themselves.
 const home = mkdtempSync(join(tmpdir(), 'sealkeeper-test-home-'));
 
 export default defineConfig({

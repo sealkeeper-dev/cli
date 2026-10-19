@@ -225,10 +225,99 @@
       }
     },
     {
+      "name": "v6-valid",
+      "file": "seals/v6-valid.txt",
+      "kind": "seal",
+      "description": "A version 6 SEAL, v4-valid plus the routine fingerprint beside the session one, issued an hour before FIXTURE_NOW.",
+      "commands": {
+        "pinned": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z < fixtures/seals/v6-valid.txt",
+        "now": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json < fixtures/seals/v6-valid.txt"
+      },
+      "exit": {
+        "pinned": 0,
+        "now": 1
+      },
+      "expected": {
+        "pinned": {
+          "valid": true,
+          "payload": {
+            "iss": "sealkeeper.run",
+            "sub": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+            "ver": 6,
+            "iat": 1790852400,
+            "exp": 1790938800,
+            "agent_version": "1.0.0",
+            "level": "bronze",
+            "scores": {
+              "reliability": 0.9
+            },
+            "counts": {
+              "events": 40,
+              "history_days": 4,
+              "verified_tasks": 26,
+              "seed_tasks": 25,
+              "server_checked_tasks": 1,
+              "confirmed_tasks": 0,
+              "distinct_operators": 1,
+              "safety_incidents_90d": 0,
+              "posted_tasks": 4,
+              "posted_distinct_operators": 2,
+              "posted_confirmed_tasks": 1
+            },
+            "counted": {
+              "verified_tasks": 17,
+              "seed_tasks": 17,
+              "server_checked_tasks": 0,
+              "confirmed_tasks": 0,
+              "posted_tasks": 3,
+              "posted_confirmed_tasks": 1
+            },
+            "fingerprint": {
+              "hash": "1JsN0Fu6rOWEq-ewtZ_1IAKMxj26PW8kEU2-Aa3OVXc",
+              "at": 1790848800
+            },
+            "routine_fingerprint": {
+              "hash": "JniAQWN9vaWD3U-BsZ33ReH5qhTPHc9WmG7d5Hl9tB0",
+              "at": 1790845200
+            },
+            "state": "matches",
+            "trust": 412,
+            "top_categories": [
+              {
+                "category": "code",
+                "score": 230
+              },
+              {
+                "category": "data",
+                "score": 90
+              },
+              {
+                "category": "math",
+                "score": 90
+              }
+            ],
+            "operator": {
+              "verified": false
+            },
+            "identity": [],
+            "last_active": 1790852400,
+            "dormant_days": 0
+          },
+          "expiresIn": 82800,
+          "at": "2026-10-01T12:00:00.000Z",
+          "lapsed": true
+        },
+        "now": {
+          "valid": false,
+          "reason": "expired"
+        }
+      }
+    },
+    {
       "name": "handshake",
       "file": "handshake/handshake.txt",
       "kind": "handshake",
-      "description": "A handshake the fixture agent signed at FIXTURE_NOW over its fingerprint, with nonce fixture-nonce and verifier fixture-verifier, checked beside v4-valid.",
+      "description": "A handshake the fixture agent signed at FIXTURE_NOW over its session fingerprint, with nonce fixture-nonce and verifier fixture-verifier, checked beside v4-valid.",
       "seal": "seals/v4-valid.txt",
       "nonce": "fixture-nonce",
       "verifier": "fixture-verifier",
@@ -243,6 +332,35 @@
           "valid": true,
           "result": "matches",
           "against": "seal",
+          "setup": "session",
+          "proof": "verifier"
+        },
+        "now": {
+          "valid": false,
+          "reason": "stale"
+        }
+      }
+    },
+    {
+      "name": "handshake-routine",
+      "file": "handshake/handshake-routine.txt",
+      "kind": "handshake",
+      "description": "A handshake the fixture agent signed at FIXTURE_NOW over its routine fingerprint, with nonce fixture-nonce and verifier fixture-verifier, checked beside v6-valid, whose routine_fingerprint it matches.",
+      "seal": "seals/v6-valid.txt",
+      "nonce": "fixture-nonce",
+      "verifier": "fixture-verifier",
+      "commands": {
+        "now": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z --handshake \"$(cat fixtures/handshake/handshake-routine.txt)\" --nonce fixture-nonce --for fixture-verifier < fixtures/seals/v6-valid.txt"
+      },
+      "exit": {
+        "now": 1
+      },
+      "expected": {
+        "pinned": {
+          "valid": true,
+          "result": "matches",
+          "against": "seal",
+          "setup": "routine",
           "proof": "verifier"
         },
         "now": {

@@ -4,8 +4,6 @@ import {
   GameStatusRequest,
   SignedGameSettingsRequest,
 } from '@sealkeeper/schema';
-import type { ApiError } from './api.js';
-import { refusal } from './refusal.js';
 import type { GameSettingsResponse, GameStatusResponse } from './responses.js';
 import type { TaskSession } from './tasks.js';
 
@@ -15,9 +13,6 @@ import type { TaskSession } from './tasks.js';
 // game shows the switch and turns it on or off, routine set --game-cap changes
 // the cap and status shows the game. Each one is a signed request for this
 // agent alone.
-
-// The line for a 404 from a game route.
-export const OLD_API = 'this SealKeeper API has no game layer yet';
 
 // The issuedAt of a signed game request, this machine's clock.
 const now = () => new Date().toISOString();
@@ -47,11 +42,6 @@ export const duelsStarted = (game: GameStatusResponse): string =>
   game.duelsStartedToday === undefined || game.duelsPerDay === undefined
     ? ''
     : ` ${game.duelsStartedToday} of ${game.duelsPerDay} duels started today.`;
-
-// One line for a refused settings change, OLD_API for a 404, else the
-// refusal line of its code.
-export const gameRefusal = (error: ApiError): string =>
-  error.status === 404 ? OLD_API : refusal(error);
 
 // The signed game status read, { issuedAt } checked with GameStatusRequest
 // first. init reads it after the registration and the routine setup before it

@@ -13,7 +13,10 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createApiClient, resolveApiUrl } from './api.js';
 import { ensureHome, type Paths, paths, readConfig } from './config.js';
-import { refreshFingerprintQuietly } from './fingerprint.js';
+import {
+  type RoutineSource,
+  refreshFingerprintQuietly,
+} from './fingerprint.js';
 import { syncEvents } from './sync.js';
 
 export const BACKGROUND_SYNC_INTERVAL_MS = 5 * 60 * 1000;
@@ -56,6 +59,10 @@ type BackgroundSyncDeps = {
   fetch?: typeof fetch;
   now?: () => number;
   paths?: Paths;
+  // A routine run's own source, so the sync at the end of the run captures
+  // the routine's fingerprint. Each line the run logged names the source
+  // itself, which is what declares the routine's fingerprint beside it.
+  routine?: RoutineSource;
 };
 
 type GatedSyncOptions = BackgroundSyncDeps &
@@ -109,7 +116,11 @@ export async function gatedSync(
     await touch(join(p.home, STAMP_FILE), start);
     // A sync is one of the moments the fingerprint is recomputed, see
     // fingerprint.ts. It never holds up or fails the sync.
-    await refreshFingerprintQuietly({ paths: p, now });
+    await refreshFingerprintQuietly({
+      paths: p,
+      now,
+      routine: options.routine,
+    });
     await syncEvents({
       api: createApiClient({
         apiUrl: resolveApiUrl({ config: config.apiUrl }),

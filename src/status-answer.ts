@@ -35,8 +35,8 @@ type StatusCache = z.infer<typeof StatusCache>;
 
 /*
  * What a status read got. api is a fresh answer, cache the last one kept when
- * the API could not give one, and none neither. noRoute says the API answered
- * 404, else why is the reason in plain words.
+ * the API could not give one, and none neither. why is the reason in plain
+ * words.
  */
 export type StatusRead =
   | { from: 'api'; answer: StatusAnswerResponse; fetchedAt: string }
@@ -44,10 +44,9 @@ export type StatusRead =
       from: 'cache';
       answer: StatusAnswerResponse;
       fetchedAt: string;
-      noRoute: boolean;
       why: string;
     }
-  | { from: 'none'; answer: null; noRoute: boolean; why: string };
+  | { from: 'none'; answer: null; why: string };
 
 export type ReadStatusOptions = {
   config: Pick<Config, 'agentId' | 'apiUrl' | 'version'>;
@@ -70,7 +69,6 @@ export async function readStatus(
   const now = options.now ?? new Date();
   const { config } = options;
   let why: string;
-  let noRoute = false;
   try {
     const api = createApiClient({
       apiUrl: resolveApiUrl({ config: config.apiUrl }),
@@ -100,7 +98,6 @@ export async function readStatus(
       return { from: 'api', answer, fetchedAt };
     }
   } catch (error) {
-    noRoute = error instanceof ApiError && error.status === 404;
     why =
       error instanceof ApiError
         ? refusal(error)
@@ -110,12 +107,11 @@ export async function readStatus(
   }
   const cached = await readStatusCache(p, config);
   return cached === null
-    ? { from: 'none', answer: null, noRoute, why }
+    ? { from: 'none', answer: null, why }
     : {
         from: 'cache',
         answer: cached.answer,
         fetchedAt: cached.fetchedAt,
-        noRoute,
         why,
       };
 }
@@ -124,9 +120,7 @@ export async function readStatus(
 // answer.
 export function sourceLine(read: StatusRead): string | null {
   if (read.from === 'api') return null;
-  const head = read.noRoute
-    ? 'This SealKeeper API has no status route yet'
-    : `SealKeeper did not answer, ${read.why}`;
+  const head = `SealKeeper did not answer, ${read.why}`;
   return read.from === 'cache'
     ? `${head}. The numbers are cached from ${read.fetchedAt}.`
     : `${head}, so only what this machine knows is shown.`;

@@ -8,7 +8,9 @@ import {
   Jws,
   Level,
   OperatorSlug,
+  SEAL_FAILED_CHECKS,
   SEAL_MAX_TTL_SECONDS,
+  SEAL_NO_RECENT_CHECK,
   Sha256Hex,
   StoredVersion,
   TaskOutcome,
@@ -52,8 +54,6 @@ export const AgentResponse = z.object({
   operator: Operator,
   createdAt: Timestamp,
   operatedBySealKeeper: z.boolean().optional(),
-  // The old name of operatedBySealKeeper, read when the new one is missing.
-  operatedByVouched: z.boolean().optional(),
   handle: AgentHandle.optional(),
   previousName: Name.nullable().optional(),
   counts: AgentCounts.optional(),
@@ -101,12 +101,11 @@ export function operatorSlugOf(
 const slugOrLogin = (operator: AgentResponse['operator']): string =>
   operator.slug ?? operator.login.toLowerCase();
 
-// True for an agent SealKeeper runs itself, such as the seed agent. Prefers
-// the new field and falls back to the old one.
+// True for an agent SealKeeper runs itself, such as the seed agent.
 export function runBySealKeeper(
-  agent: Pick<AgentResponse, 'operatedBySealKeeper' | 'operatedByVouched'>,
+  agent: Pick<AgentResponse, 'operatedBySealKeeper'>,
 ): boolean {
-  return agent.operatedBySealKeeper ?? agent.operatedByVouched ?? false;
+  return agent.operatedBySealKeeper ?? false;
 }
 
 export const EventsBatchResponse = z.object({
@@ -276,6 +275,12 @@ const sealClaims = {
     .nullable()
     .optional(),
   state: z.string().optional(),
+  // The fingerprint of the agent's routine runs, beside fingerprint, which is
+  // its own sessions', version 6 on.
+  routine_fingerprint: z
+    .object({ hash: z.string(), at: Seconds })
+    .nullable()
+    .optional(),
   // The Trust Score and the highest categories with their scores, version 4
   // on. category is any text here, so a category added later does not
   // break an older CLI.
@@ -444,30 +449,47 @@ export const ErrorResponse = z.object({
   }),
 });
 
-// Why a SEAL route answered 404 with no SEAL. withheld carries the reason class
-// of a hold on the agent or its operator, no_seal the dormant days. Read
-// loosely, so a class this version does not know still prints as the API sent
-// it. A reason that is not a plain class word, or days that are not a whole
-// number, read as unknown rather than failing.
+// Why a SEAL route answered 404 with no SEAL. held carries the reason class
+// of a hold on the agent or its operator, dormant the dormant days,
+// suspended when the suspension after failed task checks started,
+// no_recent_check an agent with no passing task check lately, and checking
+// an agent whose checks are still running. Read loosely, so a class this
+// version does not know still prints as the API sent it. A reason that is
+// not a plain class word, days that are not a whole number, or a start that
+// is not a timestamp, read as unknown rather than failing.
 export type SealWithheld =
   | { kind: 'held'; reason: string | null }
-  | { kind: 'dormant'; dormantDays: number | null };
+  | { kind: 'dormant'; dormantDays: number | null }
+  | { kind: 'suspended'; since: string | null }
+  | { kind: 'no_recent_check' }
+  | { kind: 'checking' };
 
 const WithheldAnswer = z.object({
-  error: z.object({ code: z.enum(['withheld', 'no_seal']) }),
+  error: z.object({ code: z.enum(['withheld', 'no_seal', 'checking']) }),
   reason: z.unknown().optional(),
+  since: z.unknown().optional(),
   dormant_days: z.unknown().optional(),
 });
 const HoldClass = z.string().regex(/^[a-z0-9_]{1,64}$/);
 const DormantDays = z.int().min(0);
+
+const sinceOf = (since: unknown): string | null => {
+  const s = Timestamp.safeParse(since);
+  return s.success ? s.data : null;
+};
 
 // The SealWithheld in a 404 body, or null when the body is anything else,
 // such as not_found for an unknown agent.
 export function sealWithheldOf(json: unknown): SealWithheld | null {
   const parsed = WithheldAnswer.safeParse(json);
   if (!parsed.success) return null;
-  const { error, reason, dormant_days } = parsed.data;
+  const { error, reason, since, dormant_days } = parsed.data;
+  if (error.code === 'checking') return { kind: 'checking' };
   if (error.code === 'withheld') {
+    if (reason === SEAL_FAILED_CHECKS) {
+      return { kind: 'suspended', since: sinceOf(since) };
+    }
+    if (reason === SEAL_NO_RECENT_CHECK) return { kind: 'no_recent_check' };
     const r = HoldClass.safeParse(reason);
     return { kind: 'held', reason: r.success ? r.data : null };
   }
@@ -475,17 +497,69 @@ export function sealWithheldOf(json: unknown): SealWithheld | null {
   return { kind: 'dormant', dormantDays: d.success ? d.data : null };
 }
 
-// withheld and why, in plain words, as in "withheld for cause, reason
-// fraud" or "withheld while the agent is dormant, 95 days".
-export function withheldText(withheld: SealWithheld): string {
-  if (withheld.kind === 'held') {
-    return withheld.reason === null
-      ? 'withheld for cause'
-      : `withheld for cause, reason ${withheld.reason}`;
+// Where the agent's SEAL stands in GET /v1/agents/<id>, read loosely. Every
+// field is optional, so an older API, or a field that does not parse, costs
+// only that field.
+export const LiveSealState = z.object({
+  state: z.string(),
+  reason: z.string().optional().catch(undefined),
+  held: z.boolean().optional().catch(undefined),
+  since: Timestamp.optional().catch(undefined),
+});
+export type LiveSealState = z.infer<typeof LiveSealState>;
+
+// The SealWithheld the agent answer's SEAL state says, when it says the SEAL
+// is suspended or still being checked. null for every other state, an
+// unknown one included, and when there is none.
+export function sealStateWithheld(
+  sealState: LiveSealState | undefined,
+): SealWithheld | null {
+  if (sealState === undefined) return null;
+  const { state, reason } = sealState;
+  if (state === 'suspended') {
+    if (reason === SEAL_FAILED_CHECKS) {
+      return { kind: 'suspended', since: sinceOf(sealState.since) };
+    }
+    const r = HoldClass.safeParse(reason);
+    return { kind: 'held', reason: r.success ? r.data : null };
   }
-  const days = withheld.dormantDays;
-  if (days === null) return 'withheld while the agent is dormant';
-  return `withheld while the agent is dormant, ${days} ${days === 1 ? 'day' : 'days'}`;
+  if (state === 'checking') {
+    return reason === SEAL_NO_RECENT_CHECK
+      ? { kind: 'no_recent_check' }
+      : { kind: 'checking' };
+  }
+  return null;
+}
+
+// 2026-10-12 09:00 UTC, to the minute.
+const minuteUtc = (iso: string): string =>
+  `${new Date(iso).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
+// withheld and why, in plain words, as in "withheld for cause, reason
+// fraud", "withheld while the agent is dormant, 95 days" or "withheld while
+// the agent is suspended since 2026-10-12 09:00 UTC after its task checks
+// failed, a passing recheck lifts it".
+export function withheldText(withheld: SealWithheld): string {
+  switch (withheld.kind) {
+    case 'held':
+      return withheld.reason === null
+        ? 'withheld for cause'
+        : `withheld for cause, reason ${withheld.reason}`;
+    case 'dormant': {
+      const days = withheld.dormantDays;
+      if (days === null) return 'withheld while the agent is dormant';
+      return `withheld while the agent is dormant, ${days} ${days === 1 ? 'day' : 'days'}`;
+    }
+    case 'suspended': {
+      const since =
+        withheld.since === null ? '' : ` since ${minuteUtc(withheld.since)}`;
+      return `withheld while the agent is suspended${since} after its task checks failed, a passing recheck lifts it`;
+    }
+    case 'no_recent_check':
+      return 'withheld until the agent passes a task check again';
+    case 'checking':
+      return 'withheld while the agent is checked';
+  }
 }
 
 // GET /v1/agents/<id>/goal, loose all the way down, read by the session

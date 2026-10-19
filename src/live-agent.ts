@@ -12,11 +12,30 @@ import { z } from 'zod';
 import { ApiError, createApiClient, resolveApiUrl } from './api.js';
 import type { Config } from './config.js';
 import { stderr } from './output.js';
+import { LiveSealState } from './responses.js';
 import { SCORE_TIMEOUT_MS } from './score.js';
 
 // Where the agent stands on SealKeeper, as init reads it.
 // The verified count and the level come live from GET /v1/agents/<id>, the
 // same numbers the public profile shows.
+
+// A fingerprint as the agent answer carries it, read loosely. Absent when it
+// is missing or does not parse, a part state this version does not know
+// included.
+const LiveFingerprint = z
+  .object({
+    hash: Sha256Base64url,
+    at: z.iso.datetime(),
+    parts: z.object({
+      model_set: FingerprintPartState,
+      prompt: FingerprintPartState,
+      tools: FingerprintPartState,
+      framework: FingerprintPartState,
+    }),
+  })
+  .nullable()
+  .optional()
+  .catch(undefined);
 
 // The part of GET /v1/agents/<id> the CLI reads here. level is optional on the
 // answer, since an agent may have none yet. Read loosely, so a field that fails
@@ -56,25 +75,18 @@ export const LiveAgent = z.object({
     .object({ needs: z.string().nullable().optional().catch(undefined) })
     .optional()
     .catch(undefined),
-  // The agent's current fingerprint as the API keeps it, its hash, when it was
-  // captured and each part's state, never a part hash. null when the agent has
-  // declared none. Absent when it is missing or does not parse, a state this
-  // version does not know included. A handshake check reads its hash
+  // The agent's current fingerprint of its own sessions as the API keeps it,
+  // its hash, when it was captured and each part's state, never a part hash.
+  // null when the agent has declared none. A handshake check reads its hash
   // (handshake.ts).
-  fingerprint: z
-    .object({
-      hash: Sha256Base64url,
-      at: z.iso.datetime(),
-      parts: z.object({
-        model_set: FingerprintPartState,
-        prompt: FingerprintPartState,
-        tools: FingerprintPartState,
-        framework: FingerprintPartState,
-      }),
-    })
-    .nullable()
-    .optional()
-    .catch(undefined),
+  fingerprint: LiveFingerprint,
+  // The fingerprint of the agent's routine runs, kept apart from the one of
+  // its own sessions above, in the same shape. A routine handshake check reads
+  // its hash. Absent from an older API.
+  routineFingerprint: LiveFingerprint,
+  // Where the agent's SEAL stands as the API keeps it, for the SEAL line of
+  // status. Absent from an older API or when it does not parse.
+  sealState: LiveSealState.optional().catch(undefined),
 });
 export type LiveAgent = z.infer<typeof LiveAgent>;
 

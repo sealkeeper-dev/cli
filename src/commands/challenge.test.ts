@@ -25,7 +25,6 @@ import {
   NO_BOARD,
   NO_TASKS,
   NO_WEEK,
-  OLD_API,
   PLAYED,
   serverTimeText,
 } from './challenge.js';
@@ -423,12 +422,14 @@ describe('sealkeeper challenge', () => {
       expect(await claimedInLog()).toEqual([]);
     });
 
-    it('says one line when the API has no challenge route yet', async () => {
-      api.answer = { status: 404, code: 'not_found' };
+    it('says the refusal of a 404 in one line', async () => {
+      api.answer = { status: 404, code: 'unknown_agent' };
       const result = await run('challenge', '--json');
       expect(result.code).toBe(1);
       expect(result.out).toBe('');
-      expect(result.err).toBe(`${OLD_API}\n`);
+      expect(result.err).toBe(
+        'this agent is not registered, run npx sealkeeper init\n',
+      );
     });
 
     it('says the refusal in one line, its own for tasks the seed agent cannot make', async () => {

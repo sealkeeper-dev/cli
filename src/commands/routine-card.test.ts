@@ -14,6 +14,7 @@ import {
   base64urlEncode,
   type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
+  partHash,
   sign,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
@@ -26,6 +27,7 @@ import {
   writeConfig,
   writeRoutineConfig,
 } from '../config.js';
+import { currentFingerprint, recordCapture } from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { createProgram } from '../program.js';
@@ -321,6 +323,79 @@ describe('the routine refreshes the card', () => {
     expect(JSON.parse(json.out).local.routine.card).toEqual(view);
   });
 
+  // One capture of a Claude Code setup with these tools, into the routine's
+  // file when routine is set, else the sessions'.
+  async function capture(tools: string, routine?: 'claude-code-routine') {
+    const fp = await recordCapture(
+      paths(),
+      {
+        model_set: await partHash(agentId, 'claude-sonnet-4-5'),
+        prompt: 'not_declared',
+        tools: await partHash(agentId, tools),
+        framework: await partHash(agentId, 'claude-code@2.1.283'),
+      },
+      Math.floor(NOW.getTime() / 1000),
+      routine,
+    );
+    if (fp === null) throw new Error('nothing recorded');
+    return fp;
+  }
+
+  // The fingerprint hash the card's handshake signs and the setup it names,
+  // or null for none.
+  function handshakeSigned(
+    text: string,
+  ): { fingerprint: string; setup?: string } | null {
+    const params = AgentCard.parse(JSON.parse(text)).capabilities.extensions[0]
+      ?.params;
+    const jws =
+      params !== undefined && 'handshake' in params
+        ? params.handshake
+        : undefined;
+    if (typeof jws !== 'string') return null;
+    return JSON.parse(
+      Buffer.from(jws.split('.')[1] ?? '', 'base64url').toString(),
+    );
+  }
+
+  // Rewrites a card inside the margin with a run and returns the hash its
+  // handshake signs. Every one it signs names the routine's setup.
+  async function refreshedHandshake(): Promise<string | null> {
+    seal = issues(24 * HOUR);
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+    expect((await run(fetchFn, 'routine', 'run')).code).toBe(0);
+    expect(await lastRun()).toMatchObject({ card: 'refreshed' });
+    const signed = handshakeSigned(await readFile(cardFile, 'utf8'));
+    if (signed !== null) expect(signed.setup).toBe('routine');
+    return signed?.fingerprint ?? null;
+  }
+
+  // The routine's fingerprint as the run left it.
+  async function routineHash(): Promise<string | undefined> {
+    return (await currentFingerprint(paths(), 'claude-code-routine'))?.hash;
+  }
+
+  it("signs the rewritten card's handshake over the fingerprint the run captured on its first run", async () => {
+    seal = issues(HOUR);
+    await writeCard();
+    await installed();
+    expect(await routineHash()).toBeUndefined();
+    const signed = await refreshedHandshake();
+    expect(signed).not.toBeNull();
+    expect(signed).toBe(await routineHash());
+  });
+
+  it("signs the rewritten card's handshake over the routine's fingerprint, not the sessions'", async () => {
+    seal = issues(HOUR);
+    await writeCard();
+    await installed();
+    const sessionFp = await capture('session tools');
+    await capture('routine tools', 'claude-code-routine');
+    const signed = await refreshedHandshake();
+    expect(signed).toBe(await routineHash());
+    expect(signed).not.toBe(sessionFp.hash);
+  });
+
   it('leaves a card whose SEAL is fresh alone, byte for byte', async () => {
     const before = await writeCard();
     await installed();
@@ -440,6 +515,31 @@ describe('the routine refreshes the card', () => {
     expect(result.out).toContain(
       'Card kept, no SEAL is issued for this agent now.',
     );
+    expect(await readFile(cardFile, 'utf8')).toBe(before);
+  });
+
+  it('goes on when the agent is suspended, and the card holds what it held', async () => {
+    seal = issues(HOUR);
+    const before = await writeCard();
+    await installed();
+    seal = async () =>
+      Response.json(
+        {
+          error: { code: 'withheld', message: 'suspended' },
+          id: agentId,
+          reason: 'failed_checks',
+          since: '2026-10-12T09:00:00.000Z',
+        },
+        { status: 404 },
+      );
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+
+    const result = await run(fetchFn, 'routine', 'run');
+    expect(result.code).toBe(0);
+    expect(await lastRun()).toMatchObject({
+      outcome: 'nothing',
+      card: 'withheld',
+    });
     expect(await readFile(cardFile, 'utf8')).toBe(before);
   });
 

@@ -26,8 +26,12 @@ import { type EmitInput, emit } from './emit.js';
 import {
   refreshFingerprintOnChange,
   refreshFingerprintQuietly,
+  routineSourceOf,
 } from './fingerprint.js';
-import { createObserver } from './fingerprint-observer.js';
+import {
+  createObserver,
+  type FingerprintObserver,
+} from './fingerprint-observer.js';
 import { takeAskAgain } from './handed.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
@@ -93,6 +97,9 @@ export type RunAgent = {
   runtime: RoutineRuntimeName;
   unready?: AgentProblem;
   start(workDir: string): { agent: AgentRuntime; close?: () => void };
+  // Writes what the run's own setup is, its runtime's version and its tools,
+  // to the run's fingerprint source before the first capture.
+  observe?: (observer: FingerprintObserver) => Promise<void>;
 };
 
 // What failed in a failed run, kept in its run line as failure. The routine
@@ -101,7 +108,6 @@ export type RunFailure =
   | 'key'
   | 'api'
   | 'api_later'
-  | 'old_api'
   | 'workdir'
   | 'agent_missing'
   | 'agent_failed'
@@ -175,13 +181,17 @@ type StopFor = NonNullable<AgentResult['stoppedFor']>;
  * takes, unless its caller aborted it, so nothing leaves before automatic sync
  * is on. A sync that fails is a sync_failed line and never fails the run.
  *
- * The fingerprint. The run recomputes it from its own home's files before its
- * first step. Each step and each submit carries the fingerprint on disk the way
- * a claim does (sendWithFingerprint), and goes again without it when the API
- * refuses the field. Before each of them the run recomputes it once more only
- * when the parts changed, as when the agent's own start wrote its Claude Code
- * hook capture or the runtime reported a new model. None of it can fail, print
- * or hold up the run.
+ * The fingerprint. A run on Claude Code or OpenClaw starts its own runtime,
+ * with its own model and no tools, so it keeps its own fingerprint in
+ * fingerprint-routine.json from its own source, and its steps, submits and
+ * the events it logs declare the routine's setup, never the operator's
+ * session, whichever sync sends those events. A
+ * Mastra run declares the agent's own. The run recomputes it from its own
+ * home's files before its first step. Each step and each submit carries the
+ * fingerprint on disk the way a claim does (sendWithFingerprint), and goes
+ * again without it when the API refuses the field. Before each of them the run
+ * recomputes it once more only when the parts changed, as when the runtime
+ * reported a new model. None of it can fail, print or hold up the run.
  */
 export async function routineRun(
   deps: RunDeps,
@@ -208,12 +218,18 @@ export async function routineRun(
   let tokens: number | null = null;
   let costUsd: number | null = null;
   let entry: Omit<RunEntry, 'at'> | null = null;
-  // The model the runtime reports for an answer goes to the runtime's
-  // fingerprint source, as the live adapters write it, so the run's next step
-  // or submit and the next sync declare it. Written when the run sees a new id,
-  // never fails the run.
+  // The run's own fingerprint source, none for a Mastra run, which reads the
+  // agent's own.
+  const routineSource =
+    agent === null ? undefined : routineSourceOf(agent.runtime);
+  // The model the runtime reports for an answer goes to the run's fingerprint
+  // source, as the live adapters write theirs, so the run's next step or
+  // submit and the sync of its events declare it. Written when the run sees a new
+  // id, never fails the run.
   const observer =
-    agent === null ? null : createObserver(agent.runtime, () => p);
+    agent === null
+      ? null
+      : createObserver(routineSource ?? agent.runtime, () => p);
 
   const finish = async (
     outcome: RunOutcome,
@@ -289,11 +305,13 @@ export async function routineRun(
   await syncAtEnd();
   return done();
 
-  // Appends one event of the run's activity to the local log. A failure
-  // only loses the event, never the run.
+  // Appends one event of the run's activity to the local log, labelled with
+  // the run's own source on Claude Code or OpenClaw, so whichever sync sends
+  // it declares the routine's fingerprint beside it. A failure only loses
+  // the event, never the run.
   async function record(input: EmitInput): Promise<void> {
     try {
-      await emit({ ...input, version: config.version }, p);
+      await emit({ ...input, version: config.version }, p, routineSource);
     } catch {
       // Not recorded.
     }
@@ -345,7 +363,7 @@ export async function routineRun(
   async function syncAtEnd(): Promise<void> {
     if (aborted()) return;
     const [synced] = await Promise.all([
-      backgroundSync({ fetch: deps.fetch, paths: p }),
+      backgroundSync({ fetch: deps.fetch, paths: p, routine: routineSource }),
       keepNudgeFresh(deps.fetch, p),
     ]);
     if (synced !== 'failed') return;
@@ -358,10 +376,25 @@ export async function routineRun(
 
   // The rest of the run, while this run holds the lock.
   async function lockedRun(): Promise<void> {
-    // The card first, so a run with nothing to do still refreshes it. In this
-    // process, never by the agent, and it takes no step. It never fails the
+    // What the run's own setup is, before its first capture. Never fails the
     // run.
-    card = await refreshCard(config, { fetch: deps.fetch }, p);
+    try {
+      if (observer !== null) await (agent as RunAgent).observe?.(observer);
+    } catch {
+      // Not written. The capture goes with what the source holds.
+    }
+    // From this home's files, never the default home's, since one machine
+    // can hold several agents. Never throws.
+    await refreshFingerprintQuietly({ paths: p, routine: routineSource });
+    // The card next, so a run with nothing to do still refreshes it, and
+    // after the capture, so its handshake signs the fingerprint this run just
+    // wrote, the first run's included. In this process, never by the agent,
+    // and it takes no step. It never fails the run.
+    card = await refreshCard(
+      config,
+      { fetch: deps.fetch, routine: routineSource },
+      p,
+    );
     const session = await openSession(deps, p, config);
     if ('error' in session) {
       await finish('failed', session.error, session.failure);
@@ -385,9 +418,6 @@ export async function routineRun(
       made ??= (agent as RunAgent).start(workDir);
       return made.agent;
     };
-    // From this home's files, never the default home's, since one machine
-    // can hold several agents. Never throws.
-    await refreshFingerprintQuietly({ paths: p });
     try {
       await loop(session, runtime, workDir);
     } finally {
@@ -424,7 +454,7 @@ export async function routineRun(
           await finish(
             'failed',
             `could not read the API: ${error.message}`,
-            error.status === 404 ? 'old_api' : 'api',
+            'api',
           );
         }
         return;
@@ -477,7 +507,7 @@ export async function routineRun(
         // A task this last call handed over goes back, unless it is a game
         // task, which a later run is handed again.
         if (task !== undefined) {
-          await recordClaims(answer);
+          await recordClaims(answer, routineSource);
           await giveUp(session, task, 'the run stopped before an answer');
         }
         await stop(over);
@@ -485,7 +515,7 @@ export async function routineRun(
       }
       worked = true;
       if (task !== undefined) {
-        await recordClaims(answer);
+        await recordClaims(answer, routineSource);
         if ((await solve(session, task)) === 'stop') return;
       } else if (r.action === 'judge' && r.judge !== null) {
         const outcome = await judge(r.judge);
@@ -505,7 +535,7 @@ export async function routineRun(
       n: number,
       v: { taskId: string; outcome: TaskOutcome } | null,
     ): Promise<RoutineAnswerResponse | null> {
-      await refreshFingerprintOnChange({ paths: p });
+      await refreshFingerprintOnChange({ paths: p, routine: routineSource });
       for (let tries = 1; ; tries++) {
         try {
           const request = RoutineNextRequest.parse({
@@ -530,6 +560,7 @@ export async function routineRun(
             'routine.next',
             (envelope) => s.api.routineNext(s.signer.agentId, envelope),
             p,
+            routineSource,
           );
         } catch (error) {
           if (!(error instanceof ApiError) || !askAgain(error)) throw error;
@@ -727,15 +758,16 @@ export async function routineRun(
       // takes. Past the tries, or when the wait does not fit, it fails as any
       // refused submit, and a wait that does not fit or that the caller aborts
       // ends the run.
-      await refreshFingerprintOnChange({ paths: p });
+      await refreshFingerprintOnChange({ paths: p, routine: routineSource });
       for (let tries = 1; ; tries++) {
         try {
-          // The model the runtime reported for this answer, else the one sync
-          // declares.
+          // The model the runtime reported for this answer, else the model of
+          // the agent's own sessions, the one a session sync declares.
           const sent = await submitAnswer(s, task.id, text, {
             routine: true,
             spec: task.spec,
             paths: p,
+            routineSource,
             modelName:
               solvedBy ?? (await declaredModel({ paths: p }))?.name ?? null,
           });

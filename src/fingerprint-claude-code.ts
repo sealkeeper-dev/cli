@@ -9,10 +9,16 @@
 // The model id. Claude Code passes the active model to its SessionStart hooks
 // as model, and leaves it out at times, such as after /clear or under claude
 // -p. When it is there it wins, since the settings may only name an alias such
-// as opus. When it is not, a model the runtime reported earlier is kept, so a
+// as opus. When it is not, a model an earlier hook reported is kept, so a
 // SessionEnd, which never carries it, does not swap the real id back for the
-// settings' alias. Else ANTHROPIC_MODEL and the settings (modelIdOf). A /model
+// settings' alias. A routine run keeps its model in a source of its own and
+// never writes this one. Else ANTHROPIC_MODEL and the settings (modelIdOf). A /model
 // switch inside a session is seen at the next SessionStart.
+//
+// The prompt is not declared. An agent's instructions on Claude Code live in
+// code, project files and skills, which are the project's and not the agent's,
+// and the user file in the Claude config folder is the person's own notes, so
+// no file on this machine is the agent's prompt.
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
@@ -154,9 +160,8 @@ export async function observeClaudeCode(
   try {
     const { parts, name, reported } = await readClaudeCode(agentId, where);
     const observed: ObservedParts = {};
-    // A model the runtime reported before, by an earlier hook or a routine
-    // run, is kept when this payload names none. The last one reported
-    // wins, whichever session or run it came from.
+    // A model an earlier hook reported is kept when this payload names
+    // none. The last one reported wins, whichever session it came from.
     const last = reported ? undefined : await readSource('claude-code', p);
     if (last?.model_reported === true && last.model_set !== undefined) {
       observed.model_set = last.model_set;
@@ -268,20 +273,23 @@ export function versionFromEnv(env: NodeJS.ProcessEnv): string | null {
 async function versionFromPath(env: NodeJS.ProcessEnv): Promise<string | null> {
   const dirs = (env.PATH ?? '').split(delimiter).filter((d) => d !== '');
   for (const dir of dirs) {
-    let real: string;
-    try {
-      real = await realpath(join(dir, 'claude'));
-    } catch {
-      continue;
-    }
-    if (isVersion(basename(real))) return basename(real);
-    const version = await findPackageVersion(
-      '@anthropic-ai/claude-code',
-      dirname(real),
-    );
+    const version = await claudeVersionAt(join(dir, 'claude'));
     if (version !== null) return version;
   }
   return null;
+}
+
+// The version of the claude at path, its real path followed, from a native
+// install's versions/<version> or an npm install's package.json. null when
+// the path is missing or says neither.
+export async function claudeVersionAt(path: string): Promise<string | null> {
+  try {
+    const real = await realpath(path);
+    if (isVersion(basename(real))) return basename(real);
+    return await findPackageVersion('@anthropic-ai/claude-code', dirname(real));
+  } catch {
+    return null;
+  }
 }
 
 async function readJson(file: string): Promise<Json | null> {

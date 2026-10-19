@@ -29,7 +29,6 @@ import { skillPath } from '../claude-code-skill.js';
 import {
   agentsMapPath,
   bindFolder,
-  LEGACY_FILES,
   namedHome,
   paths,
   readRoutineConfig,
@@ -40,6 +39,7 @@ import {
 import { createKey } from '../identity.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
+import { ensurePromptSecret } from '../prompt-secret.js';
 import { appendRoutine } from '../routine.js';
 import { copyPaths } from '../routine-copy.js';
 import { jobName, type Runner } from '../routine-scheduler.js';
@@ -218,6 +218,7 @@ describe('sealkeeper agent delete', () => {
     const p = paths(home);
     return [
       p.key,
+      p.promptSecret,
       p.config,
       p.log,
       p.credential,
@@ -225,8 +226,9 @@ describe('sealkeeper agent delete', () => {
       p.cursor,
       p.cursorOffset,
       p.status,
-      ...LEGACY_FILES.map((file) => join(p.home, file)),
-      p.sessions,
+      p.fingerprint,
+      p.fingerprintRoutine,
+      p.fingerprintSources,
     ];
   };
 
@@ -255,15 +257,16 @@ describe('sealkeeper agent delete', () => {
     const p = paths(home);
     await mkdir(p.log, { recursive: true });
     await writeFile(p.logFile('2026-09-24'), '{}\n');
-    await mkdir(p.sessions, { recursive: true });
-    await writeFile(join(p.sessions, 's1'), '1');
+    await ensurePromptSecret(p);
     for (const f of [
       p.credential,
       p.wellKnown,
       p.cursor,
       p.cursorOffset,
       p.status,
-      ...LEGACY_FILES.map((file) => join(p.home, file)),
+      p.fingerprint,
+      p.fingerprintRoutine,
+      p.fingerprintSources,
     ]) {
       await writeFile(f, '{}');
     }

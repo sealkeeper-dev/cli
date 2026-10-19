@@ -69,19 +69,31 @@ export class ApiError extends Error {
 }
 
 // The SEAL routes answered 404 because the SEAL is withheld. withheld says
-// which kind and why, and the message is one plain line with the reason class
-// or the dormant days.
+// which kind and why, and the message is one plain line with the reason and
+// what brings the SEAL back.
 export class SealWithheldError extends ApiError {
   override name = 'SealWithheldError';
   constructor(readonly withheld: SealWithheld) {
-    super(
-      404,
-      withheld.kind === 'held' ? 'withheld' : 'no_seal',
-      withheld.kind === 'held'
-        ? `no SEAL, ${withheldText(withheld)}, none is issued while the hold is in force`
-        : `no SEAL, ${withheldText(withheld)}, one returns on the next scoring run after activity`,
-    );
+    super(404, withheldCode(withheld), withheldMessage(withheld));
   }
+}
+
+// The error code the SEAL route sent for this kind.
+function withheldCode(withheld: SealWithheld): string {
+  if (withheld.kind === 'dormant') return 'no_seal';
+  if (withheld.kind === 'checking') return 'checking';
+  return 'withheld';
+}
+
+function withheldMessage(withheld: SealWithheld): string {
+  const text = `no SEAL, ${withheldText(withheld)}`;
+  if (withheld.kind === 'held') {
+    return `${text}, none is issued while the hold is in force`;
+  }
+  if (withheld.kind === 'dormant') {
+    return `${text}, one returns on the next scoring run after activity`;
+  }
+  return text;
 }
 
 // An explicit flag wins, then SEALKEEPER_API_URL, then the config, then the

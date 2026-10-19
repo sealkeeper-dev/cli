@@ -30,6 +30,7 @@ import {
   readCache,
 } from './credential.js';
 import { readIfExists, tildePath } from './files.js';
+import type { RoutineSource } from './fingerprint.js';
 import { makeHandshakeQuietly } from './handshake.js';
 import { cli } from './invocation.js';
 import { sha256Hex } from './tasks.js';
@@ -322,10 +323,12 @@ function sealOnCard(text: string): string | null {
 // The card is rewritten whenever the SEAL the CLI holds now, from the cache or
 // the API as init gets it, is not the one on the card. A withheld SEAL leaves
 // the card as it was, and so does an API that cannot be reached with no usable
-// SEAL cached.
+// SEAL cached. The handshake on a rewritten card signs the fingerprint the run
+// declares, the routine's own when routine names its source, or the session's
+// while the routine has none yet.
 export async function refreshCard(
   config: Config,
-  deps: CardDeps,
+  deps: CardDeps & { routine?: RoutineSource },
   p: Paths = paths(),
   now: () => number = Date.now,
 ): Promise<CardRefresh | null> {
@@ -354,7 +357,13 @@ export async function refreshCard(
     }
     if (credential === null) return 'offline';
     if (credential.credential === sealOnCard(text)) return 'current';
-    const handshake = await makeHandshakeQuietly(now(), p);
+    // A routine with no fingerprint of its own yet signs the session's, so
+    // a rewritten card never loses its handshake.
+    const handshake =
+      (await makeHandshakeQuietly(now(), p, deps.routine)) ??
+      (deps.routine === undefined
+        ? null
+        : await makeHandshakeQuietly(now(), p));
     const written = cardText(
       buildCard(config, credential, handshake, record.url),
     );

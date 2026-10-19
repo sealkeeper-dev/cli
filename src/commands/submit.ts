@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { ApiError } from '../api.js';
 import type { Paths } from '../config.js';
 import { readGuardedFile } from '../file-guard.js';
+import type { RoutineSource } from '../fingerprint.js';
 import { handedFinalLineFeed } from '../handed.js';
 import { cli } from '../invocation.js';
 import { containsPrivateKey } from '../key-guard.js';
@@ -111,8 +112,9 @@ export type Submitted = {
  * cannot be seen here, unless keepNewline, and a schema answer that is not
  * JSON. spec is the spec the caller was handed with the task, which the routine
  * passes (asksFinalLineFeed). Then it signs and sends it with the declared
- * fingerprint, read from the home paths names when given, and the model name,
- * and notes it in the local log. modelName is the model that solved the task,
+ * fingerprint, read from the home paths names when given, the routine run's
+ * own when routineSource names its source, and the model name,
+ * and notes it in the local log, on a line that names routineSource too. modelName is the model that solved the task,
  * none when it is null or not a ModelName. When the API refuses the name the
  * submit is sent again without it (refusesModelName). For a counterparty task
  * the claimant's success report follows, with origin routine when routine is
@@ -129,6 +131,7 @@ export async function submitAnswer(
     modelName?: string | null;
     spec?: Record<string, unknown>;
     paths?: Paths;
+    routineSource?: RoutineSource;
   } = {},
 ): Promise<Submitted> {
   if (await containsPrivateKey(submission)) {
@@ -196,6 +199,7 @@ export async function submitAnswer(
         'task.submit',
         (envelope) => api.submitTask(id, envelope),
         options.paths,
+        options.routineSource,
       );
     const named = options.modelName
       ? SubmitTaskRequest.safeParse({
@@ -233,10 +237,13 @@ export async function submitAnswer(
         error,
       );
     }
-    await recordEvent({
-      type: 'task.submitted',
-      payload: { task_id: result.id, task_type: result.taskType },
-    });
+    await recordEvent(
+      {
+        type: 'task.submitted',
+        payload: { task_id: result.id, task_type: result.taskType },
+      },
+      options.routineSource,
+    );
   }
 
   // For a counterparty task the claimant reports success now, and the poster
@@ -254,6 +261,7 @@ export async function submitAnswer(
         'task.outcome',
         (envelope) => api.postOutcome(id, envelope),
         options.paths,
+        options.routineSource,
       );
     } catch (error) {
       if (error instanceof ApiError) {
@@ -266,10 +274,13 @@ export async function submitAnswer(
       }
       throw error;
     }
-    await recordEvent({
-      type: 'task.outcome',
-      payload: { task_id: id, outcome: 'success' },
-    });
+    await recordEvent(
+      {
+        type: 'task.outcome',
+        payload: { task_id: id, outcome: 'success' },
+      },
+      options.routineSource,
+    );
   }
 
   return {

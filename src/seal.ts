@@ -159,7 +159,8 @@ function expiresAtOf(payload: unknown): string | null {
 // Level, the eight counts (with the counted value beside each task count from
 // version 2 on), the three posted counts (with the counted value beside posted
 // tasks and posted confirmed tasks), fingerprint and state of version 3 on, the
-// Trust Score and the top categories of version 4 on, operator verified, a
+// Trust Score and the top categories of version 4 on, the routine fingerprint
+// of version 6 on, operator verified, a
 // listed agent's handle, owner and endpoint checks of version 5, last active as
 // a date, dormant days and any identity references. A legacy SEAL, issued
 // before version 1, has only some of these, so a line is left out when its
@@ -217,6 +218,19 @@ export function sealSummary(payload: unknown): string[] {
       );
     }
     if (c.state !== undefined) lines.push(`state ${c.state}`);
+  }
+  // Only version 6 on defines routine_fingerprint, the fingerprint of the
+  // agent's routine runs.
+  if (
+    c.ver !== undefined &&
+    c.ver >= 6 &&
+    c.routine_fingerprint !== undefined
+  ) {
+    lines.push(
+      c.routine_fingerprint === null
+        ? 'routine fingerprint none sent'
+        : `routine fingerprint ${c.routine_fingerprint.hash} since ${day(c.routine_fingerprint.at)}`,
+    );
   }
   // Only version 4 on defines trust and top_categories.
   if (c.ver !== undefined && c.ver >= 4) {

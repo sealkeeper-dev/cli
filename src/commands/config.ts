@@ -3,15 +3,11 @@ import type { Command } from 'commander';
 import { ApiError } from '../api.js';
 import { requireConfig } from '../cli-config.js';
 import { paths, readNudge, writeConfig } from '../config.js';
-import {
-  changeGame,
-  duelsStarted,
-  gameRefusal,
-  readGameStatus,
-} from '../game.js';
+import { changeGame, duelsStarted, readGameStatus } from '../game.js';
 import { cli } from '../invocation.js';
 import { NUDGE_OFF, NUDGE_ON, setNudge } from '../nudge.js';
 import { stdout, wantsJson } from '../output.js';
+import { refusal } from '../refusal.js';
 import type { GameSettingsResponse, GameStatusResponse } from '../responses.js';
 import { openTaskSession, utc } from '../tasks.js';
 import { AUTO_SYNC_OFF, AUTO_SYNC_ON } from './sync.js';
@@ -157,7 +153,7 @@ export function register(
             : await changeGame(session, { enabled: state === 'on' });
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
-        this.error(gameRefusal(error));
+        this.error(refusal(error));
       }
       if (wantsJson(this)) {
         stdout(JSON.stringify(game));

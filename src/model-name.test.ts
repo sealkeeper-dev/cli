@@ -67,6 +67,33 @@ describe('declaredModel', () => {
     expect(await declared()).toEqual({ name: 'opus', source: 'claude-code' });
   });
 
+  it('the declared name ignores a routine source unless asked for it', async () => {
+    await observeParts(
+      'claude-code',
+      { model_name: 'claude-opus-4-1' },
+      p,
+      NOW,
+    );
+    await observeParts(
+      'claude-code-routine',
+      { model_name: 'claude-opus-5' },
+      p,
+      NOW + 1,
+    );
+    expect(await declared()).toEqual({
+      name: 'claude-opus-4-1',
+      source: 'claude-code',
+    });
+    expect(
+      await declaredModel({
+        paths: p,
+        env: {},
+        now: () => NOW * 1000,
+        routine: 'claude-code-routine',
+      }),
+    ).toEqual({ name: 'claude-opus-5', source: 'claude-code-routine' });
+  });
+
   it('is null when the adapter has none, a bad one or a stale one', async () => {
     await observeParts('openclaw', {}, p, NOW);
     expect(await declared()).toBeNull();

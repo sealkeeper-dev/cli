@@ -7,6 +7,7 @@ import {
   paths,
   readConfig,
 } from './config.js';
+import type { RoutineSource } from './fingerprint.js';
 import { appendEvent } from './log.js';
 
 // What a caller of emit supplies. type and payload are required, the rest is
@@ -25,10 +26,13 @@ export type EmitInput = {
 // them. Without a config (not initialised) the version falls back to the one
 // init registers by default, so the log works offline and before init. Throws
 // a ZodError when the event does not match the taxonomy and writes nothing.
-// Nothing here signs or sends. That is sync.
+// Nothing here signs or sends. That is sync. routine is the source of the
+// routine run that logs the event, kept on its line, unset for every other
+// caller.
 export async function emit(
   input: EmitInput,
   p: Paths = paths(),
+  routine?: RoutineSource,
 ): Promise<Event> {
   const version =
     input.version ?? (await readConfig(p))?.version ?? DEFAULT_AGENT_VERSION;
@@ -39,5 +43,5 @@ export async function emit(
     version,
     payload: input.payload,
   });
-  return appendEvent(event, p);
+  return appendEvent(event, p, new Date(), routine);
 }

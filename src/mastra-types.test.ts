@@ -8,6 +8,7 @@ import type * as mastra from './mastra.js';
 describe('published mastra types', () => {
   it('match the source types', () => {
     expectTypeOf<published.MastraToolLike>().toEqualTypeOf<mastra.MastraToolLike>();
+    expectTypeOf<published.InstructionsOption>().toEqualTypeOf<mastra.InstructionsOption>();
     expectTypeOf<published.SealKeeperSession>().toEqualTypeOf<mastra.SealKeeperSession>();
     expectTypeOf<typeof published.withSealKeeper>().toEqualTypeOf<
       typeof mastra.withSealKeeper
@@ -55,6 +56,19 @@ describe('published mastra types', () => {
     expectTypeOf<{
       signal: AbortSignal;
     }>().toExtend<published.RoutineOptions>();
+  });
+
+  it('takes the instructions as text, or no options, as before', () => {
+    expectTypeOf<
+      Parameters<typeof published.withSealKeeper>[1]
+    >().toEqualTypeOf<published.InstructionsOption | undefined>();
+    expectTypeOf<{
+      signal: AbortSignal;
+      instructions: string;
+    }>().toExtend<published.RoutineOptions>();
+    expectTypeOf<{
+      instructions: () => string;
+    }>().not.toExtend<published.InstructionsOption>();
   });
 
   it('accepts a createTool shaped object and keeps its type', () => {

@@ -39,7 +39,6 @@ import {
   ConfigError,
   handleOf,
   handleUrl,
-  LEGACY_FILES,
   listMachineAgents,
   type MachineAgent,
   type Paths,
@@ -544,14 +543,15 @@ async function removeLocal(p: Paths): Promise<string[]> {
     p.cardWrite,
     p.wellKnown,
     p.status,
-    ...LEGACY_FILES.map((file) => join(p.home, file)),
     p.goal,
     p.nudge,
     p.routine,
     p.runtimeQuestion,
     p.operatorSlug,
     p.fingerprint,
+    p.fingerprintRoutine,
     p.fingerprintSources,
+    p.promptSecret,
     p.handed,
     routinePaths(p).log,
     routinePaths(p).lock,
@@ -563,7 +563,6 @@ async function removeLocal(p: Paths): Promise<string[]> {
     // goes with it.
     join(p.home, STAMP_FILE),
     join(p.home, LOCK_FILE),
-    p.sessions,
     p.log,
   ]) {
     await rm(target, { recursive: true, force: true });

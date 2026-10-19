@@ -5,6 +5,8 @@
 // strict parser says ok the CLI must say valid, and where it says malformed
 // the CLI must say malformed too. Below that, the SEAL conformance cases
 // every verifier runs.
+
+import { readFile } from 'node:fs/promises';
 import {
   base64urlEncode,
   type VerifiedCredentialPayload as CredentialPayload,
@@ -329,9 +331,9 @@ describe('seal verify against the SEAL conformance cases', () => {
   });
 });
 
-// The handshake conformance cases, each beside the suite's version 3
-// SEAL, through checkSeal and then checkHandshakeLine, what seal verify
-// --handshake runs. The API and the web run the same cases.
+// The handshake conformance cases, each beside the suite's version 3 or
+// version 6 SEAL, through checkSeal and then checkHandshakeLine, what seal
+// verify --handshake runs. The API runs the same cases.
 describe('seal verify --handshake against the handshake conformance cases', () => {
   let hs: HandshakeConformance;
   beforeAll(async () => {
@@ -342,7 +344,11 @@ describe('seal verify --handshake against the handshake conformance cases', () =
     const answers = await Promise.all(
       hs.cases.map(async (c) => {
         const nowMs = (c.nowSeconds ?? hs.nowSeconds) * 1000;
-        const seal = await checkSeal(hs.seal, hs.wellKnown as never, nowMs);
+        const seal = await checkSeal(
+          c.seal === 'v6' ? hs.sealV6 : hs.seal,
+          hs.wellKnown as never,
+          nowMs,
+        );
         if (!seal.valid) throw new Error(`SEAL ${seal.reason}`);
         const { out } = await checkHandshakeLine({
           handshake: c.jws,
@@ -351,12 +357,103 @@ describe('seal verify --handshake against the handshake conformance cases', () =
           ...(c.nonce === undefined ? {} : { nonce: c.nonce }),
           ...(c.aud === undefined ? {} : { aud: c.aud }),
           record: async () => {
-            throw new Error('read the record for a version 3 SEAL');
+            throw new Error('no conformance case reads the record');
           },
         });
-        return [c.name, out.json.valid ? out.json.result : out.json.reason];
+        // The setup is compared where the case names one.
+        return [
+          c.name,
+          out.json.valid ? out.json.result : out.json.reason,
+          c.setup === undefined || !out.json.valid ? undefined : out.json.setup,
+        ];
       }),
     );
-    expect(answers).toEqual(hs.cases.map((c) => [c.name, c.expected]));
+    expect(answers).toEqual(
+      hs.cases.map((c) => [
+        c.name,
+        c.expected,
+        c.setup === undefined ? undefined : c.setup,
+      ]),
+    );
+  });
+});
+
+// The reader fixtures in fixtures/, each handshake beside its SEAL at the
+// pinned clock, the answer seal verify --json gives and the first line it
+// prints, which names the setup.
+describe('seal verify --handshake against the reader fixtures', () => {
+  type FixtureIndex = {
+    clocks: { pinnedSeconds: number };
+    cases: {
+      name: string;
+      kind?: string;
+      file: string;
+      seal?: string;
+      nonce?: string;
+      verifier?: string;
+      expected?: { pinned?: Record<string, unknown> };
+    }[];
+  };
+  const fixture = (path: string) =>
+    readFile(new URL(`../fixtures/${path}`, import.meta.url), 'utf8');
+
+  it('reads each handshake as its expected answer, with its setup', async () => {
+    const index: FixtureIndex = JSON.parse(await fixture('index.json'));
+    const keys = JSON.parse(await fixture('keys.json'));
+    const nowMs = index.clocks.pinnedSeconds * 1000;
+    const handshakes = index.cases.filter((c) => c.kind === 'handshake');
+    expect(handshakes.map((c) => c.name)).toEqual([
+      'handshake',
+      'handshake-routine',
+    ]);
+    for (const c of handshakes) {
+      const seal = await checkSeal(
+        (await fixture(c.seal ?? '')).trim(),
+        keys,
+        nowMs,
+      );
+      if (!seal.valid) throw new Error(`SEAL ${seal.reason}`);
+      const { out } = await checkHandshakeLine({
+        handshake: (await fixture(c.file)).trim(),
+        seal: seal.payload as SealPayload,
+        nowMs,
+        ...(c.nonce === undefined ? {} : { nonce: c.nonce }),
+        ...(c.verifier === undefined ? {} : { aud: c.verifier }),
+        record: async () => {
+          throw new Error('no fixture reads the record');
+        },
+      });
+      expect(out.json, c.name).toEqual(c.expected?.pinned);
+      const setup = c.expected?.pinned?.setup;
+      expect(out.lines[0], c.name).toBe(`handshake Matches, ${setup} setup`);
+    }
+  });
+
+  it('prints the routine fingerprint of a version 6 SEAL and none before', async () => {
+    const index: FixtureIndex = JSON.parse(await fixture('index.json'));
+    const keys = JSON.parse(await fixture('keys.json'));
+    const nowMs = index.clocks.pinnedSeconds * 1000;
+    const lines = async (file: string) => {
+      const r = await checkSeal((await fixture(file)).trim(), keys, nowMs);
+      if (!r.valid) throw new Error(`SEAL ${r.reason}`);
+      return sealSummary(r.payload);
+    };
+    const v6 = await lines('seals/v6-valid.txt');
+    expect(v6).toContain(
+      'routine fingerprint JniAQWN9vaWD3U-BsZ33ReH5qhTPHc9WmG7d5Hl9tB0 since 2026-10-01',
+    );
+    expect(v6.indexOf('state matches')).toBeLessThan(
+      v6.findIndex((line) => line.startsWith('routine fingerprint')),
+    );
+    expect(
+      (await lines('seals/v4-valid.txt')).some((line) =>
+        line.startsWith('routine fingerprint'),
+      ),
+    ).toBe(false);
+    const v6Case = index.cases.find((c) => c.name === 'v6-valid');
+    const payload = v6Case?.expected?.pinned?.payload as object;
+    expect(sealSummary({ ...payload, routine_fingerprint: null })).toContain(
+      'routine fingerprint none sent',
+    );
   });
 });

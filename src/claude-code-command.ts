@@ -15,10 +15,6 @@ import { CHALLENGE_SUBMITS, DUEL_SUBMITS } from './tasks.js';
 // install only ever writes or removes a file we wrote. A file without the
 // marker belongs to the operator and is left alone.
 
-// The command an older init wrote before run replaced prove. Install and
-// uninstall remove it when it is ours.
-const RETIRED_COMMAND_FILE = 'sealkeeper-prove.md';
-
 // A one line shell function that makes sealkeeper mean invocation. For
 // plain sealkeeper it goes through command, so the function does not call
 // itself. It sets SEALKEEPER_INVOCATION=sealkeeper for the run, so the
@@ -179,10 +175,6 @@ function commandPath(settingsFile: string, command: SlashCommand): string {
   );
 }
 
-// The retired /sealkeeper-prove beside them, see RETIRED_COMMAND_FILE.
-const retiredCommandPath = (settingsFile: string): string =>
-  join(dirname(settingsFile), 'commands', RETIRED_COMMAND_FILE);
-
 // What install did with one slash command's file.
 export type CommandInstall = {
   command: SlashCommand;
@@ -191,8 +183,7 @@ export type CommandInstall = {
 };
 
 // Writes each slash command whose file is missing or ours, see
-// installManagedFile. The retired /sealkeeper-prove goes once
-// /sealkeeper-run, its replacement, is written, and only when it is ours.
+// installManagedFile.
 export async function installCommands(
   settingsFile: string,
   invocation: string,
@@ -205,9 +196,6 @@ export async function installCommands(
       commandText(command, invocation),
     );
     installed.push({ command, path, result });
-  }
-  if (installed[0]?.result !== 'kept') {
-    await uninstallManagedFile(retiredCommandPath(settingsFile));
   }
   return installed;
 }
@@ -248,16 +236,12 @@ export async function refreshCommands(
   return installed.some((i) => i.result === 'written');
 }
 
-// Removes each slash command, and the retired /sealkeeper-prove, only when
-// ours. Returns the paths it removed.
+// Removes each slash command, only when ours. Returns the paths it removed.
 export async function uninstallCommands(
   settingsFile: string,
 ): Promise<string[]> {
   const removed: string[] = [];
-  for (const file of [
-    ...commandPaths(settingsFile),
-    retiredCommandPath(settingsFile),
-  ]) {
+  for (const file of commandPaths(settingsFile)) {
     if (await uninstallManagedFile(file)) removed.push(file);
   }
   return removed;

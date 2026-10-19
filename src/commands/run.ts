@@ -62,10 +62,6 @@ import { dailyCeilingReached, todayLine, todayOf } from '../today.js';
  * adds.
  */
 
-// The line for a 404 from the run route.
-export const OLD_API =
-  'this SealKeeper API has no run route yet, nothing was claimed';
-
 export const EXPLAIN = [
   'Your agent earns verified tasks by solving small checks,',
   'like deduplicating lines or reading a JSON value.',
@@ -149,7 +145,7 @@ export function register(
         );
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
-        this.error(error.status === 404 ? OLD_API : refusal(error));
+        this.error(refusal(error));
       }
       await recordClaims(answer);
       // Synced and the goal refreshed while the answer prints.

@@ -186,8 +186,9 @@ describe('hook claude-code', () => {
     return all;
   }
 
+  // Files a hook would keep per session. None is ever written.
   async function markers(): Promise<string[]> {
-    return readdir(paths(home).sessions).catch(() => []);
+    return readdir(join(home, 'sessions')).catch(() => []);
   }
 
   async function initialise(autoSync = true, nudge?: boolean): Promise<string> {
@@ -266,22 +267,6 @@ describe('hook claude-code', () => {
     expect(err).toBe('');
     expect(fetches).toEqual([]);
     expect((await readCursor(paths(home))).lastAcked).toBeNull();
-  });
-
-  // A CLI before 0.5.0 kept a marker per session, and installed Stop.
-  it('Stop records nothing, and SessionEnd removes the markers an older CLI left', async () => {
-    await initialise(false);
-    const dir = paths(home).sessions;
-    await mkdir(dir, { recursive: true });
-    for (const name of [SESSION, `ended.${SESSION}`, 'tool.toolu_old']) {
-      await writeFile(join(dir, name), new Date().toISOString());
-    }
-    const { err } = await hook(payloads.stop());
-    expect(err).toBe('');
-    expect(await markers()).toHaveLength(3);
-    await hook(payloads.sessionEnd());
-    await expect(stat(dir)).rejects.toThrow();
-    expect(await logged()).toEqual([]);
   });
 
   it('a failed sync at session end still exits 0 with one warning', async () => {

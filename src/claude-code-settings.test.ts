@@ -17,7 +17,6 @@ import {
   cliInvocation,
   HOOK_EVENTS,
   hasHooks,
-  hasRetiredHooks,
   hookCommand,
   installHooks,
   invocationOf,
@@ -25,8 +24,6 @@ import {
   isOurCommand,
   ourCommands,
   parseHookCommand,
-  RETIRED_HOOK_EVENTS,
-  removeRetiredHooks,
   SettingsError,
   settingsPath,
   sharedProjectSettingsPath,
@@ -130,82 +127,15 @@ describe('Claude Code settings', () => {
     expect(after.endsWith('\n')).toBe(false);
   });
 
-  // The hooks write no event, Stop is retired.
   it('a fresh install writes the two session hooks', async () => {
     expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
       added: ['SessionStart', 'SessionEnd'],
       updated: [],
-      removed: [],
     });
     expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual({
       hooks: { SessionStart: [OURS], SessionEnd: [OURS] },
     });
-  });
-
-  // What an install before 0.4.14 left, ours under six events next to
-  // another tool's hooks, at a path that has since moved.
-  const olderInstall = () => {
-    const old = structuredClone(CROWDED) as {
-      hooks: Record<string, unknown[]>;
-    };
-    const npx = { hooks: [{ type: 'command', command: NPX_COMMAND }] };
-    for (const event of [...HOOK_EVENTS, ...RETIRED_HOOK_EVENTS]) {
-      old.hooks[event]?.push(npx);
-    }
-    // One group holds a foreign hook and ours, so only ours goes.
-    old.hooks.PreToolUse?.push({
-      matcher: 'Bash',
-      hooks: [
-        { type: 'command', command: NOTIFY },
-        { type: 'command', command: NPX_COMMAND },
-      ],
-    });
-    return old;
-  };
-
-  it('a repeat install over six hooks leaves three and every foreign hook', async () => {
-    await writeFile(file(), JSON.stringify(olderInstall(), null, 2));
-    expect(await hasRetiredHooks(file())).toBe(true);
-    expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
-      added: [],
-      updated: [...HOOK_EVENTS],
-      removed: [...RETIRED_HOOK_EVENTS],
-    });
-    const expected = structuredClone(CROWDED) as {
-      hooks: Record<string, unknown[]>;
-    };
-    for (const event of HOOK_EVENTS) expected.hooks[event]?.push(OURS);
-    expected.hooks.PreToolUse?.push({
-      matcher: 'Bash',
-      hooks: [{ type: 'command', command: NOTIFY }],
-    });
-    expect(JSON.parse(await readFile(file(), 'utf8'))).toEqual(expected);
-    expect(await hasRetiredHooks(file())).toBe(false);
-  });
-
-  it('removeRetiredHooks takes out only our tool call hooks', async () => {
-    expect(await removeRetiredHooks(file())).toEqual([]);
-    const old = olderInstall();
-    await writeFile(file(), JSON.stringify(old, null, 2));
-    expect(await removeRetiredHooks(file(), HOOK_COMMAND)).toEqual([
-      ...RETIRED_HOOK_EVENTS,
-    ]);
-    const after = JSON.parse(await readFile(file(), 'utf8'));
-    for (const event of HOOK_EVENTS) {
-      expect(after.hooks[event]).toEqual(old.hooks[event]);
-    }
-    expect(after.hooks.PostToolUse).toEqual(CROWDED.hooks.PostToolUse);
-    expect(after.hooks.PreToolUse).toEqual([
-      ...CROWDED.hooks.PreToolUse,
-      { matcher: 'Bash', hooks: [{ type: 'command', command: NOTIFY }] },
-    ]);
-    const mtime = (await stat(file())).mtimeMs;
-    expect(await removeRetiredHooks(file(), HOOK_COMMAND)).toEqual([]);
-    expect((await stat(file())).mtimeMs).toBe(mtime);
-    // A tool call hook of another tool is not ours to report.
-    await writeFile(file(), CROWDED_TEXT);
-    expect(await hasRetiredHooks(file())).toBe(false);
   });
 
   it('running twice changes nothing and does not write', async () => {
@@ -216,7 +146,6 @@ describe('Claude Code settings', () => {
     expect(await installHooks(file(), HOOK_COMMAND)).toEqual({
       added: [],
       updated: [],
-      removed: [],
     });
     expect(await readFile(file(), 'utf8')).toBe(once);
     expect((await stat(file())).mtimeMs).toBe(mtime);
@@ -295,7 +224,7 @@ describe('Claude Code settings', () => {
       expect(await hasHooks(file(), ours)).toBe(true);
       expect(await ourCommands(file())).toEqual([ours]);
       const again = await installHooks(file(), ours);
-      expect(again).toEqual({ added: [], updated: [], removed: [] });
+      expect(again).toEqual({ added: [], updated: [] });
     });
 
     it('never claims the hook of another tool built at a path that looks alike', async () => {
@@ -384,7 +313,6 @@ describe('Claude Code settings', () => {
     expect(result).toEqual({
       added: [],
       updated: [...HOOK_EVENTS],
-      removed: [],
     });
     const after = await readFile(file(), 'utf8');
     // The text is the old text with our command swapped, nothing else.

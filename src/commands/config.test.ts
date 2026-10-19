@@ -202,19 +202,26 @@ describe('what-is-shared', () => {
       expect(out).toMatch(new RegExp(`^ {2}${part} `, 'm'));
     }
     expect(out).toContain(
-      'Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.',
+      "Only a SHA-256 hash of each part is stored, never what it is hashed from. claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. Each fingerprint sent says which setup made it, session for your own sessions or routine for a routine run's own setup, as a label beside the hashes and outside them. The terminal run and a look at the duels or the challenge board send none.",
     );
     // The model name is the one value that leaves as text.
     expect(out).toContain(
       'Model name. Each sync also sends the name of the model your agent runs, as text and not a hash',
     );
-    // A submit carries it too.
+    // A submit carries it too, and the events a routine run logged do not.
     expect(out).toContain(
-      'Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run',
+      'Each submit sends the same name with the answer, and on a routine run the one the runtime reported for that answer, else the one of your own sessions.',
+    );
+    expect(out).toContain(
+      'The events a routine run logged go with none, so the name stays the one of your own sessions.',
+    );
+    // The routine keeps its own fingerprint file.
+    expect(out).toContain(
+      'A routine run on Claude Code or OpenClaw keeps its own in fingerprint-routine.json.',
     );
     // The profile shows a submit's name too.
     expect(out).toContain(
-      "The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit sent.",
+      "The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit of your own sessions sent.",
     );
     expect(out).toContain(
       'Only the name leaves, never a prompt, an input or an output.',

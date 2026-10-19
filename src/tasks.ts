@@ -21,6 +21,7 @@ import {
   refusesFingerprint,
 } from './declared-fingerprint.js';
 import { type EmitInput, emit } from './emit.js';
+import type { RoutineSource } from './fingerprint.js';
 import { keepHanded } from './handed.js';
 import { KeyError, loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
@@ -86,10 +87,14 @@ export function failOnApiError(cmd: Command, error: unknown): never {
 
 // Appends the matching event to the local log, without syncing, so status
 // and the log reflect the work. The write to the API already happened, so a
-// failure here is a warning, not an error.
-export async function recordEvent(input: EmitInput): Promise<void> {
+// failure here is a warning, not an error. routine is the source of the
+// routine run that logs it, kept on its line.
+export async function recordEvent(
+  input: EmitInput,
+  routine?: RoutineSource,
+): Promise<void> {
   try {
-    await emit(input);
+    await emit(input, undefined, routine);
   } catch (error) {
     stderr(
       `warning: could not record ${input.type} in the local log: ${(error as Error).message}`,
@@ -117,16 +122,18 @@ export async function afterTaskWork(
 // declared fingerprint, and once more without it when the API refuses the
 // field, so a fingerprint never costs the request. request is the payload its
 // schema already parsed, purpose the route it is for. p is the home whose
-// fingerprint.json is read, the routine run's own, else the default. What send
-// throws otherwise is thrown.
+// fingerprint is read, the routine run's own, else the default. routine is a
+// routine run's own source, which reads fingerprint-routine.json in place of
+// fingerprint.json. What send throws otherwise is thrown.
 export async function sendWithFingerprint<T>(
   signer: Signer,
   request: object,
   purpose: RequestPurpose,
   send: (envelope: string) => Promise<T>,
   p?: Paths,
+  routine?: RoutineSource,
 ): Promise<T> {
-  const declared = await declaredFingerprint(p);
+  const declared = await declaredFingerprint(p, routine);
   if (declared.fingerprint === undefined) {
     return send(await signer.sign(request, purpose));
   }
@@ -301,16 +308,21 @@ export const NOT_FOUND = 'no task with this id';
 // does not hold yet is recorded. run, challenge, duel and the routine's
 // run all use it. What submit needs of the spec of each duel or challenge
 // task is kept too, since only this answer shows that spec (keepHanded).
+// routine is the routine run's own source, kept on each line it logs.
 export async function recordClaims(
   answer: Pick<CoreAnswerResponse, 'tasks'>,
+  routine?: RoutineSource,
 ): Promise<void> {
   await keepHanded(answer.tasks.filter((task) => GAME_KINDS.has(task.kind)));
   const known = new Set(await unsubmittedClaims());
   const fresh = answer.tasks.filter((task) => !known.has(task.id));
   for (const task of fresh) {
-    await recordEvent({
-      type: 'task.claimed',
-      payload: { task_id: task.id, task_type: task.type },
-    });
+    await recordEvent(
+      {
+        type: 'task.claimed',
+        payload: { task_id: task.id, task_type: task.type },
+      },
+      routine,
+    );
   }
 }

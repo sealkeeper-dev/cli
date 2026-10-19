@@ -32,7 +32,6 @@ import {
   actionCommand,
   EXPLAIN,
   NO_STANDING,
-  OLD_API,
   terminalClaimLine,
 } from './run.js';
 
@@ -572,12 +571,14 @@ describe('run', () => {
       expect(JSON.parse(result.out).limited).toEqual(limited);
     });
 
-    it('says one line when the API has no run route yet', async () => {
-      api.answer = { status: 404, code: 'not_found' };
+    it('says the refusal of a 404 in one line', async () => {
+      api.answer = { status: 404, code: 'unknown_agent' };
       const result = await run('run', '--json');
       expect(result.code).toBe(1);
       expect(result.out).toBe('');
-      expect(result.err).toBe(`${OLD_API}\n`);
+      expect(result.err).toBe(
+        'this agent is not registered, run npx sealkeeper init\n',
+      );
     });
 
     it('says the refusal in one line', async () => {

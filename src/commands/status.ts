@@ -11,7 +11,7 @@ import {
   allSettingsPaths,
   claudeCodeHooksIn,
   claudeConfigDir,
-  hasRetiredHooks,
+  HOOK_EVENTS,
   ourCommands,
   parseHookCommand,
 } from '../claude-code-settings.js';
@@ -28,7 +28,7 @@ import {
 import { exists } from '../files.js';
 import { duelsStarted } from '../game.js';
 import { cli } from '../invocation.js';
-import { readLiveAgent } from '../live-agent.js';
+import { type LiveAgent, readLiveAgent } from '../live-agent.js';
 import {
   CursorError,
   countPending,
@@ -40,11 +40,13 @@ import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
 import { gameOnHint } from '../refusal.js';
-import type {
-  CurrentChallengeResponse,
-  StatusAnswerResponse,
+import {
+  type CurrentChallengeResponse,
+  type SealWithheld,
+  type StatusAnswerResponse,
+  sealStateWithheld,
+  withheldText,
 } from '../responses.js';
-import { withheldText } from '../responses.js';
 import { readStatus, type StatusRead, sourceLine } from '../status-answer.js';
 import {
   defaultTasksDeps,
@@ -72,7 +74,9 @@ import { eventsWaitLine } from './sync.js';
  *
  * The API decides and words it. status signs StatusRequest and calls POST
  * /v1/agents/:id/status (status-answer.ts), which answers the core answer with
- * tasks empty plus status. Labels and words the API sent are printed as they
+ * tasks empty plus status. It reads GET /v1/agents/:id beside it, for the
+ * SEAL state when the SEAL is suspended or still being checked, and for the
+ * runtime question. Labels and words the API sent are printed as they
  * came, through the terminal escaping of stdout. status writes only the lines
  * about what this machine knows, sessions and events in the local log, the
  * routine and the agent card.
@@ -80,10 +84,11 @@ import { eventsWaitLine } from './sync.js';
  * --json, or a stdout that is not a terminal as when an agent runs it, prints
  * the answer as it came, each action this CLI knows with the command line it
  * built, as run --json does (agentAnswer), plus source, where the answer came
- * from, and local, the parts of this machine.
+ * from, local, the parts of this machine, and seal, the SEAL line the screen
+ * prints.
  *
- * Offline, or when the status route answers 404, the answer is the last one
- * kept, and one line says so. A failed read never fails the local part.
+ * Offline, or when the status route refuses, the answer is the last one kept,
+ * and one line says so. A failed read never fails the local part.
  */
 
 // env is what runtime detection reads, for the one time runtime question.
@@ -93,7 +98,6 @@ export type StatusDeps = TasksDeps & { env?: () => NodeJS.ProcessEnv };
 // no recent SealKeeper work in the log.
 export const NO_ADAPTER = `No Claude Code hooks or daily routine here, and no SealKeeper work recorded in 7 days. Run ${INSTALL_COMMAND}.`;
 export const HOOKS_MISSING = `The Claude Code hooks point at a sealkeeper that is no longer there. Run ${INSTALL_COMMAND} again, or npm i -g sealkeeper for a stable path.`;
-export const TOOL_HOOKS_LEFT = `The Claude Code settings still hold hooks of an older sealkeeper, which record nothing now. Run ${INSTALL_COMMAND} again to remove them.`;
 export const NOTHING_WAITS = 'Nothing waits for you.';
 const QUIET_DAYS = 7;
 const stdoutIsTTY = () => process.stdout.isTTY === true;
@@ -147,25 +151,35 @@ export function register(
       let read: StatusRead;
       let local: Local;
       let routine: RoutineView;
+      let live: LiveAgent | null;
       try {
-        [read, local, routine] = await Promise.all([
+        [read, local, routine, , live] = await Promise.all([
           readStatus({ config, fetch: deps.fetch, now, paths: p }),
           readLocal(config, now, p, options.show === true),
           routineView(routineDeps, p, now),
           // The session nudge's own cache, see nudge.ts.
           keepNudgeFresh(deps.fetch, p),
+          // The agent answer, for its SEAL state and the runtime question.
+          // null when it does not answer, never throws.
+          readLiveAgent(config, deps.fetch),
         ]);
       } catch (error) {
         if (error instanceof CursorError) this.error(error.message);
         throw error;
       }
 
+      const withheld = sealStateWithheld(live?.sealState);
       // The agent's form whenever stdout is not a terminal, as run's.
       const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
       if (json) {
         stdout(
           JSON.stringify({
             ...(read.answer === null ? {} : agentAnswer(read.answer)),
+            // The SEAL line the screen prints.
+            seal:
+              read.answer === null
+                ? null
+                : sealText(read.answer.status.seal, withheld),
             source: {
               from: read.from,
               fetchedAt: read.from === 'none' ? null : read.fetchedAt,
@@ -176,29 +190,33 @@ export function register(
         );
       } else {
         const slug = await readOperatorSlug(config.agentId, p);
-        for (const line of screenLines(read, local, routine.lines, {
-          handle: handleOf(config, slug),
-          profile: profileUrl(config, slug),
-          version: config.version,
-          now,
-        })) {
+        for (const line of screenLines(
+          read,
+          local,
+          routine.lines,
+          {
+            handle: handleOf(config, slug),
+            profile: profileUrl(config, slug),
+            version: config.version,
+            now,
+          },
+          withheld,
+        )) {
           stdout(line);
         }
       }
       // On stderr, so --json output stays one object.
       if (await noAdapterAndQuiet(deps, now, p)) stderr(NO_ADAPTER);
       if (await hooksGone(deps)) stderr(HOOKS_MISSING);
-      if (await toolHooksLeft(deps)) stderr(TOOL_HOOKS_LEFT);
       // The daily job's copy of the CLI, when it is out of date or gone.
       for (const line of routine.warnings) stderr(line);
       // An agent the API has as unknown is asked what it runs in, once,
-      // and only where a person can answer. The agent is read only when
-      // the question is still open.
+      // and only where a person can answer. Its runtime comes from the
+      // agent answer read above, so the agent is read once per run.
       if (!json) {
         await offerRuntime({
           config,
-          readRuntime: async () =>
-            (await readLiveAgent(config, deps.fetch))?.runtime,
+          readRuntime: async () => live?.runtime,
           input: (deps.stdin ?? (() => streamInput(process.stdin)))(),
           fetch: deps.fetch,
           report: { ok: stdout, info: stderr },
@@ -252,6 +270,7 @@ export function screenLines(
   local: Local,
   routine: string[],
   who: Who,
+  withheld: SealWithheld | null = null,
 ): string[] {
   const answer = read.answer;
   const s = answer?.status;
@@ -267,7 +286,7 @@ export function screenLines(
   if (source !== null) lines.push(source);
   lines.push('');
 
-  if (answer !== null) lines.push(...standingSection(answer), '');
+  if (answer !== null) lines.push(...standingSection(answer, withheld), '');
   const scores = scoresSection(answer);
   if (scores.length > 0) lines.push(...scores, '');
   lines.push(...todaySection(answer, local, who.now), '');
@@ -296,9 +315,12 @@ export function screenLines(
 // The level and the SEAL, what the next level needs, and the steps in the
 // order the API sent them, the first the one that moves it most, each with
 // the command this CLI built for it.
-function standingSection(answer: StatusAnswerResponse): string[] {
+function standingSection(
+  answer: StatusAnswerResponse,
+  withheld: SealWithheld | null,
+): string[] {
   const { standing, status } = answer;
-  const lines = [`${levelLine(standing)} ${sealText(status.seal)}.`];
+  const lines = [`${levelLine(standing)} ${sealText(status.seal, withheld)}.`];
   if (standing.nextLevel !== null) {
     const met = status.thresholds;
     const parts = [
@@ -343,9 +365,15 @@ function formatScore(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
-// The SEAL's state as the API sent it, the reason or the dormant days in
-// the words check uses. A state this CLI does not know is said as it came.
-export function sealText(seal: StatusAnswerResponse['status']['seal']): string {
+// The SEAL's state, the reason or the dormant days in the words check uses.
+// withheld, from the agent answer's SEAL state, wins when it says the SEAL
+// is withheld. Otherwise the status answer's state is said as it came, and a
+// state this CLI does not know is said as it came too.
+export function sealText(
+  seal: StatusAnswerResponse['status']['seal'],
+  withheld: SealWithheld | null = null,
+): string {
+  if (withheld !== null) return `no SEAL, ${withheldText(withheld)}`;
   if (seal === undefined) return 'SEAL unknown';
   switch (seal.state) {
     case 'issued':
@@ -494,13 +522,16 @@ function claudeDirs(deps: StatusDeps) {
   };
 }
 
-// True when a hook of ours in the user or project settings runs a node
-// binary or a sealkeeper script that is not there any more, as happens once
-// the npx cache is cleared.
+// True when a hook of ours on a current event in the user or project
+// settings runs a node binary or a sealkeeper script that is not there any
+// more, as happens once the npx cache is cleared. A hook of ours on any
+// other event is one init no longer writes or rewrites, so it is not read.
 async function hooksGone(deps: StatusDeps): Promise<boolean> {
   const dirs = claudeDirs(deps);
   const commands = (
-    await Promise.all(allSettingsPaths(dirs).map((file) => ourCommands(file)))
+    await Promise.all(
+      allSettingsPaths(dirs).map((file) => ourCommands(file, HOOK_EVENTS)),
+    )
   ).flat();
   for (const command of commands) {
     const parsed = parseHookCommand(command);
@@ -510,15 +541,6 @@ async function hooksGone(deps: StatusDeps): Promise<boolean> {
     }
   }
   return false;
-}
-
-// True when a settings file of the user or the project still holds the
-// tool call hooks an older CLI installed, which record nothing now.
-async function toolHooksLeft(deps: StatusDeps): Promise<boolean> {
-  const found = await Promise.all(
-    allSettingsPaths(claudeDirs(deps)).map((file) => hasRetiredHooks(file)),
-  );
-  return found.some(Boolean);
 }
 
 // True when neither Claude Code settings file holds our hooks, no daily routine

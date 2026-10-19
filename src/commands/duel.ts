@@ -7,7 +7,7 @@ import {
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
-import { type ApiClient, ApiError } from '../api.js';
+import { ApiError } from '../api.js';
 import { DUEL_STEP } from '../claude-code-command.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
 import { cli } from '../invocation.js';
@@ -58,10 +58,6 @@ import { actionCommand, actionLine, agentAnswer } from './run.js';
  * The task a step claims is recorded in the local log as run records its
  * claims.
  */
-
-// The line for a 404 from the duel route.
-export const OLD_API =
-  'this SealKeeper API has no duel route yet, nothing was done';
 
 export const BAD_AGENT = (value: string) =>
   `${value} is not an agent, give its id or its handle such as alice/scout`;
@@ -154,12 +150,6 @@ export function register(
           : await sendWithFingerprint(signer, request, 'duel.next', call);
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
-        if (
-          error.status === 404 &&
-          !(await hasDuelRoute(api, signer.agentId))
-        ) {
-          this.error(OLD_API);
-        }
         this.error(refusal(error));
       }
       await recordClaims(answer);
@@ -216,18 +206,6 @@ export function duelForm(
   if (o.cancel === true) return { cancel: true };
   if (o.list === true) return { list: true };
   return {};
-}
-
-// Probes the duel route with an empty body, so a 404 of a duel or an agent not
-// found is told from a missing route. A 404 means no route. A probe that gets
-// no answer counts as the route, so the line is the refusal.
-async function hasDuelRoute(api: ApiClient, agentId: string): Promise<boolean> {
-  try {
-    const path = `/v1/agents/${encodeURIComponent(agentId)}/duel/next`;
-    return (await api.request(path, { body: {} })).status !== 404;
-  } catch {
-    return true;
-  }
 }
 
 // What duel --json prints. The answer as run prints it, and each invite in

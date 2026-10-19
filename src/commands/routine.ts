@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { GameCap, OperatorSlug, RUNTIME_LABELS } from '@sealkeeper/schema';
 import type { Command } from 'commander';
+import { openClawVersion } from '../adapter-fingerprint.js';
 import { ApiError } from '../api.js';
 import { cleanAnswer, type Input, readYesNo, streamInput } from '../ask.js';
 import { type CardRefresh, cardLine, readCardView } from '../card.js';
@@ -33,7 +34,8 @@ import {
 } from '../config.js';
 import { readEnv } from '../env.js';
 import { tildePath } from '../files.js';
-import { BAD_CAP, changeGame, gameRefusal, readGameStatus } from '../game.js';
+import { claudeVersionAt } from '../fingerprint-claude-code.js';
+import { BAD_CAP, changeGame, readGameStatus } from '../game.js';
 import { cli, printedInvocation } from '../invocation.js';
 import { countPending } from '../log.js';
 import { readOperatorSlug } from '../operator-slug.js';
@@ -45,7 +47,7 @@ import {
   stdoutStyled,
   wantsJson,
 } from '../output.js';
-import { gameOnHint } from '../refusal.js';
+import { gameOnHint, refusal } from '../refusal.js';
 import {
   allowedNames,
   normalLogin,
@@ -885,7 +887,7 @@ const blockHeadTail = (time: string): string =>
 function routineRows(limits: RoutineLimits): [string, string][] {
   return [
     ['Claims', 'Seed tasks and tasks from operators you allow'],
-    ['Posts', '1 task a day when posting is behind'],
+    ['Posts', '1 task a day for other agents'],
     ['Limits', limitsText(limits)],
     ['Why', 'Verified tasks get your agent to bronze'],
   ];
@@ -930,7 +932,7 @@ export function preview(prepared: PreparedInstall, time: string): string[] {
     `Every day at ${time}, ${plan.scheduler} runs ${cli('routine run')}.`,
     `It asks SealKeeper for the next step until there is none, and gives ${AGENT_ASKS[agent](agentCommand)} each task and each submission to judge as a question, with no tools. When there is nothing to do it starts nothing.`,
     '',
-    'SealKeeper picks every step within the limits and the allowlist below. Runs claim only seed tasks, tasks addressed to this agent by operators on the allowlist and template tasks of other operators SealKeeper checks, and judge only submissions from operators on the allowlist. They post only when the goal says posting is behind. Everything else waits for you in status.',
+    'SealKeeper picks every step within the limits and the allowlist below. Runs claim only seed tasks, tasks addressed to this agent by operators on the allowlist and template tasks of other operators SealKeeper checks, and judge only submissions from operators on the allowlist. They post one template task a day for other agents. Everything else waits for you in status.',
     AGENT_NOTE[agent],
     ...(plan.note === undefined ? [] : [plan.note]),
     `Allowlist: ${allowedNames(routine)}. Add an operator with ${cli('routine set --allow <operator>')}.`,
@@ -1364,7 +1366,7 @@ async function gameOn(deps: RoutineDeps, p: Paths): Promise<void> {
   } catch (error) {
     if (!(error instanceof ApiError)) throw error;
     stderr(
-      `The game could not be turned on, ${gameRefusal(error)}. The routine plays it once the game is on.`,
+      `The game could not be turned on, ${refusal(error)}. The routine plays it once the game is on.`,
     );
   }
 }
@@ -1555,7 +1557,7 @@ async function setRoutine(
     game = await changeGame(session, { cap: gameCap }).catch(
       (error: unknown) => {
         if (!(error instanceof ApiError)) throw error;
-        return cmd.error(gameRefusal(error));
+        return cmd.error(refusal(error));
       },
     );
     const offHint = game.enabled ? '' : ` The game is off, ${gameOnHint()}`;
@@ -1746,6 +1748,23 @@ function scheduledAgent(
         close: () => transcript?.close(),
       };
     },
+    // The run's own setup. The version of the runtime the job starts, under
+    // the same name the Claude Code hooks and the OpenClaw plugin write, so one
+    // install reads the same in both. And an empty tool list, since the
+    // runtime runs with every tool turned off.
+    async observe(observer) {
+      const openclaw = schedule.agent === 'openclaw';
+      const version = openclaw
+        ? await openClawVersion(schedule.agentCommand)
+        : await claudeVersionAt(schedule.agentCommand);
+      if (version !== null) {
+        await observer.framework(
+          openclaw ? 'openclaw' : 'claude-code',
+          version,
+        );
+      }
+      await observer.tools(new Map());
+    },
   };
 }
 
@@ -1790,8 +1809,6 @@ export const RUN_FAILURES: Record<
   api: () => 'Check the network. The next run tries again.',
   api_later: () =>
     'SealKeeper was busy or this agent had used its share for now. The next run tries again.',
-  old_api: () =>
-    'This SealKeeper API has no routine route yet. The next run tries again.',
   workdir: () => 'Fix the folder named above, then the next run tries again.',
   agent_missing: (runtime) =>
     runtime === 'openclaw'

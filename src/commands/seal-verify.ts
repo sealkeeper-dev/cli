@@ -1,6 +1,7 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   AgentId,
+  type FingerprintSetup,
   HANDSHAKE_AUD_MAX,
   HANDSHAKE_NONCE_MAX,
   HandshakeAudience,
@@ -192,9 +193,10 @@ export function register(parent: Command, deps: SealDeps): Command {
       }
 
       // The handshake beside a valid SEAL. A SEAL before version 3 carries
-      // no fingerprint, so it is compared with the agent answer from the
-      // API paired with where the keys came from (recordApiUrl), which
-      // --keys and --offline never fetch.
+      // no fingerprint, and one before version 6 none of the routine's, so
+      // such a handshake is compared with the agent answer from the API
+      // paired with where the keys came from (recordApiUrl), which --keys
+      // and --offline never fetch.
       let handshake: HandshakeLine | null = null;
       if (result.valid && options.handshake !== undefined) {
         const fetchesNothing =
@@ -203,9 +205,16 @@ export function register(parent: Command, deps: SealDeps): Command {
         const recordUrl = fetchesNothing
           ? null
           : recordApiUrl(pointed, sealIssuer(seal));
-        const refuse = (message: string) => async () => {
-          throw new RecordError(message);
-        };
+        // Why there is no record to read, from the setup the handshake
+        // names, since a SEAL carries the routine fingerprint only from
+        // version 6.
+        const refuse =
+          (why: string) =>
+          async (_sub: string, setup: FingerprintSetup): Promise<never> => {
+            throw new RecordError(
+              `${setup === 'routine' ? 'the SEAL carries no routine fingerprint until version 6' : 'the SEAL carries no fingerprint until version 3'}, and ${why}`,
+            );
+          };
         try {
           const { out } = await checkHandshakeLine({
             handshake: options.handshake,
@@ -214,12 +223,10 @@ export function register(parent: Command, deps: SealDeps): Command {
             ...(options.nonce === undefined ? {} : { nonce: options.nonce }),
             ...(options.for === undefined ? {} : { aud: options.for }),
             record: fetchesNothing
-              ? refuse(
-                  'the SEAL carries no fingerprint until version 3, and --keys and --offline fetch no record to compare with',
-                )
+              ? refuse('--keys and --offline fetch no record to compare with')
               : recordUrl === null
                 ? refuse(
-                    `the SEAL carries no fingerprint until version 3, and its keys came from ${keysOrigin(pointed, sealIssuer(seal))}, not the API this CLI points at, ${pointed}`,
+                    `its keys came from ${keysOrigin(pointed, sealIssuer(seal))}, not the API this CLI points at, ${pointed}`,
                   )
                 : recordFromApi(recordUrl, deps.fetch),
           });

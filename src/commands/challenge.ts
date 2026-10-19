@@ -55,10 +55,6 @@ import { challengeLine } from './status.js';
  * carries the top places and the agent's rank.
  */
 
-// The line for a 404 from the challenge route.
-export const OLD_API =
-  'this SealKeeper API has no challenge route yet, nothing was claimed';
-
 // The line for seed_unavailable from an entry.
 export const NO_TASKS =
   'SealKeeper cannot make challenge tasks right now, try again later';
@@ -160,14 +156,13 @@ async function send(
     : call(await signer.sign(request, 'challenge.next'));
 }
 
-// The answer, or the command ended with one line. A 404 is OLD_API. Every other
-// refusal is its line in refusal.ts.
+// The answer, or the command ended with one line. seed_unavailable is NO_TASKS
+// and every other refusal is its line in refusal.ts.
 async function attempt<T>(cmd: Command, request: () => Promise<T>): Promise<T> {
   try {
     return await request();
   } catch (error) {
     if (!(error instanceof ApiError)) throw error;
-    if (error.status === 404) cmd.error(OLD_API);
     cmd.error(error.code === 'seed_unavailable' ? NO_TASKS : refusal(error));
   }
 }

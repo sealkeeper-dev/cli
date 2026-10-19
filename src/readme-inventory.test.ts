@@ -7,7 +7,6 @@ import { LOCK_FILE, STAMP_FILE } from './background-sync.js';
 import { commandPaths } from './claude-code-command.js';
 import {
   HOOK_EVENTS,
-  RETIRED_HOOK_EVENTS,
   settingsPath,
   sharedProjectSettingsPath,
 } from './claude-code-settings.js';
@@ -49,7 +48,7 @@ describe('the What init does inventory', () => {
 
   it('lists every file paths() names in the SealKeeper home, one line each', () => {
     const p = paths(ROOT);
-    const dirs = new Set<keyof Paths>(['log', 'sessions']);
+    const dirs = new Set<keyof Paths>(['log']);
     for (const key of Object.keys(p) as (keyof Paths)[]) {
       if (key === 'home' || key === 'logFile') continue;
       const path = `${tilde(p[key] as string)}${dirs.has(key) ? '/' : ''}`;
@@ -89,10 +88,6 @@ describe('the What init does inventory', () => {
     expect(text).toContain(`- \`${tilde(user)}\`, two hooks`);
     expect(HOOK_EVENTS).toHaveLength(2);
     for (const event of HOOK_EVENTS) expect(text).toContain(`\`${event}\``);
-    // The hooks an older install wrote, which install takes out.
-    for (const event of RETIRED_HOOK_EVENTS) {
-      expect(text).toContain(`\`${event}\``);
-    }
     for (const path of commandPaths(user)) {
       expect(text).toContain(`- \`${tilde(path)}\`, `);
     }

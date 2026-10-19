@@ -3,7 +3,9 @@
 // process and writes no event. Only a routine run, routine(agent) below,
 // records a session and its usage. withSealKeeper and sealKeeperSession read
 // the fingerprint parts this process sees, the tools, the framework and the
-// model of each step, and keep the shapes earlier versions had. A failure is
+// model of each step, and keep the shapes earlier versions had. The
+// instructions text passed to withSealKeeper or routine gives the prompt
+// part. A failure is
 // swallowed so it never throws into the agent. sealKeeperContext gives the
 // session nudge for the agent's instructions. Mastra is typed by shape only, so
 // this file imports nothing from Mastra. Types are in types/mastra.d.ts, which
@@ -69,8 +71,8 @@ export type SealKeeperSession = {
 };
 
 // The fingerprint parts this process sees. Model ids from steps, the names and
-// schemas of every tool passed to withSealKeeper and the @mastra/core version.
-// Their hashes are written, and the model id also as the model name, in text,
+// schemas of every tool passed to withSealKeeper, the instructions text passed
+// to it or to routine and the @mastra/core version. Their hashes are written, and the model id also as the model name, in text,
 // see fingerprint-observer.ts.
 const observer = createObserver('mastra');
 let frameworkLooked = false;
@@ -104,13 +106,42 @@ function observeTools(tools: readonly MastraToolLike[]): void {
   }
 }
 
+// What withSealKeeper and routine take for the prompt part. instructions is
+// the agent's instructions as text, the string given to the Agent, or the
+// fixed text an instructions function builds on. The adapter never reads the
+// agent's own instructions, since Mastra may hold a function there, and never
+// calls one, so the part is not declared until text is passed here. Once
+// written the hash is kept, as the tools are, until a later process passes
+// other text or the source ages out. Only a hash of the text is kept.
+export type InstructionsOption = {
+  instructions?: string | undefined;
+};
+
+// The prompt part from the text given, written only for a new text. A value
+// that is not text, a function among them, is ignored and never called.
+// Never throws into the agent.
+function observeInstructions(
+  options: InstructionsOption | undefined,
+): Promise<void> {
+  try {
+    const text = options?.instructions;
+    if (typeof text === 'string' && text.trim() !== '') {
+      return observer.prompt(text);
+    }
+  } catch {
+    // Left as the last observation.
+  }
+  return Promise.resolve();
+}
+
 // Hashes the names and schemas of the tools in a record or an array for the
 // fingerprint and returns the tools themselves, unchanged. Their calls are not
-// recorded.
+// recorded. options.instructions gives the prompt part.
 export function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T): T {
+>(tools: T, options?: InstructionsOption): T {
   observeTools(Array.isArray(tools) ? tools : Object.values(tools));
+  void observeInstructions(options);
   return tools;
 }
 
@@ -221,10 +252,15 @@ export async function assertTrusted(
 // tools. Resolves with what the run did, a failed run included, and rejects
 // only when no agent is set up here or routine.json does not read. It never
 // prints. options.signal stops the run at its next safe point, and it then
-// resolves with outcome aborted.
+// resolves with outcome aborted. options.instructions gives the prompt part, as
+// withSealKeeper takes it, written before the run computes the fingerprint at
+// its start. The routine's own questions are never part of it.
 export function routine(
   agent: MastraAgentLike,
   options?: RoutineOptions,
 ): Promise<RoutineRunResult> {
-  return quietly(() => mastraRoutine(agent, options));
+  return quietly(async () => {
+    await observeInstructions(options);
+    return mastraRoutine(agent, options);
+  });
 }

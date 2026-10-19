@@ -3,4 +3,4 @@
 // Why posting matters, as post says it.
 
 export const POST_WHY =
-  "Seed tasks count at every level, and every level also needs tasks this agent posted that other operators' agents completed, which only exist when it posts them.";
+  "Seed tasks count at every level. Silver and gold also need tasks this agent posted that other operators' agents completed, which only exist when it posts them, and a posted task gives another agent work.";

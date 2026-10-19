@@ -14,6 +14,7 @@ import {
   CLI_VERSION_HEADER,
   type VerifiedCredentialPayload as CredentialPayload,
   generateKeypair,
+  HANDSHAKE_ROUTINE_RECORD_NOTE,
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
   partHash,
@@ -27,6 +28,7 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_API_URL, paths, writeConfig } from '../config.js';
 import { recordCapture } from '../fingerprint.js';
+import { makeHandshake } from '../handshake.js';
 import { createKey, loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import type { WellKnown } from '../responses.js';
@@ -367,6 +369,44 @@ describe('sealkeeper seal', () => {
       expect(out).toBe('');
       expect(err).toBe(
         'no SEAL, withheld while the agent is dormant, 95 days, one returns on the next scoring run after activity\n',
+      );
+    });
+
+    it("seal show says a suspended agent's SEAL is withheld since when and what lifts it", async () => {
+      const suspended = await run(
+        withheldFetch({
+          error: { code: 'withheld', message: 'suspended' },
+          reason: 'failed_checks',
+          since: '2026-10-12T09:00:00.000Z',
+        }),
+        'seal',
+        'show',
+      );
+      expect(suspended.code).toBe(1);
+      expect(suspended.out).toBe('');
+      expect(suspended.err).toBe(
+        'no SEAL, withheld while the agent is suspended since 2026-10-12 09:00 UTC after its task checks failed, a passing recheck lifts it\n',
+      );
+      const stale = await run(
+        withheldFetch({
+          error: { code: 'withheld', message: 'no recent check' },
+          reason: 'no_recent_check',
+        }),
+        'seal',
+        'show',
+      );
+      expect(stale.code).toBe(1);
+      expect(stale.err).toBe(
+        'no SEAL, withheld until the agent passes a task check again\n',
+      );
+      const checking = await run(
+        withheldFetch({ error: { code: 'checking', message: 'checking' } }),
+        'seal',
+        'show',
+      );
+      expect(checking.code).toBe(1);
+      expect(checking.err).toBe(
+        'no SEAL, withheld while the agent is checked\n',
       );
     });
 
@@ -765,7 +805,7 @@ describe('sealkeeper seal', () => {
       expect(verified.out).toContain('owner verified by email on 2026-10-12');
     });
 
-    it.each([6, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    it.each([7, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
@@ -1776,7 +1816,20 @@ describe('sealkeeper seal', () => {
     // The fingerprint hash the agent answer holds for the agent, null for
     // none.
     let recordHash: string | null;
+    // The routine fingerprint hash the agent answer holds, null for none and
+    // undefined for an answer without the field.
+    let routineHash: string | null | undefined;
     let withRecord: typeof fetch;
+    const answerOf = (hash: string) => ({
+      hash,
+      at: new Date(NOW - 60_000).toISOString(),
+      parts: {
+        model_set: 'declared',
+        prompt: 'not_declared',
+        tools: 'declared',
+        framework: 'declared',
+      },
+    });
 
     const capture = async (tools: string) => {
       const fp = await recordCapture(
@@ -1848,23 +1901,18 @@ describe('sealkeeper seal', () => {
         registeredAt: new Date(NOW).toISOString(),
       });
       recordHash = null;
+      routineHash = undefined;
       withRecord = (async (input: string | URL | Request) => {
         if (String(input) === AGENT()) {
           requests.push(String(input));
           return Response.json({
-            fingerprint:
-              recordHash === null
-                ? null
-                : {
-                    hash: recordHash,
-                    at: new Date(NOW - 60_000).toISOString(),
-                    parts: {
-                      model_set: 'declared',
-                      prompt: 'not_declared',
-                      tools: 'declared',
-                      framework: 'declared',
-                    },
-                  },
+            fingerprint: recordHash === null ? null : answerOf(recordHash),
+            ...(routineHash === undefined
+              ? {}
+              : {
+                  routineFingerprint:
+                    routineHash === null ? null : answerOf(routineHash),
+                }),
           });
         }
         return fetchFn(input);
@@ -1888,6 +1936,7 @@ describe('sealkeeper seal', () => {
           sub: agentId,
           fingerprint: fp.hash,
           at: fp.captured_at,
+          setup: 'session',
           iat: NOW_SEC,
         },
       });
@@ -1934,7 +1983,7 @@ describe('sealkeeper seal', () => {
       expect(code).toBe(4);
       expect(lastLines(out, 4)).toEqual([
         'Expires in 24 hours 0 minutes',
-        'handshake Matches',
+        'handshake Matches, session setup',
         NOTE,
         NO_NONCE,
       ]);
@@ -1953,7 +2002,11 @@ describe('sealkeeper seal', () => {
         await handshake(),
       );
       expect(code).toBe(3);
-      expect(lastLines(out, 3)).toEqual(['handshake Changed', NOTE, NO_NONCE]);
+      expect(lastLines(out, 3)).toEqual([
+        'handshake Changed, session setup',
+        NOTE,
+        NO_NONCE,
+      ]);
     });
 
     it('compares a version 3 SEAL with its own fingerprint, without the API', async () => {
@@ -1971,7 +2024,7 @@ describe('sealkeeper seal', () => {
       const matched = await verifyWith(fp.hash);
       expect(matched.code).toBe(4);
       expect(lastLines(matched.out, 2)).toEqual([
-        'handshake Matches',
+        'handshake Matches, session setup',
         NO_NONCE,
       ]);
       const changed = await verifyWith(
@@ -1979,16 +2032,173 @@ describe('sealkeeper seal', () => {
       );
       expect(changed.code).toBe(3);
       expect(lastLines(changed.out, 2)).toEqual([
-        'handshake Changed',
+        'handshake Changed, session setup',
         NO_NONCE,
       ]);
       const none = await verifyWith(null);
       expect(none.code).toBe(3);
       expect(lastLines(none.out, 2)).toEqual([
-        'handshake valid, no fingerprint on record to compare with',
+        'handshake valid, session setup, no fingerprint on record to compare with',
         NO_NONCE,
       ]);
       expect(requests).not.toContain(AGENT());
+    });
+
+    // A routine handshake is compared with the routine's fingerprint only,
+    // from the record while the SEAL carries none of the routine's, and a
+    // session handshake never with the routine's.
+    describe('the routine setup', () => {
+      const ROUTINE_NOTE = HANDSHAKE_ROUTINE_RECORD_NOTE;
+      const captureRoutine = async (tools: string) => {
+        const fp = await recordCapture(
+          paths(),
+          {
+            model_set: await partHash(agentId, 'claude-opus-5'),
+            prompt: 'not_declared',
+            tools: await partHash(agentId, tools),
+            framework: await partHash(agentId, 'claude-code@2.1.300'),
+          },
+          NOW_SEC - 30,
+          'claude-code-routine',
+        );
+        if (fp === null) throw new Error('nothing recorded');
+        return fp;
+      };
+      const routineHandshake = async () => {
+        const jws = await makeHandshake(
+          NOW,
+          { routine: 'claude-code-routine' },
+          paths(),
+        );
+        if (jws === null) throw new Error('no routine handshake');
+        return jws;
+      };
+
+      it('signs the routine fingerprint with the routine setup', async () => {
+        const fp = await captureRoutine('');
+        expect(
+          await verifyHandshake(await routineHandshake(), agentId, NOW_SEC),
+        ).toEqual({
+          ok: true,
+          payload: {
+            sub: agentId,
+            fingerprint: fp.hash,
+            at: fp.captured_at,
+            setup: 'routine',
+            iat: NOW_SEC,
+          },
+        });
+      });
+
+      it("reads the record's routine fingerprint beside a version 3 SEAL, and the session handshake still Matches", async () => {
+        const session = await capture('mcp:github');
+        const routine = await captureRoutine('');
+        routineHash = routine.hash;
+        const seal = await sign(v3(session.hash), serverKey.privateKey, KID);
+        const verified = await run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--handshake',
+          await routineHandshake(),
+          '--json',
+        );
+        expect(verified.code).toBe(4);
+        expect(JSON.parse(verified.out).handshake).toEqual({
+          valid: true,
+          result: 'matches',
+          against: 'record',
+          proof: 'none',
+          setup: 'routine',
+        });
+        expect(requests).toContain(AGENT());
+
+        const lines = await run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--handshake',
+          await routineHandshake(),
+        );
+        expect(lastLines(lines.out, 3)).toEqual([
+          'handshake Matches, routine setup',
+          ROUTINE_NOTE,
+          NO_NONCE,
+        ]);
+
+        // The routine moved on the record. The session handshake is
+        // compared with the session fingerprint alone.
+        routineHash = 'BHAfx6dALmCdt3aXz-g6iAjLLGDurK95DZm15ZjIVZg';
+        const sessionCheck = await run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--handshake',
+          await handshake(),
+        );
+        expect(sessionCheck.code).toBe(4);
+        expect(lastLines(sessionCheck.out, 2)).toEqual([
+          'handshake Matches, session setup',
+          NO_NONCE,
+        ]);
+        const routineCheck = await run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--handshake',
+          await routineHandshake(),
+        );
+        expect(routineCheck.code).toBe(3);
+        expect(lastLines(routineCheck.out, 3)[0]).toBe(
+          'handshake Changed, routine setup',
+        );
+      });
+
+      it('reads an answer without routineFingerprint as no routine fingerprint', async () => {
+        const session = await capture('mcp:github');
+        await captureRoutine('');
+        recordHash = session.hash;
+        const { code, out } = await run(
+          withRecord,
+          'seal',
+          'verify',
+          await sign(v3(session.hash), serverKey.privateKey, KID),
+          '--handshake',
+          await routineHandshake(),
+        );
+        expect(code).toBe(3);
+        expect(lastLines(out, 3)).toEqual([
+          'handshake valid, routine setup, no fingerprint on record to compare with',
+          ROUTINE_NOTE,
+          NO_NONCE,
+        ]);
+      });
+
+      it('says the SEAL carries no routine fingerprint until version 6 when --offline fetches no record', async () => {
+        const session = await capture('mcp:github');
+        await captureRoutine('');
+        const seal = await sign(v3(session.hash), serverKey.privateKey, KID);
+        expect((await run(withRecord, 'seal', 'verify', seal)).code).toBe(0);
+        requests = [];
+        const { code, err } = await run(
+          withRecord,
+          'seal',
+          'verify',
+          seal,
+          '--offline',
+          '--handshake',
+          await routineHandshake(),
+        );
+        expect(code).toBe(2);
+        expect(err).toContain(
+          'the SEAL carries no routine fingerprint until version 6, and --keys and --offline fetch no record to compare with',
+        );
+        expect(requests).toEqual([]);
+      });
     });
 
     it('refuses a handshake signed by another key', async () => {
@@ -2037,6 +2247,7 @@ describe('sealkeeper seal', () => {
         result: 'matches',
         against: 'record',
         proof: 'nonce',
+        setup: 'session',
       });
       const wrong = await verifyWith('check-2');
       expect(wrong.code).toBe(1);
@@ -2093,6 +2304,7 @@ describe('sealkeeper seal', () => {
           result: 'matches',
           against: 'record',
           proof: 'nonce',
+          setup: 'session',
         },
       });
       // Signed at --at, so stale by the real clock.
@@ -2131,7 +2343,7 @@ describe('sealkeeper seal', () => {
       const card = await verifyWith(await signedAgo(6 * HOUR));
       expect(card.code).toBe(4);
       expect(lastLines(card.out, 3)).toEqual([
-        'handshake Matches',
+        'handshake Matches, session setup',
         NOTE,
         NO_NONCE,
       ]);
@@ -2236,7 +2448,7 @@ describe('sealkeeper seal', () => {
       const loose = await verifyAs(forM);
       expect(loose.code).toBe(0);
       expect(lastLines(loose.out, 3)).toEqual([
-        'handshake Matches',
+        'handshake Matches, session setup',
         NOTE,
         NONCE_ONLY,
       ]);
@@ -2303,7 +2515,11 @@ describe('sealkeeper seal', () => {
         hs,
       );
       expect(code).toBe(4);
-      expect(lastLines(out, 3)).toEqual(['handshake Matches', NOTE, NO_NONCE]);
+      expect(lastLines(out, 3)).toEqual([
+        'handshake Matches, session setup',
+        NOTE,
+        NO_NONCE,
+      ]);
       expect(requests).toEqual([WELL_KNOWN_URL, productionAgent]);
       expect(recordApiUrl(DEFAULT_API_URL, 'sealkeeper.run')).toBe(
         DEFAULT_API_URL,

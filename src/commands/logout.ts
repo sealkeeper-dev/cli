@@ -1,8 +1,8 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import type { Command } from 'commander';
-import { LEGACY_FILES, type Paths, paths, readConfig } from '../config.js';
+import { type Paths, paths, readConfig } from '../config.js';
 import { exists } from '../files.js';
 import { deleteKey as removeKey } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -184,7 +184,6 @@ async function removeSession(
   const targets = [
     p.credential,
     p.status,
-    ...LEGACY_FILES.map((file) => join(p.home, file)),
     p.goal,
     p.operatorSlug,
     ...(deleteKey
@@ -193,7 +192,9 @@ async function removeSession(
           p.cursorOffset,
           p.log,
           p.fingerprint,
+          p.fingerprintRoutine,
           p.fingerprintSources,
+          p.promptSecret,
           p.handed,
         ]
       : []),

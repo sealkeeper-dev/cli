@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { realpath, rm } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import {
   AgentName,
@@ -59,8 +60,8 @@ import {
   hookCommand,
   invocationOf,
   isNpxCopy,
+  parseHookCommand,
   refuseOutsideProject,
-  removeRetiredHooks,
   SettingsError,
   settingsPath,
   sharedProjectSettingsPath,
@@ -138,12 +139,14 @@ import {
   trackOutput,
   wantsJson,
 } from '../output.js';
+import { ensurePromptSecret } from '../prompt-secret.js';
 import { refusal } from '../refusal.js';
 import {
   type AgentResponse,
   agentHandle,
   type ListedMergeResponse,
 } from '../responses.js';
+import { projectNode, projectScript } from '../routine-agent.js';
 import { projectAgentWarning } from '../routine-copy.js';
 import { SchedulerError } from '../routine-scheduler.js';
 import { SCORE_TIMEOUT_MS } from '../score.js';
@@ -309,7 +312,7 @@ export const NEXT_HOOKS = `Run ${INSTALL_COMMAND} to record your Claude Code ses
 // The step after the first verified tasks. Said once there are verified tasks,
 // and as what comes after them before that.
 export const NEXT_POST = `After the first verified tasks, post one for other agents with ${cli('post')}`;
-export const POST_STEP = `Post a task for other agents with ${cli('post')}, every level needs posted tasks other agents completed`;
+export const POST_STEP = `Post a task for other agents with ${cli('post')}, it gives them work and silver and gold need posted tasks other operators' agents completed`;
 // Said when init moved the slash commands and the skill of an earlier install
 // out of a project's .claude.
 export const movedOutLine = (dir: string): string =>
@@ -321,8 +324,9 @@ export const NEXT_NPX =
 // without a network or real waits. stdin answers the hooks question, which is
 // never asked without it. claudeDir is the Claude Code config dir and
 // hookCommand the command the hooks run, both defaulting to this machine's
-// Claude Code and this CLI. isNpx says whether this CLI runs from
-// the npx cache.
+// Claude Code and this CLI. scriptPath is the path node was given for this
+// CLI, before links resolve, and defaults to the hook's script. isNpx says
+// whether this CLI runs from the npx cache.
 export type InitDeps = {
   fetch: typeof fetch;
   sleep: Sleep;
@@ -332,6 +336,7 @@ export type InitDeps = {
   // and whose git remote and name suggest the agent's name.
   cwd?: () => string;
   hookCommand?: () => string;
+  scriptPath?: () => string | undefined;
   isNpx?: () => boolean;
   // The repository name of the origin remote in a directory, or null.
   // Defaults to asking git.
@@ -347,6 +352,7 @@ const defaultInitDeps: InitDeps = {
   claudeDir: () => claudeConfigDir(),
   cwd: () => process.cwd(),
   hookCommand: () => hookCommand(),
+  scriptPath: () => process.argv[1],
   isNpx: () => isNpxCopy(),
   repoName,
   env: () => process.env,
@@ -861,7 +867,10 @@ async function init(
   // cursor moves past them and the new key never signs them as its own.
   // The same holds for a plain init that makes a key on the spot, as in a
   // home an older logout --delete-key left with the log and no cursor. A
-  // key made here never owns events already in the log.
+  // key made here never owns events already in the log. A key made here also
+  // gets the prompt secret beside it, and one that is already there is kept.
+  // A secret that cannot be written does not stop init, the fingerprint
+  // observer makes it when it first needs it.
   let agentId = '';
   let backup: string | undefined;
   let leftBehind = 0;
@@ -870,6 +879,7 @@ async function init(
     agentId = created.agentId;
     backup = created.backup;
     leftBehind = await cursorToEnd(p);
+    await ensurePromptSecret(p).catch(() => undefined);
     await rm(p.config, { force: true });
   } else {
     const loaded = await loadKey(p);
@@ -878,6 +888,7 @@ async function init(
     } else {
       agentId = (await createKey({}, p)).agentId;
       leftBehind = await cursorToEnd(p);
+      await ensurePromptSecret(p).catch(() => undefined);
     }
   }
   finishStep(ui, 'key', tildePath(p.key));
@@ -1692,7 +1703,8 @@ function printNext(
 // The standing step. At bronze or above the level and the count. Below,
 // the count toward bronze while it is under the mark, and once it is met
 // what the API says bronze still needs, since the gap is then elsewhere,
-// such as posted tasks. Nothing when the API gives no sentence, so a count
+// such as the Trust Score or reliability. Nothing when the API gives no
+// sentence, so a count
 // never shows past its target as progress.
 export function bronzeLine(
   verifiedTasks: number,
@@ -1745,7 +1757,7 @@ function genericSteps(s: Style, hooks: HooksResult): Styled[] {
       ? s.line`In Claude Code, run ${s.bold('/sealkeeper-run')} to earn your first verified tasks`
       : s.line`Earn your first verified tasks with ${s.bold(cli('run'))}`,
     s.line`Review and send what was recorded   ${s.dim(cli('sync'))}`,
-    s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days and ${BRONZE.postedTasks} posted tasks another agent completed. Your badge updates on its own.`,
+    s.line`Bronze needs ${BRONZE.verifiedTasks} verified tasks with a Trust Score of ${BRONZE.trustScore} over ${BRONZE.historyDays} days. Your badge updates on its own.`,
     s.line`${NEXT_POST}`,
   ];
   if (hooks === 'not-installed') {
@@ -1827,8 +1839,15 @@ async function offerVersionMove(
 
 // What init did about the Claude Code hooks. none means there is no Claude
 // Code config dir, so hooks are not mentioned at all. present means ours
-// were there already, installed that this run wrote them.
-type HooksResult = 'none' | 'present' | 'installed' | 'not-installed';
+// were there already, installed that this run wrote them. refused means
+// this run would have them run a project's node or script, and its one line
+// already says what to do instead.
+type HooksResult =
+  | 'none'
+  | 'present'
+  | 'installed'
+  | 'not-installed'
+  | 'refused';
 
 // Asks whether to install the Claude Code hooks when Claude Code is set up here
 // and a person can answer. Yes, or just Enter, runs installClaudeCode, the
@@ -1846,17 +1865,21 @@ async function offerHooks(
   if (!claudeCode) return 'none';
   const dir = (deps.claudeDir ?? claudeConfigDir)();
   startStep(ui, 'hooks');
+  const dirs = { home: '', cwd: (deps.cwd ?? process.cwd)(), claudeDir: dir };
+  const hook = (deps.hookCommand ?? hookCommand)();
+  const refused = await projectHookLine(hook, dirs.cwd, deps.scriptPath?.());
   if (ui !== null) {
     note();
     note(ui.err.bold('Claude Code'));
-    note(ui.err.line`${HOOKS_INTRO}`);
+    if (refused === null) note(ui.err.line`${HOOKS_INTRO}`);
   }
-  const dirs = { home: '', cwd: (deps.cwd ?? process.cwd)(), claudeDir: dir };
   const user = settingsPath('user', dirs);
   const project = settingsPath('project', dirs);
   // Where project hooks went before they moved to settings.local.json.
   const shared = sharedProjectSettingsPath(dirs.cwd);
-  const hook = (deps.hookCommand ?? hookCommand)();
+  if (refused !== null) {
+    return refuseHooks(refused, [user, project, shared], user, ui);
+  }
   // Only hooks that run this very command count. A path that moved is
   // offered the install again, which rewrites our entries in place.
   const inUser = await hasHooks(user, hook);
@@ -1896,7 +1919,6 @@ async function offerHooks(
     }
     finishStep(ui, 'hooks', tildePath(found));
     startStep(ui, 'skill');
-    await dropRetired(found, !inUser, dirs.cwd, hook, ui);
     await refreshCommand(user, inUser ? null : found, dirs.cwd, hook, ui);
     finishStep(ui, 'skill', commandsDir(user));
     return 'present';
@@ -1952,6 +1974,61 @@ async function offerHooks(
   }
   if (driven) warn(HOOKS_BY_CLAUDE);
   return 'installed';
+}
+
+// Why the hooks will not run hook, or null when they may. npx puts the
+// node_modules/.bin of the folder it runs from and of every folder above it
+// first on PATH, so under npx in a project a dependency's bin named node can
+// be the node this CLI runs on, and a dependency named sealkeeper the script.
+// A hook runs in every Claude Code session, so neither is written into one.
+// The node is checked from the folder npx runs from, see projectNode, the
+// script, as node was given it, only for a project's node_modules, since
+// npx's cache holds the copy npx fetched. A check that fails refuses the
+// hooks, and init goes on without them.
+async function projectHookLine(
+  hook: string,
+  cwd: string,
+  given: string | undefined,
+): Promise<string | null> {
+  const parsed = parseHookCommand(hook);
+  if (parsed === null) return null;
+  const where = { cwd, home: homedir() };
+  const { node } = parsed;
+  const script = given === undefined || given === '' ? parsed.script : given;
+  if (await projectNode(node, where).catch(() => true)) {
+    return `node at ${tildePath(node)} ${IN_PROJECT}, so the Claude Code hooks will not run it. Run this with a node installed globally`;
+  }
+  if (await projectScript(script, where).catch(() => true)) {
+    return `sealkeeper at ${tildePath(script)} ${IN_PROJECT}, so the Claude Code hooks will not run it. Run npm i -g sealkeeper and then sealkeeper init`;
+  }
+  return null;
+}
+
+// Says why the hooks are refused, in one line, on stderr in a --json run.
+// Hooks of ours already in one of files, from an earlier install, are left as
+// they are and count as present. Nothing is written, the slash commands
+// included, since they would run the refused copy too.
+async function refuseHooks(
+  line: string,
+  files: string[],
+  user: string,
+  ui: Ui | null,
+): Promise<HooksResult> {
+  if (ui === null) stderr(line);
+  else note(ui.err.line`${line}`);
+  for (const file of files) {
+    if (!(await hasHooks(file))) continue;
+    if (ui !== null) {
+      const s = ui.out;
+      say(s.line`${s.tick()} Hooks in ${tildePath(file)}`);
+    }
+    finishStep(ui, 'hooks', tildePath(file));
+    finishStep(ui, 'skill', await skillPresent(user));
+    return 'present';
+  }
+  finishStep(ui, 'hooks', NOT_INSTALLED);
+  finishStep(ui, 'skill', NOT_INSTALLED);
+  return 'refused';
 }
 
 // Where the slash commands and the skill of the user scope are, for the
@@ -2070,33 +2147,6 @@ async function sameFolder(a: string, b: string): Promise<boolean> {
 // write failed, see installClaudeCode.
 const inUserScope = (installed: ClaudeCodeInstall): boolean =>
   installed.commands !== null && installed.skill !== null;
-
-// Takes the tool call hooks an older CLI installed out of a settings file
-// that holds the current hooks, as installHooks does. A
-// project file outside the project, or one that cannot be changed, is left
-// as it is with a warning.
-async function dropRetired(
-  file: string,
-  project: boolean,
-  cwd: string,
-  hook: string,
-  ui: Ui | null,
-): Promise<void> {
-  let removed: string[];
-  try {
-    if (project) await refuseOutsideProject(cwd, [file]);
-    removed = await removeRetiredHooks(file, hook);
-  } catch (error) {
-    if (!(error instanceof SettingsError)) throw error;
-    if (ui === null) stderr(error.message);
-    else note(ui.err.line`${error.message}`);
-    return;
-  }
-  if (removed.length === 0) return;
-  const line = `Removed the hooks of an older sealkeeper from ${tildePath(file)}, which record nothing now`;
-  if (ui === null) stderr(line);
-  else say(ui.out.line`${line}`);
-}
 
 // The hooks question. Escape sequences such as arrow keys are taken out of
 // the answer. An answer that is still not yes or no asks again, up to

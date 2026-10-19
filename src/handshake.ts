@@ -1,7 +1,9 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
   checkHandshake,
+  type FingerprintSetup,
   HANDSHAKE_RECORD_NOTE,
+  HANDSHAKE_ROUTINE_RECORD_NOTE,
   type HandshakeCheck,
   type HandshakeProof,
   type HandshakeRefusal,
@@ -11,6 +13,7 @@ import {
 import { ApiError, createApiClient } from './api.js';
 import { type Paths, paths } from './config.js';
 import { declaredFingerprint } from './declared-fingerprint.js';
+import type { RoutineSource } from './fingerprint.js';
 import { loadKey } from './identity.js';
 import { LiveAgent } from './live-agent.js';
 
@@ -18,23 +21,26 @@ import { LiveAgent } from './live-agent.js';
 // so whoever holds its SEAL can check the presenter holds the key the SEAL
 // names and whether it still runs what the SEAL records. The signing and the
 // checks are the schema's, signHandshake and checkHandshake. This file finds
-// the key and the fingerprint, and reads the issuer's record for a SEAL before
-// version 3.
+// the key and the fingerprint, and reads the issuer's record when the SEAL
+// carries no fingerprint of the handshake's setup, a SEAL before version 3, or
+// a routine handshake beside a SEAL before version 6.
 
 // How long the record lookup may take.
 const RECORD_TIMEOUT_MS = 10_000;
 
-// A signed handshake over the fingerprint sync or run last wrote to
-// fingerprint.json, or null when there is none or its hash is not the hash
-// of its parts. nonce is the one a verifier gave, aud the verifier's name.
-// Never recomputes the fingerprint. Throws KeyError when the key file is
-// not a key, and returns null when there is no key file.
+// A signed handshake over the fingerprint the agent declares, the one sync or
+// run last wrote to fingerprint.json, or to fingerprint-routine.json when
+// routine names a routine run's source. It names that setup, session or
+// routine, as the fingerprint does. null when there is none or its hash
+// is not the hash of its parts. nonce is the one a verifier gave, aud the
+// verifier's name. Never recomputes the fingerprint. Throws KeyError when the
+// key file is not a key, and returns null when there is no key file.
 export async function makeHandshake(
   nowMs: number,
-  options: { nonce?: string; aud?: string } = {},
+  options: { nonce?: string; aud?: string; routine?: RoutineSource } = {},
   p: Paths = paths(),
 ): Promise<string | null> {
-  const { fingerprint } = await declaredFingerprint(p);
+  const { fingerprint } = await declaredFingerprint(p, options.routine);
   if (fingerprint === undefined) return null;
   const key = await loadKey(p);
   if (key === null) return null;
@@ -49,13 +55,14 @@ export async function makeHandshake(
 }
 
 // makeHandshake that never throws, for the card, which must not fail
-// over a handshake. null when there is none.
+// over a handshake. null when there is none. routine as for makeHandshake.
 export async function makeHandshakeQuietly(
   nowMs: number,
   p: Paths = paths(),
+  routine?: RoutineSource,
 ): Promise<string | null> {
   try {
-    return await makeHandshake(nowMs, {}, p);
+    return await makeHandshake(nowMs, { routine }, p);
   } catch {
     return null;
   }
@@ -66,11 +73,15 @@ export class RecordError extends Error {
   override name = 'RecordError';
 }
 
-// Reads the agent's current fingerprint hash from the agent answer at
-// apiUrl, null when the API holds none or has no such agent. Throws
+// Reads the agent's current fingerprint hash of a setup from the agent answer
+// at apiUrl, fingerprint for the session and routineFingerprint for the
+// routine, null when the API holds none or has no such agent. Throws
 // RecordError when the API cannot be reached or answers anything else.
 export function recordFromApi(apiUrl: string, fetchFn: typeof fetch) {
-  return async (sub: string): Promise<string | null> => {
+  return async (
+    sub: string,
+    setup: FingerprintSetup,
+  ): Promise<string | null> => {
     const api = createApiClient({
       apiUrl,
       fetch: fetchFn,
@@ -81,7 +92,9 @@ export function recordFromApi(apiUrl: string, fetchFn: typeof fetch) {
         `/v1/agents/${encodeURIComponent(sub)}`,
         LiveAgent,
       );
-      return live.fingerprint?.hash ?? null;
+      const record =
+        setup === 'routine' ? live.routineFingerprint : live.fingerprint;
+      return record?.hash ?? null;
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) return null;
       throw new RecordError(
@@ -113,7 +126,13 @@ const PROOF_WORDS: Record<HandshakeProof, string> = {
 export type HandshakeLine = {
   // The answer for --json, as the API's handshake field has it.
   json:
-    | { valid: true; result: string; against: string; proof: HandshakeProof }
+    | {
+        valid: true;
+        result: string;
+        against: string;
+        proof: HandshakeProof;
+        setup: FingerprintSetup;
+      }
     | { valid: false; reason: HandshakeRefusal };
   // What seal verify prints, one or two lines.
   lines: string[];
@@ -126,7 +145,7 @@ export async function checkHandshakeLine(options: {
   nowMs: number;
   nonce?: string;
   aud?: string;
-  record: (sub: string) => Promise<string | null>;
+  record: (sub: string, setup: FingerprintSetup) => Promise<string | null>;
 }): Promise<{ check: HandshakeCheck; out: HandshakeLine }> {
   const check = await checkHandshake({
     handshake: options.handshake,
@@ -145,15 +164,21 @@ export async function checkHandshakeLine(options: {
       },
     };
   }
+  // The setup the handshake signed for, beside the result, so a verifier
+  // sees which fingerprint it was compared with.
   const lines = [
     check.result === 'matches'
-      ? 'handshake Matches'
+      ? `handshake Matches, ${check.setup} setup`
       : check.result === 'changed'
-        ? 'handshake Changed'
-        : 'handshake valid, no fingerprint on record to compare with',
+        ? `handshake Changed, ${check.setup} setup`
+        : `handshake valid, ${check.setup} setup, no fingerprint on record to compare with`,
   ];
   if (check.against === 'record') {
-    lines.push(HANDSHAKE_RECORD_NOTE);
+    lines.push(
+      check.setup === 'routine'
+        ? HANDSHAKE_ROUTINE_RECORD_NOTE
+        : HANDSHAKE_RECORD_NOTE,
+    );
   }
   lines.push(PROOF_WORDS[check.proof]);
   return {
@@ -164,6 +189,7 @@ export async function checkHandshakeLine(options: {
         result: check.result,
         against: check.against,
         proof: check.proof,
+        setup: check.setup,
       },
       lines,
     },

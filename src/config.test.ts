@@ -76,7 +76,6 @@ describe('config', () => {
       cursorOffset: '/h/cursor-offset.json',
       credential: '/h/credential.json',
       status: '/h/status.json',
-      sessions: '/h/sessions',
     });
     expect(p.logFile('2026-09-23')).toBe('/h/log/2026-09-23.jsonl');
   });

@@ -685,9 +685,15 @@ export async function projectProgram(
   }
   if (real.split(/[\\/]+/).includes('_npx')) return true;
   if (projects.some((project) => inside(real, project))) return true;
+  return inSetupModules(real, where);
+}
+
+// Whether path is inside the node_modules of the setup's folder or of a
+// folder above it, where npx looks for a program before the global ones.
+function inSetupModules(path: string, where: ProjectWhere): boolean {
   if (where.cwd === null) return false;
   const cwds = bothForms(where.cwd);
-  for (let dir = dirname(real); dirname(dir) !== dir; dir = dirname(dir)) {
+  for (let dir = dirname(path); dirname(dir) !== dir; dir = dirname(dir)) {
     if (
       basename(dir) === 'node_modules' &&
       cwds.some((cwd) => inside(cwd, dirname(dir)))
@@ -696,4 +702,65 @@ export async function projectProgram(
     }
   }
   return false;
+}
+
+// The folder npx runs from for a setup in where.cwd, the nearest folder at
+// or above it that holds a package.json, a .git or a node_modules, or null
+// when there is none. npx puts the node_modules/.bin of that folder and of
+// every folder above it first on PATH. The home folder and the folders above
+// it hold every global install, see projectFolders, so they are never one.
+export function npxFolder(where: ProjectWhere): string | null {
+  if (where.cwd === null) return null;
+  const homes = bothForms(where.home);
+  for (let dir = where.cwd; ; dir = dirname(dir)) {
+    if (bothForms(dir).some((d) => homes.some((home) => inside(home, d)))) {
+      return null;
+    }
+    if (NPX_MARKS.some((mark) => existsSync(join(dir, mark)))) return dir;
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+const NPX_MARKS = [...PROJECT_MARKS, 'node_modules'];
+
+// Whether node, the binary a Claude Code hook runs, is a project's own. It is
+// checked as projectProgram checks a program, from the folder npx runs from,
+// see npxFolder, and it counts too when it resolves to a file anywhere inside
+// that folder, as a link in node_modules/.bin to a binary the project holds
+// does.
+export async function projectNode(
+  node: string,
+  where: ProjectWhere,
+): Promise<boolean> {
+  const folder = npxFolder(where);
+  if (folder === null) return projectProgram(node, where);
+  if (await projectProgram(node, { cwd: folder, home: where.home })) {
+    return true;
+  }
+  let real = node;
+  try {
+    real = await realpath(node);
+  } catch {
+    // Not there.
+  }
+  return bothForms(folder).some((dir) => inside(real, dir));
+}
+
+// Whether script, the file of this CLI that a Claude Code hook runs, is a
+// project's own copy, one npx found in the node_modules of the setup's
+// folder or of a folder above it. script is the path node was given, such as
+// a node_modules/.bin link, and it counts as written or as the file system
+// resolves it. A global install and npx's own cache are elsewhere and
+// allowed. A copy built in the setup's folder and run by its path is allowed
+// too, since only a person who runs that file starts it.
+export async function projectScript(
+  script: string,
+  where: ProjectWhere,
+): Promise<boolean> {
+  if (inSetupModules(script, where)) return true;
+  try {
+    return inSetupModules(await realpath(script), where);
+  } catch {
+    return false;
+  }
 }

@@ -4,8 +4,10 @@
 // its signed payload, as the model that solved the task.
 //
 // The name is the model_name the adapter read in the source that decides the
-// fingerprint (chosenSource in fingerprint.ts). A runtime with no adapter
-// declares none.
+// fingerprint (chosenSource in fingerprint.ts), the agent's own, or a routine
+// run's own source when options.routine names it. A runtime with no adapter
+// declares none. A routine run's sync names none, and a routine submit names
+// the model its runtime reported, else the one of the agent's own sessions.
 import { ModelName } from '@sealkeeper/schema';
 import { ApiError } from './api.js';
 import {

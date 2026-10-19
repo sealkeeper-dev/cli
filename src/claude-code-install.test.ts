@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ANSWERS_FALLBACK,
@@ -74,9 +74,6 @@ const VERBS = SLASH_COMMANDS.map((c) => c.verb);
 
 const OUR_ENTRY = { hooks: [{ type: 'command', command: HOOK_COMMAND }] };
 const EVENTS = ['SessionStart', 'SessionEnd'];
-// The tool call hooks an install before 0.4.14 wrote next to them.
-// The hooks an older CLI installed, which install takes out.
-const TOOL_EVENTS = ['Stop', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure'];
 
 // The Claude Code install init runs and the uninstall agent delete runs,
 // driven here as one run per call. install and uninstall take
@@ -239,46 +236,6 @@ describe('the Claude Code install and uninstall', () => {
     expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
   });
 
-  // The hooks write no event, so a repeat install takes
-  // the tool call hooks and Stop of an older install out, in whichever file
-  // it writes.
-  it.each([
-    ['user', [], userFile],
-    ['project', ['--scope', 'project'], projectFile],
-  ] as const)(
-    'a repeat %s install over six hooks leaves two and every foreign hook',
-    async (_scope, args, file) => {
-      await mkdir(dirname(file()), { recursive: true });
-      const older = JSON.parse(OTHER_TEXT) as {
-        hooks: Record<string, unknown[]>;
-      };
-      for (const event of [...EVENTS, ...TOOL_EVENTS]) {
-        older.hooks[event] = [...(older.hooks[event] ?? []), OUR_ENTRY];
-      }
-      await writeFile(file(), `${JSON.stringify(older, null, 2)}\n`);
-      const { code, out } = await run('install', ...args, '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out)).toMatchObject({
-        path: file(),
-        hooks: { added: [], updated: [], removed: TOOL_EVENTS },
-      });
-      const after = await readJson(file());
-      const hooks = after.hooks as Record<string, unknown[]>;
-      expect(Object.keys(hooks)).toEqual([
-        'PreToolUse',
-        'Notification',
-        ...EVENTS,
-      ]);
-      expect(hooks.PreToolUse).toEqual(OTHER.hooks.PreToolUse);
-      for (const event of EVENTS) expect(hooks[event]).toEqual([OUR_ENTRY]);
-
-      await writeFile(file(), `${JSON.stringify(older, null, 2)}\n`);
-      expect((await run('install', ...args)).out).toContain(
-        `removed sealkeeper hooks for ${TOOL_EVENTS.join(', ')} from ${file()}, which record nothing now\n`,
-      );
-    },
-  );
-
   it('install twice adds nothing the second time', async () => {
     await run('install');
     const first = await readFile(userFile(), 'utf8');
@@ -325,6 +282,7 @@ describe('the Claude Code install and uninstall', () => {
     expect(await readFile(userFile(), 'utf8')).toBe(OTHER_TEXT);
   });
 
+  // Ours goes from every event, Stop included, beside the two install writes.
   it('uninstall removes only ours and cleans up empty containers', async () => {
     await mkdir(join(home, '.claude'));
     const mixed = {
@@ -347,7 +305,7 @@ describe('the Claude Code install and uninstall', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       path: userFile(),
-      removed: EVENTS.length,
+      removed: EVENTS.length + 1,
       removedFromShared: 0,
       commands: VERBS.map((v) => commandIn(home, v)),
       skill: true,
@@ -572,32 +530,12 @@ describe('the Claude Code install and uninstall', () => {
       );
     });
 
-    // run replaced prove, so the /sealkeeper-prove an older
-    // install wrote goes, and one the operator wrote stays.
-    it('install removes the retired /sealkeeper-prove of ours, never one it did not write', async () => {
-      const retired = join(home, '.claude', 'commands', 'sealkeeper-prove.md');
-      await mkdir(dirname(retired), { recursive: true });
-      await writeFile(retired, `---\n${MANAGED_MARKER}\n---\nold text\n`);
-      expect((await run('install')).code).toBe(0);
-      await expect(stat(retired)).rejects.toThrow('ENOENT');
-      expect(await readFile(userCommand(), 'utf8')).toBe(RUN_COMMAND_TEXT);
-
-      await writeFile(retired, 'my own prove command\n');
-      expect((await run('install')).code).toBe(0);
-      expect(await readFile(retired, 'utf8')).toBe('my own prove command\n');
-      await run('uninstall');
-      expect(await readFile(retired, 'utf8')).toBe('my own prove command\n');
-    });
-
-    it('uninstall removes ours, the retired /sealkeeper-prove too', async () => {
-      const retired = join(home, '.claude', 'commands', 'sealkeeper-prove.md');
+    it('uninstall removes every slash command of ours', async () => {
       await run('install');
-      await writeFile(retired, `---\n${MANAGED_MARKER}\n---\nold text\n`);
       await run('uninstall');
       for (const verb of VERBS) {
         await expect(stat(commandIn(home, verb))).rejects.toThrow('ENOENT');
       }
-      await expect(stat(retired)).rejects.toThrow('ENOENT');
       expect((await run('uninstall')).out).toBe('');
     });
   });

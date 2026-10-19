@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import {
   base64urlDecode,
   decodeHeader,
@@ -42,7 +42,6 @@ import {
   NO_SIGNAL,
   NOTHING_WAITS,
   sealText,
-  TOOL_HOOKS_LEFT,
 } from './status.js';
 
 const API_URL = 'https://api.test';
@@ -195,6 +194,10 @@ class FakeApi {
   errors: string[] = [];
   // The runtime the agent route answers, and every PATCH sent to it.
   runtime = 'claude-code';
+  // The SEAL state the agent route answers, none unless a test sets one, or
+  // a status to refuse the agent route with.
+  sealState: Record<string, unknown> | undefined = undefined;
+  agentStatus = 200;
   agentReads = 0;
   patches: string[] = [];
   // Reads of the goal, which only the session nudge's cache asks for.
@@ -213,7 +216,9 @@ class FakeApi {
     if (url.pathname === `/v1/agents/${this.agentId}`) {
       if (method === 'PATCH') this.patches.push(String(init?.body));
       else this.agentReads += 1;
+      if (this.agentStatus !== 200) return error(this.agentStatus, 'internal');
       return Response.json({
+        ...(this.sealState === undefined ? {} : { sealState: this.sealState }),
         id: this.agentId,
         name: 'scout',
         version: '1.0.0',
@@ -815,11 +820,11 @@ describe('status', () => {
       expect(result.out).not.toContain('Waiting');
     });
 
-    it('says the API has no status route yet on a 404', async () => {
+    it('says the refusal of a 404 and shows the local part', async () => {
       api.answer = { status: 404, code: 'not_found' };
       const { out } = await run('status');
       expect(out).toContain(
-        'This SealKeeper API has no status route yet, so only what this machine knows is shown.\n',
+        'SealKeeper did not answer, failed with not_found, so only what this machine knows is shown.\n',
       );
       expect((await json()).source).toMatchObject({ from: 'none' });
     });
@@ -855,7 +860,76 @@ describe('status', () => {
     expect(await readOperatorSlug(agentId)).toBe('alice-2');
   });
 
+  describe('the SEAL state of the agent answer', () => {
+    const SUSPENDED_LINE =
+      'no SEAL, withheld while the agent is suspended since 2026-10-12 09:00 UTC after its task checks failed, a passing recheck lifts it';
+    const suspended = {
+      state: 'suspended',
+      level: 'bronze',
+      held: false,
+      reason: 'failed_checks',
+      since: '2026-10-12T09:00:00.000Z',
+      failedAt: ['2026-10-11T09:00:00.000Z', '2026-10-12T09:00:00.000Z'],
+      recheck: { requestedAt: null, failedAt: null, nextAt: null },
+    };
+
+    it('says the SEAL is withheld for a suspended agent and never issued', async () => {
+      api.sealState = suspended;
+      const result = await run('status');
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(
+        `Level bronze. Next silver. ${SUSPENDED_LINE}.\n`,
+      );
+      expect(result.out).not.toContain('SEAL issued');
+    });
+
+    it('says the SEAL is withheld with no recent task check', async () => {
+      api.sealState = {
+        state: 'checking',
+        level: null,
+        reason: 'no_recent_check',
+      };
+      const result = await run('status');
+      expect(result.out).toContain(
+        'no SEAL, withheld until the agent passes a task check again.\n',
+      );
+      expect(result.out).not.toContain('SEAL issued');
+    });
+
+    it("keeps the status answer's SEAL state when the agent answer has none or says active", async () => {
+      api.sealState = { state: 'active', level: 'bronze' };
+      expect((await run('status')).out).toContain('SEAL issued.');
+      api.sealState = suspended;
+      api.agentStatus = 500;
+      const failed = await run('status');
+      expect(failed.code).toBe(0);
+      expect(failed.out).toContain('SEAL issued.');
+    });
+
+    it('prints the SEAL words in --json', async () => {
+      api.sealState = suspended;
+      const answer = await json();
+      expect(answer.seal).toBe(SUSPENDED_LINE);
+      expect(answer.status.seal.state).toBe('issued');
+    });
+
+    it('reads the agent once per run', async () => {
+      api.runtime = 'unknown';
+      terminal = { isTTY: true, readLine: async () => null };
+      await run('status');
+      expect(api.agentReads).toBe(1);
+      await run('status', '--json');
+      expect(api.agentReads).toBe(2);
+    });
+  });
+
   it('names the SEAL states the API sends, and one it does not know as it came', () => {
+    expect(
+      sealText(
+        { state: 'issued', reason: null, dormantDays: null },
+        { kind: 'no_recent_check' },
+      ),
+    ).toBe('no SEAL, withheld until the agent passes a task check again');
     expect(sealText({ state: 'issued', reason: null, dormantDays: null })).toBe(
       'SEAL issued',
     );
@@ -1008,64 +1082,6 @@ describe('status', () => {
     });
   });
 
-  // An install before 0.4.14 also wrote PreToolUse,
-  // PostToolUse and PostToolUseFailure, and one before 0.5.0 Stop, which
-  // record nothing now.
-  describe('tool call hooks an older install left', () => {
-    async function writeHooks(file: string, events: string[]): Promise<void> {
-      const scriptDir = join(home, 'lib', 'node_modules', 'sealkeeper', 'dist');
-      await mkdir(scriptDir, { recursive: true });
-      const script = join(scriptDir, 'index.js');
-      await writeFile(script, '');
-      const ours = [
-        {
-          hooks: [
-            { type: 'command', command: hookCommand(process.execPath, script) },
-          ],
-        },
-      ];
-      await mkdir(dirname(file), { recursive: true });
-      await writeFile(
-        file,
-        JSON.stringify({
-          hooks: Object.fromEntries(events.map((event) => [event, ours])),
-        }),
-      );
-    }
-    const TWO = ['SessionStart', 'SessionEnd'];
-    const SIX = [
-      ...TWO,
-      'Stop',
-      'PreToolUse',
-      'PostToolUse',
-      'PostToolUseFailure',
-    ];
-
-    it('reads two hooks as complete and says nothing', async () => {
-      await writeHooks(join(home, 'claude', 'settings.json'), TWO);
-      expect((await run('status')).err).toBe('');
-    });
-
-    it('says in one line on stderr to run the install again', async () => {
-      await writeHooks(join(home, 'claude', 'settings.json'), SIX);
-      const { code, out, err } = await run('status', '--json');
-      expect(code).toBe(0);
-      expect(JSON.parse(out)).toMatchObject({ local: { pending: 0 } });
-      expect(TOOL_HOOKS_LEFT).toBe(
-        'The Claude Code settings still hold hooks of an older sealkeeper, which record nothing now. Run npx sealkeeper init again to remove them.',
-      );
-      expect(err).toBe(`${TOOL_HOOKS_LEFT}\n`);
-    });
-
-    it('finds them in the project settings too', async () => {
-      await writeHooks(
-        join(home, 'project', '.claude', 'settings.local.json'),
-        SIX,
-      );
-      expect((await run('status')).err).toBe(`${TOOL_HOOKS_LEFT}\n`);
-    });
-  });
-
   describe('hooks that point at a sealkeeper that is gone', () => {
     function settings(command: string): string {
       return JSON.stringify({
@@ -1121,6 +1137,23 @@ describe('status', () => {
       const { out, err } = await run('status', '--json');
       expect(JSON.parse(out)).toMatchObject({ local: { pending: 0 } });
       expect(err).toBe(`${HOOKS_MISSING}\n`);
+    });
+
+    it('says nothing about a hook of ours on an event init no longer writes', async () => {
+      const gone = hookCommand(
+        process.execPath,
+        '/no/such/sealkeeper/dist/index.js',
+      );
+      await mkdir(join(home, 'claude'), { recursive: true });
+      await writeFile(
+        join(home, 'claude', 'settings.json'),
+        JSON.stringify({
+          hooks: {
+            Stop: [{ hooks: [{ type: 'command', command: gone }] }],
+          },
+        }),
+      );
+      expect((await run('status')).err).not.toContain(HOOKS_MISSING);
     });
   });
 

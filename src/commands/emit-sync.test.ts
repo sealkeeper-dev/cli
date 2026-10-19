@@ -30,7 +30,11 @@ import {
   STAMP_FILE,
 } from '../background-sync.js';
 import { paths, readConfig, writeConfig } from '../config.js';
-import { currentFingerprint, observeParts } from '../fingerprint.js';
+import {
+  currentFingerprint,
+  observeParts,
+  recordCapture,
+} from '../fingerprint.js';
 import { createKey } from '../identity.js';
 import {
   appendEvent,
@@ -728,7 +732,8 @@ describe('emit and sync', () => {
     });
 
     // The fingerprint sync last wrote goes beside the envelopes as a
-    // JWS the agent signed over { fingerprint }, with the first batch only.
+    // JWS the agent signed over { fingerprint }, with the first batch only,
+    // labelled with the session setup.
     it('sends the fingerprint from fingerprint.json with the first batch, signed by the agent', async () => {
       await initialise();
       server.verify = false;
@@ -742,9 +747,55 @@ describe('emit and sync', () => {
       expect(decodeHeader(first).kid).toBe(agentId);
       const { payload } = await verify(first, publicKeyFromAgentId(agentId));
       expect(unsigned(payload)).toEqual({
-        fingerprint: await currentFingerprint(),
+        fingerprint: { ...(await currentFingerprint()), setup: 'session' },
       });
     }, 60_000);
+
+    // A line a routine run logged goes in a batch of its own, beside the
+    // routine's fingerprint with no model name, every such batch of the run.
+    it("sends each run of routine lines in its own batch beside the routine's fingerprint", async () => {
+      await initialise();
+      await observeParts('mastra', { model_name: 'gpt-4.1' }, paths());
+      const routineFp = await recordCapture(
+        paths(),
+        {
+          model_set: 'not_declared',
+          prompt: 'not_declared',
+          tools: 'not_declared',
+          framework: 'not_declared',
+        },
+        Math.floor(Date.now() / 1000),
+        'claude-code-routine',
+      );
+      if (routineFp === null) throw new Error('no routine fingerprint');
+      const routine = (n: number) =>
+        appendEvent(sessionEnd(n), paths(), new Date(), 'claude-code-routine');
+      await seed(1);
+      await routine(1);
+      await routine(2);
+      await seed(1);
+      await routine(3);
+      const { code, out } = await api('sync');
+      expect(code).toBe(0);
+      expect(out).toBe('accepted 5, duplicates 0\n');
+      expect(server.batches.map((b) => b.length)).toEqual([1, 2, 1, 1]);
+      const declared = await Promise.all(
+        server.fingerprints.map(async (f) =>
+          f === undefined
+            ? null
+            : unsigned(
+                (await verify(f, publicKeyFromAgentId(agentId))).payload,
+              ),
+        ),
+      );
+      const session = {
+        fingerprint: { ...(await currentFingerprint()), setup: 'session' },
+        model: 'gpt-4.1',
+      };
+      const ofRoutine = { fingerprint: { ...routineFp, setup: 'routine' } };
+      expect(declared).toEqual([session, ofRoutine, null, ofRoutine]);
+      expect(await countPending()).toBe(0);
+    });
 
     it('sends the batch again without the fingerprint when the API refuses it', async () => {
       await initialise();
@@ -781,7 +832,7 @@ describe('emit and sync', () => {
       if (first === undefined) throw new Error('no fingerprint sent');
       const { payload } = await verify(first, publicKeyFromAgentId(agentId));
       expect(unsigned(payload)).toEqual({
-        fingerprint: await currentFingerprint(),
+        fingerprint: { ...(await currentFingerprint()), setup: 'session' },
         model: 'gpt-4.1',
       });
     });

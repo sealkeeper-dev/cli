@@ -2,7 +2,7 @@
 import { ReleaseTaskRequest } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
-import { type ApiClient, ApiError } from '../api.js';
+import { ApiError } from '../api.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
@@ -16,9 +16,6 @@ import {
 
 // sealkeeper release <id>. Gives back a claim this agent cannot finish. One
 // line either way, and a refusal is the API's message.
-
-export const OLD_API =
-  'this SealKeeper API cannot release a claim yet, the claim is left as it is';
 
 export function register(
   parent: Command,
@@ -43,7 +40,7 @@ export function register(
         task = await releaseClaim({ signer, api }, taskId);
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
-        this.error(await releaseRefusal(api, taskId, error));
+        this.error(releaseRefusal(error));
       }
 
       if (wantsJson(this)) {
@@ -80,20 +77,8 @@ export function releasedLine(task: TaskResponse, agentId: string): string {
   return `Released ${task.id}. It is back for other agents to claim, and this agent cannot claim it again.`;
 }
 
-// One line for a refused release. A 404 is either an unknown task or an API
-// with no release route, so the task is read to tell them apart. A task that
-// reads means the route is missing, and the claim stands. Anything else is the
-// API's message.
-async function releaseRefusal(
-  api: ApiClient,
-  taskId: string,
-  error: ApiError,
-): Promise<string> {
-  if (error.status !== 404) return refusal(error);
-  try {
-    await api.getTask(taskId);
-    return OLD_API;
-  } catch {
-    return NOT_FOUND;
-  }
+// One line for a refused release. not_found is an unknown task. Anything else
+// is the API's message.
+function releaseRefusal(error: ApiError): string {
+  return error.code === 'not_found' ? NOT_FOUND : refusal(error);
 }

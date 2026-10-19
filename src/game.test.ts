@@ -12,7 +12,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeConfig } from './config.js';
-import { BAD_CAP, OLD_API } from './game.js';
+import { BAD_CAP } from './game.js';
 import { createKey } from './identity.js';
 import { createProgram } from './program.js';
 import { takePurpose } from './test-purpose.js';
@@ -27,7 +27,7 @@ type Sent = { method: string; path: string; payload: Record<string, unknown> };
 // against the key its kid names, which must be the local agent, and must
 // name this API. The status starts on with the full cap, and a settings
 // change moves it as the API does. refuse answers every request with that
-// error instead, and gone answers 404 as an API from before the game does.
+// error instead.
 // status starts as an older API answers it, with no duels started
 // and no closed, and closed is what a settings change answers beside it.
 class FakeGame {
@@ -46,7 +46,6 @@ class FakeGame {
   sent: Sent[] = [];
   errors: string[] = [];
   refuse: { status: number; code: string; message: string } | null = null;
-  gone = false;
 
   constructor(readonly agentId: string) {}
 
@@ -70,12 +69,6 @@ class FakeGame {
     if (!named.ok) this.errors.push('wrong purpose');
     const payload = named.payload as Record<string, unknown>;
     this.sent.push({ method, path: url.pathname, payload });
-    if (this.gone) {
-      return Response.json(
-        { error: { code: 'not_found', message: 'Not found' } },
-        { status: 404 },
-      );
-    }
     if (this.refuse !== null) {
       const { status, code, message } = this.refuse;
       return Response.json({ error: { code, message } }, { status });
@@ -332,13 +325,13 @@ describe('the game settings', () => {
     });
 
     it.each([[[]], [['off']]])(
-      '%j against an API without the game says so in one line',
+      '%j prints the line of a 404 as the API sent it',
       async (words) => {
-        game.gone = true;
+        game.refuse = { status: 404, code: 'not_found', message: 'Not found' };
         const result = await run('config', 'game', ...words);
         expect(result.code).toBe(1);
         expect(result.out).toBe('');
-        expect(result.err).toBe(`${OLD_API}\n`);
+        expect(result.err).toBe('Not found\n');
       },
     );
 
@@ -366,13 +359,12 @@ describe('the game settings', () => {
   });
 
   describe('refusals', () => {
-    it('routine set --game-cap against an API without the game says so in one line', async () => {
-      game.gone = true;
+    it('routine set --game-cap prints the line of a 404 as the API sent it', async () => {
+      game.refuse = { status: 404, code: 'not_found', message: 'Not found' };
       const result = await run('routine', 'set', '--game-cap', '2', '--yes');
       expect(result.code).toBe(1);
       expect(result.out).toBe('');
-      expect(result.err).toBe(`${OLD_API}\n`);
-      expect(OLD_API).toBe('this SealKeeper API has no game layer yet');
+      expect(result.err).toBe('Not found\n');
     });
 
     it.each([

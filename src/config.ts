@@ -252,23 +252,13 @@ export class ConfigError extends Error {
   override name = 'ConfigError';
 }
 
-// Files older CLIs kept in the SealKeeper home and nothing writes now,
-// post-prompt.json, score.json, inbox.json and the routine-*.lock files. logout
-// and agent delete still remove them, so a named home ends up empty.
-export const LEGACY_FILES = [
-  'post-prompt.json',
-  'score.json',
-  'inbox.json',
-  'routine-claim.lock',
-  'routine-confirm.lock',
-  'routine-post.lock',
-  'model.json',
-] as const;
-
 export type Paths = {
   home: string;
   config: string;
   key: string;
+  // The secret the prompt part of the fingerprint is hashed with, see
+  // prompt-secret.ts.
+  promptSecret: string;
   log: string;
   cursor: string;
   // The byte offset of the cursor's line, kept apart from cursor.json so
@@ -284,9 +274,6 @@ export type Paths = {
   // The last status answer, which status shows offline and labels as
   // cached, see status-answer.ts.
   status: string;
-  // Where an older CLI kept a start time marker per Claude Code session. None
-  // is written now, and SessionEnd and agent delete remove the folder.
-  sessions: string;
   // The goal answer, a cache the session nudge reads, see goal.ts.
   goal: string;
   // Whether the session nudge is on, see nudge.ts.
@@ -302,8 +289,12 @@ export type Paths = {
   // The last captures of the agent's fingerprint and the fingerprint they
   // make, see fingerprint.ts.
   fingerprint: string;
-  // The part hashes the Mastra and OpenClaw adapters observed in the
-  // agent's process, for the next capture, see fingerprint.ts.
+  // The same for the routine's own runs on Claude Code and OpenClaw, see
+  // fingerprint.ts.
+  fingerprintRoutine: string;
+  // The part hashes each source observed, the hooks, the adapters in the
+  // agent's process and the routine's runs, for the next capture, see
+  // fingerprint.ts.
   fingerprintSources: string;
   // Whether the spec of each duel or challenge task handed over asks for a
   // final line feed, for submit, see handed.ts.
@@ -614,6 +605,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     home,
     config: join(home, 'config.json'),
     key: join(home, 'key'),
+    promptSecret: join(home, 'prompt-secret'),
     log,
     cursor: join(home, 'cursor.json'),
     cursorOffset: join(home, 'cursor-offset.json'),
@@ -622,13 +614,13 @@ export function paths(home: string = sealkeeperHome()): Paths {
     cardWrite: join(home, 'card-write.json'),
     wellKnown: join(home, 'well-known.json'),
     status: join(home, 'status.json'),
-    sessions: join(home, 'sessions'),
     goal: join(home, 'goal.json'),
     nudge: join(home, 'nudge.json'),
     routine: join(home, 'routine.json'),
     runtimeQuestion: join(home, 'runtime-question.json'),
     operatorSlug: join(home, 'operator-slug.json'),
     fingerprint: join(home, 'fingerprint.json'),
+    fingerprintRoutine: join(home, 'fingerprint-routine.json'),
     fingerprintSources: join(home, 'fingerprint-sources.json'),
     handed: join(home, 'handed-tasks.json'),
     logFile: (day) => join(log, `${day}.jsonl`),

@@ -17,7 +17,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   agentsMapPath,
   bindFolder,
-  LEGACY_FILES,
   namedHome,
   type Paths,
   paths,
@@ -29,6 +28,7 @@ import { createKey, loadKey } from '../identity.js';
 import { appendEvent, writeCursor } from '../log.js';
 import { saveOperatorSlug } from '../operator-slug.js';
 import { createProgram } from '../program.js';
+import { ensurePromptSecret } from '../prompt-secret.js';
 import { copyPaths } from '../routine-copy.js';
 import { jobName, launchdPath, type Runner } from '../routine-scheduler.js';
 
@@ -110,9 +110,6 @@ describe('logout', () => {
     await writeCursor({ v: 1, lastAcked: null }, p);
     await writeFile(p.credential, '{}\n');
     await writeFile(p.status, '{}\n');
-    for (const file of LEGACY_FILES) {
-      await writeFile(join(p.home, file), '{}\n');
-    }
     await appendEvent(
       {
         event_id: randomUUID(),
@@ -125,12 +122,7 @@ describe('logout', () => {
     );
   }
 
-  const SESSION = () => [
-    p.config,
-    p.credential,
-    p.status,
-    ...LEGACY_FILES.map((file) => join(p.home, file)),
-  ];
+  const SESSION = () => [p.config, p.credential, p.status];
 
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-logout-'));
@@ -143,17 +135,19 @@ describe('logout', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('removes the session files and keeps the key, the log and the cursor', async () => {
+  it('removes the session files and keeps the key, the prompt secret, the log and the cursor', async () => {
     await initialise();
+    await ensurePromptSecret(p);
     const { code, out, err } = await run('logout');
     expect(code).toBe(0);
     expect(err).toBe('');
     for (const file of SESSION()) expect(await exists(file)).toBe(false);
     expect(await exists(p.key)).toBe(true);
+    expect(await exists(p.promptSecret)).toBe(true);
     expect(await exists(p.cursor)).toBe(true);
     expect(await readdir(p.log)).toHaveLength(1);
     expect(out).toContain(
-      'logged out, removed credential.json, status.json, post-prompt.json, score.json, inbox.json, routine-claim.lock, routine-confirm.lock, routine-post.lock, model.json, config.json',
+      'logged out, removed credential.json, status.json, config.json',
     );
     expect(out).toContain(`kept the key at ${p.key}`);
     expect(out).toContain('run npx sealkeeper init to sign in again');
@@ -174,11 +168,12 @@ describe('logout', () => {
     }
   });
 
-  it('--delete-key --yes removes the key, the cursor and the log too', async () => {
+  it('--delete-key --yes removes the key, the prompt secret, the cursor and the log too', async () => {
     await initialise();
+    await ensurePromptSecret(p);
     const { code, out } = await run('logout', '--delete-key', '--yes');
     expect(code).toBe(0);
-    for (const file of [...SESSION(), p.key, p.cursor, p.log]) {
+    for (const file of [...SESSION(), p.key, p.promptSecret, p.cursor, p.log]) {
       expect(await exists(file)).toBe(false);
     }
     expect(out).toContain(`the identity of agent ${agentId} is gone for good`);
@@ -230,6 +225,31 @@ describe('logout', () => {
     expect(await exists(p.operatorSlug)).toBe(false);
   });
 
+  it('removes both fingerprint files and the sources file only with the key', async () => {
+    await initialise();
+    const files = [p.fingerprint, p.fingerprintRoutine, p.fingerprintSources];
+    for (const f of files) await writeFile(f, '{}\n');
+    expect((await run('logout', '--json')).code).toBe(0);
+    for (const f of files) expect(await exists(f)).toBe(true);
+
+    await initialise();
+    const { code, out } = await run(
+      'logout',
+      '--delete-key',
+      '--yes',
+      '--json',
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(out).removed).toEqual(
+      expect.arrayContaining([
+        'fingerprint.json',
+        'fingerprint-routine.json',
+        'fingerprint-sources.json',
+      ]),
+    );
+    for (const f of files) expect(await exists(f)).toBe(false);
+  });
+
   it('keeps the cursor offset file with the key, and removes it with the key', async () => {
     await initialise();
     await writeFile(p.cursorOffset, '{}\n');
@@ -264,17 +284,7 @@ describe('logout', () => {
     expect(code).toBe(0);
     expect(JSON.parse(out)).toEqual({
       loggedOut: true,
-      removed: [
-        'status.json',
-        'post-prompt.json',
-        'score.json',
-        'inbox.json',
-        'routine-claim.lock',
-        'routine-confirm.lock',
-        'routine-post.lock',
-        'model.json',
-        'config.json',
-      ],
+      removed: ['status.json', 'config.json'],
       keyDeleted: false,
       routineJob: null,
       folders: [],

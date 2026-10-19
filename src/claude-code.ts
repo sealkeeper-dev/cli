@@ -1,5 +1,4 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { rm } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { gatedSync, WAITING_CALLER_LIMITS } from './background-sync.js';
 import {
@@ -18,10 +17,10 @@ import { stderr, stdout } from './output.js';
 // for each hook event with one JSON object on stdin. It writes no event.
 // SessionStart reads the model id for the fingerprint source and prints the
 // session nudge, SessionEnd reads the fingerprint parts again and syncs what
-// the log holds. Any other hook, such as one an older CLI installed, records
-// nothing. It never throws. Claude Code adds what a SessionStart hook prints on
-// stdout to the session's context, so stdout carries only the session nudge
-// (nudge.ts), and only on SessionStart once the operator turned it on.
+// the log holds. Any other hook records nothing. It never throws. Claude Code
+// adds what a SessionStart hook prints on stdout to the session's context, so
+// stdout carries only the session nudge (nudge.ts), and only on SessionStart
+// once the operator turned it on.
 
 // Only the SessionEnd hook may go to the network. It tries a sync once autoSync
 // is on, through the gate in background-sync.ts, and a sync sends only pending
@@ -141,7 +140,6 @@ async function runHook(
         // Before the sync below, which recomputes the fingerprint.
         // SessionEnd names no model, so a reported one is kept.
         await observe(null);
-        await removeSessionMarkers(p);
         // Every SessionEnd, whatever session it ends, but with nothing
         // pending it makes no request. Nothing leaves on its own until
         // autoSync is on, which a confirmed first sync, a yes in the
@@ -154,16 +152,6 @@ async function runHook(
     }
   } catch (error) {
     warn(error);
-  }
-}
-
-// Removes the per session start time markers an older CLI kept here. Never
-// fails the hook.
-async function removeSessionMarkers(p: Paths): Promise<void> {
-  try {
-    await rm(p.sessions, { recursive: true, force: true });
-  } catch {
-    // Left for the next SessionEnd.
   }
 }
 

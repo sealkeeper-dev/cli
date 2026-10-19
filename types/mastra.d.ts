@@ -22,13 +22,24 @@ export type SealKeeperSession = {
   end: () => Promise<void>;
 };
 
+// The agent's instructions as text, for the prompt part of the fingerprint.
+// The string given to the Agent, or the fixed text an instructions function
+// builds on. SealKeeper never reads the agent's own instructions and never
+// calls an instructions function, so the part is not declared until text is
+// passed. Once written the hash is kept until a later process passes other
+// text. Only a hash of the text is kept.
+export type InstructionsOption = {
+  instructions?: string | undefined;
+};
+
 // Hashes the names and schemas of the tools in a record or an array for the
 // fingerprint in fingerprint-sources.json and returns the tools themselves,
 // unchanged. Their calls are not recorded. The model ids of steps are hashed
-// the same way. Only the hashes are kept.
+// the same way, and options.instructions for the prompt part. Only the
+// hashes are kept.
 export declare function withSealKeeper<
   T extends Record<string, MastraToolLike> | readonly MastraToolLike[],
->(tools: T): T;
+>(tools: T, options?: InstructionsOption): T;
 
 // A session for the fingerprint, which writes no event. The id defaults to
 // a new UUID.
@@ -129,9 +140,11 @@ export type MastraAgentLike = {
 };
 
 // What routine takes besides the agent. signal stops the run at its next
-// safe point, as its limits do.
+// safe point, as its limits do. instructions gives the prompt part, as
+// withSealKeeper takes it. The routine's own questions are never part of it.
 export type RoutineOptions = {
   signal?: AbortSignal | undefined;
+  instructions?: string | undefined;
 };
 
 // What one routine run did. outcome is done, nothing, stopped, failed,

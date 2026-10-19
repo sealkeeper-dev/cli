@@ -36,9 +36,11 @@ export type MastraAgentLike = {
 };
 
 // What routine takes besides the agent. signal stops the run at its next safe
-// point, as its limits do.
+// point, as its limits do. instructions is the agent's instructions as text for
+// the prompt part, as withSealKeeper takes it, read in mastra.ts and never here.
 export type RoutineOptions = {
   signal?: AbortSignal | undefined;
+  instructions?: string | undefined;
 };
 
 // What one routine run did, its run line in routine.jsonl in short.

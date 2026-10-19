@@ -1,10 +1,12 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { createHash } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
   readdir,
   readFile,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
@@ -27,24 +29,30 @@ import {
   resetBackgroundSyncThrottle,
 } from './background-sync.js';
 import { handleHook } from './claude-code.js';
-import { HOOK_EVENTS, RETIRED_HOOK_EVENTS } from './claude-code-settings.js';
+import { HOOK_EVENTS } from './claude-code-settings.js';
 import { type Paths, paths, writeConfig } from './config.js';
+import { declaredFingerprint } from './declared-fingerprint.js';
 import {
   type CapturedParts,
   captureParts,
   currentFingerprint,
+  describeFingerprint,
   FINGERPRINT_WINDOW,
   NOTHING_DECLARED,
   observeParts,
+  PROMPT_SECRET_TEXT,
   partsFromCaptures,
+  readSource,
   recordCapture,
   refreshFingerprint,
   refreshFingerprintOnChange,
   replaceSource,
+  routineSourceOf,
   SOURCE_MAX_AGE_SECONDS,
 } from './fingerprint.js';
 import { captureClaudeCode, projectDir } from './fingerprint-claude-code.js';
-import { stableJson } from './fingerprint-content.js';
+import { linesContent, stableJson } from './fingerprint-content.js';
+import { createObserver, PROMPT_TEXTS_MAX } from './fingerprint-observer.js';
 import { sealKeeperSession, withSealKeeper } from './mastra.js';
 import { declaredModel } from './model-name.js';
 import { sealKeeperPlugin } from './openclaw.js';
@@ -83,6 +91,16 @@ afterEach(async () => {
 });
 
 const h = (text: string) => partHash(AGENT, text);
+
+// The prompt part of these instructions texts in a home, the home's prompt
+// secret, one newline, then one SHA-256 hex line each.
+const promptIn = async (home: Paths, ...texts: string[]) =>
+  h(
+    `${(await readFile(home.promptSecret, 'utf8')).trim()}\n${linesContent(
+      texts.map((t) => createHash('sha256').update(t, 'utf8').digest('hex')),
+    )}`,
+  );
+const promptOf = (...texts: string[]) => promptIn(p, ...texts);
 
 async function parts(
   overrides: Partial<Record<keyof CapturedParts, string>>,
@@ -340,6 +358,14 @@ describe('Claude Code capture', () => {
     expect(await version({ PATH: npmBin })).toBe(await h('claude-code@2.1.12'));
   });
 
+  it('declares no prompt from an instruction file, the user one or the project one', async () => {
+    await writeFile(join(claudeDir, 'CLAUDE.md'), 'My own notes.');
+    await writeFile(join(project, 'CLAUDE.md'), 'Project rules.');
+    expect((await captureClaudeCode(AGENT, where())).prompt).toBe(
+      'not_declared',
+    );
+  });
+
   describe('through the hooks', () => {
     beforeEach(() => {
       vi.stubEnv('CLAUDE_CODE_EXECPATH', EXEC);
@@ -401,10 +427,12 @@ describe('Claude Code capture', () => {
     });
 
     // The hooks are SessionStart and SessionEnd. A tool
-    // event or Stop from an older install reads nothing.
-    it('is captured by the two hooks install writes, and by no retired hook', async () => {
+    // event or Stop reads nothing.
+    it('is captured by the two hooks install writes, and by no other hook', async () => {
       expect(HOOK_EVENTS).toEqual(['SessionStart', 'SessionEnd']);
-      for (const event of RETIRED_HOOK_EVENTS) await hook(event, 's1');
+      for (const event of ['Stop', 'PreToolUse', 'PostToolUse']) {
+        await hook(event, 's1');
+      }
       await expect(readFile(p.fingerprintSources)).rejects.toThrow();
 
       await hook('SessionStart', 's1');
@@ -525,6 +553,38 @@ describe('choosing a source', () => {
     });
   });
 
+  it('reads the prompt a source holds, and not declared from an older file', async () => {
+    await writeFile(
+      p.fingerprintSources,
+      JSON.stringify({
+        v: 1,
+        mastra: { at: at(0), tools: await h('mastra') },
+      }),
+    );
+    expect(await capture()).toEqual({
+      ...NOTHING_DECLARED,
+      tools: await h('mastra'),
+    });
+    // A key this CLI does not know is dropped, so a newer file still reads.
+    await writeFile(
+      p.fingerprintSources,
+      JSON.stringify({
+        v: 1,
+        mastra: {
+          at: at(0),
+          prompt: await h('p'),
+          tools: await h('mastra'),
+          a_later_part: await h('later'),
+        },
+      }),
+    );
+    expect(await capture()).toEqual({
+      ...NOTHING_DECLARED,
+      prompt: await h('p'),
+      tools: await h('mastra'),
+    });
+  });
+
   it('writes nothing into a home without a config', async () => {
     const gone = paths(join(root, 'gone'));
     await observeParts('mastra', { tools: await h('t') }, gone);
@@ -565,6 +625,20 @@ describe('the Mastra adapter', () => {
     expect((await sources())?.model_name).toBe('gpt-alice');
     expect(text.split('gpt-alice')).toHaveLength(2);
     expect(text).not.toContain('lookup');
+  });
+
+  it('hashes the instructions text passed to withSealKeeper, and never calls a function', async () => {
+    const instructions = 'You are alice-helper. Keep answers short.';
+    const fn = vi.fn(() => 'never called');
+    withSealKeeper([], { instructions: fn as unknown as string });
+    withSealKeeper([], { instructions });
+    await vi.waitFor(async () =>
+      expect((await sources())?.prompt).toBe(await promptOf(instructions)),
+    );
+    expect(fn).not.toHaveBeenCalled();
+    const text = await readFile(p.fingerprintSources, 'utf8');
+    expect(text).not.toContain('alice-helper');
+    expect(text).not.toContain('never called');
   });
 
   it('writes a schema the same whatever its key order', () => {
@@ -634,6 +708,171 @@ describe('the OpenClaw adapter', () => {
       expect(file.openclaw.tools).toBeUndefined();
     });
   });
+
+  it('never reads the before_prompt_build event, and declares no prompt', async () => {
+    vi.stubEnv('SEALKEEPER_HOME', p.home);
+    const handlers = new Map<
+      string,
+      (event: unknown, ctx: unknown) => unknown
+    >();
+    sealKeeperPlugin().register({
+      on: (name, handler) => {
+        handlers.set(
+          name,
+          handler as (event: unknown, ctx: unknown) => unknown,
+        );
+      },
+    });
+    const untouchable = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error('the event was read');
+        },
+      },
+    );
+    await expect(
+      handlers.get('before_prompt_build')?.(untouchable, untouchable),
+    ).resolves.toBeUndefined();
+    await handlers.get('llm_output')?.({ model: 'alice-llm-2' }, {});
+    await vi.waitFor(async () => {
+      const file = JSON.parse(await readFile(p.fingerprintSources, 'utf8'));
+      expect(file.openclaw.model_set).toBe(await h('alice-llm-2'));
+      expect(file.openclaw.prompt).toBeUndefined();
+    });
+  });
+});
+
+// The observer hashes instructions text and writes the prompt part once per
+// new text, never the text itself.
+describe('the observer prompt', () => {
+  it('writes once per new text, and keeps every text it was given', async () => {
+    const observer = createObserver('mastra', () => p);
+    await observer.prompt('First instructions.\nCite sources.');
+    expect((await captureParts({ paths: p, env: {} })).prompt).toBe(
+      await promptOf('First instructions.\nCite sources.'),
+    );
+
+    // The same text again writes nothing.
+    await rm(p.fingerprintSources);
+    await observer.prompt('First instructions.\nCite sources.');
+    await observer.settled();
+    await expect(readFile(p.fingerprintSources)).rejects.toThrow();
+
+    // A second agent's text in the same process adds a line.
+    await observer.prompt('Second instructions.');
+    expect((await captureParts({ paths: p, env: {} })).prompt).toBe(
+      await promptOf(
+        'First instructions.\nCite sources.',
+        'Second instructions.',
+      ),
+    );
+    const text = await readFile(p.fingerprintSources, 'utf8');
+    expect(text).not.toContain('instructions');
+    expect(text).not.toContain('Cite');
+  });
+
+  it('moves when the text changes', async () => {
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    const first = (await captureParts({ paths: p, env: {} })).prompt;
+    await createObserver('mastra', () => p).prompt('Be terse, edited.');
+    const edited = (await captureParts({ paths: p, env: {} })).prompt;
+    expect(first).toBe(await promptOf('Be terse.'));
+    expect(edited).toBe(await promptOf('Be terse, edited.'));
+  });
+
+  it('declares at most PROMPT_TEXTS_MAX texts, and writes nothing past them', async () => {
+    const observer = createObserver('mastra', () => p);
+    const texts = Array.from(
+      { length: PROMPT_TEXTS_MAX },
+      (_, i) => `Text ${i}.`,
+    );
+    for (const text of texts) await observer.prompt(text);
+    expect((await captureParts({ paths: p, env: {} })).prompt).toBe(
+      await promptOf(...texts),
+    );
+    await rm(p.fingerprintSources);
+    await observer.prompt('One text too many.');
+    await observer.settled();
+    await expect(readFile(p.fingerprintSources)).rejects.toThrow();
+  });
+
+  it('keeps the hash an earlier process wrote when a later one passes no text', async () => {
+    await createObserver('mastra', () => p).prompt('Old instructions.');
+    const later = createObserver('mastra', () => p);
+    await later.tools(new Map([['add', 'add\t{}']]));
+    const sources = JSON.parse(await readFile(p.fingerprintSources, 'utf8'));
+    expect(sources.mastra.tools).toBe(await h('add\t{}'));
+    expect(sources.mastra.prompt).toBe(await promptOf('Old instructions.'));
+  });
+
+  it('never throws, and writes nothing before init', async () => {
+    const before = paths(join(root, 'not-yet'));
+    const observer = createObserver('mastra', () => before);
+    await expect(observer.prompt('text')).resolves.toBeUndefined();
+    await expect(readdir(before.home)).rejects.toThrow();
+  });
+
+  it('makes the prompt secret on the first text, mode 600, and keeps it', async () => {
+    await expect(readFile(p.promptSecret)).rejects.toThrow();
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    const secret = await readFile(p.promptSecret, 'utf8');
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43}\n$/);
+    if (process.platform !== 'win32') {
+      expect((await stat(p.promptSecret)).mode & 0o777).toBe(0o600);
+    }
+    const first = (await captureParts({ paths: p, env: {} })).prompt;
+    // A second process of the same home reads the same secret.
+    await rm(p.fingerprintSources);
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    expect(await readFile(p.promptSecret, 'utf8')).toBe(secret);
+    expect((await captureParts({ paths: p, env: {} })).prompt).toBe(first);
+    const text = await readFile(p.fingerprintSources, 'utf8');
+    expect(text).not.toContain(secret.trim());
+  });
+
+  it('gives two homes with the same text different prompt hashes', async () => {
+    const other = paths(join(root, 'other'));
+    await mkdir(other.home, { recursive: true });
+    await initialise(other);
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    await createObserver('mastra', () => other).prompt('Be terse.');
+    const mine = (await captureParts({ paths: p, env: {} })).prompt;
+    const theirs = (await captureParts({ paths: other, env: {} })).prompt;
+    expect(mine).toBe(await promptOf('Be terse.'));
+    expect(theirs).toBe(await promptIn(other, 'Be terse.'));
+    expect(mine).not.toBe(theirs);
+  });
+
+  it('makes a new secret when the file is gone, and the part moves', async () => {
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    const before = (await captureParts({ paths: p, env: {} })).prompt;
+    const secret = await readFile(p.promptSecret, 'utf8');
+    await rm(p.promptSecret);
+    await createObserver('mastra', () => p).prompt('Be terse.');
+    expect(await readFile(p.promptSecret, 'utf8')).not.toBe(secret);
+    const after = (await captureParts({ paths: p, env: {} })).prompt;
+    expect(after).toBe(await promptOf('Be terse.'));
+    expect(after).not.toBe(before);
+  });
+
+  it('writes no prompt part, and never replaces the file, when the secret does not read', async () => {
+    await writeFile(p.promptSecret, 'not a secret\n', { mode: 0o600 });
+    const observer = createObserver('mastra', () => p);
+    await expect(observer.prompt('Be terse.')).resolves.toBeUndefined();
+    expect((await captureParts({ paths: p, env: {} })).prompt).toBe(
+      NOTHING_DECLARED.prompt,
+    );
+    expect(await readFile(p.promptSecret, 'utf8')).toBe('not a secret\n');
+  });
+
+  it('says in what-is-shared that a guessed prompt cannot be confirmed', () => {
+    expect(PROMPT_SECRET_TEXT).toBe(
+      'A declared prompt leaves only as a hash that mixes in a secret this machine keeps, so it cannot be confirmed by guessing the text.',
+    );
+    expect(describeFingerprint()).toContain(PROMPT_SECRET_TEXT);
+    expect(describeFingerprint()).not.toContain('stock prompt');
+  });
 });
 
 // What a routine run calls before each step and submit.
@@ -671,6 +910,150 @@ describe('recompute on change', () => {
     const before = paths(join(root, 'not-yet'));
     await refreshFingerprintOnChange({ paths: before });
     await expect(readdir(before.home)).rejects.toThrow();
+  });
+});
+
+// A routine run on Claude Code or OpenClaw keeps its own source and its own
+// fingerprint file beside the session's.
+describe('the routine setup', () => {
+  const ROUTINE = 'claude-code-routine' as const;
+  const at = (seconds: number) => () => seconds * 1000;
+
+  beforeEach(async () => {
+    await replaceSource(
+      'claude-code',
+      { model_set: await h('session'), tools: await h('session-tools') },
+      p,
+      NOW - 10,
+    );
+    await observeParts(ROUTINE, { model_set: await h('routine') }, p, NOW);
+  });
+
+  it('a session capture never reads a routine source, even a newer one', async () => {
+    expect(await captureParts({ paths: p, env: {}, now: at(NOW) })).toEqual(
+      await parts({ model_set: 'session', tools: 'session-tools' }),
+    );
+  });
+
+  it('a routine capture reads its own source alone', async () => {
+    expect(
+      await captureParts({ paths: p, env: {}, now: at(NOW), routine: ROUTINE }),
+    ).toEqual(await parts({ model_set: 'routine' }));
+  });
+
+  it('a routine source older than the age limit reads nothing declared', async () => {
+    expect(
+      await captureParts({
+        paths: p,
+        env: {},
+        now: at(NOW + SOURCE_MAX_AGE_SECONDS + 1),
+        routine: ROUTINE,
+      }),
+    ).toEqual(NOTHING_DECLARED);
+  });
+
+  it('a routine capture writes fingerprint-routine.json and leaves fingerprint.json', async () => {
+    const session = await refreshFingerprint({
+      paths: p,
+      env: {},
+      now: at(NOW),
+    });
+    const before = await readFile(p.fingerprint, 'utf8');
+    const routine = await refreshFingerprint({
+      paths: p,
+      env: {},
+      now: at(NOW + 1),
+      routine: ROUTINE,
+    });
+    expect(await readFile(p.fingerprint, 'utf8')).toBe(before);
+    expect(await currentFingerprint(p, ROUTINE)).toEqual(routine);
+    expect(await currentFingerprint(p)).toEqual(session);
+    expect(routine?.hash).not.toBe(session?.hash);
+  });
+
+  it('session and routine captures that alternate never read unstable', async () => {
+    for (let round = 0; round < 8; round++) {
+      const t = NOW + round * 2;
+      await refreshFingerprint({ paths: p, env: {}, now: at(t) });
+      await refreshFingerprint({
+        paths: p,
+        env: {},
+        now: at(t + 1),
+        routine: ROUTINE,
+      });
+    }
+    for (const fp of [
+      await currentFingerprint(p),
+      await currentFingerprint(p, ROUTINE),
+    ]) {
+      expect(Object.values(fp?.parts ?? {})).not.toContain('unstable');
+    }
+    expect((await currentFingerprint(p))?.parts.model_set).toEqual({
+      hash: await h('session'),
+    });
+    expect((await currentFingerprint(p, ROUTINE))?.parts.model_set).toEqual({
+      hash: await h('routine'),
+    });
+  });
+
+  it('a setup whose own captures keep changing still reads unstable', async () => {
+    await refreshFingerprint({ paths: p, env: {}, now: at(NOW) });
+    for (let i = 0; i < FINGERPRINT_WINDOW; i++) {
+      await observeParts(ROUTINE, { model_set: await h(`m${i}`) }, p, NOW + i);
+      await refreshFingerprint({
+        paths: p,
+        env: {},
+        now: at(NOW + i),
+        routine: ROUTINE,
+      });
+    }
+    expect((await currentFingerprint(p, ROUTINE))?.parts.model_set).toBe(
+      'unstable',
+    );
+    expect((await currentFingerprint(p))?.parts.model_set).toEqual({
+      hash: await h('session'),
+    });
+  });
+
+  it('the observer declares an empty tool list once', async () => {
+    const observer = createObserver(ROUTINE, () => p);
+    await observer.tools(new Map());
+    expect((await readSource(ROUTINE, p))?.tools).toBe(
+      await h(linesContent([])),
+    );
+    await replaceSource(ROUTINE, { tools: await h('other') }, p);
+    await observer.tools(new Map());
+    expect((await readSource(ROUTINE, p))?.tools).toBe(await h('other'));
+  });
+
+  it('declares the session fingerprint as session and the routine one as routine, with the same hash rule', async () => {
+    const session = await refreshFingerprint({
+      paths: p,
+      env: {},
+      now: at(NOW),
+    });
+    const routine = await refreshFingerprint({
+      paths: p,
+      env: {},
+      now: at(NOW + 1),
+      routine: ROUTINE,
+    });
+    expect(await declaredFingerprint(p)).toEqual({
+      fingerprint: { ...session, setup: 'session' },
+    });
+    expect(await declaredFingerprint(p, ROUTINE)).toEqual({
+      fingerprint: { ...routine, setup: 'routine' },
+    });
+    // The label sits outside the hash.
+    if (routine === null) throw new Error('no routine fingerprint');
+    const declared = (await declaredFingerprint(p, ROUTINE)).fingerprint;
+    expect(declared?.hash).toBe(await fingerprintHash(routine.parts));
+  });
+
+  it('routineSourceOf maps claude-code and openclaw and gives none for mastra', () => {
+    expect(routineSourceOf('claude-code')).toBe('claude-code-routine');
+    expect(routineSourceOf('openclaw')).toBe('openclaw-routine');
+    expect(routineSourceOf('mastra')).toBeUndefined();
   });
 });
 

@@ -11,6 +11,13 @@
 // (refreshFingerprintOnChange). Anything that needs the fingerprint reads the
 // cached file with currentFingerprint.
 //
+// A routine run on Claude Code or OpenClaw is a setup of its own, with its own
+// model, no tools and no project, so it keeps its own captures and fingerprint
+// in fingerprint-routine.json, in the same format. Each request declares the
+// fingerprint of the setup that made it, the session's from fingerprint.json
+// and a routine run's from fingerprint-routine.json. Each file keeps its own
+// window, so captures of one setup never make the other's parts read unstable.
+//
 // Where the parts come from. Each source writes the hashes of what it sees to
 // fingerprint-sources.json, and the recompute reads them from there, so sync
 // and run give the same parts from any folder.
@@ -19,9 +26,18 @@
 //   folder Claude Code runs in, see fingerprint-claude-code.ts.
 // - mastra and openclaw, written by the adapters in the agent's own process
 //   as they see a change (observeParts).
-// - Any of the three, written by a routine run with the model the runtime
-//   reported for its answers, through the same observer (routine-run.ts).
-// - Prompt is not declared by any source yet.
+// - claude-code-routine and openclaw-routine, written by a routine run on
+//   Claude Code or OpenClaw with the model its runtime reported, the version
+//   of the runtime it starts and its empty tool set (routine-run.ts), and read
+//   only by that run's captures, which go to fingerprint-routine.json. A
+//   Mastra routine runs in the agent's own process with the agent's own
+//   setup, so it writes and reads the mastra source.
+//
+// The prompt part is declared only where the runtime shows the CLI the agent's
+// instructions, and only as a hash of them. Mastra, the instructions text the
+// developer passes to withSealKeeper or routine, see mastra.ts. Claude Code
+// and OpenClaw declare none, see fingerprint-claude-code.ts and openclaw.ts.
+// A routine run's own question is never part of it.
 //
 // Each source also keeps the model name it read, as text, never hashed and
 // never a part. Sync sends the chosen source's name beside the fingerprint, see
@@ -104,9 +120,18 @@ export function partsFromCaptures(
   return out;
 }
 
-async function readFingerprintFile(p: Paths): Promise<FingerprintFile | null> {
+// The file that holds a setup's captures, a routine run's own when routine
+// names its source, else the session's.
+function fingerprintPath(p: Paths, routine?: RoutineSource): string {
+  return routine === undefined ? p.fingerprint : p.fingerprintRoutine;
+}
+
+async function readFingerprintFile(
+  p: Paths,
+  routine?: RoutineSource,
+): Promise<FingerprintFile | null> {
   try {
-    const raw = await readIfExists(p.fingerprint);
+    const raw = await readIfExists(fingerprintPath(p, routine));
     if (raw === null) return null;
     const parsed = FingerprintFile.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : null;
@@ -115,33 +140,41 @@ async function readFingerprintFile(p: Paths): Promise<FingerprintFile | null> {
   }
 }
 
-// The fingerprint as last computed, from fingerprint.json, or null when it was
-// never computed or the file does not parse. Never recomputes, never throws.
-// What a task claim, submit and outcome report send (sendWithFingerprint in
-// tasks.ts), and what sync sends, both through declared-fingerprint.ts.
+// The fingerprint as last computed, from fingerprint.json, or from
+// fingerprint-routine.json when routine names a routine source, or null when
+// it was never computed or the file does not parse. Never recomputes, never
+// throws. What a task claim, submit and outcome report send
+// (sendWithFingerprint in tasks.ts), and what sync sends, both through
+// declared-fingerprint.ts.
 export async function currentFingerprint(
   p: Paths = paths(),
+  routine?: RoutineSource,
 ): Promise<Fingerprint | null> {
-  return (await readFingerprintFile(p))?.current ?? null;
+  return (await readFingerprintFile(p, routine))?.current ?? null;
 }
 
 // Adds one capture to the window, keeps the last FINGERPRINT_WINDOW and
-// writes the fingerprint they make. A file that does not parse starts a new
-// window. Returns the new fingerprint, or null and writes nothing when
-// config.json is absent, so a command run before init leaves no home.
+// writes the fingerprint they make, in the file of the setup routine names.
+// A file that does not parse starts a new window. Returns the new
+// fingerprint, or null and writes nothing when config.json is absent, so a
+// command run before init leaves no home.
 export async function recordCapture(
   p: Paths,
   parts: CapturedParts,
   atSeconds: number,
+  routine?: RoutineSource,
 ): Promise<Fingerprint | null> {
   if (!(await exists(p.config))) return null;
-  const before = (await readFingerprintFile(p))?.captures ?? [];
+  const before = (await readFingerprintFile(p, routine))?.captures ?? [];
   const captures = [...before, { at: atSeconds, parts }].slice(
     -FINGERPRINT_WINDOW,
   );
   const current = await makeFingerprint(partsFromCaptures(captures), atSeconds);
   const file: FingerprintFile = { v: 1, captures, current };
-  await writeFileAtomic(p.fingerprint, `${JSON.stringify(file, null, 2)}\n`);
+  await writeFileAtomic(
+    fingerprintPath(p, routine),
+    `${JSON.stringify(file, null, 2)}\n`,
+  );
   return current;
 }
 
@@ -150,10 +183,13 @@ export async function recordCapture(
 // not a part. model_reported says the model part and name came from the model
 // id the runtime itself reported, a session hook's payload or a model step, not
 // from the settings. A value this CLI cannot read drops alone, so it never
-// costs the source its hashes.
+// costs the source its hashes. A source written without a prompt reads it as
+// not declared, and a key this CLI does not know is dropped on read, so a file
+// an older or a newer CLI wrote still reads.
 const Observed = z.object({
   at: z.number().int().min(0),
   model_set: Sha256Base64url.optional(),
+  prompt: Sha256Base64url.optional(),
   tools: Sha256Base64url.optional(),
   framework: Sha256Base64url.optional(),
   model_name: z.string().optional().catch(undefined),
@@ -162,13 +198,31 @@ const Observed = z.object({
 export type Observed = z.infer<typeof Observed>;
 export type ObservedParts = Omit<Observed, 'at'>;
 
-// Every source, named as the runtime it stands for.
+// The sources of the agent's own setup, named as the runtime they stand for.
+const SESSION_SOURCES = ['claude-code', 'mastra', 'openclaw'] as const;
+
+// The sources of a routine run that starts its own runtime.
+export const ROUTINE_SOURCES = [
+  'claude-code-routine',
+  'openclaw-routine',
+] as const;
+export type RoutineSource = (typeof ROUTINE_SOURCES)[number];
+
+// Every source.
 export const FINGERPRINT_SOURCES = [
-  'claude-code',
-  'mastra',
-  'openclaw',
+  ...SESSION_SOURCES,
+  ...ROUTINE_SOURCES,
 ] as const;
 export type FingerprintSource = (typeof FINGERPRINT_SOURCES)[number];
+
+// The source a routine run on this runtime writes and reads. A Mastra routine
+// runs in the agent's own process with the agent's own setup, so it has none
+// and reads the mastra source.
+export function routineSourceOf(runtime: string): RoutineSource | undefined {
+  if (runtime === 'claude-code') return 'claude-code-routine';
+  if (runtime === 'openclaw') return 'openclaw-routine';
+  return undefined;
+}
 
 // A source older than this is ignored, so an adapter that stopped running
 // does not decide the fingerprint for good.
@@ -179,6 +233,8 @@ const SourcesFile = z.object({
   'claude-code': Observed.optional(),
   mastra: Observed.optional(),
   openclaw: Observed.optional(),
+  'claude-code-routine': Observed.optional(),
+  'openclaw-routine': Observed.optional(),
 });
 type SourcesFile = z.infer<typeof SourcesFile>;
 
@@ -247,6 +303,9 @@ export type CaptureOptions = {
   paths?: Paths;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
+  // The routine run's own source, when a routine run on Claude Code or
+  // OpenClaw captures or declares. Unset for everything else.
+  routine?: RoutineSource;
 };
 
 // The source that matches the agent's declared runtime. runtime in
@@ -258,33 +317,38 @@ async function declaredSource(
 ): Promise<FingerprintSource | null> {
   const config = await readConfig(p).catch(() => null);
   const runtime = (config as { runtime?: unknown } | null)?.runtime;
-  const named = FINGERPRINT_SOURCES.find((s) => s === runtime);
+  const named = SESSION_SOURCES.find((s) => s === runtime);
   if (named !== undefined) return named;
   return readEnv('CLAUDECODE', env) !== undefined ? 'claude-code' : null;
 }
 
 // The source that decides the fingerprint, from fingerprint-sources.json.
-// Sources older than SOURCE_MAX_AGE_SECONDS are ignored. Of the rest, the
-// one that matches the declared runtime wins, else the newest. undefined
-// when none is left. Never reads the project, so the folder it runs in
-// does not matter. The model name sync declares comes from the same one,
-// as that source last wrote it. Within the claude-code source a model id
+// Sources older than SOURCE_MAX_AGE_SECONDS are ignored. For a routine run
+// with its own source it is that source alone, when it is fresh. Otherwise,
+// of the agent's own sources, the one that matches the declared runtime wins,
+// else the newest, and a routine source never decides. undefined when none
+// is left. Never reads the project, so the folder it runs in does not
+// matter. The model name declared beside the fingerprint comes from the same
+// one, as that source last wrote it. Within the claude-code source a model id
 // Claude Code reported wins over ANTHROPIC_MODEL and the settings, see
-// observeClaudeCode. Two sessions or runs on one machine that run
-// different models write the same source in turn, and the last one written
-// is the one declared.
+// observeClaudeCode. Two sessions on one machine that run different models
+// write the same source in turn, and the last one written is the one
+// declared.
 export async function chosenSource(
   options: CaptureOptions = {},
 ): Promise<{ name: FingerprintSource; observed: Observed } | undefined> {
   const p = options.paths ?? paths();
   const now = Math.floor((options.now?.() ?? Date.now()) / 1000);
   const sources = await readSources(p);
-  const fresh = FINGERPRINT_SOURCES.flatMap((name) => {
+  const names: readonly FingerprintSource[] =
+    options.routine === undefined ? SESSION_SOURCES : [options.routine];
+  const fresh = names.flatMap((name) => {
     const observed = sources[name];
     return observed !== undefined && observed.at >= now - SOURCE_MAX_AGE_SECONDS
       ? [{ name, observed }]
       : [];
   });
+  if (options.routine !== undefined) return fresh[0];
   const declared = await declaredSource(p, options.env ?? process.env);
   return (
     fresh.find((s) => s.name === declared) ??
@@ -301,7 +365,7 @@ export async function captureParts(
   const { observed } = chosen;
   return {
     model_set: observed.model_set ?? FINGERPRINT_NOT_DECLARED,
-    prompt: FINGERPRINT_NOT_DECLARED,
+    prompt: observed.prompt ?? FINGERPRINT_NOT_DECLARED,
     tools: observed.tools ?? FINGERPRINT_NOT_DECLARED,
     framework: observed.framework ?? FINGERPRINT_NOT_DECLARED,
   };
@@ -315,7 +379,7 @@ export async function refreshFingerprint(
   const p = options.paths ?? paths();
   const parts = await captureParts({ ...options, paths: p });
   const now = options.now?.() ?? Date.now();
-  return recordCapture(p, parts, Math.floor(now / 1000));
+  return recordCapture(p, parts, Math.floor(now / 1000), options.routine);
 }
 
 // refreshFingerprint that never throws, for sync, run, duel, challenge and
@@ -332,9 +396,8 @@ export async function refreshFingerprintQuietly(
 
 // Records one capture only when the parts the chosen source gives now differ
 // from the newest capture's, or there is no capture yet. A routine run calls it
-// before each step and each submit, so what the agent's own start wrote, a
-// Claude Code SessionStart hook or the model the runtime reported, is in the
-// next request it signs. A run so adds one capture at its start and one more
+// before each step and each submit, so the model its runtime reported is in
+// the next request it signs. A run so adds one capture at its start and one more
 // only for a real change. Never throws, a failure loses the capture only.
 export async function refreshFingerprintOnChange(
   options: CaptureOptions = {},
@@ -342,13 +405,15 @@ export async function refreshFingerprintOnChange(
   try {
     const p = options.paths ?? paths();
     const parts = await captureParts({ ...options, paths: p });
-    const newest = (await readFingerprintFile(p))?.captures.at(-1)?.parts;
+    const newest = (await readFingerprintFile(p, options.routine))?.captures.at(
+      -1,
+    )?.parts;
     const same =
       newest !== undefined &&
       FINGERPRINT_PARTS.every((name) => newest[name] === parts[name]);
     if (same) return;
     const now = options.now?.() ?? Date.now();
-    await recordCapture(p, parts, Math.floor(now / 1000));
+    await recordCapture(p, parts, Math.floor(now / 1000), options.routine);
   } catch {
     // Not captured. The request goes with the fingerprint on disk.
   }
@@ -362,32 +427,40 @@ function nowSeconds(): number {
 const PART_TEXT: Record<FingerprintPartName, string> = {
   model_set:
     'the model ids the agent runs, the id Claude Code passes to its session start hook or reports on a routine run, else the Claude Code settings or ANTHROPIC_MODEL, or the ids Mastra and OpenClaw report',
-  prompt: 'not declared yet by any adapter',
+  prompt:
+    "the agent's instructions, the instructions text you pass to the Mastra adapter. A Mastra instructions function is never called, and Claude Code and OpenClaw declare none, since Claude Code's instruction files are the project's or the person's own notes and OpenClaw's prompt hook shows no system prompt",
   tools:
     'the MCP server names in .mcp.json, ~/.claude.json and the Claude Code settings with the MCP tools they allow, or the names and schemas of the Mastra tools',
   framework:
     'the framework and its version, for example Claude Code 2.1.283 or the installed @mastra/core',
 };
 
+// What a declared prompt leaves. Its hash starts from the prompt secret in
+// the home, see prompt-secret.ts, so the public fingerprint hash cannot be
+// matched by guessing the text.
+export const PROMPT_SECRET_TEXT =
+  'A declared prompt leaves only as a hash that mixes in a secret this machine keeps, so it cannot be confirmed by guessing the text.';
+
 // Which requests carry the fingerprint, every caller of sendWithFingerprint in
 // tasks.ts and sync, each step of a routine run among them.
 // what-is-shared.test.ts fails when a command that sends it is missing here.
 export const FINGERPRINT_SENDS =
-  'claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. The terminal run and a look at the duels or the challenge board send none.';
+  "claim, submit, outcome, run, duel and challenge send those hashes inside the signed request, and so do each step of a routine run and its submits, and each sync beside its events, and each sync and submit sends the model name below with them. Each fingerprint sent says which setup made it, session for your own sessions or routine for a routine run's own setup, as a label beside the hashes and outside them. The terminal run and a look at the duels or the challenge board send none.";
 
 // The model name block of what-is-shared.
-export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. A routine run sends the id the runtime reported for its answers. Each submit sends the same name with the answer, the one the runtime reported for that answer on a routine run. The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit sent. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
+export const MODEL_NAME_TEXT = `Model name. Each sync also sends the name of the model your agent runs, as text and not a hash, so it shows on the agent's profile. It is the model id the adapter read, the id Claude Code passes to its session start hook, else ANTHROPIC_MODEL or the Claude Code settings, or the id Mastra and OpenClaw report. The events a routine run logged go with none, so the name stays the one of your own sessions. Each submit sends the same name with the answer, and on a routine run the one the runtime reported for that answer, else the one of your own sessions. The task keeps it beside the answer, which only the poster and your agent can read, and the agent's profile shows it too, the newest name a sync or a submit of your own sessions sent. A runtime with no adapter sends none. Of an AWS ARN only the part after the last slash goes, so no account id or region leaves. Only the name leaves, never a prompt, an input or an output.`;
 
 export function describeFingerprint(): string {
   const width = Math.max(...FINGERPRINT_PARTS.map((n) => n.length)) + 2;
   return [
     'Fingerprint',
     '',
-    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync, run, each duel or challenge step and the start of a routine run, and again during the run when what the agent runs changed. Only a SHA-256 hash of each part is stored, never what it is hashed from. ${FINGERPRINT_SENDS}`,
+    `A record of what your agent runs, kept on this machine in fingerprint.json and recomputed at sync, run, each duel or challenge step and the start of a routine run, and again during the run when what the agent runs changed. A routine run on Claude Code or OpenClaw keeps its own in fingerprint-routine.json. Only a SHA-256 hash of each part is stored, never what it is hashed from. ${FINGERPRINT_SENDS}`,
     ...FINGERPRINT_PARTS.map(
       (name) => `  ${name.padEnd(width)}${PART_TEXT[name]}`,
     ),
     `A part reads not_declared when this machine cannot see it, and unstable when it changed on each of the last ${FINGERPRINT_WINDOW} captures.`,
+    PROMPT_SECRET_TEXT,
     '',
     MODEL_NAME_TEXT,
   ].join('\n');

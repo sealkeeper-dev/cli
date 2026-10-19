@@ -5,6 +5,7 @@ import { basename } from 'node:path';
 import { EVENT_MAX_AGE_DAYS, Event } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { ensureHome, type Paths, paths, writeFileAtomic } from './config.js';
+import { ROUTINE_SOURCES, type RoutineSource } from './fingerprint.js';
 import { stderr } from './output.js';
 import { isSent, UNSENT_TYPES } from './taxonomy.js';
 
@@ -14,7 +15,10 @@ import { isSent, UNSENT_TYPES } from './taxonomy.js';
 // is when that one sorts later, as after a clock that ran ahead was put back.
 // So file name order is append order, and an event that arrives late, or
 // after the clock stepped back, still lands at or after the cursor. Each line
-// is {v: 1, ...event}. Nothing here signs or sends anything. Day files are
+// is {v: 1, ...event}, and a line a routine run on Claude Code or OpenClaw
+// wrote also holds routine, that run's source, outside the event, so sync
+// sends it under the routine's fingerprint whichever sync sends it. Nothing
+// here signs or sends anything. Day files are
 // deleted only by pruneLog, once they are old and wholly behind the cursor.
 
 const LOG_LINE_VERSION = 1;
@@ -27,6 +31,7 @@ const DAY_MS = 24 * 3600 * 1000;
 const READ_CHUNK_BYTES = 64 * 1024;
 
 const Day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const LineRoutine = z.enum(ROUTINE_SOURCES).optional();
 const DAY_FILE = /^\d{4}-\d{2}-\d{2}\.jsonl$/;
 
 // Where sync got to, as cursor.json stores it. file is the day file's name,
@@ -79,11 +84,18 @@ type Pending = {
   events: Event[];
   // The position of each event in events, so a caller can ack part of them.
   positions: LogPosition[];
+  // The routine source of each event in events, undefined for a session's.
+  routines: (RoutineSource | undefined)[];
   // Position of the last event returned, or null when nothing is pending.
   last: LogPosition | null;
 };
 
-export type PendingEntry = { event: Event; position: LogPosition };
+export type PendingEntry = {
+  event: Event;
+  position: LogPosition;
+  // The routine run's source when a routine run wrote the line.
+  routine?: RoutineSource;
+};
 
 export type ReadOptions = {
   // The clock, which decides which day files are too old to send. Tests set
@@ -113,11 +125,13 @@ const NEWEST_DAY_TTL_MS = 10 * 60 * 1000;
 // sorts later. No fsync, so emit stays fast. The file is opened read and
 // write so the last byte can be checked. If an earlier crash left a partial
 // line with no trailing newline, the new line starts on a fresh line and is
-// not lost.
+// not lost. routine is the source of the routine run that logs the event,
+// kept on the line beside it.
 export async function appendEvent(
   input: unknown,
   p: Paths = paths(),
   now: Date = new Date(),
+  routine?: RoutineSource,
 ): Promise<Event> {
   const event = Event.parse(input);
   await mkdir(p.log, { recursive: true, mode: 0o700 });
@@ -135,7 +149,11 @@ export async function appendEvent(
       await file.read(last, 0, 1, size - 1);
       if (last[0] !== 0x0a) prefix = '\n';
     }
-    const line = JSON.stringify({ v: LOG_LINE_VERSION, ...event });
+    const line = JSON.stringify({
+      v: LOG_LINE_VERSION,
+      ...(routine === undefined ? {} : { routine }),
+      ...event,
+    });
     await file.write(`${prefix}${line}\n`);
   } finally {
     await file.close();
@@ -251,14 +269,16 @@ export async function readPending(
 ): Promise<Pending> {
   const events: Event[] = [];
   const positions: LogPosition[] = [];
-  if (limit <= 0) return { events, positions, last: null };
+  const routines: (RoutineSource | undefined)[] = [];
+  if (limit <= 0) return { events, positions, routines, last: null };
 
   for await (const entry of pendingEvents(p, options)) {
     events.push(entry.event);
     positions.push(entry.position);
+    routines.push(entry.routine);
     if (events.length >= limit) break;
   }
-  return { events, positions, last: positions.at(-1) ?? null };
+  return { events, positions, routines, last: positions.at(-1) ?? null };
 }
 
 // How many events are pending. A type this CLI never sends, see
@@ -480,7 +500,8 @@ function holdsId(eventId: string): (text: string) => boolean {
 // True for a line that is a valid event with the acked event id.
 function holdsEvent(acked: LogPosition): (text: string) => boolean {
   return (text) =>
-    text.includes(acked.eventId) && parseLine(text)?.event_id === acked.eventId;
+    text.includes(acked.eventId) &&
+    parseLine(text)?.event.event_id === acked.eventId;
 }
 
 // The byte offset just after the acked line of its day file, or null when
@@ -553,14 +574,16 @@ async function* fileEntries(
         continue;
       }
       if (line.text.length === 0) continue;
-      const event = parseLine(line.text);
-      if (!event) {
+      const parsed = parseLine(line.text);
+      if (!parsed) {
         invalid++;
         continue;
       }
+      const { event, routine } = parsed;
       yield {
         event,
         position: { file, eventId: event.event_id, offset: line.offset },
+        ...(routine === undefined ? {} : { routine }),
       };
     }
   } finally {
@@ -640,7 +663,9 @@ async function* readLines(path: string, start: number): AsyncGenerator<Line> {
   }
 }
 
-function parseLine(line: string): Event | null {
+function parseLine(
+  line: string,
+): { event: Event; routine?: RoutineSource } | null {
   let json: unknown;
   try {
     json = JSON.parse(line);
@@ -650,8 +675,12 @@ function parseLine(line: string): Event | null {
   if (typeof json !== 'object' || json === null || Array.isArray(json)) {
     return null;
   }
-  const { v, ...rest } = json as Record<string, unknown>;
+  const { v, routine, ...rest } = json as Record<string, unknown>;
   if (v !== LOG_LINE_VERSION) return null;
+  const source = LineRoutine.safeParse(routine);
   const result = Event.safeParse(rest);
-  return result.success ? result.data : null;
+  if (!source.success || !result.success) return null;
+  return source.data === undefined
+    ? { event: result.data }
+    : { event: result.data, routine: source.data };
 }

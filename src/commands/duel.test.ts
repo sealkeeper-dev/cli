@@ -31,7 +31,6 @@ import {
   inviteAnswer,
   listLine,
   NO_DUELS,
-  OLD_API,
   ONE_FORM,
   timeLeft,
 } from './duel.js';
@@ -103,14 +102,11 @@ function answerOf(over: Record<string, unknown> = {}) {
 }
 
 // The duel route. Every request is verified against the local agent's key,
-// names the API it is for and must parse as DuelNextRequest. An empty body
-// is the CLI's probe for the route, 400 while it exists.
+// names the API it is for and must parse as DuelNextRequest.
 class FakeApi {
   // The answer the next step gets, or a status to refuse it with.
   answer: Record<string, unknown> = answerOf();
   refuse: { status: number; code: string; message?: string } | null = null;
-  // false is an API from before the duel route, which answers 404 to all.
-  hasRoute = true;
   // The signed payloads, without the fingerprint every claim carries.
   payloads: Omit<DuelNextRequest, 'fingerprint'>[] = [];
   fingerprints = 0;
@@ -127,7 +123,6 @@ class FakeApi {
     const method = init?.method ?? 'GET';
     this.requests.push(`${method} ${url.pathname}`);
     if (
-      !this.hasRoute ||
       method !== 'POST' ||
       url.pathname !== `/v1/agents/${this.agentId}/duel/next`
     ) {
@@ -433,15 +428,7 @@ describe('duel', () => {
       expect(await handedFinalLineFeed(plain.id)).toBe(false);
     });
 
-    it('says one line when the API has no duel route yet', async () => {
-      api.hasRoute = false;
-      const result = await run('duel', '--accept', randomUUID(), '--json');
-      expect(result.code).toBe(1);
-      expect(result.out).toBe('');
-      expect(result.err).toBe(`${OLD_API}\n`);
-    });
-
-    it('says what was not found when the route is there', async () => {
+    it('says what was not found in one line, with no second request', async () => {
       api.refuse = {
         status: 404,
         code: 'not_found',
@@ -450,9 +437,7 @@ describe('duel', () => {
       const result = await run('duel', '--accept', randomUUID(), '--json');
       expect(result.code).toBe(1);
       expect(result.err).toBe('Duel not found\n');
-      // The probe that told the two apart.
-      expect(api.requests.at(-1)).toBe(`POST /v1/agents/${me}/duel/next`);
-      expect(api.requests).toHaveLength(2);
+      expect(api.requests).toEqual([`POST /v1/agents/${me}/duel/next`]);
     });
 
     it('says a refusal in one line', async () => {

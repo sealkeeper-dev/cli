@@ -206,9 +206,38 @@ describe('log', () => {
     expect(await readPending(10)).toEqual({
       events: [],
       positions: [],
+      routines: [],
       last: null,
     });
     expect(await countPending()).toBe(0);
+  });
+
+  it('keeps the routine a line names beside its event and none on a session line', async () => {
+    const session = event(TODAY, 1);
+    const routine = event(TODAY, 2);
+    await append(session);
+    await appendEvent(
+      routine,
+      paths(),
+      new Date(`${TODAY}T12:00:00.000Z`),
+      'claude-code-routine',
+    );
+    const lines = (await readFile(paths().logFile(TODAY), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(lines[0]).not.toHaveProperty('routine');
+    expect(lines[1]).toMatchObject({ v: 1, routine: 'claude-code-routine' });
+    const pending = await readPending(10);
+    expect(pending.events).toEqual([session, routine]);
+    expect(pending.routines).toEqual([undefined, 'claude-code-routine']);
+    expect(await readDay(TODAY)).toEqual([session, routine]);
+    // A line naming a routine source this CLI does not know is invalid.
+    await appendFile(
+      paths().logFile(TODAY),
+      `${JSON.stringify({ v: 1, routine: 'other', ...event(TODAY, 3) })}\n`,
+    );
+    expect((await readPending(10)).events).toHaveLength(2);
   });
 
   it('skips a partial trailing line with one warning', async () => {

@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import {
@@ -27,7 +27,10 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
-import { resetBackgroundSyncThrottle } from '../background-sync.js';
+import {
+  backgroundSync,
+  resetBackgroundSyncThrottle,
+} from '../background-sync.js';
 import {
   bindFolder,
   type Config,
@@ -47,7 +50,13 @@ import {
   observeParts,
   readSource,
   refreshFingerprint,
+  replaceSource,
 } from '../fingerprint.js';
+import {
+  frameworkContent,
+  linesContent,
+  modelSetContent,
+} from '../fingerprint-content.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
 import { dayOf, readDay } from '../log.js';
@@ -214,6 +223,10 @@ class FakeApi {
   // How many envelopes POST /v1/events took, and whether it fails.
   synced = 0;
   eventsDown = false;
+  // The fingerprint JWS each POST /v1/events carried beside its envelopes.
+  syncedFingerprints: string[] = [];
+  // Each POST /v1/events, the event types it carried and its fingerprint.
+  syncedBatches: { types: string[]; fingerprint?: string }[] = [];
 
   constructor(readonly agentId: string) {}
 
@@ -331,10 +344,25 @@ class FakeApi {
     }
     if (method === 'POST' && url.pathname === '/v1/events') {
       if (this.eventsDown) return error(503, 'unavailable');
-      const { envelopes } = JSON.parse(String(init?.body)) as {
+      const { envelopes, fingerprint } = JSON.parse(String(init?.body)) as {
         envelopes: string[];
+        fingerprint?: string;
       };
       this.synced += envelopes.length;
+      if (fingerprint !== undefined) this.syncedFingerprints.push(fingerprint);
+      this.syncedBatches.push({
+        types: envelopes.map(
+          (e) =>
+            (
+              JSON.parse(
+                new TextDecoder().decode(
+                  base64urlDecode(e.split('.')[1] ?? ''),
+                ),
+              ) as { type: string }
+            ).type,
+        ),
+        ...(fingerprint === undefined ? {} : { fingerprint }),
+      });
       return Response.json({ accepted: envelopes.length, duplicates: 0 });
     }
     if (url.pathname === '/v1/game/status') {
@@ -1418,7 +1446,7 @@ describe('routine', () => {
         'Daily routine   14:37, only when there is work',
         '',
         '  Claims   Seed tasks and tasks from operators you allow',
-        '  Posts    1 task a day when posting is behind',
+        '  Posts    1 task a day for other agents',
         '  Limits   10 claims, 3 posts, 15 min, 300k tokens a day',
         '  Why      Verified tasks get your agent to bronze',
         '',
@@ -2261,9 +2289,10 @@ describe('routine', () => {
       ]);
     });
 
-    // claude -p names its model in the init line, and the run
-    // records it for the claude-code source, so the next sync declares it.
-    // A name that does not parse is dropped and the run goes on.
+    // claude -p names its model in the init line, and the run records it
+    // in the routine's own source, so the run's next submit and its closing
+    // sync declare it, and a session's sync never does. A name that does not
+    // parse is dropped and the run goes on.
     it('records the model claude -p names for the next sync, and drops one that is no name', async () => {
       const init = (model: string) => ({
         type: 'system',
@@ -2283,14 +2312,22 @@ describe('routine', () => {
           ),
       ];
       expect((await run('routine', 'run')).code).toBe(0);
-      expect(await readSource('claude-code', paths())).toMatchObject({
+      expect(await readSource('claude-code-routine', paths())).toMatchObject({
         model_name: 'claude-opus-5',
         model_reported: true,
       });
+      expect(await readSource('claude-code', paths())).toBeUndefined();
       expect(
-        (await declaredModel({ paths: paths(), env: { CLAUDECODE: '1' } }))
-          ?.name,
+        (
+          await declaredModel({
+            paths: paths(),
+            routine: 'claude-code-routine',
+          })
+        )?.name,
       ).toBe('claude-opus-5');
+      expect(
+        await declaredModel({ paths: paths(), env: { CLAUDECODE: '1' } }),
+      ).toBeNull();
       // The submit names the model that answered.
       expect(api.submitted[0]?.modelName).toBe('claude-opus-5');
 
@@ -2308,17 +2345,43 @@ describe('routine', () => {
       expect((await run('routine', 'run')).code).toBe(0);
       expect((await runs())[0]).toMatchObject({ outcome: 'done' });
       expect(
-        (await readSource('claude-code', paths()))?.model_name,
+        (await readSource('claude-code-routine', paths()))?.model_name,
       ).toBeUndefined();
       // Nor does the submit name one.
       expect(api.submitted[1]).not.toHaveProperty('modelName');
     });
 
-    // An answer whose runtime named no model is submitted with
-    // the model sync declares.
-    it('submits with the declared model when claude -p names none', async () => {
+    // An answer whose runtime named no model is submitted with the model of
+    // the agent's own sessions, never one an earlier run reported.
+    it("submits with the session's model when claude -p names none", async () => {
+      await observeParts(
+        'claude-code-routine',
+        { model_name: 'claude-sonnet-5' },
+        paths(),
+      );
       await observeParts(
         'claude-code',
+        { model_name: 'claude-opus-4-1' },
+        paths(),
+      );
+      const config = await readConfig();
+      if (config === null) throw new Error('no config');
+      await writeConfig({ ...config, runtime: 'claude-code' });
+      api.steps = [api.task(api.add())];
+      nextAgents = [
+        () =>
+          new FakeAgent(
+            [{ type: 'result', result: 'a\nb', total_cost_usd: 0.01 }],
+            0,
+          ),
+      ];
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(api.submitted[0]?.modelName).toBe('claude-opus-4-1');
+    });
+
+    it('submits with no model name when claude -p names none and the sessions declare none', async () => {
+      await observeParts(
+        'claude-code-routine',
         { model_name: 'claude-sonnet-5' },
         paths(),
       );
@@ -2334,19 +2397,33 @@ describe('routine', () => {
           ),
       ];
       expect((await run('routine', 'run')).code).toBe(0);
-      expect(api.submitted[0]?.modelName).toBe('claude-sonnet-5');
+      expect(api.submitted[0]).not.toHaveProperty('modelName');
     });
 
     // A run recomputes the fingerprint from its own home at its
     // start, and again before a step or a submit only when the parts
-    // changed, and every step and submit carries it.
+    // changed, and every step and submit carries it. A Claude Code run
+    // keeps its own in fingerprint-routine.json.
     describe('the fingerprint', () => {
       type Captured = {
         captures: { parts: Record<string, unknown> }[];
-        current: { hash: string; parts: Record<string, unknown> };
+        current: {
+          hash: string;
+          parts: Record<string, unknown>;
+          setup?: string;
+        };
       };
-      const fingerprintFile = async (p = paths()): Promise<Captured> =>
-        JSON.parse(await readFile(p.fingerprint, 'utf8'));
+      const fingerprintFile = async (
+        file = paths().fingerprintRoutine,
+      ): Promise<Captured> => JSON.parse(await readFile(file, 'utf8'));
+      // The tools part of a setup with no tools.
+      const noTools = () => partHash(agentId, linesContent([]));
+      // What a signed sync declared beside its envelopes.
+      const syncedDeclaration = async (jws: string | undefined) =>
+        (await verify(jws ?? '', base64urlDecode(agentId))).payload as {
+          fingerprint: Captured['current'];
+          model?: string;
+        };
       // The agent's answer, as claude -p streams it with the model it ran.
       const answersWith = (model: string) => () =>
         new FakeAgent(
@@ -2367,23 +2444,31 @@ describe('routine', () => {
         expect((await run('routine', 'run')).code).toBe(0);
         expect((await runs())[0]).toMatchObject({ outcome: 'done' });
 
-        // Step 0 went before the agent was asked, so nothing is declared.
-        expect(fingerprintOf(api.routineCalls[0])?.parts).toEqual({
+        // Step 0 went before the agent was asked, so no model is declared,
+        // and the run's empty tool list is.
+        expect(fingerprintOf(api.routineCalls[0])?.parts).toMatchObject({
           model_set: 'not_declared',
           prompt: 'not_declared',
-          tools: 'not_declared',
-          framework: 'not_declared',
+          tools: { hash: await noTools() },
         });
         // The submit carries the model the agent's start reported, and so
         // does the step after it.
-        const model = (await readSource('claude-code', paths()))?.model_set;
+        const model = (await readSource('claude-code-routine', paths()))
+          ?.model_set;
         expect(model).toBeDefined();
         const submitted = fingerprintOf(api.submitted[0]);
         expect(submitted?.parts.model_set).toEqual({ hash: model });
         expect(fingerprintOf(api.routineCalls.at(-1))).toEqual(submitted);
+        // Every one names the routine's setup, which the file does not hold.
+        for (const payload of [...api.routineCalls, ...api.submitted]) {
+          expect(fingerprintOf(payload)?.setup).toBe('routine');
+        }
         const file = await fingerprintFile();
-        expect(file.current).toEqual(submitted);
+        expect({ ...file.current, setup: 'routine' }).toEqual(submitted);
+        expect(file.current).not.toHaveProperty('setup');
         expect(file.captures).toHaveLength(2);
+        // Nothing of the session's was written.
+        expect(existsSync(paths().fingerprint)).toBe(false);
       });
 
       it('asks the same step again without it when the API refuses the field, and the run goes on', async () => {
@@ -2426,7 +2511,11 @@ describe('routine', () => {
 
       it('records exactly one capture in a run in which nothing changes', async () => {
         const model = await partHash(agentId, 'claude-opus-5');
-        await observeParts('claude-code', { model_set: model }, paths());
+        await observeParts(
+          'claude-code-routine',
+          { model_set: model },
+          paths(),
+        );
         api.steps = [api.task(api.add()), api.task(api.add())];
         nextAgents = [() => says('a\nb'), () => says('a\nb')];
         expect((await run('routine', 'run')).code).toBe(0);
@@ -2475,8 +2564,150 @@ describe('routine', () => {
             hash: mine,
           });
         }
-        expect((await fingerprintFile(other)).captures).toHaveLength(1);
+        expect(
+          (await fingerprintFile(other.fingerprint)).captures,
+        ).toHaveLength(1);
         expect(await readFile(paths().fingerprint, 'utf8')).toBe(before);
+      });
+
+      it("a Claude Code run declares its own setup, not the session's", async () => {
+        const sessionTools = await partHash(agentId, 'mcp:github');
+        await replaceSource(
+          'claude-code',
+          {
+            tools: sessionTools,
+            framework: await partHash(agentId, 'claude-code 2.1.200'),
+            model_set: await partHash(agentId, 'claude-opus-4-1'),
+            model_name: 'claude-opus-4-1',
+          },
+          paths(),
+        );
+        await refreshFingerprint({ paths: paths() });
+        const session = await readFile(paths().fingerprint, 'utf8');
+        const sessionSource = await readSource('claude-code', paths());
+        api.steps = [api.task(api.add())];
+        nextAgents = [answersWith('claude-opus-5')];
+        expect((await run('routine', 'run')).code).toBe(0);
+
+        const empty = await noTools();
+        const sent = [...api.routineCalls, ...api.submitted].map(fingerprintOf);
+        expect(sent).toHaveLength(3);
+        for (const fingerprint of sent) {
+          expect(fingerprint?.parts.tools).toEqual({ hash: empty });
+        }
+        const reported = await partHash(
+          agentId,
+          modelSetContent(['claude-opus-5']),
+        );
+        expect(fingerprintOf(api.routineCalls.at(-1))?.parts.model_set).toEqual(
+          { hash: reported },
+        );
+        expect(api.submitted[0]?.modelName).toBe('claude-opus-5');
+        expect(await readFile(paths().fingerprint, 'utf8')).toBe(session);
+        expect(await readSource('claude-code', paths())).toEqual(sessionSource);
+      });
+
+      it("the run's closing sync declares the routine's fingerprint and no model name", async () => {
+        await autoSyncOn();
+        await replaceSource(
+          'claude-code',
+          { model_name: 'claude-opus-4-1' },
+          paths(),
+        );
+        api.steps = [api.task(api.add())];
+        nextAgents = [answersWith('claude-opus-5')];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect(api.syncedFingerprints).toHaveLength(1);
+        const declared = await syncedDeclaration(api.syncedFingerprints[0]);
+        expect(declared.fingerprint.hash).toBe(
+          (await fingerprintFile()).current.hash,
+        );
+        expect(declared.fingerprint).toMatchObject({ setup: 'routine' });
+        expect(declared).not.toHaveProperty('model');
+        // The submit names the model that solved it.
+        expect(api.submitted[0]?.modelName).toBe('claude-opus-5');
+      });
+
+      it("a later session sync sends the routine's events beside the routine's fingerprint and the session's beside its own", async () => {
+        await replaceSource(
+          'claude-code',
+          {
+            tools: await partHash(agentId, 'mcp:github'),
+            model_name: 'claude-opus-4-1',
+          },
+          paths(),
+        );
+        // A session sync started just before the run, so the run's closing
+        // sync is held back by the gate.
+        await autoSyncOn();
+        await writeFile(join(paths().home, 'background-sync.stamp'), '');
+        api.steps = [api.task(api.add())];
+        nextAgents = [answersWith('claude-opus-5')];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect(api.syncedBatches).toEqual([]);
+        // An event of the operator's own session after the run.
+        await emit(
+          { type: 'session.start', payload: { session_id: 's1' } },
+          paths(),
+        );
+
+        resetBackgroundSyncThrottle();
+        await rm(join(paths().home, 'background-sync.stamp'));
+        expect(await backgroundSync({ fetch: api.fetch, paths: paths() })).toBe(
+          'synced',
+        );
+        expect(api.syncedBatches).toHaveLength(2);
+        const [routineBatch, sessionBatch] = api.syncedBatches;
+        expect(routineBatch?.types).toContain('usage');
+        const routineDeclared = await syncedDeclaration(
+          routineBatch?.fingerprint,
+        );
+        expect(routineDeclared.fingerprint.hash).toBe(
+          (await fingerprintFile()).current.hash,
+        );
+        expect(routineDeclared.fingerprint).toMatchObject({ setup: 'routine' });
+        expect(routineDeclared).not.toHaveProperty('model');
+        expect(sessionBatch?.types).toEqual(['session.start']);
+        const sessionDeclared = await syncedDeclaration(
+          sessionBatch?.fingerprint,
+        );
+        expect(sessionDeclared.fingerprint.hash).toBe(
+          (await fingerprintFile(paths().fingerprint)).current.hash,
+        );
+        expect(sessionDeclared.fingerprint).toMatchObject({ setup: 'session' });
+        expect(sessionDeclared.model).toBe('claude-opus-4-1');
+      });
+
+      it('the run writes the version of the claude it starts', async () => {
+        const versions = join(home, 'claude-install', 'versions');
+        await mkdir(versions, { recursive: true });
+        await writeFile(join(versions, '2.1.300'), '');
+        const link = join(home, 'claude-install', 'claude');
+        await symlink(join(versions, '2.1.300'), link);
+        await installed({
+          schedule: {
+            time: '10:00',
+            scheduler: 'cron',
+            agent: 'claude-code',
+            agentCommand: link,
+            job: 'run.sealkeeper.routine',
+            files: [],
+            installedAt: new Date().toISOString(),
+          },
+        });
+        api.steps = [api.task(api.add())];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect(
+          (await readSource('claude-code-routine', paths()))?.framework,
+        ).toBe(
+          await partHash(agentId, frameworkContent('claude-code', '2.1.300')),
+        );
+        expect(fingerprintOf(api.routineCalls[0])?.parts.framework).toEqual({
+          hash: await partHash(
+            agentId,
+            frameworkContent('claude-code', '2.1.300'),
+          ),
+        });
       });
     });
 
@@ -2986,11 +3217,9 @@ describe('routine', () => {
       });
 
       api.routineReply = () => error(404, 'not_found');
-      const old = await run('routine', 'run');
-      expect(old.code).toBe(1);
-      expect(old.out).toContain(
-        'Fix: This SealKeeper API has no routine route yet.',
-      );
+      const missing = await run('routine', 'run');
+      expect(missing.code).toBe(1);
+      expect(missing.out).toContain('Fix: Check the network.');
       api.routineReply = null;
       api.down = true;
       const down = await run('routine', 'run');
@@ -3577,12 +3806,15 @@ describe('routine', () => {
         tokens: 120,
         costUsd: 0.01,
       });
-      // The envelope's model goes to the OpenClaw source, as the live
-      // adapter reads it, without the provider.
-      expect(await readSource('openclaw', paths())).toMatchObject({
+      // The envelope's model goes to the routine's own OpenClaw source,
+      // as the live adapter reads it, without the provider, and the
+      // Gateway's source is left alone.
+      expect(await readSource('openclaw-routine', paths())).toMatchObject({
         model_name: 'gpt-x',
         model_reported: true,
+        tools: await partHash(agentId, linesContent([])),
       });
+      expect(await readSource('openclaw', paths())).toBeUndefined();
       expect(api.submitted[0]?.modelName).toBe('gpt-x');
     });
 
@@ -3774,6 +4006,39 @@ describe('routine', () => {
         on: true,
         runtime: 'mastra',
       });
+    });
+
+    // The instructions passed to routine give the prompt part before the
+    // run's first step, as a hash. The routine's own question is never part
+    // of it, and the agent itself is never read for it.
+    it('declares the instructions it is given as the prompt part, from the first step', async () => {
+      api.steps = [api.task(api.add())];
+      const instructions = 'You are scout, run by alice. Answer briefly.';
+      const generate = vi.fn(async () => ({
+        text: 'a\nb',
+        response: { modelId: 'gpt-4.1' },
+      }));
+      const agent = {
+        generate,
+        get instructions(): string {
+          throw new Error('the agent was read');
+        },
+      };
+      const result = await routine(agent, { instructions });
+      expect(result).toMatchObject({ outcome: 'done' });
+      const secret = (await readFile(paths().promptSecret, 'utf8')).trim();
+      const prompt = await partHash(
+        agentId,
+        `${secret}\n${createHash('sha256').update(instructions, 'utf8').digest('hex')}`,
+      );
+      expect((await readSource('mastra', paths()))?.prompt).toBe(prompt);
+      const first = api.routineCalls[0]?.fingerprint as
+        | { parts: Record<string, unknown> }
+        | undefined;
+      expect(first?.parts.prompt).toEqual({ hash: prompt });
+      const sources = await readFile(paths().fingerprintSources, 'utf8');
+      expect(sources).not.toContain('scout');
+      expect(sources).not.toContain('Answer');
     });
 
     // inputTokens in and outputTokens out, in either naming, and

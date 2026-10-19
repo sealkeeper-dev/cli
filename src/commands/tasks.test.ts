@@ -32,7 +32,6 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError } from '../api.js';
 import type { Input } from '../ask.js';
 import { resetBackgroundSyncThrottle, STAMP_FILE } from '../background-sync.js';
 import { paths, writeConfig, writeFileAtomic, writeNudge } from '../config.js';
@@ -84,8 +83,6 @@ import {
 import {
   ADOPT_PREVIEW_CHECK,
   ADOPTED_CHECK,
-  API_TOO_OLD_FOR_FIELDS,
-  API_TOO_OLD_FOR_TEMPLATE,
   adoptPreviewLines,
   assigneeCap,
   assigneeOperatorCap,
@@ -102,12 +99,10 @@ import {
   NOT_POSTED,
   NOTHING_POSTED,
   noAssignee,
-  postRefusal,
   sameOperator,
   TEMPLATE_SETS_FIELDS,
   templateNeedsYes,
 } from './post.js';
-import { OLD_API } from './release.js';
 import { AWAITING_POSTER } from './submit.js';
 
 const API_URL = 'https://api.test';
@@ -189,19 +184,14 @@ class FakeApi {
   // Open tasks this agent is barred from, left out of the signed open
   // list. The public GET still lists them.
   barred = new Set<string>();
-  // False for an API from before POST /v1/tasks/open.
-  openRoute = true;
-  // False for an API from before POST /v1/tasks/:id/release.
-  releaseRoute = true;
   // Replaces the answer to a release when set.
   releaseReply: (() => Response) | null = null;
   // Replaces the answer to the signed open list when set.
   openReply: (() => Response) | null = null;
-  // True for an older API, whose strict payloads refuse a
-  // fingerprint.
+  // True for an API whose strict payloads refuse a fingerprint.
   refuseFingerprint = false;
-  // True for an older API, whose strict submit payload
-  // refuses a model name.
+  // True for an API whose strict submit payload refuses a model
+  // name.
   refuseModelName = false;
 
   constructor(readonly agentId: string) {}
@@ -379,8 +369,6 @@ class FakeApi {
     }
 
     if (url.pathname === '/v1/tasks/open') {
-      // An API from before the signed open list answers 404.
-      if (!this.openRoute) return error(404, 'not_found');
       if (this.openReply) return this.openReply();
       const q = OpenTasksRequest.parse(payload);
       const { issuedAt: _, ...sent } = payload as Record<string, unknown>;
@@ -453,10 +441,6 @@ class FakeApi {
     }
     const id = match?.[1] ?? '';
     if (request.payload.taskId !== id) this.errors.push(`taskId ${id}`);
-    // An API from before releases has no such route, whatever the task.
-    if (match?.[2] === 'release' && !this.releaseRoute) {
-      return error(404, 'not_found');
-    }
     const task = this.tasks.get(id);
     if (!task) return error(404, 'not_found');
 
@@ -1006,17 +990,11 @@ describe('submit, release and the tasks commands', () => {
       expect(refused.err).toBe('failed with not_claimant\n');
     });
 
-    it('says in one line that an older API cannot release, and leaves the claim', async () => {
-      api.releaseRoute = false;
-      const task = held();
-      const { code, out, err } = await run('release', task.id);
+    it('says in one line that no task has an unknown id', async () => {
+      const { code, out, err } = await run('release', randomUUID());
       expect(code).toBe(1);
       expect(out).toBe('');
-      expect(err).toBe(`${OLD_API}\n`);
-      expect(api.tasks.get(task.id)?.state).toBe('claimed');
-      // An unknown task reads as one, not as an older API.
-      const missing = await run('release', randomUUID());
-      expect(missing.err).toBe(`${NOT_FOUND}\n`);
+      expect(err).toBe(`${NOT_FOUND}\n`);
     });
 
     it('refuses anything but a full task id before any request', async () => {
@@ -1741,48 +1719,6 @@ describe('submit, release and the tasks commands', () => {
       expect(api.requests).toEqual([]);
     });
 
-    it('says an API from before the fields does not take category or size', async () => {
-      // What an older API answers, its strict payload refusing both.
-      api.postReply = () =>
-        Response.json(
-          {
-            error: {
-              code: 'validation_failed',
-              message: 'Invalid payload',
-              issues: [
-                {
-                  path: [],
-                  code: 'unrecognized_keys',
-                  message: 'Unrecognized keys: "category", "size"',
-                },
-              ],
-            },
-          },
-          { status: 400 },
-        );
-      const { code, err } = await run(
-        'post',
-        '--template',
-        'text_dedupe',
-        '--yes',
-      );
-      expect(code).toBe(1);
-      expect(err).toBe(`${API_TOO_OLD_FOR_FIELDS}\n`);
-    });
-
-    it('names the fields by path too, and leaves other validation refusals alone', () => {
-      const failed = (path: string[]) =>
-        new ApiError(400, 'validation_failed', 'Invalid payload', [
-          { path, code: 'invalid_value', message: 'Invalid option' },
-        ]);
-      expect(postRefusal(failed(['size']), undefined)).toBe(
-        API_TOO_OLD_FOR_FIELDS,
-      );
-      expect(postRefusal(failed(['spec']), undefined)).not.toBe(
-        API_TOO_OLD_FOR_FIELDS,
-      );
-    });
-
     // --difficulty, sent on every post, the template's for a
     // template task type when not given, else 2.
     it.each([1, 2, 3, 4, 5])(
@@ -1871,38 +1807,6 @@ describe('submit, release and the tasks commands', () => {
         expect(api.requests).toEqual([]);
       },
     );
-
-    it('says an API from before difficulty does not take it', async () => {
-      // What an older API answers, its strict payload refusing it.
-      api.postReply = () =>
-        Response.json(
-          {
-            error: {
-              code: 'validation_failed',
-              message: 'Invalid payload',
-              issues: [
-                {
-                  path: [],
-                  code: 'unrecognized_keys',
-                  message: 'Unrecognized key: "difficulty"',
-                },
-              ],
-            },
-          },
-          { status: 400 },
-        );
-      const { code, err } = await run(
-        'post',
-        '--type',
-        'review',
-        '--spec',
-        '{}',
-        '--verify',
-        'counterparty',
-      );
-      expect(code).toBe(1);
-      expect(err).toBe(`${API_TOO_OLD_FOR_FIELDS}\n`);
-    });
 
     it('prints the poster guide in the help of --difficulty', () => {
       for (const line of [
@@ -2470,40 +2374,6 @@ describe('submit, release and the tasks commands', () => {
       expect(err).toBe(
         `${inputMisfit('text_dedupe', 'no line repeats, so there is nothing to remove')}\n`,
       );
-    });
-
-    it('says so when the API is older than template posts', async () => {
-      // An older API reads the post as an adoption.
-      api.postReply = () =>
-        Response.json(
-          {
-            error: {
-              code: 'validation_failed',
-              message: 'Invalid payload',
-              issues: [
-                {
-                  path: ['category'],
-                  code: 'invalid_value',
-                  message: 'Invalid option',
-                },
-                {
-                  path: [],
-                  code: 'unrecognized_keys',
-                  message: 'Unrecognized key: "template"',
-                },
-              ],
-            },
-          },
-          { status: 400 },
-        );
-      const { code, err } = await run(
-        'post',
-        '--template',
-        'json_shape',
-        '--yes',
-      );
-      expect(code).toBe(1);
-      expect(err).toBe(`${API_TOO_OLD_FOR_TEMPLATE}\n`);
     });
 
     it('posts a counterparty template from an input file, addressed with --for', async () => {
@@ -3317,7 +3187,8 @@ describe('submit, release and the tasks commands', () => {
   });
 
   // Claim, submit and outcome carry the fingerprint sync and run
-  // last wrote, and leave it out when there is none.
+  // last wrote, labelled with the session setup, and leave it out when
+  // there is none.
   describe('fingerprint', () => {
     const MODEL = 'A'.repeat(42).concat('E');
 
@@ -3329,7 +3200,7 @@ describe('submit, release and the tasks commands', () => {
       );
       const fingerprint = await currentFingerprint();
       if (fingerprint === null) throw new Error('no fingerprint written');
-      return fingerprint;
+      return { ...fingerprint, setup: 'session' as const };
     };
 
     const sent = (suffix: string) =>
@@ -3350,6 +3221,20 @@ describe('submit, release and the tasks commands', () => {
       expect(sent('/outcome')[0]?.payload).toEqual({
         taskId: task.id,
         outcome: 'success',
+        fingerprint,
+      });
+    });
+
+    it('labels it by the file it was read from, whatever the file holds', async () => {
+      const fingerprint = await written();
+      const file = JSON.parse(await readFile(paths().fingerprint, 'utf8'));
+      expect(file.current).not.toHaveProperty('setup');
+      file.current = { ...file.current, setup: 'routine' };
+      await writeFileAtomic(paths().fingerprint, JSON.stringify(file));
+      const task = api.add({});
+      expect((await run('claim', task.id)).code).toBe(0);
+      expect(sent('/claim')[0]?.payload).toEqual({
+        taskId: task.id,
         fingerprint,
       });
     });

@@ -11,6 +11,7 @@ import {
   declaredFingerprint,
   refusesFingerprint,
 } from './declared-fingerprint.js';
+import type { RoutineSource } from './fingerprint.js';
 import { loadSigner, type Signer } from './identity.js';
 import { cli } from './invocation.js';
 import {
@@ -31,7 +32,10 @@ import { isSent } from './taxonomy.js';
 // MAX_BATCH_EVENTS pending events, drops the ones older than the accepted
 // window, skips the types this CLI never sends (UNSENT_TYPES in taxonomy.ts),
 // signs the rest, posts them to /v1/events and, on 200, moves the cursor past
-// the last one sent. It loops until nothing is pending. Once a run has finished
+// the last one sent. It loops until nothing is pending. A round holds the lines
+// of one setup only, the session's or a routine run's (the routine a line
+// holds, see log.ts), and ends where the next line is of the other, so each
+// batch goes beside the fingerprint of the setup that logged it. Once a run has finished
 // it deletes the day files the log no longer needs, see pruneLog. It runs when
 // sync, emit, a hook or an adapter's background sync calls it.
 
@@ -211,18 +215,18 @@ async function sendRounds(
     }
   };
 
-  // The fingerprint this run declares, fingerprint.json as sync or run last
-  // wrote it, never computed here, with the model name beside it as text when
-  // an adapter read one or one is set. Signed on its own when the first batch
-  // goes and sent beside the envelopes until a batch is accepted with it. When
-  // the API refuses it with a model name, it is signed again without the name
-  // and the batch goes again. When the API refuses it without one, the batch
-  // goes again without it and the rest of the run sends none.
+  // The session's fingerprint, fingerprint.json as sync or run last wrote it,
+  // never computed here, with the model name beside it as text when an
+  // adapter read one or one is set. Signed on its own when the first session
+  // batch goes and sent beside the envelopes until a batch is accepted with
+  // it. When the API refuses it with a model name, it is signed again without
+  // the name and the batch goes again. When the API refuses it without one,
+  // the batch goes again without it and the rest of the run sends none.
   let fingerprintDue = true;
   let modelDue = true;
   let fingerprintJws: string | undefined;
   let jwsNamesModel = false;
-  const fingerprintToSend = async (s: Signer): Promise<string | undefined> => {
+  const sessionFingerprint = async (s: Signer): Promise<string | undefined> => {
     if (!fingerprintDue) return undefined;
     if (fingerprintJws === undefined) {
       const { fingerprint } = await declaredFingerprint(p);
@@ -240,6 +244,33 @@ async function sendRounds(
     }
     return fingerprintJws;
   };
+  // A routine run's fingerprint, fingerprint-routine.json, beside every batch
+  // of the lines a routine run logged, so each of them counts for the
+  // routine's setup. It names no model, since the agent's model name is the
+  // one of its own sessions, and each routine submit names the model that
+  // solved it. Signed once per run. When the API refuses it, the batch goes
+  // again without it and the rest of the run sends none.
+  let routineDue = true;
+  let routineJws: string | undefined;
+  const routineFingerprint = async (
+    s: Signer,
+    routine: RoutineSource,
+  ): Promise<string | undefined> => {
+    if (!routineDue) return undefined;
+    if (routineJws === undefined) {
+      const { fingerprint } = await declaredFingerprint(p, routine);
+      if (fingerprint === undefined) {
+        routineDue = false;
+        return undefined;
+      }
+      routineJws = await s.signEvent({ fingerprint });
+    }
+    return routineJws;
+  };
+  const fingerprintToSend = (s: Signer, routine: RoutineSource | undefined) =>
+    routine === undefined
+      ? sessionFingerprint(s)
+      : routineFingerprint(s, routine);
 
   for (;;) {
     if (options.deadline !== undefined && now() >= options.deadline) {
@@ -253,12 +284,22 @@ async function sendRounds(
       if (end >= 0) {
         pending.events.length = end + 1;
         pending.positions.length = end + 1;
+        pending.routines.length = end + 1;
         lastRound = true;
       } else if (pending.events.length < MAX_BATCH_EVENTS) {
         // Everything pending was read and until is not in it, so it has
         // already been sent.
         return result;
       }
+    }
+    // The round ends before the first line of the other setup, and the rest
+    // goes in the next round.
+    const routine = pending.routines[0];
+    const cut = pending.routines.findIndex((r) => r !== routine);
+    if (cut > 0) {
+      pending.events.length = cut;
+      pending.positions.length = cut;
+      lastRound = false;
     }
     const last = pending.events.length - 1;
     if (last < 0) return result;
@@ -293,7 +334,7 @@ async function sendRounds(
     const roundSigner = await loadOnce();
     for (const { event } of fresh)
       signed.push(await roundSigner.signEvent(event));
-    let fingerprint = await fingerprintToSend(roundSigner);
+    let fingerprint = await fingerprintToSend(roundSigner, routine);
     let envelopes = fitBatch(signed, fingerprint);
 
     // Sends one batch. A rejection at index i > 0 sends the i events before
@@ -307,7 +348,7 @@ async function sendRounds(
       await options.onRound?.();
       try {
         const sent = await options.api.postEvents(envelopes, fingerprint);
-        fingerprintDue = false;
+        if (routine === undefined) fingerprintDue = false;
         result.accepted += sent.accepted;
         result.duplicates += sent.duplicates;
         // When the whole round went, stale events after the last fresh one
@@ -323,13 +364,16 @@ async function sendRounds(
       } catch (error) {
         if (!(error instanceof ApiError)) throw error;
         if (fingerprint !== undefined && refusesFingerprint(error)) {
-          if (jwsNamesModel) {
+          if (routine !== undefined) {
+            routineDue = false;
+          } else if (jwsNamesModel) {
             modelDue = false;
             fingerprintJws = undefined;
-            fingerprint = await fingerprintToSend(roundSigner);
+            fingerprint = await fingerprintToSend(roundSigner, routine);
             continue;
+          } else {
+            fingerprintDue = false;
           }
-          fingerprintDue = false;
           fingerprint = undefined;
           continue;
         }

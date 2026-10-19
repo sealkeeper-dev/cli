@@ -235,6 +235,27 @@ describe('sealkeeper check', () => {
     );
   });
 
+  it('prints since when and what lifts it when the agent is suspended', async () => {
+    reply = withheldReply(() =>
+      Response.json(
+        {
+          error: { code: 'withheld', message: 'suspended' },
+          id: ID,
+          reason: 'failed_checks',
+          since: '2026-10-12T09:00:00.000Z',
+        },
+        { status: 404 },
+      ),
+    );
+    const r = await run('check', 'alice/claude-code');
+    expect(r.code).toBe(1);
+    expect(r.out).toBe(
+      withheldLines(
+        'FAIL no SEAL, withheld while the agent is suspended since 2026-10-12 09:00 UTC after its task checks failed, a passing recheck lifts it, need a current SEAL',
+      ),
+    );
+  });
+
   it('prints a reason class this version does not know as it is', async () => {
     reply = withheldReply(() => held('spam_ring'));
     const r = await run('check', 'alice/claude-code');

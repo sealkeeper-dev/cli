@@ -102,8 +102,6 @@ export const templateNeedsYes = (id: string): string =>
 // The line for SealKeeper's refusal of an input it made no task from.
 export const inputMisfit = (id: string, message: string): string =>
   `nothing posted. The input does not fit ${id}, ${message}`;
-export const API_TOO_OLD_FOR_TEMPLATE =
-  'nothing posted. This API is older than this CLI and does not make template tasks yet';
 
 // The refusals of an addressed post, one line each. ref is what --for gave.
 export const noAssignee = (ref: string): string =>
@@ -124,8 +122,6 @@ export const badDifficulty = (value: string): string =>
   `--difficulty must be a whole number from ${TASK_DIFFICULTIES[0]} to ${TASK_DIFFICULTIES.at(-1)}, got ${value}`;
 export const difficultyNeedsConfirm = (difficulty: number): string =>
   `--difficulty ${difficulty} needs your confirmation of the result, so it goes with --verify counterparty only`;
-export const API_TOO_OLD_FOR_FIELDS =
-  'nothing posted. This API is older than this CLI and does not take category, size or difficulty yet';
 export const TEMPLATE_SETS_FIELDS =
   '--template sets its own category, size and difficulty, leave out --category, --size and --difficulty';
 
@@ -152,8 +148,6 @@ export const adoptCap = (cap: number | null): string =>
   cap === null
     ? "nothing posted. SealKeeper's daily limit of adoptions is reached, try again tomorrow"
     : `nothing posted. SealKeeper's daily limit of ${cap} adoptions is reached, try again tomorrow`;
-export const API_TOO_OLD_FOR_ADOPT =
-  'nothing posted. This API is older than this CLI and does not take adoptions yet';
 export const ADOPTED_CHECK =
   'SealKeeper knows the answer to this task and checks it on submit, so nothing waits on you.';
 // Said before an adoption, since the task may come back as a counterparty task
@@ -616,27 +610,11 @@ function capOf(error: ApiError): number | null {
   return found === undefined ? null : Number(found);
 }
 
-// The fields only a post has, named when an older API reads an adoption as a
-// post.
-const POST_FIELDS = new Set(['taskType', 'spec', 'verification']);
-
-// True when an older API read the adoption as a post and asked for its task
-// type, spec or verification.
-function apiTooOldForAdopt(error: ApiError): boolean {
-  return (
-    error.code === 'validation_failed' &&
-    error.issues.some((issue) =>
-      issue.path.some((p) => typeof p === 'string' && POST_FIELDS.has(p)),
-    )
-  );
-}
-
 // One line per refusal of an adoption. Everything else is the shared
 // refusal.
 export function adoptRefusal(error: ApiError, category: string): string {
   if (error.code === 'candidate_none') return noneWaiting(category);
   if (error.code === 'adopt_limit') return adoptCap(capOf(error));
-  if (apiTooOldForAdopt(error)) return API_TOO_OLD_FOR_ADOPT;
   return refusal(error);
 }
 
@@ -1023,50 +1001,18 @@ function ownAgent(ref: string, slug: string, agentId: string): boolean {
   );
 }
 
-// True when a validation_failed names category, size or difficulty as
-// unrecognized keys of the payload, path [] and the keys in the message, as an
-// older API refuses them.
-function namesNewFields(error: ApiError): boolean {
-  if (error.code !== 'validation_failed') return false;
-  const field = /^(category|size|difficulty)$/;
-  return error.issues.some(
-    (issue) =>
-      issue.path.some((p) => typeof p === 'string' && field.test(p)) ||
-      (issue.code === 'unrecognized_keys' &&
-        /"(category|size|difficulty)"/.test(issue.message)),
-  );
-}
-
-// True when an older API read a template post as an adoption and refused the
-// template as a key it does not know.
-function apiTooOldForTemplate(error: ApiError): boolean {
-  return (
-    error.code === 'validation_failed' &&
-    error.issues.some(
-      (issue) =>
-        issue.code === 'unrecognized_keys' && /"template"/.test(issue.message),
-    )
-  );
-}
-
 // One line per refusal of the post route. The assignee codes name what
-// --for gave. For a template post, template names the template, an input
-// SealKeeper made no task from says why and an API that does not make
-// template tasks says so. An API that does not take category, size or
-// difficulty says so.
-// Everything else is the shared refusal.
+// --for gave. For a template post, template names the template and an input
+// SealKeeper made no task from says why. Everything else is the shared
+// refusal.
 export function postRefusal(
   error: ApiError,
   assignee: string | undefined,
   template?: string,
 ): string {
-  if (template !== undefined) {
-    if (error.code === 'template_input') {
-      return inputMisfit(template, error.message);
-    }
-    if (apiTooOldForTemplate(error)) return API_TOO_OLD_FOR_TEMPLATE;
+  if (template !== undefined && error.code === 'template_input') {
+    return inputMisfit(template, error.message);
   }
-  if (namesNewFields(error)) return API_TOO_OLD_FOR_FIELDS;
   if (assignee !== undefined) {
     switch (error.code) {
       case 'not_found':

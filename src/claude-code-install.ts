@@ -150,9 +150,8 @@ export function installLines(
   ];
 }
 
-// What install did with the hooks, one line each for what it added, what
-// it rewrote and the retired tool call hooks it took out, or one saying
-// nothing changed.
+// What install did with the hooks, one line each for what it added and what
+// it rewrote, or one saying nothing changed.
 function hooksLines(result: InstallResult, file: string): string[] {
   const lines: string[] = [];
   if (result.added.length > 0) {
@@ -165,16 +164,9 @@ function hooksLines(result: InstallResult, file: string): string[] {
       `updated sealkeeper hooks for ${result.updated.join(', ')} in ${file}`,
     );
   }
-  if (result.removed.length > 0) lines.push(retiredLine(result.removed, file));
   if (lines.length === 0)
     lines.push(`sealkeeper hooks already installed in ${file}`);
   return lines;
-}
-
-// Said when install took the hooks of an older CLI out, the tool call
-// hooks and Stop.
-function retiredLine(events: string[], file: string): string {
-  return `removed sealkeeper hooks for ${events.join(', ')} from ${file}, which record nothing now`;
 }
 
 // A slash command by its file, the /sealkeeper-run command for

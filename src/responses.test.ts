@@ -24,6 +24,7 @@ import {
   runBySealKeeper,
   SealClaims,
   StatusAnswerResponse,
+  sealStateWithheld,
   sealWithheldOf,
   TaskResponse,
   WellKnown,
@@ -606,30 +607,18 @@ describe('CredentialPayload issuer', () => {
 });
 
 describe('runBySealKeeper', () => {
-  it('reads operatedBySealKeeper and prefers it over the old name', () => {
+  it('reads operatedBySealKeeper, false when it is missing', () => {
     expect(runBySealKeeper({ operatedBySealKeeper: true })).toBe(true);
-    expect(
-      runBySealKeeper({ operatedBySealKeeper: false, operatedByVouched: true }),
-    ).toBe(false);
-    expect(
-      runBySealKeeper({ operatedBySealKeeper: true, operatedByVouched: false }),
-    ).toBe(true);
-  });
-
-  it('falls back to operatedByVouched from an older API', () => {
-    expect(runBySealKeeper({ operatedByVouched: true })).toBe(true);
-    expect(runBySealKeeper({ operatedByVouched: false })).toBe(false);
+    expect(runBySealKeeper({ operatedBySealKeeper: false })).toBe(false);
     expect(runBySealKeeper({})).toBe(false);
   });
 
-  it('keeps both names when AgentResponse parses an answer', () => {
-    const both = AgentResponse.parse({
+  it('reads it from an AgentResponse parsed from an answer', () => {
+    const parsed = AgentResponse.parse({
       ...agent,
       operatedBySealKeeper: true,
-      operatedByVouched: true,
     });
-    expect(both.operatedBySealKeeper).toBe(true);
-    expect(runBySealKeeper(both)).toBe(true);
+    expect(runBySealKeeper(parsed)).toBe(true);
   });
 });
 
@@ -728,6 +717,38 @@ describe('sealWithheldOf', () => {
     }
   });
 
+  it('reads a suspension with when it started', () => {
+    const suspended = (since: unknown) => ({
+      error: { code: 'withheld', message: 'm' },
+      id: 'x',
+      reason: 'failed_checks',
+      since,
+    });
+    expect(sealWithheldOf(suspended('2026-10-12T09:00:00.000Z'))).toEqual({
+      kind: 'suspended',
+      since: '2026-10-12T09:00:00.000Z',
+    });
+    for (const since of [undefined, 3, 'yesterday', null]) {
+      expect(sealWithheldOf(suspended(since))).toEqual({
+        kind: 'suspended',
+        since: null,
+      });
+    }
+  });
+
+  it('reads no recent check and checking', () => {
+    expect(
+      sealWithheldOf({
+        error: { code: 'withheld', message: 'm' },
+        id: 'x',
+        reason: 'no_recent_check',
+      }),
+    ).toEqual({ kind: 'no_recent_check' });
+    expect(
+      sealWithheldOf({ error: { code: 'checking', message: 'm' } }),
+    ).toEqual({ kind: 'checking' });
+  });
+
   it('says withheld and why in plain words', () => {
     expect(withheldText({ kind: 'held', reason: 'fraud' })).toBe(
       'withheld for cause, reason fraud',
@@ -743,6 +764,59 @@ describe('sealWithheldOf', () => {
     );
     expect(withheldText({ kind: 'dormant', dormantDays: null })).toBe(
       'withheld while the agent is dormant',
+    );
+    expect(
+      withheldText({ kind: 'suspended', since: '2026-10-12T09:00:00.000Z' }),
+    ).toBe(
+      'withheld while the agent is suspended since 2026-10-12 09:00 UTC after its task checks failed, a passing recheck lifts it',
+    );
+    expect(withheldText({ kind: 'suspended', since: null })).toBe(
+      'withheld while the agent is suspended after its task checks failed, a passing recheck lifts it',
+    );
+    expect(withheldText({ kind: 'no_recent_check' })).toBe(
+      'withheld until the agent passes a task check again',
+    );
+    expect(withheldText({ kind: 'checking' })).toBe(
+      'withheld while the agent is checked',
+    );
+  });
+});
+
+describe('sealStateWithheld', () => {
+  it('says nothing for a SEAL that is not withheld or a state it does not know', () => {
+    for (const state of ['active', 'dormant', 'sealed']) {
+      expect(sealStateWithheld({ state })).toBeNull();
+    }
+    expect(sealStateWithheld(undefined)).toBeNull();
+  });
+
+  it('reads a suspension after failed task checks and a hold', () => {
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: false,
+        reason: 'failed_checks',
+        since: '2026-10-12T09:00:00.000Z',
+      }),
+    ).toEqual({ kind: 'suspended', since: '2026-10-12T09:00:00.000Z' });
+    expect(
+      sealStateWithheld({ state: 'suspended', held: true, reason: 'fraud' }),
+    ).toEqual({ kind: 'held', reason: 'fraud' });
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: true,
+        reason: 'Bad Class',
+      }),
+    ).toEqual({ kind: 'held', reason: null });
+  });
+
+  it('reads a checking state with and without a recent check', () => {
+    expect(
+      sealStateWithheld({ state: 'checking', reason: 'no_recent_check' }),
+    ).toEqual({ kind: 'no_recent_check' });
+    expect(sealStateWithheld({ state: 'checking', reason: 'listing' })).toEqual(
+      { kind: 'checking' },
     );
   });
 });
