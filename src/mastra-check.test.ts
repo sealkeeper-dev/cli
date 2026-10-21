@@ -192,6 +192,54 @@ describe('mastra check', () => {
     expect(e.result.seal).toBeNull();
   });
 
+  it('assertTrusted throws for a Service SEAL unless kind service is asked for', async () => {
+    const service = await fixture.serviceSeal(ID);
+    const body = {
+      ...answer(true),
+      checks: [
+        ...answer(true).checks,
+        { name: 'minLevel', required: 'bronze', actual: 'bronze', ok: true },
+      ],
+      credential: service,
+      seal: service,
+    };
+    const { fn } = fakeFetch(() => Response.json(body));
+    const options = { apiUrl: 'https://api.test', fetch: fn };
+    const error = await assertTrusted('alice/claude-code', {}, options).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(SealKeeperCheckError);
+    expect((error as SealKeeperCheckError).message).toBe(
+      [
+        'alice/claude-code did not pass the SealKeeper check',
+        'FAIL level Bronze Service SEAL, need at least Bronze Agent SEAL',
+      ].join('\n'),
+    );
+    const passed = await assertTrusted(
+      'alice/claude-code',
+      { kind: 'service' },
+      options,
+    );
+    expect(passed.ok).toBe(true);
+  });
+
+  it('check of kind service needs no verified tasks unless minVerified is given', async () => {
+    const { fn, urls } = fakeFetch(() => Response.json(answer(false)));
+    const options = { apiUrl: 'https://api.test', fetch: fn };
+    await check('alice/claude-code', { kind: 'service' }, options);
+    await check(
+      'alice/claude-code',
+      { kind: 'service', minVerified: 1 },
+      options,
+    );
+    await check('alice/claude-code', {}, options);
+    expect(urls).toEqual([
+      'https://api.test/v1/check/alice/claude-code?minVerified=0',
+      'https://api.test/v1/check/alice/claude-code?minVerified=1',
+      'https://api.test/v1/check/alice/claude-code',
+    ]);
+  });
+
   it('rejects for an unknown agent, a bad handle and a bad threshold', async () => {
     const { fn, urls } = fakeFetch(() =>
       Response.json(

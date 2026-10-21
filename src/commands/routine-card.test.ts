@@ -1,4 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
+import { createHash } from 'node:crypto';
 import {
   mkdir,
   mkdtemp,
@@ -59,6 +60,11 @@ describe('the routine refreshes the card', () => {
   let serverKey: Awaited<ReturnType<typeof generateKeypair>>;
   // What GET /v1/agents/:id/seal answers, a SEAL or a withheld 404.
   let seal: () => Promise<Response>;
+  // What GET /v1/agents/:id answers, for status.
+  let agent: () => Promise<Response>;
+  // Called at each step the routine route answers, so a test can change
+  // what the run captures while it runs.
+  let onStep: () => Promise<void>;
   let requests: string[];
   let fetchFn: typeof fetch;
 
@@ -93,12 +99,31 @@ describe('the routine refreshes the card', () => {
     return sign(payload, serverKey.privateKey, KID);
   }
 
-  const issues = (expSec: number) => async () => {
-    const credential = await credentialFor(expSec);
+  const answer = (credential: string) => {
     const body = credential.split('.')[1] ?? '';
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString());
     return Response.json({ credential, payload });
   };
+
+  const issues = (expSec: number) => async () =>
+    answer(await credentialFor(expSec));
+
+  // The same SEAL at every call, as the API answers while it keeps one.
+  async function keeps(expSec: number): Promise<() => Promise<Response>> {
+    const credential = await credentialFor(expSec);
+    return async () => answer(credential);
+  }
+
+  const suspended = async () =>
+    Response.json(
+      {
+        error: { code: 'withheld', message: 'suspended' },
+        id: agentId,
+        reason: 'failed_checks',
+        since: '2026-10-12T09:00:00.000Z',
+      },
+      { status: 404 },
+    );
 
   const withheld = async () =>
     Response.json(
@@ -120,9 +145,11 @@ describe('the routine refreshes the card', () => {
         fetch: fetcher,
         stdoutTTY: () => false,
         sleep: async () => undefined,
+        versionOf: async () => null,
       },
       // status prints its screen, as in a terminal.
       tasks: { fetch: fetcher, isTTY: () => true },
+      seal: { fetch: fetcher },
     });
     throwOnExit(program);
     let out = '';
@@ -173,6 +200,11 @@ describe('the routine refreshes the card', () => {
   // left is what the card refresh read.
   const cardRequests = () =>
     requests.filter((url) => !url.endsWith('/routine/next'));
+
+  // How many times the SEAL was asked for.
+  const sealRequests = () =>
+    requests.filter((url) => url === `${API_URL}/v1/agents/${agentId}/seal`)
+      .length;
 
   // The routine route, done at the first step.
   const done = (init?: RequestInit) => {
@@ -242,13 +274,21 @@ describe('the routine refreshes the card', () => {
     });
     serverKey = await generateKeypair();
     seal = issues(24 * HOUR);
+    agent = async () =>
+      Response.json(
+        { error: { code: 'not_found', message: 'not found' } },
+        { status: 404 },
+      );
+    onStep = async () => undefined;
     requests = [];
     fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       requests.push(url);
       if (url === `${API_URL}/v1/agents/${agentId}/routine/next`) {
+        await onStep();
         return done(init);
       }
+      if (url === `${API_URL}/v1/agents/${agentId}`) return agent();
       if (url === `${API_URL}/.well-known/seal.json`) {
         return Response.json({
           keys: [
@@ -396,7 +436,8 @@ describe('the routine refreshes the card', () => {
     expect(signed).not.toBe(sessionFp.hash);
   });
 
-  it('leaves a card whose SEAL is fresh alone, byte for byte', async () => {
+  it('leaves a card alone, byte for byte, while the API answers the SEAL it holds', async () => {
+    seal = await keeps(24 * HOUR);
     const before = await writeCard();
     await installed();
     requests = [];
@@ -405,7 +446,8 @@ describe('the routine refreshes the card', () => {
     const result = await run(fetchFn, 'routine', 'run');
     expect(result.code).toBe(0);
     expect(await readFile(cardFile, 'utf8')).toBe(before);
-    expect(requests).not.toContain(`${API_URL}/v1/agents/${agentId}/seal`);
+    // Asked even with a fresh SEAL cached, so a withheld one is seen.
+    expect(sealRequests()).toBe(1);
     expect(await lastRun()).toMatchObject({ card: 'current' });
     expect(result.out).toContain('Card up to date.');
     // The record keeps the time init wrote it.
@@ -499,7 +541,25 @@ describe('the routine refreshes the card', () => {
     );
   });
 
-  it('goes on when the SEAL is withheld, and the card holds what it held', async () => {
+  // The card a withheld SEAL leaves, the card init writes with no SEAL,
+  // with the cached SEAL gone and the write recorded.
+  async function expectNoSeal(before: string): Promise<void> {
+    const after = await readFile(cardFile, 'utf8');
+    expect(AgentCard.parse(JSON.parse(after))).toEqual({
+      ...AgentCard.parse(JSON.parse(before)),
+      capabilities: { extensions: [] },
+    });
+    expect((await stat(cardFile)).mode & 0o777).toBe(0o644);
+    await expect(stat(paths().credential)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    const record = JSON.parse(await readFile(paths().cardWrite, 'utf8'));
+    expect(record.sha256).toBe(
+      createHash('sha256').update(after).digest('hex'),
+    );
+  }
+
+  it('goes on when the SEAL is withheld, and writes the card without a SEAL', async () => {
     seal = issues(HOUR);
     const before = await writeCard();
     await installed();
@@ -513,25 +573,15 @@ describe('the routine refreshes the card', () => {
       card: 'withheld',
     });
     expect(result.out).toContain(
-      'Card kept, no SEAL is issued for this agent now.',
+      'Card holds no SEAL, none is issued for this agent now.',
     );
-    expect(await readFile(cardFile, 'utf8')).toBe(before);
+    await expectNoSeal(before);
   });
 
-  it('goes on when the agent is suspended, and the card holds what it held', async () => {
-    seal = issues(HOUR);
+  it('writes the card without a SEAL when the agent is suspended, with a fresh SEAL cached', async () => {
     const before = await writeCard();
     await installed();
-    seal = async () =>
-      Response.json(
-        {
-          error: { code: 'withheld', message: 'suspended' },
-          id: agentId,
-          reason: 'failed_checks',
-          since: '2026-10-12T09:00:00.000Z',
-        },
-        { status: 404 },
-      );
+    seal = suspended;
     vi.setSystemTime(new Date(NOW.getTime() + 60_000));
 
     const result = await run(fetchFn, 'routine', 'run');
@@ -540,7 +590,74 @@ describe('the routine refreshes the card', () => {
       outcome: 'nothing',
       card: 'withheld',
     });
-    expect(await readFile(cardFile, 'utf8')).toBe(before);
+    await expectNoSeal(before);
+
+    // A second run leaves the card as it is.
+    const unsealed = await readFile(cardFile, 'utf8');
+    expect((await run(fetchFn, 'routine', 'run')).code).toBe(0);
+    expect(await lastRun()).toMatchObject({ card: 'withheld' });
+    expect(await readFile(cardFile, 'utf8')).toBe(unsealed);
+
+    // Once the API issues a SEAL again, the next run puts it on the card.
+    seal = issues(24 * HOUR);
+    expect((await run(fetchFn, 'routine', 'run')).code).toBe(0);
+    expect(await lastRun()).toMatchObject({ card: 'refreshed' });
+    const cached = JSON.parse(await readFile(paths().credential, 'utf8'));
+    expect(sealOf(await readFile(cardFile, 'utf8'))).toBe(cached.seal);
+  });
+
+  it('writes the card without a SEAL when seal show finds it withheld', async () => {
+    const before = await writeCard();
+    seal = suspended;
+    const result = await run(fetchFn, 'seal', 'show');
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(
+      'no SEAL, withheld while the agent is suspended',
+    );
+    await expectNoSeal(before);
+  });
+
+  it("signs the card's handshake over the fingerprint the run ends with, when it changed during the run", async () => {
+    seal = issues(HOUR);
+    await writeCard();
+    await installed();
+    seal = await keeps(24 * HOUR);
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+    // The runtime reports a part once the run is going, as the model on the
+    // first run of a setup.
+    let start: string | undefined;
+    onStep = async () => {
+      start ??= await routineHash();
+      await capture('routine tools', 'claude-code-routine');
+    };
+    requests = [];
+
+    expect((await run(fetchFn, 'routine', 'run')).code).toBe(0);
+    const end = await routineHash();
+    expect(start).toBeDefined();
+    expect(end).not.toBe(start);
+    expect(handshakeSigned(await readFile(cardFile, 'utf8'))).toMatchObject({
+      fingerprint: end,
+      setup: 'routine',
+    });
+    expect(await lastRun()).toMatchObject({ card: 'refreshed' });
+    // Written at the start of the run and again at its end.
+    expect(sealRequests()).toBe(2);
+  });
+
+  it('writes the card once when the fingerprint stays the same through the run', async () => {
+    seal = issues(HOUR);
+    await writeCard();
+    await installed();
+    seal = await keeps(24 * HOUR);
+    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
+    requests = [];
+
+    expect((await run(fetchFn, 'routine', 'run')).code).toBe(0);
+    expect(handshakeSigned(await readFile(cardFile, 'utf8'))?.fingerprint).toBe(
+      await routineHash(),
+    );
+    expect(sealRequests()).toBe(1);
   });
 
   // status shows the card from the files alone, offline too, and
@@ -584,6 +701,30 @@ describe('the routine refreshes the card', () => {
         `Card       ${cardFile}, holds no SEAL yet, last written ${NOW.toISOString()}`,
       );
       expect(json).toMatchObject({ state: 'unsealed' });
+    });
+
+    it('writes the card without a SEAL and says why while the agent is suspended', async () => {
+      const before = await writeCard();
+      agent = async () =>
+        Response.json({
+          sealState: {
+            state: 'suspended',
+            reason: 'failed_checks',
+            held: false,
+            since: '2026-10-12T09:00:00.000Z',
+          },
+        });
+      const screen = await run(fetchFn, 'status');
+      expect(screen.code).toBe(0);
+      const line = screen.out.split('\n').find((l) => l.startsWith('Card '));
+      expect(line).toBe(
+        `Card       ${cardFile}, holds no SEAL, withheld while the agent is suspended since 2026-10-12 09:00 UTC after its task checks failed, a passing recheck lifts it, last written ${NOW.toISOString()}`,
+      );
+      await expectNoSeal(before);
+      const json = await run(fetchFn, 'status', '--json');
+      expect(JSON.parse(json.out).local.card).toMatchObject({
+        state: 'unsealed',
+      });
     });
 
     it('says when the card file is gone, edited or unreadable', async () => {

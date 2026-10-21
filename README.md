@@ -263,6 +263,8 @@ npx sealkeeper seal verify <seal>
 
 `seal show` prints the agent's current SEAL and what it says, and `seal write` saves it to `seal.txt`. `seal verify` checks any agent's SEAL and exits 0 when it is valid, 1 when it is broken and 2 when the keys could not be loaded. Pass `-` in place of the SEAL to read it from stdin.
 
+Both name the kind first, an Agent SEAL or a Service SEAL, and print the level with it, as in `level Silver Service SEAL`. For a SEAL with x402 checks they also print them in short form, made without paying. A SEAL from before the kind was signed is an Agent SEAL.
+
 | Flag of `seal verify` | What it does |
 |---|---|
 | `--keys <file>` | Check against a saved copy of `/.well-known/seal.json` and fetch nothing |
@@ -271,7 +273,7 @@ npx sealkeeper seal verify <seal>
 | `--handshake <jws>`, `--nonce <text>`, `--for <verifier>` | Check a handshake beside the SEAL |
 | `--at <time>` | Check the SEAL at a past time, ISO 8601 |
 
-A SEAL alone does not show that whoever presents it holds the agent's key. `seal handshake --nonce <nonce> --for <verifier>` prints a handshake signed with the agent's key, and the verifier checks it with `seal verify --handshake`.
+A SEAL alone does not show that whoever presents it holds the agent's key. `seal handshake --nonce <nonce> --for <verifier>` prints a handshake signed with the agent's key, and the verifier checks it with `seal verify --handshake`. A service has no SealKeeper key to prove, so `seal verify --handshake` beside a Service SEAL prints the SEAL, then `handshake refused`, and exits 1.
 
 ```sh
 npx sealkeeper seal handshake --nonce <nonce> --for <verifier>
@@ -280,7 +282,7 @@ npx sealkeeper seal verify <seal> --handshake <handshake> --nonce <nonce> --for 
 
 A handshake names the setup whose fingerprint it signs, `session` for your own sessions, which `seal handshake` signs, or `routine` for the one the daily routine puts in the agent card on Claude Code and OpenClaw. `seal verify` compares it with that setup's fingerprint only and prints the setup beside the result, as in `handshake Matches, routine setup`. A SEAL from version 6 carries both fingerprints, and `seal show` prints the routine's on its own line.
 
-`init` writes the agent's A2A agent card to `~/.sealkeeper/agent-card.json` with the SEAL as an extension. If the agent has its own HTTP surface, serve that file at `/.well-known/agent-card.json`. The daily routine refreshes it.
+`init` writes the agent's A2A agent card to `~/.sealkeeper/agent-card.json` with the SEAL as an extension. If the agent has its own HTTP surface, serve that file at `/.well-known/agent-card.json`. The daily routine refreshes it. While SealKeeper issues no SEAL for the agent, the routine, `status` and `seal show` write it without one.
 
 The format, the keys and how to verify a SEAL in any language are in the [SEAL spec](https://github.com/sealkeeper-dev/cli/blob/main/docs/seal.md). To test a SEAL reader of your own, [fixtures/README.md](https://github.com/sealkeeper-dev/cli/blob/main/fixtures/README.md) has valid, expired and broken SEALs, each with the answer to expect.
 
@@ -292,7 +294,7 @@ Before you hand work to another agent, check its track record in one line. No ke
 npx sealkeeper check alice/claude-code --min-verified 5 || exit 1
 ```
 
-It prints one line per check, then `PASS` or `FAIL` and the handle. By default it needs 1 verified task, no incidents in the last 90 days and level bronze. Change them with `--min-verified <n>`, `--max-incidents <n>`, `--min-reliability <x>`, `--min-safety <x>` and `--min-level <level>`, one of `none`, `bronze`, `silver` or `gold`. `--min-safety` fails for every agent while safety is not measured.
+It prints one line per check, then `PASS` or `FAIL` and the handle. By default it needs 1 verified task, no incidents in the last 90 days and level bronze. Change them with `--min-verified <n>`, `--max-incidents <n>`, `--min-reliability <x>`, `--min-safety <x>` and `--min-level <level>`, one of `none`, `bronze`, `silver` or `gold`. `--min-safety` fails for every agent while safety is not measured. The level is read from an Agent SEAL. Pass `--kind service` to check a service's level on its Service SEAL instead. A service does no tasks, so with `--kind service` the check needs 0 verified tasks unless you pass `--min-verified`. A SEAL of the other kind fails the level check, since the levels of an agent and a service are never compared. The level prints with its kind, as in `ok   level Silver Agent SEAL, need at least Bronze Agent SEAL`.
 
 Exit codes are 0 when every check passed, 1 when one failed and 2 when the check could not run. A pass is not taken on the API's word, since the agent's SEAL must verify, be current and name the agent.
 

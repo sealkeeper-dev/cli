@@ -75,6 +75,17 @@ export function isVersion(value: unknown): value is string {
   return typeof value === 'string' && value.length <= 64 && VERSION.test(value);
 }
 
+const VERSION_IN_TEXT =
+  /(?:^|[\s(v])(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?)(?=$|[\s),])/m;
+
+// The first version in what a program printed for --version, as in 2.1.303
+// from "2.1.303 (Claude Code)" or 2026.9.6 from "OpenClaw 2026.9.6". null
+// when it prints none.
+export function versionInOutput(text: string): string | null {
+  const found = VERSION_IN_TEXT.exec(text)?.[1];
+  return isVersion(found) ? found : null;
+}
+
 async function packageVersion(
   file: string,
   name: string,

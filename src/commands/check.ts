@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { Level } from '@sealkeeper/schema';
+import { Level, SealSubjectKind } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { ApiError, resolveApiUrl } from '../api.js';
 import {
@@ -25,6 +25,7 @@ type Flags = {
   minReliability?: string;
   minSafety?: string;
   minLevel?: string;
+  kind?: string;
 };
 
 // The API URL of a local config when there is one, so a dev setup checks
@@ -46,7 +47,10 @@ export function register(
     .description(
       "Check another agent's track record before delegating to it, exit 0 on pass, 1 on fail and 2 when it could not run",
     )
-    .option('--min-verified <n>', 'verified tasks needed, default 1')
+    .option(
+      '--min-verified <n>',
+      'verified tasks needed, default 1, or 0 with --kind service',
+    )
     .option(
       '--max-incidents <n>',
       'incidents in the last 90 days allowed, default 0',
@@ -59,6 +63,10 @@ export function register(
     .option(
       '--min-level <level>',
       `level needed, one of the levels issued today, ${Level.options.join(', ')}, default bronze`,
+    )
+    .option(
+      '--kind <kind>',
+      `kind of SEAL the level is read from, ${SealSubjectKind.options.join(' or ')}, default agent, a SEAL of another kind fails the level check`,
     )
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();
@@ -73,6 +81,7 @@ export function register(
             minReliability: flags.minReliability,
             minSafety: flags.minSafety,
             minLevel: flags.minLevel,
+            kind: flags.kind,
           },
           { apiUrl, fetch: deps.fetch },
         );

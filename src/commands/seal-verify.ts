@@ -35,6 +35,7 @@ import {
   type SealCheck,
   sealIssuer,
   sealKid,
+  sealKindName,
   sealSummary,
 } from '../seal.js';
 import { configApiUrl } from './check.js';
@@ -44,14 +45,23 @@ import type { SealDeps } from './seal.js';
 // broken or expired one, a SEAL for another agent than --agent among them, 2
 // the keys could not be loaded, which with --offline means the cache has no
 // usable copy. With --handshake, 0 only when it also reads Matches over the
-// verifier's own nonce, 1 when it is refused, 2 when the issuer's record could
-// not be read, 3 when it reads Changed or there is no fingerprint to compare
-// with, and 4 when it reads Matches but no --nonce was given, so it does not
-// show the presenter holds the key.
+// verifier's own nonce, 1 when it is refused, beside a Service SEAL always,
+// 2 when the issuer's record could not be read, 3 when it reads Changed or
+// there is no fingerprint to compare with, and 4 when it reads Matches but
+// no --nonce was given, so it does not show the presenter holds the key.
 const EXIT_BROKEN = 1;
 const EXIT_NO_KEYS = 2;
 const EXIT_NOT_MATCHED = 3;
 const EXIT_NO_NONCE = 4;
+
+// A service has no SealKeeper key to prove, so a handshake beside a Service
+// SEAL is refused without being read.
+export const SERVICE_HANDSHAKE: HandshakeLine = {
+  json: { valid: false, reason: 'service' },
+  lines: [
+    'handshake refused: a service has no SealKeeper key to prove, so a handshake is only checked beside an Agent SEAL',
+  ],
+};
 
 // Needs no key, no init and no account. The keys come from --keys, or from
 // the keys document (WELL_KNOWN_PATH) through a cache in the home that is
@@ -192,13 +202,19 @@ export function register(parent: Command, deps: SealDeps): Command {
         result = await checkSeal(seal, wellKnown, nowMs, options.agent, atMs);
       }
 
+      // The kind is read from the payload only once the signature checked
+      // out.
+      const kind = result.valid ? sealKindName(result.payload) : null;
+
       // The handshake beside a valid SEAL. A SEAL before version 3 carries
       // no fingerprint, and one before version 6 none of the routine's, so
       // such a handshake is compared with the agent answer from the API
       // paired with where the keys came from (recordApiUrl), which --keys
       // and --offline never fetch.
       let handshake: HandshakeLine | null = null;
-      if (result.valid && options.handshake !== undefined) {
+      if (kind === 'Service SEAL' && options.handshake !== undefined) {
+        handshake = SERVICE_HANDSHAKE;
+      } else if (result.valid && options.handshake !== undefined) {
         const fetchesNothing =
           options.keys !== undefined || options.offline === true;
         const pointed = resolveApiUrl({ config: await configApiUrl() });
@@ -252,8 +268,8 @@ export function register(parent: Command, deps: SealDeps): Command {
           !result.valid
             ? `broken SEAL: ${result.reason}`
             : result.at === undefined
-              ? 'valid SEAL'
-              : `valid SEAL at ${result.at}`,
+              ? `valid ${kind}`
+              : `valid ${kind} at ${result.at}`,
         );
         // What it says only for a valid SEAL. A broken one shows the raw
         // payload and nothing that reads like a claim.

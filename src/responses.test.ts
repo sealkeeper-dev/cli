@@ -673,6 +673,25 @@ describe('agentHandle and operatorSlugOf', () => {
 });
 
 describe('sealWithheldOf', () => {
+  it('reads a pay-to wallet change and a price above the declared one as their own kinds', () => {
+    const withheld = (reason: string) => ({
+      error: { code: 'withheld', message: 'm' },
+      reason,
+    });
+    expect(sealWithheldOf(withheld('wallet_unproven_change'))).toEqual({
+      kind: 'wallet_change',
+    });
+    expect(sealWithheldOf(withheld('price_above_declared'))).toEqual({
+      kind: 'price_above',
+    });
+    expect(withheldText({ kind: 'wallet_change' })).toBe(
+      'withheld after a pay-to wallet changed to one not proven, the owner can confirm the change',
+    );
+    expect(withheldText({ kind: 'price_above' })).toBe(
+      'withheld while a paid endpoint asks more than its declared price',
+    );
+  });
+
   it('reads the hold class and the dormant days loosely', () => {
     const held = (reason: unknown) => ({
       error: { code: 'withheld', message: 'm' },
@@ -783,6 +802,23 @@ describe('sealWithheldOf', () => {
 });
 
 describe('sealStateWithheld', () => {
+  it('reads a pay-to wallet change and a price above the declared one, never as a hold', () => {
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: false,
+        reason: 'wallet_unproven_change',
+      }),
+    ).toEqual({ kind: 'wallet_change' });
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: false,
+        reason: 'price_above_declared',
+      }),
+    ).toEqual({ kind: 'price_above' });
+  });
+
   it('says nothing for a SEAL that is not withheld or a state it does not know', () => {
     for (const state of ['active', 'dormant', 'sealed']) {
       expect(sealStateWithheld({ state })).toBeNull();

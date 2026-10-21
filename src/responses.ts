@@ -11,6 +11,8 @@ import {
   SEAL_FAILED_CHECKS,
   SEAL_MAX_TTL_SECONDS,
   SEAL_NO_RECENT_CHECK,
+  SEAL_PRICE_ABOVE_DECLARED,
+  SEAL_WALLET_UNPROVEN_CHANGE,
   Sha256Hex,
   StoredVersion,
   TaskOutcome,
@@ -221,7 +223,7 @@ const IdentityClaim = z.object({
 });
 export type IdentityClaim = z.infer<typeof IdentityClaim>;
 
-// The claims inside a SEAL, version 1, 2, 3, 4 or 5 or the legacy shape
+// The claims inside a SEAL, version 1 to 7 or the legacy shape
 // without ver. iss is any text here so seal verify can name a wrong issuer
 // instead of calling the SEAL malformed. scores takes any dimension name and level any
 // text, so a dimension or level added later does not break an older CLI.
@@ -303,12 +305,45 @@ const sealClaims = {
     })
     .optional(),
   listing: z.object({ handle: z.string() }).optional(),
+  // What the SEAL covers, version 7 on, an agent or a service, and for a
+  // service the interfaces it is checked over and whether it is paid. Text
+  // here, so a kind or an interface added later does not break an older
+  // CLI. A SEAL without it covers an agent.
+  subject: z
+    .object({
+      kind: z.string(),
+      interfaces: z.array(z.string()).optional(),
+      paid: z.boolean().optional(),
+    })
+    .optional(),
+  // endpoint_check carries task_total and task_ok, x402_check, version 7
+  // on, the unpaid x402 calls, the pay-to wallet and the price counts.
   evidence: z
     .array(
       z.object({
         type: z.string(),
         task_total: Count.optional(),
         task_ok: Count.optional(),
+        endpoints: Count.optional(),
+        checks_total: Count.optional(),
+        challenge_valid: Count.optional(),
+        wallet: z
+          .object({
+            proven: z.boolean(),
+            changes_30d: Count,
+            last_change_at: z.string().nullable(),
+            last_change_confirmed: z.boolean().nullable(),
+          })
+          .optional(),
+        price: z
+          .object({
+            as_declared: Count,
+            above_declared: Count,
+            below_declared: Count,
+            undeclared: Count,
+            changes_30d: Count,
+          })
+          .optional(),
       }),
     )
     .optional(),
@@ -378,11 +413,15 @@ export type WellKnown = z.infer<typeof WellKnown>;
 // later does not break this version. The names today are minVerified,
 // maxIncidents, minReliability, minSafety and minLevel, and minLevel is the
 // one whose required and actual are levels (none, bronze, silver, gold).
+// kind is set by the CLI on minLevel, never read from the API. required is
+// the kind of SEAL asked for, actual the kind of the agent's SEAL, null with
+// no SEAL.
 export type Check = {
   name: string;
   required: number | string;
   actual: number | string | null;
   ok: boolean;
+  kind?: { required: string; actual: string | null } | undefined;
 };
 export const Check: z.ZodType<Check> = z.object({
   name: z.string().min(1),
@@ -452,8 +491,10 @@ export const ErrorResponse = z.object({
 // Why a SEAL route answered 404 with no SEAL. held carries the reason class
 // of a hold on the agent or its operator, dormant the dormant days,
 // suspended when the suspension after failed task checks started,
-// no_recent_check an agent with no passing task check lately, and checking
-// an agent whose checks are still running. Read loosely, so a class this
+// no_recent_check an agent with no passing task check lately, wallet_change
+// a listing whose pay-to wallet moved to one its host has not proved,
+// price_above a listing whose paid endpoint asks more than the price it
+// declares, and checking an agent whose checks are still running. Read loosely, so a class this
 // version does not know still prints as the API sent it. A reason that is
 // not a plain class word, days that are not a whole number, or a start that
 // is not a timestamp, read as unknown rather than failing.
@@ -462,6 +503,8 @@ export type SealWithheld =
   | { kind: 'dormant'; dormantDays: number | null }
   | { kind: 'suspended'; since: string | null }
   | { kind: 'no_recent_check' }
+  | { kind: 'wallet_change' }
+  | { kind: 'price_above' }
   | { kind: 'checking' };
 
 const WithheldAnswer = z.object({
@@ -478,6 +521,13 @@ const sinceOf = (since: unknown): string | null => {
   return s.success ? s.data : null;
 };
 
+// The kind of a withheld reason that is no hold, null for any other.
+const unheldOf = (reason: unknown): SealWithheld | null => {
+  if (reason === SEAL_WALLET_UNPROVEN_CHANGE) return { kind: 'wallet_change' };
+  if (reason === SEAL_PRICE_ABOVE_DECLARED) return { kind: 'price_above' };
+  return null;
+};
+
 // The SealWithheld in a 404 body, or null when the body is anything else,
 // such as not_found for an unknown agent.
 export function sealWithheldOf(json: unknown): SealWithheld | null {
@@ -490,6 +540,8 @@ export function sealWithheldOf(json: unknown): SealWithheld | null {
       return { kind: 'suspended', since: sinceOf(since) };
     }
     if (reason === SEAL_NO_RECENT_CHECK) return { kind: 'no_recent_check' };
+    const unheld = unheldOf(reason);
+    if (unheld) return unheld;
     const r = HoldClass.safeParse(reason);
     return { kind: 'held', reason: r.success ? r.data : null };
   }
@@ -520,6 +572,8 @@ export function sealStateWithheld(
     if (reason === SEAL_FAILED_CHECKS) {
       return { kind: 'suspended', since: sinceOf(sealState.since) };
     }
+    const unheld = unheldOf(reason);
+    if (unheld) return unheld;
     const r = HoldClass.safeParse(reason);
     return { kind: 'held', reason: r.success ? r.data : null };
   }
@@ -557,6 +611,10 @@ export function withheldText(withheld: SealWithheld): string {
     }
     case 'no_recent_check':
       return 'withheld until the agent passes a task check again';
+    case 'wallet_change':
+      return 'withheld after a pay-to wallet changed to one not proven, the owner can confirm the change';
+    case 'price_above':
+      return 'withheld while a paid endpoint asks more than its declared price';
     case 'checking':
       return 'withheld while the agent is checked';
   }

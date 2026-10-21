@@ -11,6 +11,7 @@ import {
   WELL_KNOWN_MAX_AGE_SECONDS,
   WELL_KNOWN_PATH,
   WELL_KNOWN_URL,
+  X402_UNPAID_NOTE,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
 import { createApiClient } from './api.js';
@@ -155,14 +156,50 @@ function expiresAtOf(payload: unknown): string | null {
     : null;
 }
 
+// What a SEAL covers, read from subject.kind, agent or service. A SEAL
+// without subject.kind, from before version 7, covers an agent.
+export function sealKind(payload: unknown): string {
+  const subject =
+    typeof payload === 'object' && payload !== null && 'subject' in payload
+      ? (payload as { subject: unknown }).subject
+      : undefined;
+  const kind =
+    typeof subject === 'object' && subject !== null && 'kind' in subject
+      ? (subject as { kind: unknown }).kind
+      : undefined;
+  return typeof kind === 'string' ? kind : 'agent';
+}
+
+// The name of a kind, Agent SEAL or Service SEAL. A kind this version does
+// not know is named as it came, as in robot SEAL.
+export function kindName(kind: string): string {
+  if (kind === 'agent') return 'Agent SEAL';
+  if (kind === 'service') return 'Service SEAL';
+  return `${kind} SEAL`;
+}
+
+// The name of what a SEAL covers, Agent SEAL or Service SEAL.
+export function sealKindName(payload: unknown): string {
+  return kindName(sealKind(payload));
+}
+
+// The level with its kind, as in Silver Service SEAL. none reads as none
+// beside the kind.
+export function levelWithKind(level: string, kind: string): string {
+  return level === 'none'
+    ? `none, ${kind}`
+    : `${level.charAt(0).toUpperCase()}${level.slice(1)} ${kind}`;
+}
+
 // What a verified SEAL says, one line each, for seal show and seal verify.
-// Level, the eight counts (with the counted value beside each task count from
-// version 2 on), the three posted counts (with the counted value beside posted
-// tasks and posted confirmed tasks), fingerprint and state of version 3 on, the
-// Trust Score and the top categories of version 4 on, the routine fingerprint
-// of version 6 on, operator verified, a
-// listed agent's handle, owner and endpoint checks of version 5, last active as
-// a date, dormant days and any identity references. A legacy SEAL, issued
+// Level with its kind, a service's interfaces and whether it is paid, the
+// eight counts (with the counted value beside each task count from version 2
+// on), the three posted counts (with the counted value beside posted tasks and
+// posted confirmed tasks), fingerprint and state of version 3 on, the Trust
+// Score and the top categories of version 4 on, the routine fingerprint of
+// version 6 on, operator verified, a listed agent's handle, owner and endpoint
+// checks of version 5, the x402 checks of version 7 in short form, last active
+// as a date, dormant days and any identity references. A legacy SEAL, issued
 // before version 1, has only some of these, so a line is left out when its
 // field is. Nothing for a payload that is not a SEAL.
 const COUNT_LINES = [
@@ -186,12 +223,18 @@ export function sealSummary(payload: unknown): string[] {
   const parsed = SealClaims.safeParse(payload);
   if (!parsed.success) return [];
   const c = parsed.data;
+  const kind = sealKindName(c);
   const lines: string[] = [];
   lines.push(
     c.level === undefined
       ? 'level not in this SEAL, it was issued before version 1'
-      : `level ${c.level}`,
+      : `level ${levelWithKind(c.level, kind)}`,
   );
+  if (kind === 'Service SEAL' && c.subject !== undefined) {
+    lines.push(
+      `interfaces ${(c.subject.interfaces ?? []).join(', ') || 'none'}, paid ${c.subject.paid ? 'yes' : 'no'}`,
+    );
+  }
   for (const [key, label] of COUNT_LINES) {
     const value = c.counts[key];
     if (value === undefined) continue;
@@ -264,6 +307,7 @@ export function sealSummary(payload: unknown): string[] {
         `endpoint checks ${e.task_ok ?? 0} of ${e.task_total ?? 0} OK`,
       );
     }
+    if (e.type === 'x402_check') lines.push(...x402Lines(e));
   }
   if (c.last_active !== undefined) {
     lines.push(
@@ -280,6 +324,34 @@ export function sealSummary(payload: unknown): string[] {
       `identity ${ref.kind} ${ref.scope} from ${ref.provider}, attested ${day(ref.attested_at)}`,
     );
   }
+  return lines;
+}
+
+type Evidence = NonNullable<SealClaims['evidence']>[number];
+
+// x402_check evidence in short form. The valid challenges out of the checks,
+// whether the pay-to wallet is proven, its changes in 30 days, the price
+// counts, and that the calls were made without paying.
+function x402Lines(e: Evidence): string[] {
+  const lines = [
+    `x402 valid challenges ${e.challenge_valid ?? 0} of ${e.checks_total ?? 0} checks, ${e.endpoints ?? 0} ${e.endpoints === 1 ? 'endpoint' : 'endpoints'}`,
+  ];
+  if (e.wallet !== undefined) {
+    const w = e.wallet;
+    lines.push(w.proven ? 'wallet proven' : 'wallet not proven');
+    lines.push(
+      w.last_change_at === null
+        ? `wallet changes in 30 days ${w.changes_30d}`
+        : `wallet changes in 30 days ${w.changes_30d}, last on ${w.last_change_at.slice(0, 10)}, ${w.last_change_confirmed ? 'confirmed by owner' : 'not confirmed by owner'}`,
+    );
+  }
+  if (e.price !== undefined) {
+    const p = e.price;
+    lines.push(
+      `price ${p.as_declared} as declared, ${p.above_declared} above declared, ${p.below_declared} below declared, ${p.undeclared} no declared price, ${p.changes_30d} changes in 30 days`,
+    );
+  }
+  lines.push(X402_UNPAID_NOTE);
   return lines;
 }
 

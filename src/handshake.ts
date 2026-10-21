@@ -124,7 +124,8 @@ const PROOF_WORDS: Record<HandshakeProof, string> = {
 };
 
 export type HandshakeLine = {
-  // The answer for --json, as the API's handshake field has it.
+  // The answer for --json, as the API's handshake field has it, and the
+  // service refusal beside a Service SEAL, which only seal verify gives.
   json:
     | {
         valid: true;
@@ -133,7 +134,7 @@ export type HandshakeLine = {
         proof: HandshakeProof;
         setup: FingerprintSetup;
       }
-    | { valid: false; reason: HandshakeRefusal };
+    | { valid: false; reason: HandshakeRefusal | 'service' };
   // What seal verify prints, one or two lines.
   lines: string[];
 };

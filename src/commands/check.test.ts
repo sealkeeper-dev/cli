@@ -203,7 +203,7 @@ describe('sealkeeper check', () => {
       sealLine,
       'ok   verified tasks 30, need at least 1',
       'ok   incidents 0, allow at most 0',
-      'FAIL level none, need at least bronze',
+      'FAIL level none with no SEAL, need at least Bronze Agent SEAL',
       'FAIL alice/claude-code',
       '',
     ].join('\n');
@@ -380,7 +380,7 @@ describe('sealkeeper check', () => {
     );
     expect(r.code).toBe(1);
     expect(r.out.split('\n').at(-3)).toBe(
-      'FAIL level bronze, need at least silver',
+      'FAIL level Bronze Agent SEAL, need at least Silver Agent SEAL',
     );
     expect(urls).toEqual([
       'https://api.test/v1/check/alice/claude-code?minVerified=0&minLevel=silver',
@@ -394,6 +394,200 @@ describe('sealkeeper check', () => {
     expect(bad.code).toBe(2);
     expect(bad.err).toContain('invalid minLevel platinum');
     expect(urls).toHaveLength(1);
+  });
+
+  // The kind of SEAL the level is read from. The API answers minLevel by
+  // level alone, so the kind is checked against the SEAL it sent.
+  describe('--kind', () => {
+    let serviceSeal: string;
+    beforeAll(async () => {
+      serviceSeal = await fixture.serviceSeal(ID);
+    });
+    const withLevel = (seal: string, required = 'bronze') => ({
+      ...passing,
+      checks: [
+        ...passing.checks,
+        { name: 'minLevel', required, actual: 'bronze', ok: true },
+      ],
+      seal,
+      credential: seal,
+    });
+
+    it('fails the level of a Service SEAL by default, exit 1', async () => {
+      reply = () => Response.json(withLevel(serviceSeal));
+      const r = await run('check', 'alice/claude-code', '--min-verified', '0');
+      expect(r.code).toBe(1);
+      expect(r.err).toBe('');
+      expect(r.out.split('\n').slice(-3)).toEqual([
+        'FAIL level Bronze Service SEAL, need at least Bronze Agent SEAL',
+        'FAIL alice/claude-code',
+        '',
+      ]);
+      expect(urls).toEqual([
+        'https://api.test/v1/check/alice/claude-code?minVerified=0',
+      ]);
+    });
+
+    it('fails a Service SEAL under --min-level none too', async () => {
+      reply = () => Response.json(withLevel(serviceSeal, 'none'));
+      const r = await run('check', 'alice/claude-code', '--min-level', 'none');
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(
+        'FAIL level Bronze Service SEAL, need an Agent SEAL at any level',
+      );
+    });
+
+    it('passes a Service SEAL with --kind service, needs no verified tasks by default and never sends the kind', async () => {
+      reply = () => Response.json(withLevel(serviceSeal));
+      const r = await run('check', 'alice/claude-code', '--kind', 'service');
+      expect(r.code).toBe(0);
+      expect(r.out.split('\n').slice(-3)).toEqual([
+        'ok   level Bronze Service SEAL, need at least Bronze Service SEAL',
+        'PASS alice/claude-code',
+        '',
+      ]);
+      expect(urls).toEqual([
+        'https://api.test/v1/check/alice/claude-code?minVerified=0',
+      ]);
+    });
+
+    it('sends an explicit --min-verified with --kind service as given', async () => {
+      reply = () =>
+        Response.json({
+          ...withLevel(serviceSeal),
+          ok: false,
+          checks: [
+            { name: 'minVerified', required: 1, actual: 0, ok: false },
+            {
+              name: 'minLevel',
+              required: 'bronze',
+              actual: 'bronze',
+              ok: true,
+            },
+          ],
+        });
+      const r = await run(
+        'check',
+        'alice/claude-code',
+        '--kind',
+        'service',
+        '--min-verified',
+        '1',
+      );
+      expect(r.code).toBe(1);
+      expect(r.out).toContain('FAIL verified tasks 0, need at least 1');
+      expect(urls).toEqual([
+        'https://api.test/v1/check/alice/claude-code?minVerified=1',
+      ]);
+    });
+
+    it('does not trust a pass for a Service SEAL with 0 verified tasks under an explicit --min-verified 1', async () => {
+      reply = () => Response.json(withLevel(serviceSeal));
+      const r = await run(
+        'check',
+        'alice/claude-code',
+        '--kind',
+        'service',
+        '--min-verified',
+        '1',
+      );
+      expect(r.code).toBe(2);
+      expect(r.err).toContain(
+        'not trusting alice/claude-code, its SEAL has 0 verified tasks, the check needs 1',
+      );
+    });
+
+    it('keeps the default verified tasks for an agent check', async () => {
+      reply = () => Response.json(withLevel(passing.seal ?? ''));
+      const r = await run('check', 'alice/claude-code', '--kind', 'agent');
+      expect(r.code).toBe(0);
+      expect(urls).toEqual(['https://api.test/v1/check/alice/claude-code']);
+    });
+
+    it('fails an Agent SEAL with --kind service', async () => {
+      reply = () => Response.json(withLevel(passing.seal ?? ''));
+      const r = await run('check', 'alice/claude-code', '--kind', 'service');
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(
+        'FAIL level Bronze Agent SEAL, need at least Bronze Service SEAL',
+      );
+    });
+
+    it('names the kind of a failing answer from the SEAL it carries', async () => {
+      reply = () =>
+        Response.json({
+          ...withLevel(serviceSeal),
+          ok: false,
+          checks: [
+            { name: 'minVerified', required: 50, actual: 26, ok: false },
+            {
+              name: 'minLevel',
+              required: 'silver',
+              actual: 'bronze',
+              ok: false,
+            },
+          ],
+        });
+      const r = await run('check', 'alice/claude-code', '--kind', 'service');
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(
+        'FAIL level Bronze Service SEAL, need at least Silver Service SEAL',
+      );
+    });
+
+    it('names a kind it does not know as it came on a failing answer', async () => {
+      const [h, p, sig] = serviceSeal.split('.');
+      const payload = JSON.parse(Buffer.from(p ?? '', 'base64url').toString());
+      payload.subject.kind = 'robot';
+      const robot = `${h}.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.${sig}`;
+      reply = () =>
+        Response.json({
+          ...withLevel(robot),
+          ok: false,
+          checks: [
+            { name: 'minVerified', required: 50, actual: 26, ok: false },
+            {
+              name: 'minLevel',
+              required: 'bronze',
+              actual: 'bronze',
+              ok: true,
+            },
+          ],
+        });
+      const r = await run('check', 'alice/claude-code');
+      expect(r.code).toBe(1);
+      expect(r.out).toContain(
+        'FAIL level Bronze robot SEAL, need at least Bronze Agent SEAL',
+      );
+    });
+
+    it('--json carries the kinds on minLevel and ok false', async () => {
+      reply = () => Response.json(withLevel(serviceSeal));
+      const r = await run('--json', 'check', 'alice/claude-code');
+      expect(r.code).toBe(1);
+      const out = JSON.parse(r.out);
+      expect(out.ok).toBe(false);
+      expect(out.checks.at(-1)).toEqual({
+        name: 'minLevel',
+        required: 'bronze',
+        actual: 'bronze',
+        ok: false,
+        kind: { required: 'agent', actual: 'service' },
+      });
+    });
+
+    it('refuses a kind it does not know before anything is sent, exit 2', async () => {
+      const r = await run('check', 'alice/claude-code', '--kind', 'robot');
+      expect(r.code).toBe(2);
+      expect(r.err).toContain('invalid kind robot, one of agent, service');
+      expect(urls).toEqual([]);
+      const help = createProgram()
+        .commands.find((c) => c.name() === 'check')
+        ?.helpInformation();
+      expect(help?.replace(/\s+/g, ' ')).toContain(
+        '--kind <kind> kind of SEAL the level is read from, agent or service, default agent',
+      );
+    });
   });
 
   it.each([
@@ -436,7 +630,7 @@ describe('sealkeeper check', () => {
   it.each([
     [
       ['--min-level', 'silver'],
-      'its SEAL has level bronze, the check needs silver',
+      'its SEAL is Bronze Agent SEAL, the check needs at least Silver Agent SEAL',
     ],
     [
       ['--min-verified', '10'],
@@ -500,7 +694,9 @@ describe('sealkeeper check', () => {
     const r = await run('check', 'alice/claude-code');
     expect(r.code).toBe(1);
     expect(r.out).toContain('FAIL minTenure 12, required 30');
-    expect(r.out).toContain('FAIL level gold, need at least platinum');
+    expect(r.out).toContain(
+      'FAIL level Gold Agent SEAL, need at least Platinum Agent SEAL',
+    );
   });
 
   it('exits 2 with the message for an unknown agent', async () => {

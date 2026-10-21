@@ -67,6 +67,7 @@ import {
   runnable,
   type Spawner,
   Transcript,
+  versionByRunning,
 } from '../routine-agent.js';
 import {
   copyPaths,
@@ -185,6 +186,12 @@ export type RoutineDeps = {
   random?: () => number;
   // The clock a new routine's time comes from, tests pass a fixed one.
   now?: () => Date;
+  // The version a program prints for --version, versionByRunning by
+  // default. Tests pass their own, so none runs a program.
+  versionOf?: (
+    command: string,
+    env: NodeJS.ProcessEnv,
+  ) => Promise<string | null>;
 };
 
 // Starts one routine run to watch, as the first run after a setup.
@@ -1750,13 +1757,20 @@ function scheduledAgent(
     },
     // The run's own setup. The version of the runtime the job starts, under
     // the same name the Claude Code hooks and the OpenClaw plugin write, so one
-    // install reads the same in both. And an empty tool list, since the
-    // runtime runs with every tool turned off.
+    // install reads the same in both. From its install path, else from what
+    // it prints for --version, as a wrapper script names no version in its
+    // path. And an empty tool list, since the runtime runs with every tool
+    // turned off.
     async observe(observer) {
       const openclaw = schedule.agent === 'openclaw';
-      const version = openclaw
-        ? await openClawVersion(schedule.agentCommand)
-        : await claudeVersionAt(schedule.agentCommand);
+      const version =
+        (openclaw
+          ? await openClawVersion(schedule.agentCommand)
+          : await claudeVersionAt(schedule.agentCommand)) ??
+        (await (deps.versionOf ?? versionByRunning)(
+          schedule.agentCommand,
+          agentEnv(RUN_WHERE),
+        ));
       if (version !== null) {
         await observer.framework(
           openclaw ? 'openclaw' : 'claude-code',
@@ -1877,7 +1891,7 @@ const CARD_TEXT = new Map<string, string>([
   ['refreshed', 'Card refreshed.'],
   ['current', 'Card up to date.'],
   ['offline', 'Card kept, the API could not be reached.'],
-  ['withheld', 'Card kept, no SEAL is issued for this agent now.'],
+  ['withheld', 'Card holds no SEAL, none is issued for this agent now.'],
   ['gone', 'Card not refreshed, its file is gone.'],
   ['changed', 'Card not refreshed, the file holds another card.'],
   ['unwritable', 'Card not refreshed, its file could not be written.'],

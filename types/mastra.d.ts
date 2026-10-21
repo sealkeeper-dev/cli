@@ -55,7 +55,8 @@ export declare function sealKeeperContext(): Promise<string>;
 
 // Every value optional. A value left out takes the API's default.
 // minReliability and minSafety (0 to 1) and minLevel are checked only when
-// given.
+// given. kind is the kind of SEAL minLevel passes, agent unless given. A
+// SEAL of another kind fails minLevel whatever its level.
 export type CheckThresholds = {
   minVerified?: number | undefined;
   maxIncidents?: number | undefined;
@@ -63,6 +64,7 @@ export type CheckThresholds = {
   minSafety?: number | undefined;
   // none asks for no level. These are the levels issued today.
   minLevel?: 'none' | 'bronze' | 'silver' | 'gold' | undefined;
+  kind?: 'agent' | 'service' | undefined;
 };
 
 export type CheckOptions = {
@@ -78,12 +80,15 @@ export type CheckOptions = {
 // SEAL as actual. seal is sent only when the SEAL is withheld, required present
 // and actual withheld, and fails. The names today are seal, minVerified,
 // maxIncidents, minReliability, minSafety and minLevel. name and the levels are
-// typed as text so a check or level added later still reads.
+// typed as text so a check or level added later still reads. kind is on
+// minLevel, the kind of SEAL asked for as required and the agent's SEAL's
+// as actual, null with no SEAL. minLevel passes only when the two match.
 export type Check = {
   name: string;
   required: number | string;
   actual: number | string | null;
   ok: boolean;
+  kind?: { required: string; actual: string | null } | undefined;
 };
 
 // ok is true only when every check passed. seal is the agent's current SEAL, to

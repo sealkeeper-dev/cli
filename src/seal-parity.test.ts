@@ -456,4 +456,66 @@ describe('seal verify --handshake against the reader fixtures', () => {
       'routine fingerprint none sent',
     );
   });
+
+  it("prints a Service SEAL's level with its kind and its wallet and price as signed", async () => {
+    const index: FixtureIndex = JSON.parse(await fixture('index.json'));
+    const service = index.cases.find((c) => c.name === 'v7-service-valid')
+      ?.expected?.pinned?.payload as {
+      evidence: Record<string, unknown>[];
+    };
+    const x402 = service.evidence[0] as Record<string, unknown>;
+    const lines = sealSummary({
+      ...service,
+      level: 'silver',
+      evidence: [
+        {
+          ...x402,
+          endpoints: 1,
+          wallet: {
+            proven: false,
+            changes_30d: 2,
+            last_change_at: '2026-09-30T09:12:00.000Z',
+            last_change_confirmed: false,
+          },
+          price: {
+            as_declared: 0,
+            above_declared: 1,
+            below_declared: 0,
+            undeclared: 0,
+            changes_30d: 1,
+          },
+        },
+      ],
+    });
+    expect(lines[0]).toBe('level Silver Service SEAL');
+    expect(lines).toContain(
+      'x402 valid challenges 55 of 56 checks, 1 endpoint',
+    );
+    expect(lines).toContain('wallet not proven');
+    expect(lines).toContain(
+      'wallet changes in 30 days 2, last on 2026-09-30, not confirmed by owner',
+    );
+    expect(lines).toContain(
+      'price 0 as declared, 1 above declared, 0 below declared, 0 no declared price, 1 changes in 30 days',
+    );
+    const confirmed = sealSummary({
+      ...service,
+      level: 'none',
+      evidence: [
+        {
+          ...x402,
+          wallet: {
+            proven: true,
+            changes_30d: 1,
+            last_change_at: '2026-09-30T09:12:00.000Z',
+            last_change_confirmed: true,
+          },
+        },
+      ],
+    });
+    expect(confirmed[0]).toBe('level none, Service SEAL');
+    expect(confirmed).toContain(
+      'wallet changes in 30 days 1, last on 2026-09-30, confirmed by owner',
+    );
+  });
 });

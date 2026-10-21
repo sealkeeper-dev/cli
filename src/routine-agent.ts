@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import {
   closeSync,
   existsSync,
@@ -21,6 +21,7 @@ import {
 } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import type { ScheduledAgent } from './config.js';
+import { versionInOutput } from './fingerprint-content.js';
 
 // The agent of a routine run. The routine puts one question to one agent and
 // takes its answer back as text, a task's spec to solve or a submission to
@@ -201,6 +202,46 @@ export function spawnCall(
     args: ['/d', '/s', '/c', `"${line}"`],
     verbatim: true,
   };
+}
+
+// Short, so a slow or hung program never holds up a run.
+const VERSION_TIMEOUT_MS = 5_000;
+
+// What the program prints for --version, at most this much, is read.
+const VERSION_MAX_BYTES = 64 * 1024;
+
+// The version that command prints for --version, run directly with no shell,
+// as spawnCall starts it. For a wrapper script, whose path names no version.
+// null when it cannot be started, fails, prints no version or takes longer
+// than VERSION_TIMEOUT_MS. Never throws.
+export function versionByRunning(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), VERSION_TIMEOUT_MS + 1_000);
+    const done = (version: string | null) => {
+      clearTimeout(timer);
+      resolve(version);
+    };
+    try {
+      const call = spawnCall(command, ['--version']);
+      execFile(
+        call.file,
+        call.args,
+        {
+          env,
+          timeout: VERSION_TIMEOUT_MS,
+          maxBuffer: VERSION_MAX_BYTES,
+          windowsHide: true,
+          windowsVerbatimArguments: call.verbatim,
+        },
+        (error, stdout) => done(error ? null : versionInOutput(String(stdout))),
+      );
+    } catch {
+      done(null);
+    }
+  });
 }
 
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;

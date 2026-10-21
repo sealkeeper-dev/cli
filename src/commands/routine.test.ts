@@ -56,6 +56,7 @@ import {
   frameworkContent,
   linesContent,
   modelSetContent,
+  versionInOutput,
 } from '../fingerprint-content.js';
 import { createKey } from '../identity.js';
 import { resetInvocation } from '../invocation.js';
@@ -88,6 +89,7 @@ import {
   TRANSCRIPT_CAP_BYTES,
   TRANSCRIPT_CUT_LINE,
   Transcript,
+  versionByRunning,
 } from '../routine-agent.js';
 import { copyPaths, copyVersion } from '../routine-copy.js';
 import { mastraRuntime } from '../routine-mastra.js';
@@ -555,6 +557,9 @@ describe('routine', () => {
     env: NodeJS.ProcessEnv;
     cwd: string;
   }[];
+  // What the agent prints for --version, and the commands asked for it.
+  let versionPrinted: string | null;
+  let versionAsked: string[];
 
   const runner: Runner = async (file, args, options) => {
     calls.push({ line: [file, ...args].join(' '), input: options?.input });
@@ -627,6 +632,10 @@ describe('routine', () => {
         },
         random: () => random,
         now: () => now,
+        versionOf: async (command) => {
+          versionAsked.push(command);
+          return versionPrinted;
+        },
         clock: () => {
           tick += 1000;
           return tick;
@@ -750,6 +759,8 @@ describe('routine', () => {
     agents = [];
     nextAgents = [];
     spawned = [];
+    versionPrinted = null;
+    versionAsked = [];
     onPath = { claude: CLAUDE };
     finder = async (name) => onPath[name] ?? null;
     // A folder that is no project, never the runner's own.
@@ -2708,6 +2719,60 @@ describe('routine', () => {
             frameworkContent('claude-code', '2.1.300'),
           ),
         });
+        // The path named it, so the program was not run for it.
+        expect(versionAsked).toEqual([]);
+      });
+
+      it('the run writes the version a wrapper script prints, when its path names none', async () => {
+        const wrapper = join(home, 'bin', 'claude');
+        await mkdir(dirname(wrapper), { recursive: true });
+        await writeFile(wrapper, '#!/bin/sh\nexec claude "$@"\n');
+        versionPrinted = '2.1.303';
+        await installed({
+          schedule: {
+            time: '10:00',
+            scheduler: 'cron',
+            agent: 'claude-code',
+            agentCommand: wrapper,
+            job: 'run.sealkeeper.routine',
+            files: [],
+            installedAt: new Date().toISOString(),
+          },
+        });
+        api.steps = [api.task(api.add())];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect(versionAsked).toEqual([wrapper]);
+        const framework = await partHash(
+          agentId,
+          frameworkContent('claude-code', '2.1.303'),
+        );
+        expect(
+          (await readSource('claude-code-routine', paths()))?.framework,
+        ).toBe(framework);
+        expect(fingerprintOf(api.routineCalls[0])?.parts.framework).toEqual({
+          hash: framework,
+        });
+      });
+
+      it('the run declares no framework when neither the path nor the program names a version', async () => {
+        const missing = join(home, 'nowhere', 'claude');
+        await installed({
+          schedule: {
+            time: '10:00',
+            scheduler: 'cron',
+            agent: 'claude-code',
+            agentCommand: missing,
+            job: 'run.sealkeeper.routine',
+            files: [],
+            installedAt: new Date().toISOString(),
+          },
+        });
+        api.steps = [api.task(api.add())];
+        expect((await run('routine', 'run')).code).toBe(0);
+        expect(versionAsked).toEqual([missing]);
+        expect(
+          (await readSource('claude-code-routine', paths()))?.framework,
+        ).toBeUndefined();
       });
     });
 
@@ -3818,6 +3883,30 @@ describe('routine', () => {
       expect(api.submitted[0]?.modelName).toBe('gpt-x');
     });
 
+    it('the run writes the version an OpenClaw wrapper script prints, when its path names none', async () => {
+      const wrapper = join(home, 'bin', 'openclaw');
+      await mkdir(dirname(wrapper), { recursive: true });
+      await writeFile(wrapper, '#!/bin/sh\nexec openclaw "$@"\n');
+      versionPrinted = '2026.9.6';
+      await setRoutine({
+        model: MODEL,
+        schedule: {
+          time: '10:00',
+          scheduler: 'cron',
+          agent: 'openclaw',
+          agentCommand: wrapper,
+          job: 'run.sealkeeper.routine',
+          files: [],
+          installedAt: new Date().toISOString(),
+        },
+      });
+      expect((await run('routine', 'run')).code).toBe(0);
+      expect(versionAsked).toEqual([wrapper]);
+      expect((await readSource('openclaw-routine', paths()))?.framework).toBe(
+        await partHash(agentId, frameworkContent('openclaw', '2026.9.6')),
+      );
+    });
+
     it('a hostile spec cannot make OpenClaw run anything, and an answer from a turn that reports a tool call is dropped', async () => {
       await installedOpenClaw();
       const hostile = api.add({
@@ -4544,6 +4633,38 @@ describe('routine', () => {
       expect(call.args[3]).toContain(escapeCmdArgument('', true));
       expect(escapeCmdArgument('a&b', true)).toBe('^^^"a^^^&b^^^"');
     });
+
+    it('reads the version out of what a program prints for --version', () => {
+      expect(versionInOutput('2.1.303 (Claude Code)\n')).toBe('2.1.303');
+      expect(versionInOutput('OpenClaw 2026.9.6\n')).toBe('2026.9.6');
+      expect(versionInOutput('v1.2.3-beta.1')).toBe('1.2.3-beta.1');
+      expect(versionInOutput('claude: command not found')).toBeNull();
+      expect(versionInOutput('build 12.34')).toBeNull();
+      expect(versionInOutput('')).toBeNull();
+    });
+
+    it.skipIf(process.platform === 'win32')(
+      'runs a wrapper script with --version and no shell, and gives null for one that fails or is missing',
+      async () => {
+        const bin = join(home, 'bin');
+        await mkdir(bin, { recursive: true });
+        const script = async (name: string, body: string) => {
+          const file = join(bin, name);
+          await writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+          return file;
+        };
+        const prints = await script(
+          'prints',
+          '[ "$1" = "--version" ] && echo "2.1.303 (Claude Code)"',
+        );
+        expect(await versionByRunning(prints)).toBe('2.1.303');
+        const fails = await script('fails', 'echo "2.1.303"; exit 1');
+        expect(await versionByRunning(fails)).toBeNull();
+        expect(await versionByRunning(join(bin, 'missing'))).toBeNull();
+        // A name with shell characters is a path, never a command line.
+        expect(await versionByRunning(`${prints}; echo 9.9.9`)).toBeNull();
+      },
+    );
 
     it('refuses control characters at plan time and checks the length of a Task Scheduler command', async () => {
       const env = { platform: 'linux' as const, homedir: userHome, uid: 501 };

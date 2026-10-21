@@ -314,6 +314,339 @@
       }
     },
     {
+      "name": "v7-valid",
+      "file": "seals/v7-valid.txt",
+      "kind": "seal",
+      "description": "A version 7 SEAL of an agent, v6-valid plus subject.kind agent and nothing else, issued an hour before FIXTURE_NOW.",
+      "commands": {
+        "pinned": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z < fixtures/seals/v7-valid.txt",
+        "now": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json < fixtures/seals/v7-valid.txt"
+      },
+      "exit": {
+        "pinned": 0,
+        "now": 1
+      },
+      "expected": {
+        "pinned": {
+          "valid": true,
+          "payload": {
+            "iss": "sealkeeper.run",
+            "sub": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+            "ver": 7,
+            "iat": 1790852400,
+            "exp": 1790938800,
+            "agent_version": "1.0.0",
+            "subject": {
+              "kind": "agent"
+            },
+            "level": "bronze",
+            "scores": {
+              "reliability": 0.9
+            },
+            "counts": {
+              "events": 40,
+              "history_days": 4,
+              "verified_tasks": 26,
+              "seed_tasks": 25,
+              "server_checked_tasks": 1,
+              "confirmed_tasks": 0,
+              "distinct_operators": 1,
+              "safety_incidents_90d": 0,
+              "posted_tasks": 4,
+              "posted_distinct_operators": 2,
+              "posted_confirmed_tasks": 1
+            },
+            "counted": {
+              "verified_tasks": 17,
+              "seed_tasks": 17,
+              "server_checked_tasks": 0,
+              "confirmed_tasks": 0,
+              "posted_tasks": 3,
+              "posted_confirmed_tasks": 1
+            },
+            "fingerprint": {
+              "hash": "1JsN0Fu6rOWEq-ewtZ_1IAKMxj26PW8kEU2-Aa3OVXc",
+              "at": 1790848800
+            },
+            "routine_fingerprint": {
+              "hash": "JniAQWN9vaWD3U-BsZ33ReH5qhTPHc9WmG7d5Hl9tB0",
+              "at": 1790845200
+            },
+            "state": "matches",
+            "trust": 412,
+            "top_categories": [
+              {
+                "category": "code",
+                "score": 230
+              },
+              {
+                "category": "data",
+                "score": 90
+              },
+              {
+                "category": "math",
+                "score": 90
+              }
+            ],
+            "operator": {
+              "verified": false
+            },
+            "identity": [],
+            "last_active": 1790852400,
+            "dormant_days": 0
+          },
+          "expiresIn": 82800,
+          "at": "2026-10-01T12:00:00.000Z",
+          "lapsed": true
+        },
+        "now": {
+          "valid": false,
+          "reason": "expired"
+        }
+      }
+    },
+    {
+      "name": "v7-listed-x402-valid",
+      "file": "seals/v7-listed-x402-valid.txt",
+      "kind": "seal",
+      "description": "A version 7 SEAL of a listed agent that also answers x402, subject.kind agent, its owner unverified, endpoint_check and beside it x402_check of unpaid calls, issued an hour before FIXTURE_NOW.",
+      "commands": {
+        "pinned": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z < fixtures/seals/v7-listed-x402-valid.txt",
+        "now": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json < fixtures/seals/v7-listed-x402-valid.txt"
+      },
+      "exit": {
+        "pinned": 0,
+        "now": 1
+      },
+      "expected": {
+        "pinned": {
+          "valid": true,
+          "payload": {
+            "iss": "sealkeeper.run",
+            "sub": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+            "ver": 7,
+            "iat": 1790852400,
+            "exp": 1790938800,
+            "agent_version": "1.0.0",
+            "subject": {
+              "kind": "agent"
+            },
+            "level": "bronze",
+            "scores": {
+              "reliability": 0.9
+            },
+            "counts": {
+              "events": 40,
+              "history_days": 4,
+              "verified_tasks": 26,
+              "seed_tasks": 25,
+              "server_checked_tasks": 1,
+              "confirmed_tasks": 0,
+              "distinct_operators": 1,
+              "safety_incidents_90d": 0,
+              "posted_tasks": 4,
+              "posted_distinct_operators": 2,
+              "posted_confirmed_tasks": 1
+            },
+            "counted": {
+              "verified_tasks": 17,
+              "seed_tasks": 17,
+              "server_checked_tasks": 0,
+              "confirmed_tasks": 0,
+              "posted_tasks": 3,
+              "posted_confirmed_tasks": 1
+            },
+            "fingerprint": null,
+            "routine_fingerprint": null,
+            "state": "matches",
+            "trust": 412,
+            "top_categories": [
+              {
+                "category": "code",
+                "score": 230
+              },
+              {
+                "category": "data",
+                "score": 90
+              },
+              {
+                "category": "math",
+                "score": 90
+              }
+            ],
+            "operator": {
+              "verified": false
+            },
+            "identity": [],
+            "last_active": 1790852400,
+            "dormant_days": 0,
+            "owner": {
+              "status": "unverified"
+            },
+            "listing": {
+              "handle": "example.com/helper",
+              "domain_key": "example.com",
+              "card_url": "https://agents.example.com/.well-known/agent-card.json"
+            },
+            "evidence": [
+              {
+                "type": "endpoint_check",
+                "window_start": "2026-09-17T11:00:00.000Z",
+                "window_end": "2026-10-01T11:00:00.000Z",
+                "task_total": 12,
+                "task_ok": 11,
+                "uptime_pct": 99.5,
+                "p95_ms": 820,
+                "last_checked_at": "2026-10-01T10:00:00.000Z"
+              },
+              {
+                "type": "x402_check",
+                "window_start": "2026-09-24T11:00:00.000Z",
+                "window_end": "2026-10-01T11:00:00.000Z",
+                "unpaid_only": true,
+                "endpoints": 3,
+                "checks_total": 56,
+                "challenge_valid": 55,
+                "uptime_pct": 100,
+                "p95_ms": 410,
+                "wallet": {
+                  "proven": true,
+                  "changes_30d": 0,
+                  "last_change_at": null,
+                  "last_change_confirmed": null
+                },
+                "price": {
+                  "as_declared": 0,
+                  "above_declared": 0,
+                  "below_declared": 0,
+                  "undeclared": 3,
+                  "changes_30d": 0
+                },
+                "last_checked_at": "2026-10-01T10:00:00.000Z"
+              }
+            ]
+          },
+          "expiresIn": 82800,
+          "at": "2026-10-01T12:00:00.000Z",
+          "lapsed": true
+        },
+        "now": {
+          "valid": false,
+          "reason": "expired"
+        }
+      }
+    },
+    {
+      "name": "v7-service-valid",
+      "file": "seals/v7-service-valid.txt",
+      "kind": "seal",
+      "description": "A version 7 SEAL of a service, subject.kind service with interfaces x402 and paid, its owner unverified and x402_check evidence of unpaid calls in place of endpoint_check, issued an hour before FIXTURE_NOW.",
+      "commands": {
+        "pinned": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z < fixtures/seals/v7-service-valid.txt",
+        "now": "npx sealkeeper@latest seal verify - --keys fixtures/keys.json < fixtures/seals/v7-service-valid.txt"
+      },
+      "exit": {
+        "pinned": 0,
+        "now": 1
+      },
+      "expected": {
+        "pinned": {
+          "valid": true,
+          "payload": {
+            "iss": "sealkeeper.run",
+            "sub": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+            "ver": 7,
+            "iat": 1790852400,
+            "exp": 1790938800,
+            "agent_version": "1.0.0",
+            "subject": {
+              "kind": "service",
+              "interfaces": [
+                "x402"
+              ],
+              "paid": true
+            },
+            "level": "bronze",
+            "scores": {},
+            "counts": {
+              "events": 0,
+              "history_days": 0,
+              "verified_tasks": 0,
+              "seed_tasks": 0,
+              "server_checked_tasks": 0,
+              "confirmed_tasks": 0,
+              "distinct_operators": 0,
+              "safety_incidents_90d": 0,
+              "posted_tasks": 0,
+              "posted_distinct_operators": 0,
+              "posted_confirmed_tasks": 0
+            },
+            "counted": {
+              "verified_tasks": 0,
+              "seed_tasks": 0,
+              "server_checked_tasks": 0,
+              "confirmed_tasks": 0,
+              "posted_tasks": 0,
+              "posted_confirmed_tasks": 0
+            },
+            "fingerprint": null,
+            "routine_fingerprint": null,
+            "state": "matches",
+            "trust": 0,
+            "top_categories": [],
+            "operator": {
+              "verified": false
+            },
+            "identity": [],
+            "last_active": 1790852400,
+            "dormant_days": 0,
+            "owner": {
+              "status": "unverified"
+            },
+            "listing": {
+              "handle": "example.com/pay",
+              "domain_key": "example.com",
+              "card_url": "https://pay.example.com/.well-known/x402"
+            },
+            "evidence": [
+              {
+                "type": "x402_check",
+                "window_start": "2026-09-24T11:00:00.000Z",
+                "window_end": "2026-10-01T11:00:00.000Z",
+                "unpaid_only": true,
+                "endpoints": 3,
+                "checks_total": 56,
+                "challenge_valid": 55,
+                "uptime_pct": 100,
+                "p95_ms": 410,
+                "wallet": {
+                  "proven": true,
+                  "changes_30d": 0,
+                  "last_change_at": null,
+                  "last_change_confirmed": null
+                },
+                "price": {
+                  "as_declared": 0,
+                  "above_declared": 0,
+                  "below_declared": 0,
+                  "undeclared": 3,
+                  "changes_30d": 0
+                },
+                "last_checked_at": "2026-10-01T10:00:00.000Z"
+              }
+            ]
+          },
+          "expiresIn": 82800,
+          "at": "2026-10-01T12:00:00.000Z",
+          "lapsed": true
+        },
+        "now": {
+          "valid": false,
+          "reason": "expired"
+        }
+      }
+    },
+    {
       "name": "handshake",
       "file": "handshake/handshake.txt",
       "kind": "handshake",

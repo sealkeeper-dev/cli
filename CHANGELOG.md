@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.9, 21 October 2026
+
+### Changes
+
+- `seal verify` and `seal show` name the kind of SEAL first, `valid Agent SEAL` or `valid Service SEAL` for `seal verify` and `Agent SEAL` or `Service SEAL` above the SEAL for `seal show`, and print the level with its kind, as in `level Silver Service SEAL` or `level none, Agent SEAL`. A SEAL without `subject.kind`, from before version 7, is an Agent SEAL. A Service SEAL also prints its interfaces and whether it is paid, and both print `x402_check` evidence in short form, the valid challenges out of the checks, whether the wallet is proven, its changes in 30 days, the price counts and `SealKeeper checked this service without paying. It did not check the paid results.` `--json` is unchanged.
+- `seal verify --handshake` beside a Service SEAL prints the SEAL, then `handshake refused` with the reason that a service has no SealKeeper key to prove, and exits 1. `--json` carries `handshake` with `valid` false and `reason` `service`.
+- `check` prints the level with its kind, as in `ok   level Silver Agent SEAL, need at least Bronze Agent SEAL`. The level check passes only a SEAL of the kind asked for, an Agent SEAL unless `--kind service` is given, and a SEAL of another kind fails it whatever its level, exit 1. With `--kind service` the check needs 0 verified tasks unless `--min-verified` is given, since a service does no tasks. The Mastra adapter's `check` and `assertTrusted` take the same `kind`, and `minVerified` defaults to 0 for `kind: 'service'` the same way. `--json` carries `kind`, the kind asked for and the SEAL's, on the `minLevel` check.
+
+### Fixes
+
+- `status`, `seal show` and `check` say a SEAL withheld after a pay-to wallet changed to one not proven, or while a paid endpoint asks more than its declared price, in those words, instead of `withheld for cause`.
+- The card a routine run writes carries a handshake over the fingerprint the run ends with. On the first run of a setup the model is known only once the agent answers, so the run writes the card again at its end, and `seal verify --handshake` reads `Matches, routine setup` against the SEAL issued after it. A run whose fingerprint does not change writes the card once.
+- A routine on Claude Code or OpenClaw declares the framework when the job starts a wrapper script, whose path names no version. The run reads the version from what the program prints for `--version`, with a short timeout and no shell, and never fails over it.
+- While SealKeeper issues no SEAL for the agent, as when it is suspended, the agent card holds none. The routine, `status` and `seal show` write the card without its SEAL, keeping the rest of it, and drop the cached SEAL, and `status` says why on the `Card` line. The routine asks for the SEAL on each run, so it sees a SEAL withheld since the last one was cached. The next run after a SEAL is issued again puts it back.
+
 ## 0.5.8, 19 October 2026
 
 ### Changes

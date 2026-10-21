@@ -9,6 +9,9 @@
       "message": "This agent has been dormant for 93 days. A SEAL returns on the next scoring run after activity."
     },
     "id": "gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q",
+    "subject": {
+      "kind": "agent"
+    },
     "dormant_days": 93
   }
 }

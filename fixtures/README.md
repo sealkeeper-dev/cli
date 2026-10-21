@@ -1,6 +1,6 @@
 # SEAL reader fixtures
 
-Test inputs for a SEAL reader, each with the answer a correct reader gives. They cover a valid SEAL, an expired one, a bad signature, an unknown key, a version 4 SEAL with a handshake beside it, a version 6 SEAL with a routine handshake beside it, and every 404, 400 and 429 answer the SEAL read gives. A reader should treat every broken SEAL and every one of those answers as no SEAL.
+Test inputs for a SEAL reader, each with the answer a correct reader gives. They cover a valid SEAL, an expired one, a bad signature, an unknown key, a version 4 SEAL with a handshake beside it, a version 6 SEAL with a routine handshake beside it, a version 7 SEAL of an agent, of a listed agent that also answers x402 and of a service, and every 404, 400 and 429 answer the SEAL read gives. A reader should treat every broken SEAL and every one of those answers as no SEAL.
 
 The format is in the [SEAL Standard](https://sealkeeper.run/seal/standard) and the [format reference](../docs/seal.md). [Build a SEAL reader](https://sealkeeper.run/docs/seal-reader) walks through a reader from the first fetch.
 
@@ -24,7 +24,7 @@ A handshake is always checked against the real clock, and one with a nonce must 
 - `agent.json`. The fixture agent, its id `gTl3Dqh9F19Wo1Rmw0x-zMuNipG07jeiXfYPW4_Js5Q`, its did:key, its handle `alice/fixture`, the session fingerprint hash the version 4 and 6 SEALs carry and the routine fingerprint hash the version 6 SEAL carries.
 - `seals/`. Each file is a bare compact JWS with no trailing newline, so the SHA-256 of the file is the hash of the SEAL.
 - `handshake/`. Two handshakes signed by the fixture agent at FIXTURE_NOW, with nonce `fixture-nonce` and verifier `fixture-verifier`. `handshake.txt` names the session setup and signs the session fingerprint. `handshake-routine.txt` names the routine setup and signs the routine fingerprint, so it is compared with the `routine_fingerprint` of the version 6 SEAL.
-- `reads/`. The answers of `GET /v1/agents/<agent id>/seal` besides the SEAL, each `{ status, headers, body }` as the API writes it.
+- `reads/`. The answers of `GET /v1/agents/<agent id>/seal` besides the SEAL, each `{ status, headers, body }` as the API writes it. Each `checking`, withheld and `no_seal` answer names `subject.kind`, `agent` or `service`.
 - `index.json`. Every case, machine readable, with its file, its command, its exit code and the answer at each clock.
 
 ## The cases
@@ -39,6 +39,9 @@ The answers are those of `POST /v1/seal/verify` against `keys.json`, and the exi
 | v1-unknown-kid | `seals/v1-unknown-kid.txt` | `unknown_kid`, exit 1 | `unknown_kid`, exit 1 |
 | v4-valid | `seals/v4-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
 | v6-valid | `seals/v6-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
+| v7-valid | `seals/v7-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
+| v7-listed-x402-valid | `seals/v7-listed-x402-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
+| v7-service-valid | `seals/v7-service-valid.txt` | valid, `lapsed` true, exit 0 | `expired`, exit 1 |
 | handshake | `handshake/handshake.txt` beside `seals/v4-valid.txt` | handshake `matches`, against `seal`, setup `session`, proof `verifier` | handshake `stale`, exit 1 |
 | handshake-routine | `handshake/handshake-routine.txt` beside `seals/v6-valid.txt` | handshake `matches`, against `seal`, setup `routine`, proof `verifier` | handshake `stale`, exit 1 |
 
@@ -66,13 +69,13 @@ npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12
 npx sealkeeper@latest seal verify - --keys fixtures/keys.json < fixtures/seals/v1-valid.txt
 ```
 
-The first prints `valid SEAL at 2026-10-01T12:00:00.000Z` and exits 0, the second prints `broken SEAL: expired <n> minutes ago` and exits 1. The CLI writes each reason with spaces, such as `broken SEAL: bad signature`. The handshake beside the version 4 SEAL, at the real clock.
+The first prints `valid Agent SEAL at 2026-10-01T12:00:00.000Z` and exits 0, the second prints `broken SEAL: expired <n> minutes ago` and exits 1. `v7-service-valid` prints `valid Service SEAL at 2026-10-01T12:00:00.000Z`, `level Bronze Service SEAL` and its x402 checks. CLIs up to 0.5.8 print `valid SEAL` without the kind. The CLI writes each reason with spaces, such as `broken SEAL: bad signature`. The handshake beside the version 4 SEAL, at the real clock.
 
 ```sh
 npx sealkeeper@latest seal verify - --keys fixtures/keys.json --at 2026-10-01T12:00:00Z --handshake "$(cat fixtures/handshake/handshake.txt)" --nonce fixture-nonce --for fixture-verifier < fixtures/seals/v4-valid.txt
 ```
 
-It prints `valid SEAL at 2026-10-01T12:00:00.000Z` for the SEAL, then `handshake refused: signed outside its window`, and exits 1.
+It prints `valid Agent SEAL at 2026-10-01T12:00:00.000Z` for the SEAL, then `handshake refused: signed outside its window`, and exits 1.
 
 `POST https://api.sealkeeper.run/v1/seal/verify` checks against the production keys, never `keys.json`. So every fixture SEAL answers `{"valid":false,"reason":"unknown_kid"}` there, which is itself a case a reader must handle.
 
@@ -90,4 +93,4 @@ sealkeeper:seal:1:subject:35886f79f3a6e302e52f05e7fe10c3e9253605498052dc63c29ff0
 
 ## Versions
 
-The fixtures carry version 1, version 4 and version 6. The version 6 SEAL and the two handshakes, which name their setup, need the `@sealkeeper/schema` and CLI release that read version 6. An earlier one reads the version 6 SEAL as `unsupported_version` and a handshake that names its setup as malformed. A version 5 fixture follows with the schema release that reads it.
+The fixtures carry version 1, version 4, version 6 and version 7. The version 6 SEAL and the two handshakes, which name their setup, need the `@sealkeeper/schema` and CLI release that read version 6. An earlier one reads the version 6 SEAL as `unsupported_version` and a handshake that names its setup as malformed. The three version 7 SEALs need the release that reads version 7, and an earlier one reads them as `unsupported_version`. `v7-valid` is `v6-valid` with `ver` 7 and `subject` added, so a reader sees that an agent's SEAL changes in nothing else. `v7-listed-x402-valid` carries `x402_check` beside `endpoint_check`, evidence only, since an agent's level is never read from its x402 calls. A level compares within a kind, so read `subject.kind` beside `level`. A version 5 fixture follows with the schema release that reads it.

@@ -5,7 +5,12 @@ import { AgentHandle, type Event } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { offerRuntime } from '../agent-runtime.js';
 import { streamInput } from '../ask.js';
-import { type CardView, cardLine, readCardView } from '../card.js';
+import {
+  type CardView,
+  cardLine,
+  readCardView,
+  withholdSeal,
+} from '../card.js';
 import { INSTALL_COMMAND } from '../claude-code-install.js';
 import {
   allSettingsPaths,
@@ -152,23 +157,30 @@ export function register(
       let local: Local;
       let routine: RoutineView;
       let live: LiveAgent | null;
+      let withheld: SealWithheld | null;
       try {
-        [read, local, routine, , live] = await Promise.all([
+        [read, , live] = await Promise.all([
           readStatus({ config, fetch: deps.fetch, now, paths: p }),
-          readLocal(config, now, p, options.show === true),
-          routineView(routineDeps, p, now),
           // The session nudge's own cache, see nudge.ts.
           keepNudgeFresh(deps.fetch, p),
           // The agent answer, for its SEAL state and the runtime question.
           // null when it does not answer, never throws.
           readLiveAgent(config, deps.fetch),
         ]);
+        withheld = sealStateWithheld(live?.sealState);
+        // The API issues no SEAL now, so the CLI drops the one it holds and
+        // the card init wrote carries none, before the card is read. Never
+        // fails status.
+        if (withheld !== null) await withholdSeal(config, p);
+        [local, routine] = await Promise.all([
+          readLocal(config, now, p, options.show === true),
+          routineView(routineDeps, p, now),
+        ]);
       } catch (error) {
         if (error instanceof CursorError) this.error(error.message);
         throw error;
       }
 
-      const withheld = sealStateWithheld(live?.sealState);
       // The agent's form whenever stdout is not a terminal, as run's.
       const json = wantsJson(this) || !(deps.isTTY ?? stdoutIsTTY)();
       if (json) {
@@ -296,7 +308,7 @@ export function screenLines(
     if (game.length > 0) lines.push(...game, '');
   }
   lines.push(...section('Routine', routine), '');
-  lines.push(...section('Card', [cardLine(local.card)]), '');
+  lines.push(...section('Card', [cardLine(local.card, withheld)]), '');
   if (answer !== null) {
     lines.push(
       s?.asOf === null || s?.asOf === undefined

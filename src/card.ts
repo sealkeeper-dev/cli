@@ -1,5 +1,5 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import {
   A2A_PROTOCOL_VERSION,
   AgentCard,
@@ -33,6 +33,7 @@ import { readIfExists, tildePath } from './files.js';
 import type { RoutineSource } from './fingerprint.js';
 import { makeHandshakeQuietly } from './handshake.js';
 import { cli } from './invocation.js';
+import { type SealWithheld, withheldText } from './responses.js';
 import { sha256Hex } from './tasks.js';
 
 // init and the routine build the same card, and the seal commands read the
@@ -126,7 +127,8 @@ export async function writeCard(
 // for the card and the seal commands. credential is null when the API cannot
 // be reached and nothing usable is cached. fresh asks the API even when the
 // cached SEAL is fresh, for the show commands, so a withheld SEAL ends the
-// command with the hold or the dormant days. The writes reuse the cache.
+// command with the hold or the dormant days, and the cached SEAL and the one
+// on the card go, see withholdSeal. The writes reuse the cache.
 export async function loadSeal(
   cmd: Command,
   deps: CardDeps,
@@ -148,6 +150,7 @@ export async function loadSeal(
       force: fresh,
     });
   } catch (error) {
+    if (error instanceof SealWithheldError) await withholdSeal(config);
     if (error instanceof CredentialError || error instanceof ApiError) {
       cmd.error(error.message);
     }
@@ -209,9 +212,10 @@ async function recordCard(
 }
 
 // What the routine's refresh did with the card. refreshed wrote it with a
-// newer SEAL. current left it alone, it carries the SEAL the CLI holds.
-// offline and withheld left it as it was, since the API could not be
-// reached or issues no SEAL now. gone, changed, unwritable and failed say
+// newer SEAL or a new handshake. current left it alone, it carries the SEAL
+// the CLI holds. offline left it as it was, since the API could not be
+// reached. withheld wrote it without a SEAL, or left one that holds none,
+// since the API issues no SEAL now. gone, changed, unwritable and failed say
 // why it was not refreshed. changed is a file that no longer holds the card
 // last written there.
 export type CardRefresh =
@@ -270,8 +274,12 @@ export async function readCardView(
 }
 
 // The card's state in one line, without the Card label the screens put
-// before it.
-export function cardLine(view: CardView): string {
+// before it. withheld is why the API issues no SEAL now, when the caller
+// knows it, and says why a card that holds none has none.
+export function cardLine(
+  view: CardView,
+  withheld: SealWithheld | null = null,
+): string {
   if (view.state === 'none') return `none written, ${cli('init')} writes it`;
   const where = tildePath(view.path);
   const written = `last written ${view.writtenAt}`;
@@ -281,7 +289,9 @@ export function cardLine(view: CardView): string {
     case 'stale':
       return `${where}, does not hold the SEAL the CLI holds now, ${written}`;
     case 'unsealed':
-      return `${where}, holds no SEAL yet, ${written}`;
+      return withheld === null
+        ? `${where}, holds no SEAL yet, ${written}`
+        : `${where}, holds no SEAL, ${withheldText(withheld)}, ${written}`;
     case 'gone':
       return `${where}, the file is gone`;
     case 'changed':
@@ -320,15 +330,18 @@ function sealOnCard(text: string): string | null {
 // wrote one for this agent, and then nothing is written. A file whose bytes are
 // not the ones last written there is left alone. Never throws.
 //
-// The card is rewritten whenever the SEAL the CLI holds now, from the cache or
-// the API as init gets it, is not the one on the card. A withheld SEAL leaves
-// the card as it was, and so does an API that cannot be reached with no usable
-// SEAL cached. The handshake on a rewritten card signs the fingerprint the run
-// declares, the routine's own when routine names its source, or the session's
-// while the routine has none yet.
+// The SEAL comes from the API each time, so a SEAL withheld since the last
+// one was cached is seen, and from the cache when the API cannot be reached.
+// The card is rewritten whenever that SEAL is not the one on the card, and
+// also when newHandshake is set, for a handshake over a fingerprint that
+// changed since the card was written. A withheld SEAL writes the card without
+// one, see withholdSeal. An API that cannot be reached with no usable SEAL
+// cached leaves the card as it was. The handshake on a rewritten card signs
+// the fingerprint the run declares, the routine's own when routine names its
+// source, or the session's while the routine has none yet.
 export async function refreshCard(
   config: Config,
-  deps: CardDeps & { routine?: RoutineSource },
+  deps: CardDeps & { routine?: RoutineSource; newHandshake?: boolean },
   p: Paths = paths(),
   now: () => number = Date.now,
 ): Promise<CardRefresh | null> {
@@ -351,12 +364,19 @@ export async function refreshCard(
         fetch: deps.fetch,
         now,
         paths: p,
+        force: true,
       });
     } catch (error) {
-      return error instanceof SealWithheldError ? 'withheld' : 'failed';
+      if (!(error instanceof SealWithheldError)) return 'failed';
+      return (await withholdSeal(config, p, now)) ?? 'withheld';
     }
     if (credential === null) return 'offline';
-    if (credential.credential === sealOnCard(text)) return 'current';
+    if (
+      credential.credential === sealOnCard(text) &&
+      deps.newHandshake !== true
+    ) {
+      return 'current';
+    }
     // A routine with no fingerprint of its own yet signs the session's, so
     // a rewritten card never loses its handshake.
     const handshake =
@@ -381,6 +401,52 @@ export async function refreshCard(
       p,
     );
     return 'refreshed';
+  } catch {
+    return 'failed';
+  }
+}
+
+// The API issues no SEAL for this agent now, so the CLI holds none and the
+// card init wrote carries none. Removes the cached SEAL, and rewrites the card
+// the way init writes one with no SEAL, keeping the rest of it, when it still
+// holds one. A card that is gone, holds another card or holds no SEAL is left
+// as it is. Returns withheld when the card holds no SEAL now, gone, changed,
+// unwritable or failed as refreshCard says them when it was not written, and
+// null when init wrote no card for this agent. Never throws.
+export async function withholdSeal(
+  config: Config,
+  p: Paths = paths(),
+  now: () => number = Date.now,
+): Promise<CardRefresh | null> {
+  try {
+    if ((await readCache(p, config.agentId)) !== null) {
+      await rm(p.credential, { force: true });
+    }
+  } catch {
+    // Kept. The card is still written without a SEAL.
+  }
+  const record = await readCardRecord(config.agentId, p);
+  if (record === null) return null;
+  try {
+    const text = await readIfExists(record.path);
+    if (text === null) return 'gone';
+    if (sha256Hex(text) !== record.sha256) return 'changed';
+    if (sealOnCard(text) === null) return 'withheld';
+    const written = cardText(buildCard(config, null, null, record.url));
+    try {
+      await writeFileAtomic(record.path, written, CARD_FILE_MODE);
+    } catch {
+      return 'unwritable';
+    }
+    await recordCard(
+      {
+        ...record,
+        sha256: sha256Hex(written),
+        writtenAt: new Date(now()).toISOString(),
+      },
+      p,
+    );
+    return 'withheld';
   } catch {
     return 'failed';
   }

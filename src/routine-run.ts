@@ -24,6 +24,7 @@ import {
 } from './config.js';
 import { type EmitInput, emit } from './emit.js';
 import {
+  currentFingerprint,
   refreshFingerprintOnChange,
   refreshFingerprintQuietly,
   routineSourceOf,
@@ -214,6 +215,9 @@ export async function routineRun(
   // written, then null again.
   let sessionAt: number | null = null;
   let card: CardRefresh | null = null;
+  // The hash of the fingerprint the card's handshake signed at the start of
+  // the run, null for none. undefined until the run wrote the card.
+  let cardPrint: string | null | undefined;
   let agentStarted = false;
   let tokens: number | null = null;
   let costUsd: number | null = null;
@@ -237,6 +241,7 @@ export async function routineRun(
     failure?: RunFailure,
   ): Promise<void> => {
     await endSession();
+    await rewriteCardOnChange();
     entry = {
       kind: 'run',
       runId,
@@ -317,6 +322,22 @@ export async function routineRun(
     }
   }
 
+  // The card again at the end of the run, when the fingerprint the run
+  // declares changed since the card was written, as when the runtime
+  // reported its model only once it answered. So the card's handshake signs
+  // the fingerprint the run ends with. Never fails the run.
+  async function rewriteCardOnChange(): Promise<void> {
+    if (cardPrint === undefined || card === null || aborted()) return;
+    const end = (await currentFingerprint(p, routineSource))?.hash ?? null;
+    if (end === null || end === cardPrint) return;
+    cardPrint = end;
+    card = await refreshCard(
+      config,
+      { fetch: deps.fetch, routine: routineSource, newHandshake: true },
+      p,
+    );
+  }
+
   async function startSession(): Promise<void> {
     if (sessionAt !== null) return;
     sessionAt = clock();
@@ -385,16 +406,22 @@ export async function routineRun(
     }
     // From this home's files, never the default home's, since one machine
     // can hold several agents. Never throws.
-    await refreshFingerprintQuietly({ paths: p, routine: routineSource });
+    const captured = await refreshFingerprintQuietly({
+      paths: p,
+      routine: routineSource,
+    });
     // The card next, so a run with nothing to do still refreshes it, and
-    // after the capture, so its handshake signs the fingerprint this run just
-    // wrote, the first run's included. In this process, never by the agent,
-    // and it takes no step. It never fails the run.
+    // after the capture, so its handshake signs the fingerprint the run
+    // starts with. A part the runtime reports only once it answers, such as
+    // the model on the first run of a setup, changes it later, and the end of
+    // the run writes the card again (rewriteCardOnChange). In this process,
+    // never by the agent, and it takes no step. It never fails the run.
     card = await refreshCard(
       config,
       { fetch: deps.fetch, routine: routineSource },
       p,
     );
+    cardPrint = captured?.hash ?? null;
     const session = await openSession(deps, p, config);
     if ('error' in session) {
       await finish('failed', session.error, session.failure);

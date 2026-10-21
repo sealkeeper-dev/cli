@@ -23,6 +23,7 @@ import {
   verifyHandshake,
   WELL_KNOWN_MAX_AGE_SECONDS,
   WELL_KNOWN_URL,
+  X402_UNPAID_NOTE,
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -44,6 +45,7 @@ import { VERSION } from '../version.js';
 import type { SealDeps } from './seal.js';
 import { NO_FINGERPRINT } from './seal-handshake.js';
 import { NO_SEAL } from './seal-show.js';
+import { SERVICE_HANDSHAKE } from './seal-verify.js';
 
 const API_URL = 'https://api.test';
 const WELL_KNOWN = `${API_URL}/.well-known/seal.json`;
@@ -130,7 +132,7 @@ describe('sealkeeper seal', () => {
 
   // What seal show and seal verify print for claims(), one line each.
   const SUMMARY = [
-    'level bronze',
+    'level Bronze Agent SEAL',
     'events 12',
     'history days 3',
     'verified tasks 26',
@@ -254,12 +256,13 @@ describe('sealkeeper seal', () => {
       });
     });
 
-    it('seal show prints the SEAL, its payload and time to expiry', async () => {
+    it('seal show prints its kind, the SEAL, its payload and time to expiry', async () => {
       const { code, out, err } = await run(fetchFn, 'seal', 'show');
       expect(code).toBe(0);
       expect(err).toBe('');
       const cache = JSON.parse(await readFile(paths().credential, 'utf8'));
-      const [first, ...rest] = out.trimEnd().split('\n');
+      const [kind, first, ...rest] = out.trimEnd().split('\n');
+      expect(kind).toBe('Agent SEAL');
       expect(first).toBe(cache.credential);
       expect(rest.at(-1)).toBe('Expires in 24 hours 0 minutes');
       const brace = rest.indexOf('{');
@@ -273,6 +276,40 @@ describe('sealkeeper seal', () => {
       expect(rest.slice(brace, -1).join('\n')).toBe(
         JSON.stringify(payload, null, 2),
       );
+    });
+
+    it('seal show opens with Service SEAL for a service and prints its x402 evidence', async () => {
+      const index = JSON.parse(
+        await readFile(
+          new URL('../../fixtures/index.json', import.meta.url),
+          'utf8',
+        ),
+      );
+      const service = index.cases.find(
+        (c: { name: string }) => c.name === 'v7-service-valid',
+      ).expected.pinned.payload;
+      const nowSec = Math.floor(now / 1000);
+      currentSeal = () =>
+        sign(
+          {
+            ...service,
+            sub: agentId,
+            iat: nowSec + 30,
+            exp: nowSec + 24 * HOUR + 30,
+          },
+          serverKey.privateKey,
+          KID,
+        );
+      const { code, out } = await run(fetchFn, 'seal', 'show');
+      expect(code).toBe(0);
+      const lines = out.split('\n');
+      expect(lines[0]).toBe('Service SEAL');
+      expect(lines[2]).toBe('level Bronze Service SEAL');
+      expect(lines[3]).toBe('interfaces x402, paid yes');
+      expect(lines).toContain(
+        'x402 valid challenges 55 of 56 checks, 3 endpoints',
+      );
+      expect(lines).toContain(X402_UNPAID_NOTE);
     });
 
     it('seal show --json prints seal, payload and expiresAt', async () => {
@@ -512,7 +549,7 @@ describe('sealkeeper seal', () => {
       expect(err).toBe('');
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
       expect(lines.at(-1)).toBe('Expires in 24 hours 0 minutes');
       expect(jsonBlock(lines)).toEqual(claims());
@@ -531,7 +568,7 @@ describe('sealkeeper seal', () => {
       expect(err).toBe('');
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
       expect(jsonBlock(lines).scores).toEqual({
         reliability: 0.9,
@@ -563,7 +600,7 @@ describe('sealkeeper seal', () => {
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines).toContain('level none');
+      expect(lines).toContain('level none, Agent SEAL');
       expect(lines).toContain('operator verified yes');
       expect(lines).toContain('last active never');
       expect(lines).toContain('dormant days none');
@@ -587,7 +624,7 @@ describe('sealkeeper seal', () => {
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines).toContain('verified tasks 26, 17 counted');
       expect(lines).toContain('seed tasks 25, 17 counted');
       expect(lines).toContain('server checked tasks 1, 0 counted');
@@ -638,7 +675,7 @@ describe('sealkeeper seal', () => {
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines).toContain('seed tasks 25, 17 counted');
       expect(lines).toContain('posted tasks 4, 3 counted');
       expect(lines).toContain('posted confirmed tasks 1, 1 counted');
@@ -684,7 +721,7 @@ describe('sealkeeper seal', () => {
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
       const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines).toContain('posted tasks 4, 3 counted');
       expect(lines).toContain('fingerprint none sent');
       expect(lines).toContain('state matches');
@@ -780,7 +817,7 @@ describe('sealkeeper seal', () => {
       );
       expect(unverified.code).toBe(0);
       const lines = unverified.out.trimEnd().split('\n');
-      expect(lines[0]).toBe('valid SEAL');
+      expect(lines[0]).toBe('valid Agent SEAL');
       expect(lines).toContain('Trust Score 0');
       expect(lines).toContain('listed as acme.ai/helper');
       expect(lines).toContain('owner unverified');
@@ -805,13 +842,13 @@ describe('sealkeeper seal', () => {
       expect(verified.out).toContain('owner verified by email on 2026-10-12');
     });
 
-    it.each([7, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    it.each([8, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
       const lines = out.trimEnd().split('\n');
       expect(lines[0]).toBe('broken SEAL: unsupported version');
-      expect(lines).not.toContain('level bronze');
+      expect(lines).not.toContain('level Bronze Agent SEAL');
       const json = await run(fetchFn, 'seal', 'verify', seal, '--json');
       expect(JSON.parse(json.out)).toMatchObject({
         valid: false,
@@ -908,7 +945,7 @@ describe('sealkeeper seal', () => {
       now = (LEGACY_ISSUER_UNTIL - 1) * 1000;
       const before = await run(fetchFn, 'seal', 'verify', seal);
       expect(before.code).toBe(0);
-      expect(before.out.split('\n')[0]).toBe('valid SEAL');
+      expect(before.out.split('\n')[0]).toBe('valid Agent SEAL');
       now = LEGACY_ISSUER_UNTIL * 1000;
       const after = await run(fetchFn, 'seal', 'verify', seal);
       expect(after.code).toBe(1);
@@ -1000,7 +1037,7 @@ describe('sealkeeper seal', () => {
         expect(err).toBe('');
         expect(code).toBe(0);
         const lines = out.trimEnd().split('\n');
-        expect(lines[0]).toBe(`valid SEAL at ${iso(T + HOUR)}`);
+        expect(lines[0]).toBe(`valid Agent SEAL at ${iso(T + HOUR)}`);
         expect(lines.slice(1, lines.indexOf('{'))).toEqual(SUMMARY);
         expect(lines.at(-1)).toBe(
           `expired since ${iso(T + DAY)}, valid at the time checked only`,
@@ -1015,7 +1052,7 @@ describe('sealkeeper seal', () => {
           '2026-09-21T15:00:00+02:00',
         );
         expect(offset.out.split('\n')[0]).toBe(
-          'valid SEAL at 2026-09-21T13:00:00.000Z',
+          'valid Agent SEAL at 2026-09-21T13:00:00.000Z',
         );
         // Without --at the same SEAL is expired.
         const nowCheck = await run(fetchFn, 'seal', 'verify', seal);
@@ -1035,7 +1072,7 @@ describe('sealkeeper seal', () => {
         );
         expect(code).toBe(0);
         const lines = out.trimEnd().split('\n');
-        expect(lines[0]).toBe(`valid SEAL at ${iso(NOW_SEC + 60)}`);
+        expect(lines[0]).toBe(`valid Agent SEAL at ${iso(NOW_SEC + 60)}`);
         expect(lines.at(-1)).toBe('Expires in 24 hours 0 minutes');
       });
 
@@ -1158,7 +1195,7 @@ describe('sealkeeper seal', () => {
         file,
       );
       expect(code).toBe(0);
-      expect(out.split('\n')[0]).toBe('valid SEAL');
+      expect(out.split('\n')[0]).toBe('valid Agent SEAL');
       expect(requests).toEqual([]);
     });
 
@@ -1176,7 +1213,7 @@ describe('sealkeeper seal', () => {
       expect(copied.code).toBe(1);
       expect(copied.out.split('\n')[0]).toBe('broken SEAL: wrong agent');
       // Never the summary of a SEAL for someone else.
-      expect(copied.out).not.toContain('level bronze');
+      expect(copied.out).not.toContain('level Bronze Agent SEAL');
       const json = await run(
         fetchFn,
         'seal',
@@ -1277,7 +1314,7 @@ describe('sealkeeper seal', () => {
       );
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(0);
-      expect(out.split('\n')[0]).toBe('valid SEAL');
+      expect(out.split('\n')[0]).toBe('valid Agent SEAL');
       expect(requests).toEqual([WELL_KNOWN_URL]);
       const cache = JSON.parse(await readFile(paths().wellKnown, 'utf8'));
       expect(cache.wellKnown.keys).toHaveLength(2);
@@ -1424,7 +1461,7 @@ describe('sealkeeper seal', () => {
       stdin = `${await currentSeal()}\n`;
       const { code, out } = await run(fetchFn, 'seal', 'verify', '-');
       expect(code).toBe(0);
-      expect(out.split('\n')[0]).toBe('valid SEAL');
+      expect(out.split('\n')[0]).toBe('valid Agent SEAL');
 
       stdin = tamper(stdin.trim());
       const broken = await run(fetchFn, 'seal', 'verify', '-');
@@ -1655,7 +1692,7 @@ describe('sealkeeper seal', () => {
           '--offline',
         );
         expect(code).toBe(0);
-        expect(out.split('\n')[0]).toBe('valid SEAL');
+        expect(out.split('\n')[0]).toBe('valid Agent SEAL');
         expect(err).toBe(
           `offline, using the SealKeeper keys from ${ISSUER_ORIGIN} fetched at ${new Date(NOW).toISOString()}, 0 minutes old\n`,
         );
@@ -1792,6 +1829,201 @@ describe('sealkeeper seal', () => {
         );
         expect(code).toBe(0);
         expect(requests).toEqual([]);
+      });
+    });
+
+    // The reader fixtures, signed with the fixture key and checked at the
+    // pinned clock, one SEAL of each kind and SEALs from before the kind.
+    describe('the kind of SEAL', () => {
+      const PINNED = '2026-10-01T12:00:00Z';
+      const fixture = (path: string) =>
+        readFile(new URL(`../../fixtures/${path}`, import.meta.url), 'utf8');
+      const KEYS = new URL('../../fixtures/keys.json', import.meta.url)
+        .pathname;
+      const verifyFixture = async (file: string, ...args: string[]) => {
+        stdin = await fixture(`seals/${file}`);
+        return run(offline, 'seal', 'verify', '-', '--at', PINNED, ...args);
+      };
+      const X402_LINES = [
+        'x402 valid challenges 55 of 56 checks, 3 endpoints',
+        'wallet proven',
+        'wallet changes in 30 days 0',
+        'price 0 as declared, 0 above declared, 0 below declared, 3 no declared price, 0 changes in 30 days',
+        'SealKeeper checked this service without paying. It did not check the paid results.',
+      ];
+
+      beforeEach(() => {
+        now = Date.parse('2026-10-02T12:00:00Z');
+      });
+
+      it('names a Service SEAL on its first line, its level with its kind and its x402 evidence', async () => {
+        const { code, out, err } = await verifyFixture(
+          'v7-service-valid.txt',
+          '--keys',
+          KEYS,
+        );
+        expect(code).toBe(0);
+        expect(err).toBe('');
+        const lines = out.split('\n');
+        expect(lines[0]).toBe('valid Service SEAL at 2026-10-01T12:00:00.000Z');
+        expect(lines[1]).toBe('level Bronze Service SEAL');
+        expect(lines[2]).toBe('interfaces x402, paid yes');
+        expect(lines.some((l) => l.includes('Agent SEAL'))).toBe(false);
+        const at = lines.indexOf(X402_LINES[0] as string);
+        expect(lines.slice(at, at + X402_LINES.length)).toEqual(X402_LINES);
+        expect(lines[at - 1]).toBe('owner unverified');
+        expect(requests).toEqual([]);
+      });
+
+      it('names an Agent SEAL on its first line and prints no interfaces', async () => {
+        const { code, out } = await verifyFixture(
+          'v7-valid.txt',
+          '--keys',
+          KEYS,
+        );
+        expect(code).toBe(0);
+        const lines = out.split('\n');
+        expect(lines[0]).toBe('valid Agent SEAL at 2026-10-01T12:00:00.000Z');
+        expect(lines[1]).toBe('level Bronze Agent SEAL');
+        expect(lines.some((l) => l.startsWith('interfaces '))).toBe(false);
+        expect(lines).not.toContain(X402_UNPAID_NOTE);
+      });
+
+      it('prints the x402 evidence beside the endpoint checks of a listed agent', async () => {
+        const { code, out } = await verifyFixture(
+          'v7-listed-x402-valid.txt',
+          '--keys',
+          KEYS,
+        );
+        expect(code).toBe(0);
+        const lines = out.split('\n');
+        expect(lines[0]).toBe('valid Agent SEAL at 2026-10-01T12:00:00.000Z');
+        const at = lines.indexOf('endpoint checks 11 of 12 OK');
+        expect(lines[at + 1]).toBe(X402_LINES[0]);
+        expect(lines).toContain(X402_UNPAID_NOTE);
+      });
+
+      it('reads a SEAL from before the kind as an Agent SEAL', async () => {
+        for (const file of ['v1-valid.txt', 'v4-valid.txt', 'v6-valid.txt']) {
+          const { code, out } = await verifyFixture(file, '--keys', KEYS);
+          expect(code, file).toBe(0);
+          const lines = out.split('\n');
+          expect(lines[0], file).toBe(
+            'valid Agent SEAL at 2026-10-01T12:00:00.000Z',
+          );
+          expect(lines[1], file).toBe('level Bronze Agent SEAL');
+        }
+      });
+
+      it('names no kind for a broken SEAL, whatever its payload says', async () => {
+        stdin = tamper((await fixture('seals/v7-service-valid.txt')).trim());
+        const { code, out } = await run(
+          offline,
+          'seal',
+          'verify',
+          '-',
+          '--at',
+          PINNED,
+          '--keys',
+          KEYS,
+        );
+        expect(code).toBe(1);
+        expect(out.split('\n')[0]).toBe('broken SEAL: bad signature');
+        expect(out).not.toContain('Service SEAL');
+        expect(out).not.toContain(X402_UNPAID_NOTE);
+      });
+
+      it('names the kind the same way with --offline, for both kinds', async () => {
+        const keys = JSON.parse(await fixture('keys.json'));
+        await cacheKeys(paths(), ISSUER_ORIGIN, keys, now);
+        for (const [file, kind] of [
+          ['v7-service-valid.txt', 'Service SEAL'],
+          ['v7-valid.txt', 'Agent SEAL'],
+        ] as const) {
+          const { code, out, err } = await verifyFixture(file, '--offline');
+          expect(code, file).toBe(0);
+          expect(out.split('\n')[0], file).toBe(
+            `valid ${kind} at 2026-10-01T12:00:00.000Z`,
+          );
+          expect(err, file).toContain('offline, using the SealKeeper keys');
+        }
+        expect(requests).toEqual([]);
+      });
+
+      it('--json carries the subject as signed and adds nothing', async () => {
+        const { code, out } = await verifyFixture(
+          'v7-service-valid.txt',
+          '--keys',
+          KEYS,
+          '--json',
+        );
+        expect(code).toBe(0);
+        const json = JSON.parse(out);
+        expect(Object.keys(json)).toEqual([
+          'valid',
+          'reason',
+          'payload',
+          'expiresAt',
+          'at',
+          'lapsed',
+        ]);
+        expect(json.payload.subject).toEqual({
+          kind: 'service',
+          interfaces: ['x402'],
+          paid: true,
+        });
+      });
+
+      it('prints a Service SEAL and refuses the handshake beside it, exit 1', async () => {
+        const handshake = (await fixture('handshake/handshake.txt')).trim();
+        const plain = await verifyFixture(
+          'v7-service-valid.txt',
+          '--keys',
+          KEYS,
+          '--handshake',
+          handshake,
+        );
+        expect(plain.code).toBe(1);
+        expect(plain.err).toBe('');
+        const lines = plain.out.trimEnd().split('\n');
+        expect(lines[0]).toBe('valid Service SEAL at 2026-10-01T12:00:00.000Z');
+        expect(lines.slice(-1)).toEqual(SERVICE_HANDSHAKE.lines);
+        const json = await verifyFixture(
+          'v7-service-valid.txt',
+          '--keys',
+          KEYS,
+          '--handshake',
+          handshake,
+          '--json',
+        );
+        expect(json.code).toBe(1);
+        const answer = JSON.parse(json.out);
+        expect(answer.valid).toBe(true);
+        expect(answer.handshake).toEqual({ valid: false, reason: 'service' });
+        expect(requests).toEqual([]);
+      });
+
+      it('reads no record for a handshake beside a Service SEAL online', async () => {
+        vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
+        const keys = JSON.parse(await fixture('keys.json'));
+        published = () => keys;
+        stdin = await fixture('seals/v7-service-valid.txt');
+        const handshake = (await fixture('handshake/handshake.txt')).trim();
+        const { code, out } = await run(
+          fetchFn,
+          'seal',
+          'verify',
+          '-',
+          '--at',
+          PINNED,
+          '--handshake',
+          handshake,
+        );
+        expect(code).toBe(1);
+        expect(out.trimEnd().split('\n').slice(-1)).toEqual(
+          SERVICE_HANDSHAKE.lines,
+        );
+        expect(requests).toEqual([WELL_KNOWN_URL]);
       });
     });
 

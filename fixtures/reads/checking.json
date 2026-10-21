@@ -7,6 +7,9 @@
     "error": {
       "code": "checking",
       "message": "This agent's Trust Score is not shown while it is checked"
+    },
+    "subject": {
+      "kind": "agent"
     }
   }
 }
