@@ -1,13 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { Level, SealSubjectKind } from '@sealkeeper/schema';
 import type { Command } from 'commander';
-import { ApiError, resolveApiUrl } from '../api.js';
+import { ApiError } from '../api.js';
 import {
   describeCheck,
   fetchCheck,
   fetchWithheld,
   sealIsWithheld,
 } from '../check.js';
+import { commandApiUrl } from '../cli-config.js';
 import { readConfig } from '../config.js';
 import { stdout, wantsJson } from '../output.js';
 import type { CheckResponse } from '../responses.js';
@@ -71,7 +72,7 @@ export function register(
     .action(async function (this: Command, handle: string): Promise<void> {
       const flags = this.opts<Flags>();
       let result: CheckResponse;
-      const apiUrl = resolveApiUrl({ config: await configApiUrl() });
+      const apiUrl = commandApiUrl(this, await configApiUrl());
       try {
         result = await fetchCheck(
           handle,

@@ -9,10 +9,13 @@ import { z } from 'zod';
 import {
   type ApiClient,
   ApiError,
+  ApiUrlEnvError,
+  apiUrlEnvRefused,
   createApiClient,
   LISTED_MERGE_TIMEOUT_MS,
   redirectError,
   resolveApiUrl,
+  savedApiUrl,
 } from './api.js';
 import { paths } from './config.js';
 import { tildePath } from './files.js';
@@ -42,6 +45,52 @@ describe('resolveApiUrl', () => {
     expect(resolveApiUrl({ config: 'http://c' }, env)).toBe('http://env');
     expect(resolveApiUrl({ config: 'http://c' }, {})).toBe('http://c');
     expect(resolveApiUrl({}, {})).toBe('https://api.sealkeeper.run');
+  });
+});
+
+describe('savedApiUrl', () => {
+  const SAVED = 'https://api.sealkeeper.run';
+
+  it('uses the saved URL when SEALKEEPER_API_URL is unset or empty', () => {
+    expect(savedApiUrl(SAVED, {})).toBe(SAVED);
+    expect(savedApiUrl(SAVED, { SEALKEEPER_API_URL: ' ' })).toBe(SAVED);
+  });
+
+  it('uses SEALKEEPER_API_URL when it names the saved origin or this machine', () => {
+    const same = `${SAVED}/`;
+    expect(savedApiUrl(SAVED, { SEALKEEPER_API_URL: same })).toBe(same);
+    for (const local of [
+      'http://localhost:8787',
+      'http://127.0.0.1:8787',
+      'http://[::1]:8787',
+    ]) {
+      expect(savedApiUrl(SAVED, { SEALKEEPER_API_URL: local })).toBe(local);
+    }
+  });
+
+  it('throws the one line naming the saved API for any other value', () => {
+    for (const other of [
+      'https://api.example.org',
+      'http://api.sealkeeper.run',
+      'https://api.sealkeeper.run:444',
+      'not a url',
+    ]) {
+      expect(() => savedApiUrl(SAVED, { SEALKEEPER_API_URL: other })).toThrow(
+        ApiUrlEnvError,
+      );
+    }
+    expect(() =>
+      savedApiUrl(SAVED, { SEALKEEPER_API_URL: 'https://api.example.org' }),
+    ).toThrow(apiUrlEnvRefused(SAVED));
+    expect(apiUrlEnvRefused(`${SAVED}/`)).toBe(
+      "SEALKEEPER_API_URL names an API other than this agent's https://api.sealkeeper.run, nothing was sent, unset it to use https://api.sealkeeper.run",
+    );
+  });
+
+  it('with no config the variable wins, then the default', () => {
+    const env = { SEALKEEPER_API_URL: 'https://api.example.org' };
+    expect(savedApiUrl(null, env)).toBe('https://api.example.org');
+    expect(savedApiUrl(undefined, {})).toBe(SAVED);
   });
 });
 

@@ -10,6 +10,8 @@ import {
   OperatorSlug,
   SEAL_FAILED_CHECKS,
   SEAL_MAX_TTL_SECONDS,
+  SEAL_MCP_CHANGE_UNRESOLVED,
+  SEAL_MCP_HIDDEN_TEXT,
   SEAL_NO_RECENT_CHECK,
   SEAL_PRICE_ABOVE_DECLARED,
   SEAL_WALLET_UNPROVEN_CHANGE,
@@ -317,7 +319,10 @@ const sealClaims = {
     })
     .optional(),
   // endpoint_check carries task_total and task_ok, x402_check, version 7
-  // on, the unpaid x402 calls, the pay-to wallet and the price counts.
+  // on, the unpaid x402 calls, the pay-to wallet and the price counts, and
+  // mcp_check, version 8 on, the reads of an MCP server's definitions, its
+  // protocol version, what the last OK read listed and whether the reads
+  // found hidden text.
   evidence: z
     .array(
       z.object({
@@ -327,6 +332,29 @@ const sealClaims = {
         endpoints: Count.optional(),
         checks_total: Count.optional(),
         challenge_valid: Count.optional(),
+        window_start: z.string().optional(),
+        window_end: z.string().optional(),
+        checks_ok: Count.optional(),
+        uptime_pct: z.number().nullable().optional(),
+        p95_ms: Count.nullable().optional(),
+        protocol_version: z.string().optional(),
+        definitions: z
+          .object({
+            tools: Count,
+            prompts: Count,
+            resources: Count,
+            unchanged_since: z.string(),
+            changes_30d: Count,
+            last_change: z
+              .object({
+                class: z.string(),
+                at: z.string(),
+                confirmed: z.boolean(),
+              })
+              .nullable(),
+          })
+          .optional(),
+        hidden_text: z.object({ found: z.boolean() }).optional(),
         wallet: z
           .object({
             proven: z.boolean(),
@@ -494,8 +522,11 @@ export const ErrorResponse = z.object({
 // no_recent_check an agent with no passing task check lately, wallet_change
 // a listing whose pay-to wallet moved to one its host has not proved,
 // price_above a listing whose paid endpoint asks more than the price it
-// declares, and checking an agent whose checks are still running. Read loosely, so a class this
-// version does not know still prints as the API sent it. A reason that is
+// declares, mcp_hidden_text an MCP server whose definitions hold hidden
+// text, mcp_change an MCP server whose latest change to its definitions is
+// unresolved, and checking an agent whose checks are still running. Read
+// loosely, so a class this version does not know still prints as the API
+// sent it. A reason that is
 // not a plain class word, days that are not a whole number, or a start that
 // is not a timestamp, read as unknown rather than failing.
 export type SealWithheld =
@@ -505,6 +536,8 @@ export type SealWithheld =
   | { kind: 'no_recent_check' }
   | { kind: 'wallet_change' }
   | { kind: 'price_above' }
+  | { kind: 'mcp_hidden_text' }
+  | { kind: 'mcp_change' }
   | { kind: 'checking' };
 
 const WithheldAnswer = z.object({
@@ -525,6 +558,8 @@ const sinceOf = (since: unknown): string | null => {
 const unheldOf = (reason: unknown): SealWithheld | null => {
   if (reason === SEAL_WALLET_UNPROVEN_CHANGE) return { kind: 'wallet_change' };
   if (reason === SEAL_PRICE_ABOVE_DECLARED) return { kind: 'price_above' };
+  if (reason === SEAL_MCP_HIDDEN_TEXT) return { kind: 'mcp_hidden_text' };
+  if (reason === SEAL_MCP_CHANGE_UNRESOLVED) return { kind: 'mcp_change' };
   return null;
 };
 
@@ -615,6 +650,10 @@ export function withheldText(withheld: SealWithheld): string {
       return 'withheld after a pay-to wallet changed to one not proven, the owner can confirm the change';
     case 'price_above':
       return 'withheld while a paid endpoint asks more than its declared price';
+    case 'mcp_hidden_text':
+      return "withheld while the server's definitions hold hidden text";
+    case 'mcp_change':
+      return "withheld while the latest change to the server's definitions is unresolved";
     case 'checking':
       return 'withheld while the agent is checked';
   }

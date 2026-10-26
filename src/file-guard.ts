@@ -17,6 +17,10 @@ import { insideHome } from './key-guard.js';
 // - nothing whose name, as given or as resolved, matches
 //   SECRET_FILE_NAMES, in any folder, the answers folder included, and
 //   whatever the flags
+// - nothing with a path part named .git, matched without case, as given or
+//   as resolved, in every mode. A git folder holds remote URLs and headers
+//   that can carry a token. A worktree's .git file and a submodule's folder
+//   under .git/modules count too
 // - nothing inside the SealKeeper home, which holds the private key
 // - nothing inside the SealKeeper root, ~/.sealkeeper, which holds the
 //   homes of every other agent on this machine, so no agent's key is read
@@ -54,6 +58,14 @@ export const SECRET_FILE_REFUSAL =
 
 const secretName = (path: string): boolean =>
   SECRET_FILE_NAMES.some((name) => name.test(basename(path)));
+
+export const GIT_DIR_REFUSAL =
+  'it is in a .git folder, which holds remote URLs and tokens, and nothing in one is ever sent';
+
+// True when a part of path is .git, matched without case. Both / and \ are
+// split on, since a path given on Windows may hold either.
+const inGitDir = (path: string): boolean =>
+  path.split(/[\\/]/).some((part) => part.toLowerCase() === '.git');
 
 export type FileRules = {
   // The most bytes the file may hold.
@@ -132,6 +144,9 @@ export async function readGuardedFile(
 
   if (secretName(file) || secretName(target)) {
     return refuse(SECRET_FILE_REFUSAL);
+  }
+  if (inGitDir(file) || inGitDir(target)) {
+    return refuse(GIT_DIR_REFUSAL);
   }
 
   const home = await insideHome(target);

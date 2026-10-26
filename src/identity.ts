@@ -1,6 +1,14 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { randomUUID } from 'node:crypto';
-import { link, open, readdir, rename, rm, stat } from 'node:fs/promises';
+import {
+  link,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { getPublicKeyAsync } from '@noble/ed25519';
 import {
@@ -49,12 +57,16 @@ type LoadedKey = Identity & {
 // exists, so two concurrent runs can never both win. With force it is a rename
 // over the old key, which is first kept as key.<time>.bak, since a lost key
 // can never be recovered. backup names that file when there was an old key.
+// seed is a key brought from elsewhere, written in place of a new one.
 export async function createKey(
-  options: { force?: boolean } = {},
+  options: { force?: boolean; seed?: Uint8Array } = {},
   p: Paths = paths(),
 ): Promise<Identity & { backup?: string }> {
   await ensureHome(p);
-  const { privateKey, publicKey, agentId } = await generateKeypair();
+  const { privateKey, publicKey, agentId } =
+    options.seed === undefined
+      ? await generateKeypair()
+      : await seedIdentity(options.seed);
 
   const tmp = `${p.key}.${randomUUID()}.tmp`;
   let backup: string | undefined;
@@ -225,4 +237,88 @@ export function decodeSeed(raw: string): Uint8Array | null {
   } catch {
     return null;
   }
+}
+
+// A key brought to init --key-file. Neither the messages nor anything else
+// here ever includes the text read or the path it came from, since a key
+// pasted in place of a path would show.
+export const KEY_FILE_UNREADABLE = 'cannot read the key file';
+export const KEY_FILE_NOT_REGULAR =
+  'the key path is not a regular file, give a file, or pipe the key to --key-file -';
+export const KEY_FILE_INVALID =
+  'the key is not an Ed25519 private key, expected a 32 byte seed or a 64 byte seed followed by its public key, in base64url, base64 or hex';
+export const KEY_FILE_MISMATCH =
+  'the key is 64 bytes but its second half is not the public key of its first half';
+
+// More than any accepted form, with room for whitespace around it.
+const KEY_FILE_MAX = 4096;
+
+// The brought key read from a file, or from input when source is -, as the
+// seed with its public key and agent id.
+export async function readBroughtKey(
+  source: string,
+  input: () => Promise<string>,
+): Promise<LoadedKey> {
+  let raw: string;
+  if (source === '-') {
+    raw = await input();
+  } else {
+    try {
+      const info = await stat(source);
+      if (!info.isFile()) throw new KeyError(KEY_FILE_NOT_REGULAR);
+      if (info.size > KEY_FILE_MAX) throw new KeyError(KEY_FILE_INVALID);
+      raw = await readFile(source, 'utf8');
+    } catch (error) {
+      if (error instanceof KeyError) throw error;
+      throw new KeyError(KEY_FILE_UNREADABLE);
+    }
+  }
+  return seedIdentity(await decodeBroughtKey(raw));
+}
+
+// All of a stream as text, refused past KEY_FILE_MAX bytes.
+export async function readKeyStream(
+  stream: NodeJS.ReadableStream,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of stream) {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    size += bytes.length;
+    if (size > KEY_FILE_MAX) throw new KeyError(KEY_FILE_INVALID);
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+// The seed of a brought key. One value, whitespace around it trimmed, of 32
+// bytes, the seed, or 64 bytes, the seed followed by its public key. Hex is
+// 64 or 128 hex digits. Anything else is read as base64 or base64url, padded
+// or not, and must decode to 32 or 64 bytes and encode back to the same
+// text, so stray characters or trailing bits are refused. The second half of
+// a 64 byte key must be the public key of its first half.
+export async function decodeBroughtKey(raw: string): Promise<Uint8Array> {
+  const bytes = decodeKeyText(raw.trim());
+  if (bytes === null) throw new KeyError(KEY_FILE_INVALID);
+  const seed = bytes.slice(0, 32);
+  if (bytes.length === 64) {
+    const publicKey = await getPublicKeyAsync(seed);
+    if (!Buffer.from(publicKey).equals(Buffer.from(bytes.subarray(32)))) {
+      throw new KeyError(KEY_FILE_MISMATCH);
+    }
+  }
+  return seed;
+}
+
+function decodeKeyText(text: string): Uint8Array | null {
+  if (/^(?:[0-9a-fA-F]{64}|[0-9a-fA-F]{128})$/.test(text)) {
+    return new Uint8Array(Buffer.from(text, 'hex'));
+  }
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text)) return null;
+  if (text.includes('=') && text.length % 4 !== 0) return null;
+  const url = text.replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const bytes = Buffer.from(url, 'base64url');
+  if (bytes.length !== 32 && bytes.length !== 64) return null;
+  if (bytes.toString('base64url') !== url) return null;
+  return new Uint8Array(bytes);
 }

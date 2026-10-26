@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { StatusRequest } from '@sealkeeper/schema';
 import { z } from 'zod';
-import { ApiError, createApiClient, resolveApiUrl } from './api.js';
+import { ApiError, createApiClient, savedApiUrl } from './api.js';
 import {
   type Config,
   ensureHome,
@@ -71,7 +71,7 @@ export async function readStatus(
   let why: string;
   try {
     const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      apiUrl: savedApiUrl(config.apiUrl),
       fetch: options.fetch,
       timeoutMs: STATUS_TIMEOUT_MS,
     });

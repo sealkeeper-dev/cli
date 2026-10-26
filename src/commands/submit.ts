@@ -140,7 +140,12 @@ export async function submitAnswer(
       'key_material',
     );
   }
-  const request = SubmitTaskRequest.safeParse({ taskId: id, submission });
+  // issuedAt is signed with the submit.
+  const request = SubmitTaskRequest.safeParse({
+    taskId: id,
+    submission,
+    issuedAt: new Date().toISOString(),
+  });
   if (!request.success) {
     throw new SubmitRefused(z.prettifyError(request.error), 'invalid');
   }
@@ -249,9 +254,11 @@ export async function submitAnswer(
   // For a counterparty task the claimant reports success now, and the poster
   // gives its verdict with outcome.
   if (verification.kind === 'counterparty') {
+    // issuedAt is signed with the report.
     const outcome = TaskOutcomeRequest.parse({
       taskId: id,
       outcome: 'success',
+      issuedAt: new Date().toISOString(),
       ...(options.routine === true ? { origin: 'routine' } : {}),
     });
     try {

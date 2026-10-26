@@ -12,7 +12,7 @@ import {
   WELL_KNOWN_PATH,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
-import { resolveApiUrl } from '../api.js';
+import { commandApiUrl } from '../cli-config.js';
 import { paths } from '../config.js';
 import {
   checkHandshakeLine,
@@ -177,7 +177,7 @@ export function register(parent: Command, deps: SealDeps): Command {
           if (options.keys !== undefined) {
             wellKnown = await readKeysFile(options.keys);
           } else {
-            const apiUrl = resolveApiUrl({ config: await configApiUrl() });
+            const apiUrl = commandApiUrl(this, await configApiUrl());
             const iss = sealIssuer(seal);
             // Pointed at another API than the production one, say where
             // the keys came from on every result, broken or valid.
@@ -217,7 +217,7 @@ export function register(parent: Command, deps: SealDeps): Command {
       } else if (result.valid && options.handshake !== undefined) {
         const fetchesNothing =
           options.keys !== undefined || options.offline === true;
-        const pointed = resolveApiUrl({ config: await configApiUrl() });
+        const pointed = commandApiUrl(this, await configApiUrl());
         const recordUrl = fetchesNothing
           ? null
           : recordApiUrl(pointed, sealIssuer(seal));

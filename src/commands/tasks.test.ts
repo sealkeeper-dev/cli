@@ -35,7 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { resetBackgroundSyncThrottle, STAMP_FILE } from '../background-sync.js';
 import { paths, writeConfig, writeFileAtomic, writeNudge } from '../config.js';
-import { SECRET_FILE_REFUSAL } from '../file-guard.js';
+import { GIT_DIR_REFUSAL, SECRET_FILE_REFUSAL } from '../file-guard.js';
 import {
   currentFingerprint,
   NOTHING_DECLARED,
@@ -1087,6 +1087,7 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts()).toHaveLength(1);
       expect(api.posts()[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         submission: 'the answer\n',
       });
       expect(await logged()).toMatchObject([
@@ -1141,6 +1142,7 @@ describe('submit, release and the tasks commands', () => {
         expect(out).toContain('state  verified');
         expect(api.posts().at(-1)?.payload).toEqual({
           taskId: task.id,
+          issuedAt: expect.any(String),
           submission: 'a\nb\n',
         });
       }
@@ -1190,6 +1192,7 @@ describe('submit, release and the tasks commands', () => {
         expect(sent.code).toBe(0);
         expect(api.posts().at(-1)?.payload).toEqual({
           taskId: task.id,
+          issuedAt: expect.any(String),
           submission: 'a\nb\n',
         });
         api.requests = [];
@@ -1259,6 +1262,7 @@ describe('submit, release and the tasks commands', () => {
       expect(out).toContain('state  verified');
       expect(api.posts()[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         submission: 'Oslo\n',
       });
     });
@@ -1323,13 +1327,18 @@ describe('submit, release and the tasks commands', () => {
       expect(api.posts().map((r) => [r.path, r.payload])).toEqual([
         [
           `/v1/tasks/${task.id}/submit`,
-          { taskId: task.id, submission: 'done' },
+          { taskId: task.id, submission: 'done', issuedAt: expect.any(String) },
         ],
         [
           `/v1/tasks/${task.id}/outcome`,
-          { taskId: task.id, outcome: 'success' },
+          { taskId: task.id, outcome: 'success', issuedAt: expect.any(String) },
         ],
       ]);
+      // Each signs the time it was sent.
+      for (const r of api.posts()) {
+        const at = Date.parse(String(r.payload?.issuedAt));
+        expect(Math.abs(at - Date.now())).toBeLessThan(60_000);
+      }
       expect((await logged()).map((e) => e.type)).toEqual([
         'task.submitted',
         'task.outcome',
@@ -1482,6 +1491,37 @@ describe('submit, release and the tasks commands', () => {
         expect(api.posts()).toEqual([]);
       });
 
+      // A spec can ask an agent to submit .git/config, whose remote URL
+      // can hold a token.
+      it('refuses a file in a .git folder, as given or through a symlink', async () => {
+        cwd = join(dir, 'work');
+        const task = claimed({ kind: 'counterparty' });
+        const config = await fileIn(
+          join(cwd, '.git'),
+          'config',
+          '[remote "origin"]\n\turl = https://alice:ghp_token@example.com/r.git\n',
+        );
+        const link = join(cwd, '.sealkeeper-answers', 'a.txt');
+        await mkdir(join(cwd, '.sealkeeper-answers'), { recursive: true });
+        await symlink(config, link);
+        for (const file of [config, '.git/config', link]) {
+          for (const extra of [[], ['--allow-outside-cwd']]) {
+            const { code, err } = await run(
+              'submit',
+              task.id,
+              '--file',
+              file,
+              ...extra,
+            );
+            expect(code, file).toBe(1);
+            expect(err).toContain(`refusing to submit ${file}`);
+            expect(err).toContain(GIT_DIR_REFUSAL);
+            expect(err).not.toContain('ghp_token');
+          }
+        }
+        expect(api.posts()).toEqual([]);
+      });
+
       it('refuses a file outside the current directory unless --allow-outside-cwd is given', async () => {
         cwd = join(dir, 'work');
         await mkdir(cwd);
@@ -1502,6 +1542,7 @@ describe('submit, release and the tasks commands', () => {
         expect(allowed.code).toBe(0);
         expect(api.posts()[0]?.payload).toEqual({
           taskId: task.id,
+          issuedAt: expect.any(String),
           submission: 'done',
         });
       });
@@ -2190,6 +2231,19 @@ describe('submit, release and the tasks commands', () => {
         expect(secret.code).toBe(1);
         expect(secret.err).toContain(`refusing to read ${hidden}`);
         expect(secret.err).toContain('a hidden file or folder in your home');
+        const gitConfig = join(cwd, '.git', 'config');
+        await mkdir(join(cwd, '.git'));
+        await writeFile(
+          gitConfig,
+          '[remote "origin"]\n\turl = https://alice:ghp_token@example.com/r.git\n',
+        );
+        for (const file of [gitConfig, '.git/config']) {
+          const git = await post(file);
+          expect(git.code, file).toBe(1);
+          expect(git.err).toContain(`refusing to read ${file}`);
+          expect(git.err).toContain(GIT_DIR_REFUSAL);
+          expect(git.err).not.toContain('ghp_token');
+        }
         const tooBig = await post(big);
         expect(tooBig.code).toBe(1);
         expect(tooBig.err).toContain(
@@ -2705,9 +2759,12 @@ describe('submit, release and the tasks commands', () => {
       ]);
       expect(outcomePosts()[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         outcome: 'success',
         evidenceHash: sha256(SUBMISSION),
       });
+      const at = Date.parse(String(outcomePosts()[0]?.payload?.issuedAt));
+      expect(Math.abs(at - Date.now())).toBeLessThan(60_000);
       expect(await logged()).toMatchObject([
         {
           type: 'task.outcome',
@@ -3220,6 +3277,7 @@ describe('submit, release and the tasks commands', () => {
       expect(sent('/submit')[0]?.payload).toMatchObject({ fingerprint });
       expect(sent('/outcome')[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         outcome: 'success',
         fingerprint,
       });
@@ -3254,6 +3312,7 @@ describe('submit, release and the tasks commands', () => {
       expect((await run('outcome', task.id, 'success', '--yes')).code).toBe(0);
       expect(sent('/outcome')[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         outcome: 'success',
         evidenceHash: sha256('done'),
         fingerprint,
@@ -3319,6 +3378,7 @@ describe('submit, release and the tasks commands', () => {
       );
       expect(submits()[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         submission: 'the summary',
         modelName: 'gpt-4.1',
       });
@@ -3331,6 +3391,7 @@ describe('submit, release and the tasks commands', () => {
       );
       expect(submits()[0]?.payload).toEqual({
         taskId: task.id,
+        issuedAt: expect.any(String),
         submission: 'the summary',
       });
     });
@@ -3343,8 +3404,8 @@ describe('submit, release and the tasks commands', () => {
         0,
       );
       expect(submits().map((r) => Object.keys(r.payload ?? {}))).toEqual([
-        ['taskId', 'submission', 'modelName'],
-        ['taskId', 'submission'],
+        ['taskId', 'submission', 'modelName', 'issuedAt'],
+        ['taskId', 'submission', 'issuedAt'],
       ]);
       expect(api.tasks.get(task.id)?.state).toBe('submitted');
     });

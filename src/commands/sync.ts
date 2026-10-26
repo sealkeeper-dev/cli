@@ -1,6 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import type { Command } from 'commander';
-import { createApiClient, resolveApiUrl } from '../api.js';
+import { createApiClient, savedApiUrl } from '../api.js';
 import { type Input, isYes, streamInput } from '../ask.js';
 import { SyncBusyError, withSyncLock } from '../background-sync.js';
 import { requireConfig } from '../cli-config.js';
@@ -128,7 +128,7 @@ export function register(
       }
 
       const api = createApiClient({
-        apiUrl: resolveApiUrl({ config: config.apiUrl }),
+        apiUrl: savedApiUrl(config.apiUrl),
         fetch: deps.fetch,
       });
       let result: Awaited<ReturnType<typeof syncEvents>>;

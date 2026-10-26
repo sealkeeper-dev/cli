@@ -467,13 +467,14 @@ function ourHooks(group: unknown, current?: string): Hook[] {
 // The indent and line endings the file had, two spaces and LF for a new one.
 // Keys keep their order, so everything that was there is written back as it
 // was apart from what we changed. A symlinked settings file is
-// written through the link, and an existing file keeps its mode.
+// written through the link. An existing file keeps its mode, and a new one
+// is owner only.
 async function writeSettings(file: string, settings: Settings): Promise<void> {
   const target = await realpath(file).catch(() => file);
   await mkdir(dirname(target), { recursive: true });
   const mode = await stat(target)
     .then((s) => s.mode & 0o777)
-    .catch(() => 0o644);
+    .catch(() => 0o600);
   const json = JSON.stringify(settings.data, null, settings.indent);
   const text = settings.newline ? `${json}\n` : json;
   await writeFileAtomic(

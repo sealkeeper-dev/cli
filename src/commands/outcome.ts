@@ -163,11 +163,13 @@ export function register(
         }
 
         // The hash binds the verdict to the submission the poster read.
+        // issuedAt is signed with the report.
         const evidenceHash = sha256Hex(submission);
         const request = TaskOutcomeRequest.parse({
           taskId: id,
           outcome,
           evidenceHash,
+          issuedAt: new Date().toISOString(),
         });
         const sent = await sendWithFingerprint(
           signer,

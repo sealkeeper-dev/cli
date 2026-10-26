@@ -495,6 +495,51 @@ describe('logout', () => {
     expect(await exists(p.log)).toBe(true);
   });
 
+  it('without config or key, --delete-key --yes removes a key copy left behind and names only it', async () => {
+    const bak = `${p.key}.20261026T000000Z.bak`;
+    const tmp = `${p.key}.${randomUUID()}.tmp`;
+    await writeFile(bak, 'seed\n');
+    await writeFile(tmp, 'seed\n');
+    const copies = [bak, tmp].sort();
+
+    const refused = await run('logout', '--delete-key');
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain(
+      `--delete-key would delete the key copies at ${copies.join(', ')} and the log at ${p.log}`,
+    );
+    expect(refused.err).not.toContain(`the key at ${p.key}`);
+    for (const file of copies) expect(await exists(file)).toBe(true);
+
+    const { code, out, err } = await run('logout', '--delete-key', '--yes');
+    expect(code).toBe(0);
+    expect(err).toBe('');
+    expect(out).toBe(
+      [
+        ...copies.map((file) => `deleted the key copy at ${file}`),
+        `deleted the log at ${p.log}`,
+        '',
+      ].join('\n'),
+    );
+    for (const file of copies) expect(await exists(file)).toBe(false);
+  });
+
+  it('without config or key, --delete-key --yes --json reports the key copies it removed', async () => {
+    const bak = `${p.key}.20261026T000000Z.bak`;
+    await writeFile(bak, 'seed\n');
+    const { code, out } = await run(
+      'logout',
+      '--delete-key',
+      '--yes',
+      '--json',
+    );
+    expect(code).toBe(0);
+    const printed = JSON.parse(out);
+    expect(printed.keyDeleted).toBe(true);
+    expect(printed.keyCopies).toEqual([bak]);
+    expect(printed.removed).not.toContain('key');
+    expect(await exists(bak)).toBe(false);
+  });
+
   it('without config or key, --delete-key alone says there is nothing to log out', async () => {
     const { code, out } = await run('logout', '--delete-key');
     expect(code).toBe(0);

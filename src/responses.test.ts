@@ -692,6 +692,31 @@ describe('sealWithheldOf', () => {
     );
   });
 
+  it("reads hidden text and an unresolved change in an MCP server's definitions as their own kinds", () => {
+    const withheld = (reason: string) => ({
+      error: { code: 'withheld', message: 'm' },
+      reason,
+    });
+    expect(sealWithheldOf(withheld('mcp_hidden_text'))).toEqual({
+      kind: 'mcp_hidden_text',
+    });
+    expect(sealWithheldOf(withheld('mcp_change_unresolved'))).toEqual({
+      kind: 'mcp_change',
+    });
+    expect(withheldText({ kind: 'mcp_hidden_text' })).toBe(
+      "withheld while the server's definitions hold hidden text",
+    );
+    expect(withheldText({ kind: 'mcp_change' })).toBe(
+      "withheld while the latest change to the server's definitions is unresolved",
+    );
+    // A reason this version does not know still prints as the API sent it.
+    const unknown = sealWithheldOf(withheld('mcp_new_reason'));
+    expect(unknown).toEqual({ kind: 'held', reason: 'mcp_new_reason' });
+    expect(unknown && withheldText(unknown)).toBe(
+      'withheld for cause, reason mcp_new_reason',
+    );
+  });
+
   it('reads the hold class and the dormant days loosely', () => {
     const held = (reason: unknown) => ({
       error: { code: 'withheld', message: 'm' },
@@ -817,6 +842,23 @@ describe('sealStateWithheld', () => {
         reason: 'price_above_declared',
       }),
     ).toEqual({ kind: 'price_above' });
+  });
+
+  it("reads hidden text and an unresolved change in an MCP server's definitions, never as a hold", () => {
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: false,
+        reason: 'mcp_hidden_text',
+      }),
+    ).toEqual({ kind: 'mcp_hidden_text' });
+    expect(
+      sealStateWithheld({
+        state: 'suspended',
+        held: false,
+        reason: 'mcp_change_unresolved',
+      }),
+    ).toEqual({ kind: 'mcp_change' });
   });
 
   it('says nothing for a SEAL that is not withheld or a state it does not know', () => {

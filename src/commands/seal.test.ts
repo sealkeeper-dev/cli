@@ -17,6 +17,7 @@ import {
   HANDSHAKE_ROUTINE_RECORD_NOTE,
   LEGACY_ISSUER_UNTIL,
   LEGACY_ISSUERS,
+  MCP_NO_TOOL_NOTE,
   partHash,
   sign,
   signHandshake,
@@ -25,8 +26,10 @@ import {
   WELL_KNOWN_URL,
   X402_UNPAID_NOTE,
 } from '@sealkeeper/schema';
+import { sealConformanceCases } from '@sealkeeper/schema/conformance';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { apiUrlEnvRefused } from '../api.js';
 import { DEFAULT_API_URL, paths, writeConfig } from '../config.js';
 import { recordCapture } from '../fingerprint.js';
 import { makeHandshake } from '../handshake.js';
@@ -842,7 +845,7 @@ describe('sealkeeper seal', () => {
       expect(verified.out).toContain('owner verified by email on 2026-10-12');
     });
 
-    it.each([8, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
+    it.each([9, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
       const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
       const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
       expect(code).toBe(1);
@@ -1872,6 +1875,7 @@ describe('sealkeeper seal', () => {
         const at = lines.indexOf(X402_LINES[0] as string);
         expect(lines.slice(at, at + X402_LINES.length)).toEqual(X402_LINES);
         expect(lines[at - 1]).toBe('owner unverified');
+        expect(lines).not.toContain(MCP_NO_TOOL_NOTE);
         expect(requests).toEqual([]);
       });
 
@@ -1901,6 +1905,55 @@ describe('sealkeeper seal', () => {
         const at = lines.indexOf('endpoint checks 11 of 12 OK');
         expect(lines[at + 1]).toBe(X402_LINES[0]);
         expect(lines).toContain(X402_UNPAID_NOTE);
+      });
+
+      // The version 8 conformance cases, signed with the suite's own key and
+      // checked at its clock.
+      const verifyCase = async (name: string) => {
+        const suite = await sealConformanceCases();
+        const c = suite.cases.find((x) => x.name === name);
+        if (c === undefined) throw new Error(`no case ${name}`);
+        const keys = join(home, 'conformance-keys.json');
+        await writeFile(keys, JSON.stringify(suite.wellKnown));
+        stdin = c.jws;
+        const at = new Date(suite.nowSeconds * 1000).toISOString();
+        return run(offline, 'seal', 'verify', '-', '--at', at, '--keys', keys);
+      };
+      const MCP_LINES = [
+        'MCP reads 27 of 28 OK in 7 days',
+        'uptime 96.4%, p95 820 ms',
+        'MCP protocol 2025-11-25',
+        'definitions 7 tools, 0 prompts, 2 resources',
+        'definitions changes in 30 days 1, last on 2026-09-20, class released, not confirmed by owner',
+        'hidden text not found',
+        "SealKeeper read this server's definitions without calling any tool. SealKeeper did not test what the tools do.",
+      ];
+
+      it("prints a version 8 MCP service's reads, its definitions and that no tool was called", async () => {
+        const { code, out, err } = await verifyCase(
+          'version 8 of an MCP service',
+        );
+        expect(code).toBe(0);
+        expect(err).toBe('');
+        const lines = out.split('\n');
+        expect(lines[0]).toMatch(/^valid Service SEAL at /);
+        expect(lines[1]).toBe('level Bronze Service SEAL');
+        expect(lines[2]).toBe('interfaces mcp, paid no');
+        const at = lines.indexOf(MCP_LINES[0] as string);
+        expect(lines.slice(at, at + MCP_LINES.length)).toEqual(MCP_LINES);
+        expect(lines[at - 1]).toBe('owner unverified');
+        expect(lines).not.toContain(X402_UNPAID_NOTE);
+        expect(requests).toEqual([]);
+      });
+
+      it('prints a version 8 x402 service as version 7 does, with no MCP line', async () => {
+        const { code, out } = await verifyCase('version 8 of an x402 service');
+        expect(code).toBe(0);
+        const lines = out.split('\n');
+        expect(lines[2]).toBe('interfaces x402, paid yes');
+        expect(lines).toContain(X402_UNPAID_NOTE);
+        expect(lines.some((l) => l.startsWith('MCP '))).toBe(false);
+        expect(lines).not.toContain(MCP_NO_TOOL_NOTE);
       });
 
       it('reads a SEAL from before the kind as an Agent SEAL', async () => {
@@ -2122,6 +2175,8 @@ describe('sealkeeper seal', () => {
     const FOR_YOU =
       'made for you over your nonce, so the key holder answered you';
 
+    // The verifier reads the production API, which the config saved, since
+    // SEALKEEPER_API_URL naming another API than the saved one is refused.
     beforeEach(async () => {
       vi.stubEnv('SEALKEEPER_API_URL', DEFAULT_API_URL);
       await writeConfig({
@@ -2129,7 +2184,7 @@ describe('sealkeeper seal', () => {
         operatorLogin: 'alice',
         name: 'summariser',
         version: '1.0.0',
-        apiUrl: API_URL,
+        apiUrl: DEFAULT_API_URL,
         registeredAt: new Date(NOW).toISOString(),
       });
       recordHash = null;
@@ -2629,8 +2684,30 @@ describe('sealkeeper seal', () => {
 
     // The record comes from the API paired with where the keys came from,
     // never from another issuer's API.
+    it('stops verify with one line and no request when SEALKEEPER_API_URL names another API than the saved one', async () => {
+      vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+      const { code, out, err } = await run(
+        withRecord,
+        'seal',
+        'verify',
+        await currentSeal(),
+      );
+      expect(code).toBe(1);
+      expect(out).toBe('');
+      expect(err).toBe(`${apiUrlEnvRefused(DEFAULT_API_URL)}\n`);
+      expect(requests).toEqual([]);
+    });
+
     it('never reads the record from a local API for a production SEAL, whose keys came from the issuer', async () => {
       vi.stubEnv('SEALKEEPER_API_URL', API_URL);
+      await writeConfig({
+        agentId,
+        operatorLogin: 'alice',
+        name: 'summariser',
+        version: '1.0.0',
+        apiUrl: API_URL,
+        registeredAt: new Date(NOW).toISOString(),
+      });
       recordHash = (await capture('mcp:github')).hash;
       const { code, err } = await run(
         withRecord,

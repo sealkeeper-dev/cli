@@ -593,6 +593,7 @@ describe('cli bundle', () => {
           operatorLogin: 'alice',
           name: 'scout',
           version: '1.0.0',
+          apiUrl: 'https://10.255.255.1',
           registeredAt: '2026-09-23T08:00:00Z',
         }),
       );
@@ -609,7 +610,7 @@ describe('cli bundle', () => {
             env: {
               ...process.env,
               SEALKEEPER_HOME: home,
-              SEALKEEPER_API_URL: 'http://10.255.255.1',
+              SEALKEEPER_API_URL: '',
             },
           },
         );

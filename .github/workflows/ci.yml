@@ -19,8 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The lowest version engines allows, and the current LTS.
-        node: ['22.12', '24']
+        # The lowest versions engines allows on Node 22 and on Node 24, the current LTS.
+        node: ['22.23.4', '24.22.1']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

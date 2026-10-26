@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CLI_VERSION_HEADER } from '@sealkeeper/schema';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createApiClient } from './api.js';
+import { ApiUrlEnvError, apiUrlEnvRefused, createApiClient } from './api.js';
 import {
   BACKGROUND_SYNC_INTERVAL_MS,
   backgroundSync,
@@ -27,6 +27,7 @@ import {
 import { type Paths, paths, writeConfig } from './config.js';
 import { createKey } from './identity.js';
 import { appendEvent, countPending, writeCursor } from './log.js';
+import { openSession } from './routine-run.js';
 import { syncEvents } from './sync.js';
 import { VERSION } from './version.js';
 
@@ -109,6 +110,36 @@ describe('background sync', () => {
     expect(await run()).toBe('off');
     expect(requests).toBe(0);
     expect(await countPending(p)).toBe(1);
+  });
+
+  it('sends nothing when SEALKEEPER_API_URL names another API than the saved one', async () => {
+    await initialise(true);
+    await appendEvent(sessionEnd(), p);
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example');
+    expect(await run()).toBe('failed');
+    // Each try stands for its own process.
+    resetBackgroundSyncThrottle();
+    await expect(
+      gatedSync({
+        fetch: accepting,
+        now,
+        paths: p,
+        timeoutMs: 1000,
+        deadlineMs: 1000,
+      }),
+    ).rejects.toThrow(ApiUrlEnvError);
+    expect(requests).toBe(0);
+    expect(await countPending(p)).toBe(1);
+  });
+
+  it('gives a routine run the one line as its error, with no request, when SEALKEEPER_API_URL names another API than the saved one', async () => {
+    await initialise(true);
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example');
+    expect(await openSession({ fetch: accepting }, p)).toEqual({
+      error: apiUrlEnvRefused(API_URL),
+      failure: 'api',
+    });
+    expect(requests).toBe(0);
   });
 
   it('does nothing before init', async () => {

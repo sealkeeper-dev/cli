@@ -4,7 +4,7 @@ The SealKeeper CLI gives an AI agent a cryptographic identity and a verifiable t
 
 ## Quick start
 
-Needs Node 22.12 or newer. Nothing needs to be installed first.
+Needs Node 22.23.4, 24.22.1 or 26.12.1, or a newer release of the same line. Nothing needs to be installed first.
 
 **1. Set up the agent, once.** Run it in the repository or folder your agent works in.
 
@@ -41,9 +41,20 @@ Every command runs through `npx sealkeeper`. A global install, `npm i -g sealkee
 | `--api-url <url>` | The SealKeeper API base URL, https, or http to `localhost`, `127.0.0.1` or `[::1]` |
 | `--force` | Make a new key and register again, keeping the old key as `key.<time>.bak` |
 | `--listed <domain>/<name>` | Take over an A2A agent SealKeeper lists and you claimed, with a key of its own on this machine |
+| `--key-file <path>` | Register with an Ed25519 private key the agent already has instead of a new one, `-` reads it from stdin |
 | `--json` | Print one JSON object |
 
 An agent is addressed by its handle, your operator slug and the agent's name, as in `alice/research-bot`, with its public profile at `https://sealkeeper.run/agents/alice/research-bot`. Change the slug at `https://sealkeeper.run/me/account`.
+
+An agent that already signs with an Ed25519 key can keep it as its identity. The file holds one value, the 32 byte seed or the 64 byte seed followed by its public key as libsodium and tweetnacl keep it, in base64url, base64 or hex. A 64 byte key whose second half is not the public key of its first half is refused, and so is anything else. `init` copies the seed once into `~/.sealkeeper/key`, and the agent id is the key's public key in base64url. A key held in an environment variable goes in through stdin.
+
+```sh
+printf %s "$AGENT_KEY" | npx sealkeeper init --name research-bot --key-file -
+```
+
+A first `init` in a terminal, without `--key-file` or `--force`, asks for the path to a key file before it makes one, and Enter makes a new key.
+
+When the agent's home already holds that key, `init` runs as a repeat. A different key is refused unless you pass `--force`, which keeps the old key as `key.<time>.bak`. A key registered by another operator is refused.
 
 The banner, the sign in, the headings and the questions go to stderr, and the results, the summary and the next steps to stdout. When stdin is not a terminal and `CLAUDECODE` is set, Claude Code is running `init` for you, so the hooks go in without a question and the routine is not offered.
 
@@ -263,7 +274,7 @@ npx sealkeeper seal verify <seal>
 
 `seal show` prints the agent's current SEAL and what it says, and `seal write` saves it to `seal.txt`. `seal verify` checks any agent's SEAL and exits 0 when it is valid, 1 when it is broken and 2 when the keys could not be loaded. Pass `-` in place of the SEAL to read it from stdin.
 
-Both name the kind first, an Agent SEAL or a Service SEAL, and print the level with it, as in `level Silver Service SEAL`. For a SEAL with x402 checks they also print them in short form, made without paying. A SEAL from before the kind was signed is an Agent SEAL.
+Both name the kind first, an Agent SEAL or a Service SEAL, and print the level with it, as in `level Silver Service SEAL`. For a SEAL with x402 checks they also print them in short form, made without paying, and for an MCP service its reads in short form, made without calling any tool. A SEAL from before the kind was signed is an Agent SEAL.
 
 | Flag of `seal verify` | What it does |
 |---|---|
@@ -450,7 +461,7 @@ Everything `sealkeeper init` and the commands after it write on your machine, ru
 
 ### Files in the SealKeeper home
 
-- `~/.sealkeeper/key`, the agent's Ed25519 private key, readable by you alone (mode 600). It never leaves the machine.
+- `~/.sealkeeper/key`, the agent's Ed25519 private key, readable by you alone (mode 600), made by `init` or copied from `--key-file`. It never leaves the machine.
 - `~/.sealkeeper/prompt-secret`, 32 random bytes mixed into the hash of the fingerprint's prompt part so a guessed prompt cannot be confirmed, readable by you alone (mode 600), made by `init` or the first time the Mastra adapter or its routine is given instructions, and never sent.
 - `~/.sealkeeper/config.json`, the agent id, your GitHub login, the agent name and version, the API URL, when it registered and whether automatic sync is on.
 - `~/.sealkeeper/log/`, the local event log, one JSONL file per UTC day, only ever appended to. A line a routine run on Claude Code or OpenClaw logged also names that routine.
@@ -543,7 +554,7 @@ Every write is signed with your agent key, and so is each read of the agent's ow
 | Variable | Purpose |
 |---|---|
 | `SEALKEEPER_HOME` | Directory for the key, config and log, over the folder map in `agents.json`. Default is the agent bound to the current folder, else `~/.sealkeeper` |
-| `SEALKEEPER_API_URL` | API base URL, used over the config and never saved by `init` |
+| `SEALKEEPER_API_URL` | API base URL, never saved by `init`. Once the agent is set up a command uses it only when it names the saved API or this machine, and otherwise stops and sends nothing. Use `init --api-url` to save another API |
 | `CLAUDE_CONFIG_DIR` | The Claude Code config directory, default `~/.claude` |
 | `SEALKEEPER_GITHUB_CLIENT_ID` | GitHub OAuth app client id, over the one built into the package |
 | `SEALKEEPER_INVOCATION` | How printed commands spell the CLI, such as `sealkeeper` or `npx sealkeeper` |

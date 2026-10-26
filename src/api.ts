@@ -8,6 +8,7 @@ import type { z } from 'zod';
 import {
   DEFAULT_API_URL,
   INSECURE_API_URL,
+  isLoopbackUrl,
   isSecureApiUrl,
   paths,
 } from './config.js';
@@ -97,7 +98,8 @@ function withheldMessage(withheld: SealWithheld): string {
 }
 
 // An explicit flag wins, then SEALKEEPER_API_URL, then the config, then the
-// production default.
+// production default. init uses it, where envApiSource asks about a URL from
+// the environment. Every other command with a config reads savedApiUrl.
 export function resolveApiUrl(
   sources: { flag?: string; config?: string | null },
   env: NodeJS.ProcessEnv = process.env,
@@ -106,6 +108,44 @@ export function resolveApiUrl(
   return (
     sources.flag?.trim() || fromEnv || sources.config?.trim() || DEFAULT_API_URL
   );
+}
+
+// The line a command stops with when SEALKEEPER_API_URL names another API
+// than the one the agent's config saved.
+export const apiUrlEnvRefused = (saved: string): string => {
+  const origin = new URL(saved).origin;
+  return `${API_URL_ENV} names an API other than this agent's ${origin}, nothing was sent, unset it to use ${origin}`;
+};
+
+export class ApiUrlEnvError extends Error {
+  override name = 'ApiUrlEnvError';
+}
+
+// The API of the agent whose config saved the URL saved. A project's
+// .claude/settings.json can set SEALKEEPER_API_URL for every command run in
+// the folder, so the variable is used only when it names the saved origin
+// or this machine. Any other value throws ApiUrlEnvError, before anything is
+// sent. With no config, null, the variable wins as in resolveApiUrl.
+export function savedApiUrl(
+  saved: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const config = saved?.trim();
+  if (!config) return resolveApiUrl({}, env);
+  const fromEnv = readEnv(API_URL_ENV, env);
+  if (fromEnv === undefined) return config;
+  if (isLoopbackUrl(fromEnv) || originOf(fromEnv) === originOf(config)) {
+    return fromEnv;
+  }
+  throw new ApiUrlEnvError(apiUrlEnvRefused(config));
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 // What a request got back. json is undefined when the body is not JSON.

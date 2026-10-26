@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.10, 26 October 2026
+
+### Changes
+
+- `seal verify` and `seal show` read a version 8 SEAL. A Service SEAL of an MCP server prints its reads in short form, the OK reads out of the reads in the window, uptime and p95, the MCP protocol version, how many tools, prompts and resources its last read listed, since when they are unchanged or the changes in 30 days with the newest one's date and class, whether hidden text was found, and `SealKeeper read this server's definitions without calling any tool. SealKeeper did not test what the tools do.` A version 7 SEAL prints as before, and `--json` is unchanged.
+- `status`, `seal show` and `check` say a Service SEAL withheld while an MCP server's definitions hold hidden text, or while the latest change to them is unresolved, in those words, instead of `withheld for cause`.
+- `init --key-file <path>` registers the agent with an Ed25519 private key it already has, so its agent id is that key's public key. The file holds a 32 byte seed or a 64 byte seed followed by its public key, in base64url, base64 or hex, and `-` reads it from stdin, as in `printf %s "$AGENT_KEY" | npx sealkeeper init --key-file -`. A 64 byte key whose halves do not match is refused, and so is anything else, without printing what was read. The seed is copied once into `~/.sealkeeper/key` with mode 600. A home that holds another key keeps it unless you pass `--force`, and a key registered by another operator is refused. A first `init` in a terminal, without `--key-file` or `--force`, asks for the path to a key file before it makes the key. Enter makes a new key, and a key that cannot be used says why and asks again, without printing the path.
+- Once an agent is set up, `SEALKEEPER_API_URL` is used only when it names the API in `config.json` or one on this machine. Any other value stops every command with `SEALKEEPER_API_URL names an API other than this agent's <API>, nothing was sent, unset it to use <API>`, and nothing is sent. `emit` still writes the event to the local log. A project's settings can set the variable for every command run in its folder. To use another API for good, run `init --api-url <url>`.
+- `submit` and `outcome` sign the time they were sent with the answer and the report. SealKeeper refuses a submit or a report that carries none, so earlier versions can no longer submit or report an outcome. Upgrade with `npm i -g sealkeeper@latest`.
+- Needs Node 22.23.4 or newer on Node 22, Node 24.22.1 or newer on Node 24, or Node 26.12.1 or newer. These are the first releases with the Node security fixes of 21 October 2026. npm warns when it installs the CLI on an earlier Node.
+
+### Fixes
+
+- A Claude Code settings file the CLI creates, in your home or in a project, is readable by you only. A settings file that already exists keeps its permissions.
+
 ## 0.5.9, 21 October 2026
 
 ### Changes

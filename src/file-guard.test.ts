@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ANSWERS_DIR,
   type FileRules,
+  GIT_DIR_REFUSAL,
   readGuardedFile,
   SECRET_FILE_REFUSAL,
 } from './file-guard.js';
@@ -291,6 +292,60 @@ describe('readGuardedFile', () => {
       }
     }
     expect(fs.open).not.toHaveBeenCalled();
+  });
+
+  // A spec can ask an agent for --file .git/config, whose remote URL or
+  // extra header can hold a token.
+  it('refuses any file in a .git folder, as given or as resolved, in every mode, without opening it', async () => {
+    const config = await write(
+      join(cwd, '.git', 'config'),
+      '[remote "origin"]\n\turl = https://alice:token@example.com/r.git\n',
+    );
+    await write(join(cwd, '.git', 'logs', 'HEAD'), 'x');
+    await write(join(cwd, 'sub', '.git'), 'gitdir: ../.git/modules/sub\n');
+    await write(join(cwd, '.git', 'modules', 'sub', 'config'), 'x');
+    await write(join(cwd, '.GIT-like', 'notes.txt'), 'x');
+    const link = join(cwd, ANSWERS_DIR, 'a.txt');
+    await fs.symlink(config, link);
+    await fs.symlink(join(cwd, '.git'), join(cwd, 'repo'));
+    const files = [
+      config,
+      '.git/config',
+      './.git/../.git/config',
+      '.GIT/config',
+      '.Git/logs/HEAD',
+      'sub/.git',
+      '.git/modules/sub/config',
+      link,
+      join(cwd, 'repo', 'config'),
+      'repo/config',
+    ];
+    for (const file of files) {
+      for (const allowOutsideCwd of [true, false]) {
+        const read = await readGuardedFile(file, { ...rules, allowOutsideCwd });
+        // A file system that ignores case finds .GIT/config, one that does
+        // not says it cannot be read. Neither reads it.
+        if (file.startsWith('.GIT') || file.startsWith('.Git')) {
+          expect(read, file).toHaveProperty('error');
+          expect(read, file).not.toHaveProperty('text');
+          continue;
+        }
+        expect(read, file).toEqual({
+          error: `refusing to submit ${file}, ${GIT_DIR_REFUSAL}`,
+        });
+      }
+    }
+    expect(fs.open).not.toHaveBeenCalled();
+    expect(
+      await readGuardedFile(join(cwd, '.GIT-like', 'notes.txt'), rules),
+    ).toEqual({ text: 'x' });
+  });
+
+  it('refuses a .git folder named in any case once it exists', async () => {
+    const upper = await write(join(cwd, 'other', '.GIT', 'config'), 'x');
+    expect(await readGuardedFile(upper, rules)).toEqual({
+      error: `refusing to submit ${upper}, ${GIT_DIR_REFUSAL}`,
+    });
   });
 
   it('judges a symlink by its own name and by the name of what it points to', async () => {

@@ -10,7 +10,7 @@ import {
   type ApiClient,
   ApiError,
   createApiClient,
-  resolveApiUrl,
+  savedApiUrl,
 } from './api.js';
 import { type Input, streamInput } from './ask.js';
 import { backgroundSync } from './background-sync.js';
@@ -62,7 +62,7 @@ export async function openTaskSession(
 ): Promise<TaskSession> {
   const config = await requireConfig(cmd);
   const api = createApiClient({
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    apiUrl: savedApiUrl(config.apiUrl),
     fetch: deps.fetch,
   });
   // Signed for the API this session talks to, so aud is its origin.

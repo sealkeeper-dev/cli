@@ -12,7 +12,7 @@ import {
   type ApiClient,
   ApiError,
   createApiClient,
-  resolveApiUrl,
+  savedApiUrl,
 } from './api.js';
 import { cleanAnswer, type Input, readYesNo } from './ask.js';
 import { claudeCodeHooksIn } from './claude-code-settings.js';
@@ -280,7 +280,7 @@ export async function offerRuntime(options: {
     return;
   }
   const api = createApiClient({
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    apiUrl: savedApiUrl(config.apiUrl),
     fetch: options.fetch,
   });
   try {

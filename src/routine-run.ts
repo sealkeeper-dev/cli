@@ -7,8 +7,9 @@ import { clampMs } from './adapter-core.js';
 import {
   type ApiClient,
   ApiError,
+  ApiUrlEnvError,
   createApiClient,
-  resolveApiUrl,
+  savedApiUrl,
 } from './api.js';
 import { backgroundSync } from './background-sync.js';
 import { type CardRefresh, refreshCard } from './card.js';
@@ -998,7 +999,7 @@ export async function openSession(
       return { error: 'no agent is set up', failure: 'key' };
     }
     const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      apiUrl: savedApiUrl(config.apiUrl),
       fetch: deps.fetch,
     });
     return { api, signer: await loadSigner(api.apiUrl, p) };
@@ -1014,6 +1015,9 @@ export async function openSession(
         error: `could not read the API: ${error.message}`,
         failure: 'api',
       };
+    }
+    if (error instanceof ApiUrlEnvError) {
+      return { error: error.message, failure: 'api' };
     }
     throw error;
   }

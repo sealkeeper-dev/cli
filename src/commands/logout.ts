@@ -4,7 +4,10 @@ import { basename } from 'node:path';
 import type { Command } from 'commander';
 import { type Paths, paths, readConfig } from '../config.js';
 import { exists } from '../files.js';
-import { deleteKey as removeKey } from '../identity.js';
+import {
+  keyCopies as findKeyCopies,
+  deleteKey as removeKey,
+} from '../identity.js';
 import { cli } from '../invocation.js';
 import { stdout, wantsJson } from '../output.js';
 import { SchedulerError } from '../routine-scheduler.js';
@@ -57,13 +60,16 @@ export function register(
       if (!(await exists(p.config))) {
         // After a plain logout only the key and the log are left. The key must
         // still be deletable then, and --delete-key without --yes is refused as
-        // before a logout.
+        // before a logout. A copy of the key left with no key beside it holds
+        // the seed too, so it counts as a key here.
         const hasKey = await exists(p.key);
-        if (options.deleteKey && !options.yes && hasKey) {
-          this.error(deleteKeyRefusal(p, 'this agent'));
+        const copies = await findKeyCopies(p);
+        const keyLeft = hasKey || copies.length > 0;
+        if (options.deleteKey && !options.yes && keyLeft) {
+          this.error(deleteKeyRefusal(p, 'this agent', hasKey, copies));
         }
-        if (deleteKey && hasKey) {
-          const { removed, keyCopies } = await removeSession(p, true);
+        if (deleteKey && keyLeft) {
+          const { removed, keyCopies, hadKey } = await removeSession(p, true);
           const folders = await releaseFolders(p);
           if (json) {
             stdout(
@@ -76,7 +82,12 @@ export function register(
               }),
             );
           } else {
-            for (const line of deletedKeyLines(p, 'this agent', keyCopies)) {
+            for (const line of deletedKeyLines(
+              p,
+              'this agent',
+              hadKey,
+              keyCopies,
+            )) {
               stdout(line);
             }
             for (const line of unboundLines(folders)) stdout(line);
@@ -99,7 +110,14 @@ export function register(
       const identity = agentId ? `agent ${agentId}` : 'this agent';
 
       if (options.deleteKey && !options.yes) {
-        this.error(deleteKeyRefusal(p, identity));
+        this.error(
+          deleteKeyRefusal(
+            p,
+            identity,
+            await exists(p.key),
+            await findKeyCopies(p),
+          ),
+        );
       }
 
       // The job first, so a scheduler that refuses stops logout with
@@ -115,7 +133,7 @@ export function register(
         }
         throw error;
       }
-      const { removed, keyCopies } = await removeSession(p, deleteKey);
+      const { removed, keyCopies, hadKey } = await removeSession(p, deleteKey);
       const folders = deleteKey ? await releaseFolders(p) : [];
 
       if (json) {
@@ -136,7 +154,7 @@ export function register(
         for (const line of jobLines(routineJob)) stdout(line);
       }
       if (deleteKey) {
-        for (const line of deletedKeyLines(p, identity, keyCopies)) {
+        for (const line of deletedKeyLines(p, identity, hadKey, keyCopies)) {
           stdout(line);
         }
         for (const line of unboundLines(folders)) stdout(line);
@@ -149,24 +167,40 @@ export function register(
 }
 
 // What --delete-key without --yes says, three lines, and nothing is
-// deleted.
-function deleteKeyRefusal(p: Paths, identity: string): string {
+// deleted. Copies left with no key beside them are named in place of the
+// key.
+function deleteKeyRefusal(
+  p: Paths,
+  identity: string,
+  hasKey: boolean,
+  copies: string[],
+): string {
+  const what =
+    hasKey || copies.length === 0
+      ? `the key at ${p.key}, any copies of it`
+      : `the key copies at ${copies.join(', ')}`;
   return [
-    `--delete-key would delete the key at ${p.key}, any copies of it and the log at ${p.log} along with the local session.`,
+    `--delete-key would delete ${what} and the log at ${p.log} along with the local session.`,
     `The identity of ${identity} would be gone for good and its track record could not be extended.`,
     `Nothing was deleted. Run ${cli('logout --delete-key --yes')} to go ahead.`,
   ].join('\n');
 }
 
-// What logout --delete-key says it deleted. Each copy of the key is named
-// by its full path, since each held the private seed.
+// What logout --delete-key says it deleted. The key is named only when it
+// was there. Each copy of the key is named by its full path, since each held
+// the private seed.
 function deletedKeyLines(
   p: Paths,
   identity: string,
+  hadKey: boolean,
   keyCopies: string[],
 ): string[] {
   return [
-    `deleted the key at ${p.key}, the identity of ${identity} is gone for good`,
+    ...(hadKey
+      ? [
+          `deleted the key at ${p.key}, the identity of ${identity} is gone for good`,
+        ]
+      : []),
     ...keyCopies.map((file) => `deleted the key copy at ${file}`),
     `deleted the log at ${p.log}`,
   ];
@@ -176,11 +210,12 @@ function deletedKeyLines(
 // cursor and the log. A kept key keeps the cursor, so sync goes on where it
 // was after the next init. config.json goes last so a run cut short can be
 // repeated. removed names the files and folders that existed, keyCopies
-// the full paths of the key copies deleted.
+// the full paths of the key copies deleted, hadKey whether the key itself
+// was there and deleted.
 async function removeSession(
   p: Paths,
   deleteKey: boolean,
-): Promise<{ removed: string[]; keyCopies: string[] }> {
+): Promise<{ removed: string[]; keyCopies: string[]; hadKey: boolean }> {
   const targets = [
     p.credential,
     p.status,
@@ -206,12 +241,13 @@ async function removeSession(
   };
   for (const target of targets) await remove(target);
   let keyCopies: string[] = [];
+  let hadKey = false;
   if (deleteKey) {
-    const hadKey = await exists(p.key);
+    hadKey = await exists(p.key);
     keyCopies = await removeKey(p);
     if (hadKey) removed.push(basename(p.key));
     removed.push(...keyCopies.map((file) => basename(file)));
   }
   await remove(p.config);
-  return { removed, keyCopies };
+  return { removed, keyCopies, hadKey };
 }

@@ -11,6 +11,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { Readable } from 'node:stream';
 import {
   agentIdFromPublicKey,
   base64urlEncode,
@@ -29,10 +30,17 @@ import {
 import { paths } from './config.js';
 import {
   createKey,
+  decodeBroughtKey,
+  KEY_FILE_INVALID,
+  KEY_FILE_MISMATCH,
+  KEY_FILE_NOT_REGULAR,
+  KEY_FILE_UNREADABLE,
   KeyError,
   loadKey,
   loadSigner,
   NO_KEY,
+  readBroughtKey,
+  readKeyStream,
   signEnvelope,
 } from './identity.js';
 
@@ -260,5 +268,139 @@ describe('identity', () => {
     const error = await loadKey().catch((e: Error) => e);
     expect(String(error)).not.toContain(seed);
     expect(printed()).not.toContain(seed);
+  });
+});
+
+describe('a brought key', () => {
+  const one = VECTORS[0] as (typeof VECTORS)[number];
+  const two = VECTORS[1] as (typeof VECTORS)[number];
+  const seed = Buffer.from(one.secretKey, 'hex');
+  const pair = Buffer.concat([seed, Buffer.from(one.publicKey, 'hex')]);
+  const crossed = Buffer.concat([seed, Buffer.from(two.publicKey, 'hex')]);
+
+  it.each([
+    ['hex', one.secretKey],
+    ['upper case hex', one.secretKey.toUpperCase()],
+    ['base64url', seed.toString('base64url')],
+    ['padded base64', seed.toString('base64')],
+    ['unpadded base64', seed.toString('base64').replace(/=+$/, '')],
+    ['64 byte hex', pair.toString('hex')],
+    ['64 byte base64', pair.toString('base64')],
+    ['64 byte base64url', pair.toString('base64url')],
+    ['whitespace around it', `  \n${seed.toString('base64url')}\r\n\n`],
+  ])('reads the seed from %s', async (_, text) => {
+    const decoded = await decodeBroughtKey(text);
+    expect(Buffer.from(decoded).toString('hex')).toBe(one.secretKey);
+  });
+
+  it('refuses a 64 byte key whose second half is another public key', async () => {
+    for (const text of [crossed.toString('hex'), crossed.toString('base64')]) {
+      const error = await decodeBroughtKey(text).catch((e: Error) => e);
+      expect(error).toBeInstanceOf(KeyError);
+      expect((error as Error).message).toBe(KEY_FILE_MISMATCH);
+      expect((error as Error).message).not.toContain(text);
+    }
+  });
+
+  it.each([
+    ['empty', ''],
+    ['a word', 'not-a-key'],
+    ['31 bytes', seed.subarray(0, 31).toString('base64url')],
+    ['33 bytes', Buffer.concat([seed, Buffer.from([1])]).toString('base64url')],
+    ['48 bytes', Buffer.alloc(48, 7).toString('base64')],
+    ['63 hex digits', one.secretKey.slice(1)],
+    ['two values', `${one.secretKey} ${one.secretKey}`],
+    ['trailing bits set', `${seed.toString('base64url').slice(0, 42)}B`],
+    ['bad padding', `${seed.toString('base64url')}==`],
+    [
+      'a PEM block',
+      `-----BEGIN PRIVATE KEY-----\n${seed.toString('base64')}\n-----END PRIVATE KEY-----`,
+    ],
+  ])('refuses %s without echoing it', async (_, text) => {
+    const error = await decodeBroughtKey(text).catch((e: Error) => e);
+    expect(error).toBeInstanceOf(KeyError);
+    expect((error as Error).message).toBe(KEY_FILE_INVALID);
+    if (text.trim() !== '') {
+      expect((error as Error).message).not.toContain(text.trim());
+    }
+  });
+
+  it('reads a key file or the input for -, and gives the agent id of its public key', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sealkeeper-brought-'));
+    try {
+      const file = join(root, 'agent.key');
+      await writeFile(file, `${one.secretKey}\n`);
+      const fromFile = await readBroughtKey(file, async () => '');
+      expect(fromFile.agentId).toBe(one.agentId);
+      const fromInput = await readBroughtKey('-', async () =>
+        seed.toString('base64'),
+      );
+      expect(fromInput.agentId).toBe(one.agentId);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a missing file, a folder, a fifo and a large file without naming the path', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sealkeeper-brought-'));
+    try {
+      const big = join(root, 'big');
+      await writeFile(big, 'A'.repeat(5000));
+      const missing = seed.toString('base64url');
+      const cases: [string, string][] = [
+        [missing, KEY_FILE_UNREADABLE],
+        [root, KEY_FILE_NOT_REGULAR],
+        [big, KEY_FILE_INVALID],
+      ];
+      if (process.platform !== 'win32') {
+        const { execFileSync } = await import('node:child_process');
+        const fifo = join(root, 'fifo');
+        execFileSync('mkfifo', [fifo]);
+        cases.push([fifo, KEY_FILE_NOT_REGULAR]);
+      }
+      for (const [path, message] of cases) {
+        const error = await readBroughtKey(path, async () => '').catch(
+          (e: Error) => e,
+        );
+        expect(error).toBeInstanceOf(KeyError);
+        expect((error as Error).message).toBe(message);
+        expect((error as Error).message).not.toContain(path);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reads a stream to its end and refuses one past 4096 bytes', async () => {
+    expect(await readKeyStream(Readable.from(['ab', Buffer.from('cd')]))).toBe(
+      'abcd',
+    );
+    await expect(
+      readKeyStream(Readable.from([Buffer.alloc(5000, 65)])),
+    ).rejects.toThrow(KEY_FILE_INVALID);
+  });
+
+  it('writes a brought seed as the key file a new key would be', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sealkeeper-brought-'));
+    const p = paths(join(root, 'home'));
+    try {
+      const made = await createKey({ seed }, p);
+      expect(made.agentId).toBe(one.agentId);
+      expect(await readFile(p.key, 'utf8')).toBe(
+        `${seed.toString('base64url')}\n`,
+      );
+      expect((await stat(p.key)).mode & 0o777).toBe(0o600);
+      await expect(createKey({ seed }, p)).rejects.toThrow(/already exists/);
+      const replaced = await createKey(
+        { force: true, seed: Buffer.from(two.secretKey, 'hex') },
+        p,
+      );
+      expect(replaced.agentId).toBe(two.agentId);
+      expect(
+        (await loadKey({ ...p, key: replaced.backup ?? '' }))?.agentId,
+      ).toBe(one.agentId);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

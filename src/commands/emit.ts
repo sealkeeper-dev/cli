@@ -2,6 +2,7 @@
 import type { Event, EventType } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { z } from 'zod';
+import { ApiUrlEnvError } from '../api.js';
 import { gatedSync, WAITING_CALLER_LIMITS } from '../background-sync.js';
 import { loadConfig } from '../cli-config.js';
 import { DEFAULT_AGENT_VERSION } from '../config.js';
@@ -98,6 +99,11 @@ export function register(
       try {
         await gatedSync({ fetch: deps.fetch, ...WAITING_CALLER_LIMITS });
       } catch (error) {
+        // The event stays in the log, and the line says why nothing was sent.
+        if (error instanceof ApiUrlEnvError) {
+          stderr(error.message);
+          return;
+        }
         const pending =
           error instanceof SyncError
             ? error.pending

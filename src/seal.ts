@@ -5,6 +5,7 @@ import {
   CREDENTIAL_ISSUER,
   decodeHeader,
   LEGACY_ISSUERS,
+  MCP_NO_TOOL_NOTE,
   type SealBrokenReason,
   utf8Decode,
   verifySeal,
@@ -198,7 +199,8 @@ export function levelWithKind(level: string, kind: string): string {
 // posted confirmed tasks), fingerprint and state of version 3 on, the Trust
 // Score and the top categories of version 4 on, the routine fingerprint of
 // version 6 on, operator verified, a listed agent's handle, owner and endpoint
-// checks of version 5, the x402 checks of version 7 in short form, last active
+// checks of version 5, the x402 checks of version 7 and the MCP reads of
+// version 8 in short form, last active
 // as a date, dormant days and any identity references. A legacy SEAL, issued
 // before version 1, has only some of these, so a line is left out when its
 // field is. Nothing for a payload that is not a SEAL.
@@ -308,6 +310,7 @@ export function sealSummary(payload: unknown): string[] {
       );
     }
     if (e.type === 'x402_check') lines.push(...x402Lines(e));
+    if (e.type === 'mcp_check') lines.push(...mcpLines(e));
   }
   if (c.last_active !== undefined) {
     lines.push(
@@ -352,6 +355,47 @@ function x402Lines(e: Evidence): string[] {
     );
   }
   lines.push(X402_UNPAID_NOTE);
+  return lines;
+}
+
+// mcp_check evidence in short form. The OK reads out of the reads in the
+// window, uptime and p95, the protocol version, how many tools, prompts and
+// resources the last OK read listed, since when they are unchanged or the
+// changes in 30 days with the newest one's date and class, whether the
+// reads found hidden text, and that no tool was called.
+function mcpLines(e: Evidence): string[] {
+  const days =
+    e.window_start === undefined || e.window_end === undefined
+      ? null
+      : Math.round(
+          (Date.parse(e.window_end) - Date.parse(e.window_start)) / 86_400_000,
+        );
+  const lines = [
+    `MCP reads ${e.checks_ok ?? 0} of ${e.checks_total ?? 0} OK${days === null || Number.isNaN(days) ? '' : ` in ${days} ${days === 1 ? 'day' : 'days'}`}`,
+    `uptime ${e.uptime_pct == null ? 'not measured' : `${e.uptime_pct}%`}, p95 ${e.p95_ms == null ? 'not measured' : `${e.p95_ms} ms`}`,
+  ];
+  if (e.protocol_version !== undefined) {
+    lines.push(`MCP protocol ${e.protocol_version}`);
+  }
+  if (e.definitions !== undefined) {
+    const d = e.definitions;
+    const count = (n: number, one: string) =>
+      `${n} ${one}${n === 1 ? '' : 's'}`;
+    lines.push(
+      `definitions ${count(d.tools, 'tool')}, ${count(d.prompts, 'prompt')}, ${count(d.resources, 'resource')}`,
+    );
+    lines.push(
+      d.last_change === null
+        ? `definitions unchanged since ${d.unchanged_since.slice(0, 10)}`
+        : `definitions changes in 30 days ${d.changes_30d}, last on ${d.last_change.at.slice(0, 10)}, class ${d.last_change.class}, ${d.last_change.confirmed ? 'confirmed by owner' : 'not confirmed by owner'}`,
+    );
+  }
+  if (e.hidden_text !== undefined) {
+    lines.push(
+      e.hidden_text.found ? 'hidden text found' : 'hidden text not found',
+    );
+  }
+  lines.push(MCP_NO_TOOL_NOTE);
   return lines;
 }
 

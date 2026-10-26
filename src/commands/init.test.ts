@@ -24,6 +24,7 @@ import {
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wasAskedRuntime } from '../agent-runtime.js';
+import { apiUrlEnvRefused } from '../api.js';
 import {
   cleanAnswer,
   type Input,
@@ -89,6 +90,7 @@ import {
   homeTaken,
   INPUT_CLOSED,
   isYesByDefault,
+  KEY_QUESTION,
   leftBehindLine,
   MACHINE_AGENTS_SHOWN,
   machineAgentsLine,
@@ -274,6 +276,18 @@ function answering(
   return input;
 }
 
+// Answers the key question of a first init with Enter, for a new key, without
+// a read of input, so each test here reads only the questions it is about.
+// The key question has its own tests in init-key-file.test.ts.
+function enterAtKeyQuestion(input: Input, err: () => string): Input {
+  const prompt = `${KEY_QUESTION[2]}\n  > `;
+  return {
+    isTTY: input.isTTY,
+    readLine: async () =>
+      stripStyle(err()).endsWith(prompt) ? '' : input.readLine(),
+  };
+}
+
 function throwOnExit(cmd: Command): void {
   cmd.exitOverride();
   for (const sub of cmd.commands) throwOnExit(sub);
@@ -448,13 +462,20 @@ function fakeFetch(world: World): typeof fetch {
 }
 
 async function run(world: World, ...args: string[]): Promise<RunResult> {
+  let out = '';
+  let err = '';
+  let all = '';
+  const stdin =
+    world.stdin === undefined
+      ? undefined
+      : enterAtKeyQuestion(world.stdin, () => err);
   const program = createProgram({
     init: {
       fetch: fakeFetch(world),
       sleep: async (ms) => {
         world.sleeps.push(ms);
       },
-      stdin: world.stdin ? () => world.stdin as Input : undefined,
+      stdin: stdin ? () => stdin : undefined,
       hookCommand: () => world.hook ?? HOOK_COMMAND,
       scriptPath: () => world.script,
       isNpx: () => world.npx === true,
@@ -471,7 +492,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       platform: () => 'darwin',
       homedir: () => process.env.SEALKEEPER_HOME ?? '',
       uid: () => 501,
-      stdin: world.stdin ? () => world.stdin as Input : undefined,
+      stdin: stdin ? () => stdin : undefined,
       findAgent: async (name) =>
         name === 'claude' && world.claude
           ? CLAUDE
@@ -504,9 +525,6 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
     },
   });
   throwOnExit(program);
-  let out = '';
-  let err = '';
-  let all = '';
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
     out += String(chunk);
     all += String(chunk);
@@ -758,6 +776,13 @@ describe('sealkeeper init', () => {
     );
     expect(result.code).toBe(0);
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
+    // The reads after the registration go to the API it went to.
+    const agentId = (await loadKey(paths(home)))?.agentId;
+    expect(world.fetchUrls).toContain(`${API_URL}/v1/agents/${agentId}`);
+    expect(world.fetchUrls).toContain(`${API_URL}/v1/agents/${agentId}/seal`);
+    expect(
+      world.fetchUrls.filter((url) => url.includes('unreachable.test')),
+    ).toEqual([]);
   });
 
   it('uses SEALKEEPER_API_URL for the run but never saves it', async () => {
@@ -1197,6 +1222,16 @@ describe('sealkeeper init', () => {
     ]);
     expect(await readFile(paths(home).key, 'utf8')).toBe(keyBefore);
     expect((await stat(paths(home).key)).mtimeMs).toBe(keyStat.mtimeMs);
+  });
+
+  it('a second init stops with one line and sends nothing when SEALKEEPER_API_URL names another API than the saved one', async () => {
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+    vi.stubEnv('SEALKEEPER_API_URL', REMOTE_API_URL);
+    world = newWorld();
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(`${apiUrlEnvRefused(DEFAULT_API_URL)}\n`);
+    expect(world.fetchUrls).toEqual([]);
   });
 
   it('--force regenerates the key, keeps the prompt secret and registers again', async () => {
@@ -4560,6 +4595,10 @@ describe('sealkeeper init', () => {
             ○ 5  Game                      on / off
             ○ 6  Routine                   offered at the end
 
+          Key   SealKeeper makes a new Ed25519 key for this agent.
+                Already have one? Type the path to its file,
+                or press Enter for a new key.
+          > 
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 

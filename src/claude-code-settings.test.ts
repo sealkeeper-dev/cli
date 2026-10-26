@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -137,6 +138,22 @@ describe('Claude Code settings', () => {
       hooks: { SessionStart: [OURS], SessionEnd: [OURS] },
     });
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'writes a new settings file owner only and keeps the mode of an existing one',
+    async () => {
+      const dirs = { home: join(dir, 'home'), cwd: join(dir, 'project') };
+      for (const scope of ['user', 'project'] as const) {
+        const target = settingsPath(scope, dirs);
+        await installHooks(target, HOOK_COMMAND);
+        expect((await stat(target)).mode & 0o777, scope).toBe(0o600);
+      }
+      await writeFile(file(), CROWDED_TEXT, { mode: 0o644 });
+      await chmod(file(), 0o644);
+      await installHooks(file(), HOOK_COMMAND);
+      expect((await stat(file())).mode & 0o777).toBe(0o644);
+    },
+  );
 
   it('running twice changes nothing and does not write', async () => {
     await writeFile(file(), CROWDED_TEXT);

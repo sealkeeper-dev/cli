@@ -302,6 +302,40 @@ describe('hook claude-code', () => {
     expect(await countPending(paths(home))).toBe(1);
   });
 
+  it('sends nothing and prints nothing at session end when SEALKEEPER_API_URL names another API than the saved one', async () => {
+    await initialise();
+    await seedSessions(1);
+    vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example');
+    const fetchFn = vi.fn(async () => {
+      throw new TypeError('fetch failed');
+    }) as unknown as typeof fetch;
+    const program = createProgram({
+      hook: {
+        fetch: fetchFn,
+        readStdin: async () => JSON.stringify(payloads.sessionEnd()),
+      },
+    });
+    let out = '';
+    let err = '';
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      out += String(chunk);
+      return true;
+    });
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      err += String(chunk);
+      return true;
+    });
+    try {
+      await program.parseAsync(['hook', 'claude-code'], { from: 'user' });
+    } finally {
+      vi.restoreAllMocks();
+    }
+    expect(out).toBe('');
+    expect(err).toBe('');
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(await countPending(paths(home))).toBe(1);
+  });
+
   // Runs the SessionEnd hook with its own fetch and returns stderr.
   async function sessionEndWith(fetchFn: typeof fetch): Promise<string> {
     const program = createProgram({

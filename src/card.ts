@@ -11,8 +11,8 @@ import { z } from 'zod';
 import {
   ApiError,
   createApiClient,
-  resolveApiUrl,
   SealWithheldError,
+  savedApiUrl,
 } from './api.js';
 import { requireConfig } from './cli-config.js';
 import {
@@ -84,16 +84,17 @@ function buildCard(
 // the daily routine keeps its SEAL fresh. A card recorded already is the
 // routine's to refresh, so a repeat init leaves it alone. The card carries no
 // SEAL when none can be fetched, and the routine adds it later. Never throws.
-// Returns the path written, or null when nothing was written.
+// Returns the path written, or null when nothing was written. deps.apiUrl,
+// when given, is the API to read in place of the config's.
 export async function writeCard(
   config: Config,
-  deps: CardDeps,
+  deps: CardDeps & { apiUrl?: string },
   p: Paths = paths(),
 ): Promise<string | null> {
   try {
     if ((await readCardRecord(config.agentId, p)) !== null) return null;
     const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      apiUrl: deps.apiUrl ?? savedApiUrl(config.apiUrl),
       fetch: deps.fetch,
       timeoutMs: CARD_TIMEOUT_MS,
     });
@@ -137,7 +138,7 @@ export async function loadSeal(
   const config = await requireConfig(cmd);
 
   const api = createApiClient({
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    apiUrl: savedApiUrl(config.apiUrl),
     fetch: deps.fetch,
     timeoutMs: CARD_TIMEOUT_MS,
   });
@@ -352,7 +353,7 @@ export async function refreshCard(
     if (text === null) return 'gone';
     if (sha256Hex(text) !== record.sha256) return 'changed';
     const api = createApiClient({
-      apiUrl: resolveApiUrl({ config: config.apiUrl }),
+      apiUrl: savedApiUrl(config.apiUrl),
       fetch: deps.fetch,
       timeoutMs: CARD_TIMEOUT_MS,
     });

@@ -9,7 +9,7 @@ import {
   Sha256Base64url,
 } from '@sealkeeper/schema';
 import { z } from 'zod';
-import { ApiError, createApiClient, resolveApiUrl } from './api.js';
+import { ApiError, createApiClient, savedApiUrl } from './api.js';
 import type { Config } from './config.js';
 import { stderr } from './output.js';
 import { LiveSealState } from './responses.js';
@@ -95,13 +95,15 @@ export type LiveAgent = z.infer<typeof LiveAgent>;
 // A redirect is never followed. It says on stderr where the API moved, as
 // every other request does, and then counts as no answer, so init and
 // the runtime question of status still print what they can.
+// apiUrl, when given, is the API to read in place of the config's.
 export async function readLiveAgent(
   config: Pick<Config, 'agentId' | 'apiUrl'>,
   fetchFn: typeof fetch,
+  apiUrl?: string,
 ): Promise<LiveAgent | null> {
   // The loose LiveAgent parse, through the client's one request helper.
   try {
-    return await shortClient(config, fetchFn).call(
+    return await shortClient(config, fetchFn, apiUrl).call(
       `/v1/agents/${encodeURIComponent(config.agentId)}`,
       LiveAgent,
     );
@@ -113,10 +115,15 @@ export async function readLiveAgent(
   }
 }
 
-// A client with the score's two second limit.
-function shortClient(config: Pick<Config, 'apiUrl'>, fetchFn: typeof fetch) {
+// A client with the score's two second limit, for apiUrl when given, else
+// for the config's API.
+function shortClient(
+  config: Pick<Config, 'apiUrl'>,
+  fetchFn: typeof fetch,
+  apiUrl?: string,
+) {
   return createApiClient({
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    apiUrl: apiUrl ?? savedApiUrl(config.apiUrl),
     fetch: fetchFn,
     timeoutMs: SCORE_TIMEOUT_MS,
   });
@@ -125,13 +132,15 @@ function shortClient(config: Pick<Config, 'apiUrl'>, fetchFn: typeof fetch) {
 // How many agents the operator with this slug has, counting at most two,
 // from the public directory. 1 means the agent init just registered is the
 // operator's first. null when the API does not answer. Never throws.
+// apiUrl, when given, is the API to read in place of the config's.
 export async function operatorAgentCount(
   config: Pick<Config, 'apiUrl'>,
   slug: string,
   fetchFn: typeof fetch,
+  apiUrl?: string,
 ): Promise<number | null> {
   try {
-    const { agents } = await shortClient(config, fetchFn).call(
+    const { agents } = await shortClient(config, fetchFn, apiUrl).call(
       `/v1/agents?operator=${encodeURIComponent(slug)}&limit=2`,
       z.object({ agents: z.array(z.unknown()) }),
     );

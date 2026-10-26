@@ -32,6 +32,7 @@ import {
   ApiError,
   createApiClient,
   resolveApiUrl,
+  savedApiUrl,
 } from '../api.js';
 import {
   cleanAnswer,
@@ -72,6 +73,7 @@ import {
   skillPath,
   uninstallSkill,
 } from '../claude-code-skill.js';
+import { commandApiUrl } from '../cli-config.js';
 import {
   bindFolder,
   boundHome,
@@ -114,6 +116,8 @@ import {
   KeyError,
   loadKey,
   loadSigner,
+  readBroughtKey,
+  readKeyStream,
   signEnvelope,
 } from '../identity.js';
 import { cli } from '../invocation.js';
@@ -343,6 +347,8 @@ export type InitDeps = {
   repoName?: (cwd: string) => Promise<string | null>;
   // The environment runtime detection reads. Defaults to process.env.
   env?: () => NodeJS.ProcessEnv;
+  // What --key-file - reads. Defaults to all of stdin.
+  keyInput?: () => Promise<string>;
 };
 
 const defaultInitDeps: InitDeps = {
@@ -356,6 +362,7 @@ const defaultInitDeps: InitDeps = {
   isNpx: () => isNpxCopy(),
   repoName,
   env: () => process.env,
+  keyInput: () => readKeyStream(process.stdin),
 };
 
 type InitOptions = {
@@ -365,7 +372,27 @@ type InitOptions = {
   force?: boolean;
   runtime?: string;
   listed?: string;
+  keyFile?: string;
 };
+
+// init --key-file. Said when the home holds another key than the one
+// brought, and when - would read the key from a terminal, which shows it as
+// it is typed.
+export const keyFileDiffers = (home: string): string =>
+  `${home} already holds a different key, run ${cli('init --key-file <path> --force')} to replace it, the old key is kept beside it`;
+export const KEY_FILE_TERMINAL = `--key-file - reads the key from a pipe, as in printf %s "$KEY" | ${cli('init --key-file -')}, and stdin here is a terminal`;
+// The conflict for a brought key, which --force would bring again.
+export const KEY_FILE_CONFLICT = `this key is already registered by another operator, bring another key or run ${cli('init --force')} without --key-file to create a new key`;
+// The key question, on a first init where a person can answer, beside its
+// label. Enter makes a new key, a path brings the key in that file. A key
+// that cannot be used says why and asks again, up to KEY_MAX_ASKS questions
+// in all.
+export const KEY_QUESTION = [
+  'SealKeeper makes a new Ed25519 key for this agent.',
+  'Already have one? Type the path to its file,',
+  'or press Enter for a new key.',
+] as const;
+export const KEY_MAX_ASKS = 3;
 
 // init --listed <handle>. The handle is the one the dashboard's invite names,
 // <domain key>/<name>.
@@ -496,6 +523,10 @@ export function register(
     .option(
       '--listed <handle>',
       'register this agent with a key of its own and merge it into a listed agent you claimed',
+    )
+    .option(
+      '--key-file <path>',
+      'register with this Ed25519 private key instead of a new one, - reads it from stdin',
     )
     .action(async function (this: Command, options: InitOptions) {
       try {
@@ -763,9 +794,30 @@ async function init(
     if (listed === null) cmd.error(listedHandleInvalid(options.listed));
     options = { ...options, name: options.name ?? listed.name };
   }
+  // init --key-file. The key is read and checked before anything else, and
+  // written to the home only where a new key would be.
+  let brought: { privateKey: Uint8Array; agentId: string } | null = null;
+  if (options.keyFile !== undefined) {
+    if (options.keyFile === '-' && deps.stdin?.().isTTY) {
+      cmd.error(KEY_FILE_TERMINAL);
+    }
+    brought = await readBroughtKey(
+      options.keyFile,
+      deps.keyInput ?? (() => readKeyStream(process.stdin)),
+    );
+  }
   const claudeCode = await hasClaudeCode(deps);
   const target = await chooseHome(cmd, options, deps, ui, claudeCode);
   const p = target.p;
+
+  // A brought key that differs from the one in the home replaces it only
+  // with --force. The same key goes on as the home's own.
+  if (brought !== null && !options.force) {
+    const loaded = await loadKey(p);
+    if (loaded !== null && loaded.agentId !== brought.agentId) {
+      cmd.error(keyFileDiffers(tildePath(p.home)));
+    }
+  }
 
   // Without --force an existing config ends the command here. With --force it
   // is read only for its apiUrl, so a re-register goes to the same API. A
@@ -781,6 +833,8 @@ async function init(
     if (existing !== null) {
       // A home that holds an agent merges nothing without --force.
       if (listed !== null) cmd.error(listedHomeTaken(tildePath(p.home)));
+      // Before anything is sent to the API.
+      commandApiUrl(cmd, existing.apiUrl);
       await initRegistered(existing, target, deps, routineDeps, ui, claudeCode);
       return;
     }
@@ -849,7 +903,7 @@ async function init(
   // saved, so config.json keeps the old URL or the default, and a variable
   // left set in one shell does not bind the agent to that API for good.
   // --api-url is saved.
-  const savedApiUrl =
+  const apiUrlToSave =
     !options.apiUrl?.trim() && readEnv(API_URL_ENV) !== undefined
       ? previous?.apiUrl
       : apiUrl;
@@ -857,6 +911,17 @@ async function init(
   // The banner before the key is made, with no step done, since --force
   // makes a new key.
   if (ui !== null && !welcomed) welcome(ui, claudeCode, {});
+  // A first init where a person can answer asks for a key to bring, the way
+  // --key-file brings one.
+  if (
+    brought === null &&
+    !options.force &&
+    terminal !== undefined &&
+    ui !== null &&
+    !(await exists(p.key))
+  ) {
+    brought = await askKey(cmd, terminal, ui);
+  }
   startStep(ui, 'key', KEY_GENERATING);
 
   // With --force the old config describes the old key, so it goes as soon as
@@ -875,7 +940,10 @@ async function init(
   let backup: string | undefined;
   let leftBehind = 0;
   if (options.force) {
-    const created = await createKey({ force: true }, p);
+    const created = await createKey(
+      { force: true, seed: brought?.privateKey },
+      p,
+    );
     agentId = created.agentId;
     backup = created.backup;
     leftBehind = await cursorToEnd(p);
@@ -886,7 +954,7 @@ async function init(
     if (loaded !== null) {
       agentId = loaded.agentId;
     } else {
-      agentId = (await createKey({}, p)).agentId;
+      agentId = (await createKey({ seed: brought?.privateKey }, p)).agentId;
       leftBehind = await cursorToEnd(p);
       await ensurePromptSecret(p).catch(() => undefined);
     }
@@ -963,6 +1031,18 @@ async function init(
     name,
     version: options.version,
     runtime,
+  }).catch((error: unknown) => {
+    // A brought key is brought again by --force, so the conflict says what
+    // to do instead.
+    if (
+      brought !== null &&
+      error instanceof ApiError &&
+      error.code === 'conflict'
+    ) {
+      trackOutput(null);
+      cmd.error(KEY_FILE_CONFLICT);
+    }
+    throw error;
   });
   // init --listed. The merge before the config, so a failed one leaves the key
   // and no config, and a rerun picks up from the key.
@@ -987,9 +1067,9 @@ async function init(
       operatorLogin: agent.operator.login,
       name: agent.name,
       version: agent.version,
-      ...(savedApiUrl === undefined
+      ...(apiUrlToSave === undefined
         ? {}
-        : { apiUrl: savedApiUrl.replace(/\/+$/, '') }),
+        : { apiUrl: apiUrlToSave.replace(/\/+$/, '') }),
       registeredAt: agent.createdAt,
     },
     p,
@@ -1009,7 +1089,10 @@ async function init(
   // for the commands that build the handle offline. With no answer the slug
   // stored for this agent before stands in, and the login only when there is
   // none.
-  const live = await readLiveAgent(config, deps.fetch);
+  // The reads after the registration go to the API it went to, whatever
+  // SEALKEEPER_API_URL says, since a URL confirmed from it alone is never
+  // saved and --api-url wins over it.
+  const live = await readLiveAgent(config, deps.fetch, api.apiUrl);
   const slug = await refreshOperatorSlug(config.agentId, live, p);
   // The merge answer names the handle when the agent read does not answer.
   const known = live?.handle ?? agent.handle;
@@ -1023,7 +1106,11 @@ async function init(
     (runtime === undefined || runtime === 'unknown' ? 'unknown' : runtime);
   // The A2A card, with the SEAL once there is one, which the routine keeps
   // fresh.
-  const card = await writeCard(config, { fetch: deps.fetch }, p);
+  const card = await writeCard(
+    config,
+    { fetch: deps.fetch, apiUrl: api.apiUrl },
+    p,
+  );
   if (ui === null) {
     const hooks = await offerHooks(deps, null, claudeCode);
     stdout(
@@ -1080,7 +1167,7 @@ async function init(
   say(s.line`  ${s.dim('Game')}  ${gameLine(game)}`);
   if (card !== null) say(s.line`  ${s.dim('Card')}  ${tildePath(card)}`);
   await printNudge(s, hooks, p);
-  await printOperator(s, config, live, deps);
+  await printOperator(s, config, live, deps, api.apiUrl);
   if (folder !== null && target.folder !== null) {
     say(s.line`${s.tick()} ${folderLine(tildePath(target.folder), handle)}`);
   }
@@ -1347,7 +1434,7 @@ async function initRegistered(
   // Only for the step line, which asks nothing, and only where there is
   // one to finish.
   if (ui.list !== null) {
-    const apiUrl = resolveApiUrl({ config: existing.apiUrl });
+    const apiUrl = savedApiUrl(existing.apiUrl);
     finishStep(ui, 'game', gameResult(await readGame(apiUrl, deps, p)));
   }
   ui.list?.end();
@@ -1486,6 +1573,42 @@ async function askName(
   cmd.error(`no agent name, pass --name with ${NAME_RULES}`);
 }
 
+// The key question, on stderr. Enter makes a new key, null. Any other answer
+// is a path, a leading ~/ the home directory, read and checked as --key-file
+// reads one, so - is a file of that name here. A key that cannot be used
+// says why and asks again, up to KEY_MAX_ASKS questions, and then the command
+// ends. Neither the path nor the key is ever printed.
+async function askKey(
+  cmd: Command,
+  input: Input,
+  ui: Ui,
+): Promise<{ privateKey: Uint8Array; agentId: string } | null> {
+  const e = ui.err;
+  const [first, ...rest] = KEY_QUESTION;
+  let refused = '';
+  for (let asked = 0; asked < KEY_MAX_ASKS; asked++) {
+    // The whole block each time, since a pinned list clears the question
+    // area after every answer.
+    note();
+    if (refused !== '') note(e.line`${refused}`);
+    note(e.line`${e.dim('Key')}   ${first}`);
+    for (const text of rest) note(e.line`      ${text}`);
+    promptStyled(indent(e.line`> `));
+    const answer = cleanAnswer((await input.readLine()) ?? '');
+    if (answer === '') return null;
+    const path = answer.startsWith('~/')
+      ? resolve(homedir(), answer.slice(2))
+      : resolve(answer);
+    try {
+      return await readBroughtKey(path, async () => '');
+    } catch (error) {
+      if (!(error instanceof KeyError)) throw error;
+      refused = error.message;
+    }
+  }
+  cmd.error(refused);
+}
+
 // The operator slug, on the first sign up only, with where to change it.
 // The slug comes from the agent read, and first means the operator has no
 // other agent. Said on the first agent only, so nothing is printed when
@@ -1495,10 +1618,13 @@ async function printOperator(
   config: Config,
   live: LiveAgent | null,
   deps: InitDeps,
+  apiUrl: string,
 ): Promise<void> {
   const slug = live?.operator?.slug;
   if (slug === undefined) return;
-  if ((await operatorAgentCount(config, slug, deps.fetch)) !== 1) return;
+  if ((await operatorAgentCount(config, slug, deps.fetch, apiUrl)) !== 1) {
+    return;
+  }
   say(s.line`  ${s.dim('Operator')}  ${operatorLine(slug)}`);
 }
 
@@ -1786,7 +1912,7 @@ async function offerVersionMove(
   const input = deps.stdin?.();
   if (input === undefined || !input.isTTY) return false;
   const api = createApiClient({
-    apiUrl: resolveApiUrl({ config: config.apiUrl }),
+    apiUrl: savedApiUrl(config.apiUrl),
     fetch: deps.fetch,
     timeoutMs: VERSION_CHECK_TIMEOUT_MS,
   });

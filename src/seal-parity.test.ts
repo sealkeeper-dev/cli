@@ -266,6 +266,68 @@ describe('seal verify against the SEAL conformance cases', () => {
     expect(answers).toEqual(suite.cases.map((c) => [c.name, c.expected]));
   });
 
+  it("prints an MCP service's reads with no measure, one of each definition and hidden text found", async () => {
+    const c = suite.cases.find((x) => x.name === 'version 8 of an MCP service');
+    if (c === undefined) throw new Error('no MCP case');
+    const r = await checkSeal(
+      c.jws,
+      suite.wellKnown as never,
+      suite.nowSeconds * 1000,
+    );
+    if (!r.valid) throw new Error(`SEAL ${r.reason}`);
+    const payload = r.payload as { evidence: Record<string, unknown>[] };
+    const mcp = payload.evidence[0] as Record<string, unknown> & {
+      definitions: Record<string, unknown>;
+    };
+    const lines = sealSummary({
+      ...payload,
+      evidence: [
+        {
+          ...mcp,
+          window_start: '2026-09-30T00:00:00.000Z',
+          window_end: '2026-10-01T00:00:00.000Z',
+          checks_total: 1,
+          checks_ok: 0,
+          uptime_pct: null,
+          p95_ms: null,
+          definitions: {
+            ...mcp.definitions,
+            tools: 1,
+            prompts: 1,
+            resources: 1,
+            changes_30d: 0,
+            last_change: null,
+          },
+          hidden_text: { found: true },
+        },
+      ],
+    });
+    expect(lines).toContain('MCP reads 0 of 1 OK in 1 day');
+    expect(lines).toContain('uptime not measured, p95 not measured');
+    expect(lines).toContain('definitions 1 tool, 1 prompt, 1 resource');
+    expect(lines).toContain('definitions unchanged since 2026-09-20');
+    expect(lines).toContain('hidden text found');
+    const confirmed = sealSummary({
+      ...payload,
+      evidence: [
+        {
+          ...mcp,
+          definitions: {
+            ...mcp.definitions,
+            last_change: {
+              class: 'risky',
+              at: '2026-09-28T10:00:00.000Z',
+              confirmed: true,
+            },
+          },
+        },
+      ],
+    });
+    expect(confirmed).toContain(
+      'definitions changes in 30 days 1, last on 2026-09-28, class risky, confirmed by owner',
+    );
+  });
+
   it('prints each counted value a SEAL carries beside its count, the posted ones of version 3 too', async () => {
     const counts = async (name: string) => {
       const c = suite.cases.find((x) => x.name === name);

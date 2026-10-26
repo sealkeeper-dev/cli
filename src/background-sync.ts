@@ -11,7 +11,7 @@
 import { open, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createApiClient, resolveApiUrl } from './api.js';
+import { createApiClient, savedApiUrl } from './api.js';
 import { ensureHome, type Paths, paths, readConfig } from './config.js';
 import {
   type RoutineSource,
@@ -97,6 +97,8 @@ export async function backgroundSync(
 // synced returns without a request and prints nothing. A sync that ran and
 // failed throws what syncEvents threw, so a caller that prints can say how
 // many events are pending. A failed sync still counts toward the throttle.
+// SEALKEEPER_API_URL naming another API than the saved one throws
+// ApiUrlEnvError, see savedApiUrl, with nothing sent.
 export async function gatedSync(
   options: GatedSyncOptions,
 ): Promise<GatedSyncOutcome> {
@@ -107,6 +109,8 @@ export async function gatedSync(
   const p = options.paths ?? paths();
   const config = await readConfig(p);
   if (config === null || config.autoSync !== true) return 'off';
+  // Throws ApiUrlEnvError before the lock is taken and anything is sent.
+  const apiUrl = savedApiUrl(config.apiUrl);
   if (await recentlyStarted(p, start)) return 'throttled';
   if (!(await takeLock(p, start))) return 'locked';
   try {
@@ -123,7 +127,7 @@ export async function gatedSync(
     });
     await syncEvents({
       api: createApiClient({
-        apiUrl: resolveApiUrl({ config: config.apiUrl }),
+        apiUrl,
         fetch: options.fetch,
         timeoutMs: options.timeoutMs,
       }),

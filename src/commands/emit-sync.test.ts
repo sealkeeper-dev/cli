@@ -22,6 +22,7 @@ import {
 } from '@sealkeeper/schema';
 import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { apiUrlEnvRefused } from '../api.js';
 import type { Input } from '../ask.js';
 import {
   BACKGROUND_SYNC_INTERVAL_MS,
@@ -528,6 +529,17 @@ describe('emit and sync', () => {
       expect(code).toBe(0);
       expect(out).toBe('accepted 1, duplicates 0\n');
       expect(server.batches.map((b) => b.length)).toEqual([1, 1]);
+    });
+
+    it('keeps the event and says why nothing was sent when SEALKEEPER_API_URL names another API than the saved one', async () => {
+      await initialise();
+      vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example');
+      const { code, out, err } = await api(...emitArgs);
+      expect(code).toBe(0);
+      expect(out).toMatch(/^[0-9a-f-]{36}\n$/);
+      expect(err).toBe(`${apiUrlEnvRefused(API_URL)}\n`);
+      expect(server.batches).toEqual([]);
+      expect(await countPending()).toBe(1);
     });
 
     it('sends again once five minutes have passed since the last gated sync', async () => {
@@ -1548,27 +1560,28 @@ describe('emit and sync', () => {
       expect(await countPending()).toBe(3);
     });
 
-    it('stops on an insecure apiUrl with the pending count', async () => {
+    it('stops with one line and sends nothing when SEALKEEPER_API_URL names another API than the saved one', async () => {
       await initialise();
-      vi.stubEnv('SEALKEEPER_API_URL', 'http://api.example.com');
+      vi.stubEnv('SEALKEEPER_API_URL', 'https://other.example');
       await seed(2);
       const { code, out, err } = await api('sync');
       expect(code).toBe(1);
       expect(out).toBe('');
-      expect(err).toContain(
-        'refusing the SealKeeper API at http://api.example.com',
+      expect(err).toBe(`${apiUrlEnvRefused(API_URL)}\n`);
+      expect(apiUrlEnvRefused(API_URL)).toBe(
+        "SEALKEEPER_API_URL names an API other than this agent's https://api.test, nothing was sent, unset it to use https://api.test",
       );
-      expect(err).toContain('2 events pending');
       expect(server.batches).toEqual([]);
       expect(await countPending()).toBe(2);
     });
 
-    it('with an insecure apiUrl and nothing pending sends nothing', async () => {
+    it('sends when SEALKEEPER_API_URL names the saved API', async () => {
       await initialise();
-      vi.stubEnv('SEALKEEPER_API_URL', 'http://api.example.com');
+      vi.stubEnv('SEALKEEPER_API_URL', `${API_URL}/`);
+      await seed(2);
       const { code, out } = await api('sync');
       expect(code).toBe(0);
-      expect(out).toBe('accepted 0, duplicates 0\n');
+      expect(out).toBe('accepted 2, duplicates 0\n');
     });
 
     it('without config exits 1', async () => {

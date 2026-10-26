@@ -1,5 +1,6 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { isAbsolute } from 'node:path';
+import { ApiUrlEnvError } from './api.js';
 import { gatedSync, WAITING_CALLER_LIMITS } from './background-sync.js';
 import {
   ConfigError,
@@ -158,7 +159,8 @@ async function runHook(
 // Best effort. What the log holds stays there, so a failure only means it
 // goes with the next sync. The gate keeps Claude Code waiting for a few
 // seconds at most, and a sync it holds back for the throttle or the lock
-// prints nothing.
+// prints nothing. Nor does a SEALKEEPER_API_URL naming another API than the
+// saved one, which every command run by hand names.
 async function trySync(deps: HookDeps, p: Paths): Promise<void> {
   const now = deps.now;
   try {
@@ -168,7 +170,8 @@ async function trySync(deps: HookDeps, p: Paths): Promise<void> {
       now: now ? () => now().getTime() : undefined,
       ...WAITING_CALLER_LIMITS,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof ApiUrlEnvError) return;
     stderr(`sealkeeper: sync did not finish, run ${cli('sync')}`);
   }
 }
