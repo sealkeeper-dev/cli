@@ -32,7 +32,7 @@ export const SETUP_STEPS: readonly SetupStep[] = [
   { key: 'hooks', label: 'Hooks', claudeCode: true },
   { key: 'skill', label: 'Skill and slash commands', claudeCode: true },
   { key: 'game', label: 'Game', note: 'on / off' },
-  { key: 'routine', label: 'Routine', note: 'offered at the end' },
+  { key: 'routine', label: 'Routine', note: 'daily time / not installed' },
 ];
 export const SETUP_TITLE = 'Setting up this agent';
 export const setupCount = (steps: number): string => `${steps} steps`;

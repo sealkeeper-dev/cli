@@ -866,6 +866,8 @@ export const CoreAnswerResponse = z.looseObject({
   standing: z.looseObject({
     level: z.string(),
     verified: Count,
+    // Verified tasks the next scoring run counts. Absent from an older API.
+    unscored: Count.optional(),
     nextLevel: z.string().nullable(),
     needs: z.string().nullable(),
   }),

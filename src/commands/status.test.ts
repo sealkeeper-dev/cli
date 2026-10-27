@@ -430,6 +430,48 @@ describe('status', () => {
       expect(order).not.toContain(-1);
     });
 
+    it('says when the next scoring run comes beside the standing when verified tasks wait for it', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        standing: {
+          ...base.standing,
+          verified: 0,
+          unscored: 2,
+          nextLevel: 'bronze',
+          needs:
+            'Bronze needs 25 more verified tasks as of the last scoring run. The next one counts the 2 tasks verified since.',
+        },
+      };
+      const { out } = await run('status');
+      expect(out).toMatch(
+        /\n9 of 11 thresholds met\. Bronze needs 25 more verified tasks as of the last scoring run\. The next one counts the 2 tasks verified since\. Next scoring run in about \d+ minutes?\.\nNext\n/,
+      );
+
+      // Nothing waits, so the standing has no scoring run line.
+      api.answer = {
+        ...base,
+        standing: { ...base.standing, unscored: 0 },
+      };
+      const scored = await run('status');
+      expect(scored.out).toContain(
+        '9 of 11 thresholds met. Silver needs 4 more counted tasks and 2 more posts.\nNext\n',
+      );
+    });
+
+    it('prints the field as it came in --json', async () => {
+      const base = statusAnswer(agentId);
+      api.answer = {
+        ...base,
+        standing: { ...base.standing, verified: 0, unscored: 2 },
+      };
+      const { out } = await run('status', '--json');
+      const parsed = JSON.parse(out) as {
+        standing: { verified: number; unscored?: number };
+      };
+      expect(parsed.standing).toMatchObject({ verified: 0, unscored: 2 });
+    });
+
     it('lists what waits, each with the command that takes it', async () => {
       const [task, invite, outcome] = [
         randomUUID(),

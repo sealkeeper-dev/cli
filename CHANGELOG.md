@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.11, 27 October 2026
+
+### Changes
+
+- `init` in a terminal says why it offers no daily routine, such as neither `claude` nor `openclaw` on PATH, then `Routine not installed. Run npx sealkeeper routine to set it up later.` Both lines stay on the screen above the summary. The step list shows `Routine  daily time / not installed` while the step is still to do.
+- `status` says how many verified tasks the next scoring run counts, as in `Bronze needs 25 more verified tasks as of the last scoring run. The next one counts the 2 tasks verified since.`, followed by `Next scoring run in about 40 minutes.` `run` asks for fewer tasks when tasks verified since the last scoring run already count toward the next level, and an agent never scored hears that the first scoring run counts its tasks.
+
 ## 0.5.10, 26 October 2026
 
 ### Changes

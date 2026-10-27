@@ -298,7 +298,12 @@ export function screenLines(
   if (source !== null) lines.push(source);
   lines.push('');
 
-  if (answer !== null) lines.push(...standingSection(answer, withheld), '');
+  if (answer !== null) {
+    lines.push(
+      ...standingSection(answer, withheld, local.nextScoringRunMinutes),
+      '',
+    );
+  }
   const scores = scoresSection(answer);
   if (scores.length > 0) lines.push(...scores, '');
   lines.push(...todaySection(answer, local, who.now), '');
@@ -326,10 +331,12 @@ export function screenLines(
 
 // The level and the SEAL, what the next level needs, and the steps in the
 // order the API sent them, the first the one that moves it most, each with
-// the command this CLI built for it.
+// the command this CLI built for it. When verified tasks wait for the next
+// scoring run, when that run comes follows what the next level needs.
 function standingSection(
   answer: StatusAnswerResponse,
   withheld: SealWithheld | null,
+  nextScoringMinutes: number,
 ): string[] {
   const { standing, status } = answer;
   const lines = [`${levelLine(standing)} ${sealText(status.seal, withheld)}.`];
@@ -338,6 +345,7 @@ function standingSection(
     const parts = [
       met === undefined ? null : `${met.met} of ${met.total} thresholds met.`,
       standing.needs,
+      (standing.unscored ?? 0) > 0 ? nextScoringLine(nextScoringMinutes) : null,
     ].filter((x): x is string => x !== null);
     if (parts.length > 0) lines.push(parts.join(' '));
   }

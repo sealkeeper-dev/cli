@@ -1148,12 +1148,13 @@ async function init(
   const hooks = await offerHooks(deps, ui, claudeCode);
   await offerNudge(hooks, deps, ui, p);
   const enabled = await askGame(api.apiUrl, deps, ui, p, terminal);
-  await offerRoutine(deps, routineDeps, ui, p);
+  const why = await offerRoutine(deps, routineDeps, ui, p);
   // Read after the routine, whose own game question can turn the game on.
   const read = await readGame(api.apiUrl, deps, p);
   if (read !== null) finishStep(ui, 'game', gameResult(read));
   const game = read ?? { enabled, cap: null };
   ui.list?.end();
+  notOffered(ui, why);
 
   say();
   say(s.line`${s.tick()} Registered ${s.bold(handle)}`);
@@ -1430,7 +1431,7 @@ async function initRegistered(
   });
   const hooks = await offerHooks(deps, ui, claudeCode);
   await offerNudge(hooks, deps, ui, p);
-  await offerRoutine(deps, routineDeps, ui, p);
+  const why = await offerRoutine(deps, routineDeps, ui, p);
   // Only for the step line, which asks nothing, and only where there is
   // one to finish.
   if (ui.list !== null) {
@@ -1438,6 +1439,7 @@ async function initRegistered(
     finishStep(ui, 'game', gameResult(await readGame(apiUrl, deps, p)));
   }
   ui.list?.end();
+  notOffered(ui, why);
 
   say();
   if (folder !== null && target.folder !== null) {
@@ -1662,15 +1664,16 @@ async function offerNudge(
 // named, its copy of the CLI refreshed when its version is not this one, a
 // stored agent inside a project named in one line, and nothing is asked. No is
 // not stored, so a repeat init asks again. A machine where the routine cannot
-// be installed, neither claude nor openclaw on PATH or a scheduler that cannot
-// be read, hears nothing. One whose only agent is inside a project hears why,
-// in one line.
+// be installed, neither claude nor openclaw on PATH, an agent only inside a
+// project or a scheduler that cannot be read, hears why in one line and how
+// to set it up later. That reason is returned, for the caller to print once
+// the step list has ended.
 async function offerRoutine(
   deps: InitDeps,
   routineDeps: RoutineDeps,
   ui: Ui,
   p: Paths,
-): Promise<void> {
+): Promise<string | undefined> {
   const input = deps.stdin?.();
   if (input === undefined || !input.isTTY) {
     finishStep(ui, 'routine', await routineNow(p));
@@ -1709,19 +1712,13 @@ async function offerRoutine(
       current,
     );
     if (typeof planned === 'string') {
-      // An agent only a project has is named, so the person knows why no
-      // routine is offered. Anything else stays as quiet as no agent at all.
-      if (planned.includes(IN_PROJECT)) {
-        note(e.line`${planned}`);
-        say(o.line`${ROUTINE_NOT_INSTALLED}`);
-      }
       finishStep(ui, 'routine', NOT_INSTALLED);
-      return;
+      return planned;
     }
   } catch (error) {
     if (!(error instanceof SchedulerError)) throw error;
     finishStep(ui, 'routine', NOT_INSTALLED);
-    return;
+    return error.message;
   }
   note();
   note(e.bold(BLOCK_TITLE));
@@ -1738,6 +1735,15 @@ async function offerRoutine(
   if (failed !== NOTHING_INSTALLED) note(e.line`${failed}`);
   say(o.line`${ROUTINE_NOT_INSTALLED}`);
   finishStep(ui, 'routine', NOT_INSTALLED);
+}
+
+// Why no routine was offered, in one line, then how to set it up later.
+// Printed after the step list ends, so both lines stay on the screen above
+// the summary.
+function notOffered(ui: Ui, why: string | undefined): void {
+  if (why === undefined) return;
+  note(ui.err.line`${why}`);
+  say(ui.out.line`${ROUTINE_NOT_INSTALLED}`);
 }
 
 // What the routine step ends as when nothing is offered, the time of the

@@ -81,7 +81,7 @@ describe('LiveList', () => {
       '  ● 1  Key                       ~/.sealkeeper/key',
       '  ○ 2  GitHub sign-in',
       '  ○ 3  Game                      on / off',
-      '  ○ 4  Routine                   offered at the end',
+      '  ○ 4  Routine                   daily time / not installed',
     ]);
   });
 

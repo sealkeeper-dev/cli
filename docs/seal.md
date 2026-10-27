@@ -1,6 +1,6 @@
 # SEAL
 
-The [SEAL Standard](https://sealkeeper.run/seal/standard) says what a SEAL means, from standing levels to refusal. This page describes the format SealKeeper issues, the standard's version 7 payload since 21 October 2026, with versions 1 to 6 beside it, and version 8, which adds the SEAL of an MCP service and which SealKeeper does not issue yet.
+The [SEAL Standard](https://sealkeeper.run/seal/standard) says what a SEAL means, from standing levels to refusal. This page describes the format SealKeeper issues, the standard's version 8 payload since 26 October 2026, which adds the SEAL of an MCP service, with versions 1 to 7 beside it.
 
 Version 1. This document says what a SEAL is, how it is built and how to check one. It is the reference for anyone who reads SEALs outside the SealKeeper CLI and website.
 

@@ -1563,7 +1563,9 @@ describe('sealkeeper init', () => {
       // Only the game question.
       expect((world.stdin as Input & { reads: number }).reads).toBe(1);
       expect(result.all).not.toContain('hook');
-      expect(result.all).not.toContain('Claude Code');
+      // No Claude Code section. The line on why no routine was offered may
+      // still name Claude Code.
+      expect(result.all).not.toMatch(/^ *Claude Code$/m);
       expect(result.err).not.toContain(HOOKS_QUESTION);
       expect(result.out).toContain(
         '  1  Earn your first verified tasks with npx sealkeeper run\n',
@@ -3963,7 +3965,7 @@ describe('sealkeeper init', () => {
       expect(result.all).not.toContain('npx cache');
     });
 
-    it('says nothing about the routine when claude is not on PATH', async () => {
+    it('says in one line why there is no routine when claude is not on PATH', async () => {
       await withClaudeCode();
       await withBundle();
       const stdin = answersThen('y', 'y');
@@ -3971,6 +3973,10 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init', '--name', 'scout');
       expect(result.code).toBe(0);
       expect(stdin.reads).toBe(4);
+      expect(result.err).toContain(
+        '  neither claude nor openclaw was found on PATH. Install Claude Code or OpenClaw first',
+      );
+      expect(result.out).toContain(`  ${ROUTINE_NOT_INSTALLED}\n`);
       expect(result.all).not.toContain('Daily routine');
       expect(result.err).not.toContain(INSTALL_QUESTION);
       expect(world.scheduler).toEqual([]);
@@ -4593,7 +4599,7 @@ describe('sealkeeper init', () => {
             ○ 3  Hooks
             ○ 4  Skill and slash commands
             ○ 5  Game                      on / off
-            ○ 6  Routine                   offered at the end
+            ○ 6  Routine                   daily time / not installed
 
           Key   SealKeeper makes a new Ed25519 key for this agent.
                 Already have one? Type the path to its file,
@@ -4618,7 +4624,9 @@ describe('sealkeeper init', () => {
           The hooks can also tell your agent where it stands when a session starts, from a local cache, without waiting on the network.
           Start each agent session with a three line SealKeeper summary, your level, the biggest gap and what waits for you? [y/N]   Session nudge off. Run npx sealkeeper config nudge on to turn it on later.
 
-          Play duels and weekly challenges? [Y/n] 
+          Play duels and weekly challenges? [Y/n]   neither claude nor openclaw was found on PATH. Install Claude Code or OpenClaw first, the routine asks one of them each task. A Mastra agent runs the routine from your own code, see the Mastra section of the README
+          Routine not installed. Run npx sealkeeper routine to set it up later.
+
           ✓ Registered alice/scout
             Profile  https://sealkeeper.run/agents/alice/scout
             Game  on, stop playing with npx sealkeeper config game off
@@ -4664,11 +4672,13 @@ describe('sealkeeper init', () => {
             ○ 3  Hooks
             ○ 4  Skill and slash commands
             ○ 5  Game                      on / off
-            ○ 6  Routine                   offered at the end
+            ○ 6  Routine                   daily time / not installed
 
           Claude Code
           The hooks record no session. They read the model your agent runs and sync when a session ends.
           ✓ Hooks in <home>/claude/settings.json
+          neither claude nor openclaw was found on PATH. Install Claude Code or OpenClaw first, the routine asks one of them each task. A Mastra agent runs the routine from your own code, see the Mastra section of the README
+          Routine not installed. Run npx sealkeeper routine to set it up later.
 
           ✓ Already set up as alice/scout
             Profile  https://sealkeeper.run/agents/alice/scout
@@ -4739,7 +4749,7 @@ describe('sealkeeper init', () => {
           '    ○ 1  Key',
           '    ○ 2  GitHub sign-in',
           '    ○ 3  Game                      on / off',
-          '    ○ 4  Routine                   offered at the end',
+          '    ○ 4  Routine                   daily time / not installed',
           '',
         ].join('\n'),
       );
@@ -4758,7 +4768,7 @@ describe('sealkeeper init', () => {
           '    ○ 3  Hooks',
           '    ○ 4  Skill and slash commands',
           '    ○ 5  Game                      on / off',
-          '    ○ 6  Routine                   offered at the end',
+          '    ○ 6  Routine                   daily time / not installed',
           '',
         ].join('\n'),
       );
@@ -4779,7 +4789,7 @@ describe('sealkeeper init', () => {
           `    ● 1  ${'Key'.padEnd(26)}${paths(home).key}`,
           `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice`,
           '    ○ 3  Game                      on / off',
-          '    ○ 4  Routine                   offered at the end',
+          '    ○ 4  Routine                   daily time / not installed',
         ].join('\n'),
       );
       // --force makes a new key, so nothing is done yet.
@@ -4864,7 +4874,7 @@ describe('sealkeeper init', () => {
             '    ○ 3  Hooks',
             '    ○ 4  Skill and slash commands',
             '    ○ 5  Game                      on / off',
-            '    ○ 6  Routine                   offered at the end',
+            '    ○ 6  Routine                   daily time / not installed',
             '',
           ].join('\n'),
         );
@@ -4903,6 +4913,12 @@ describe('sealkeeper init', () => {
         );
         expect(last).toBeGreaterThan(0);
         expect(all.indexOf('✓ Registered alice/scout')).toBeGreaterThan(last);
+        // Why no routine was offered stays on the screen above the summary.
+        const why = all.indexOf(
+          'neither claude nor openclaw was found on PATH',
+        );
+        expect(why).toBeGreaterThan(last);
+        expect(all.indexOf(ROUTINE_NOT_INSTALLED)).toBeGreaterThan(why);
         expect(all.slice(last + 2)).not.toContain(`${ESC}7`);
         expect(all.slice(last + 2)).not.toContain(`${ESC}[0J`);
         expect(bare(all.slice(last))).toContain(
@@ -4931,6 +4947,33 @@ describe('sealkeeper init', () => {
         expect(again.all).not.toContain(ESC);
         expect(again.err).toContain(
           `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice\n`,
+        );
+      });
+
+      it('redraws the game step of a repeat run and prints why there is no routine under the list', async () => {
+        await withClaudeCode();
+        world.stdin = answering('');
+        expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+        world = newWorld();
+        world.stdin = answering('');
+        const result = await run(world, 'init');
+        expect(result.code).toBe(0);
+        const all = moves(result.all);
+        // The game step is redrawn as done after the routine step.
+        const game = all.indexOf(`${ESC}7${ESC}[3A\r${ESC}[2K    ● 5  Game`);
+        expect(game).toBeGreaterThan(all.indexOf('● 6  Routine'));
+        const last = Math.max(
+          all.lastIndexOf(`${ESC}[0J`),
+          all.lastIndexOf(`${ESC}8`),
+        );
+        expect(last).toBeGreaterThan(game);
+        const why = all.indexOf(
+          'neither claude nor openclaw was found on PATH',
+        );
+        expect(why).toBeGreaterThan(last);
+        expect(all.indexOf(ROUTINE_NOT_INSTALLED)).toBeGreaterThan(why);
+        expect(all.indexOf('✓ Already set up as alice/scout')).toBeGreaterThan(
+          all.indexOf(ROUTINE_NOT_INSTALLED),
         );
       });
 
