@@ -9,6 +9,7 @@ import {
   type Level,
   type ListedHandleParams,
   type ListedMergePayload,
+  type PairingRequest,
   parseListedHandle,
   type RegisterAgentRequest,
   RUNTIME_LABELS,
@@ -88,6 +89,7 @@ import {
   listMachineAgents,
   type MachineAgent,
   namedHome,
+  operatorOf,
   type Paths,
   paths,
   profileUrl as profileUrlOf,
@@ -103,14 +105,6 @@ import { readEnv } from '../env.js';
 import { exists, isDirectory, tildePath } from '../files.js';
 import { changeGame, readGameStatus } from '../game.js';
 import { repoName } from '../git-remote.js';
-import {
-  DeviceFlowError,
-  deviceFlow,
-  githubClientId,
-  MISSING_CLIENT_ID,
-  type Sleep,
-  sleep,
-} from '../github-device.js';
 import {
   createKey,
   KeyError,
@@ -128,11 +122,13 @@ import {
   readLiveAgent,
 } from '../live-agent.js';
 import { cursorToEnd } from '../log.js';
+import { warnUnpatchedNode } from '../node-version.js';
 import { setNudge } from '../nudge.js';
 import {
   currentOperatorSlug,
   readOperatorSlug,
   refreshOperatorSlug,
+  slugOfAnswer,
 } from '../operator-slug.js';
 import {
   promptStyled,
@@ -149,6 +145,7 @@ import {
   type AgentResponse,
   agentHandle,
   type ListedMergeResponse,
+  type PairingAnswer,
 } from '../responses.js';
 import { projectNode, projectScript } from '../routine-agent.js';
 import { projectAgentWarning } from '../routine-copy.js';
@@ -172,6 +169,7 @@ import {
   type Style,
   type Styled,
 } from '../style.js';
+import { type Sleep, sleep } from '../sync.js';
 import type { TaskSession } from '../tasks.js';
 import { describeTaxonomy } from '../taxonomy.js';
 import { VERSION } from '../version.js';
@@ -196,7 +194,7 @@ import {
 // NOTHING_SENT is what a --json run prints on stderr, next to the full
 // taxonomy block. The human output says less, see below.
 export const NOTHING_SENT = `No events have been sent yet. Run ${cli('sync')} to review them and send.`;
-// Said right before the GitHub device code, in every form, and on stderr with
+// Said right before the pairing code, in every form, and on stderr with
 // --json. Full https links, so terminals make them clickable.
 export const CONSENT =
   'Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).';
@@ -206,11 +204,14 @@ export function leftBehindLine(n: number): string {
   return `${n} unsent event${n === 1 ? '' : 's'} of the old key ${n === 1 ? 'stays' : 'stay'} in the log and ${n === 1 ? 'is' : 'are'} never sent under the new key.`;
 }
 
-// Said on stderr before the device flow when the API is not the SealKeeper one,
-// since the GitHub token goes to it.
+// Said on stderr before the sign in when the API is not the SealKeeper one,
+// since that API names the page you approve the agent on and registers it.
 export function otherApiLine(apiUrl: string): string {
-  return `This sign in sends your GitHub token to the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
+  return `This sign in registers the agent with the API at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}.`;
 }
+
+// Said when the sign in code ran out before anyone approved it.
+export const PAIRING_EXPIRED = `the sign in code expired before it was approved, run ${cli('init')} again`;
 
 // A URL from SEALKEEPER_API_URL alone, with no --api-url, can come from a
 // project's .claude/settings.json, whose env block Claude Code passes to every
@@ -226,9 +227,9 @@ const sourceText = (source: ApiSource): string =>
     ? source
     : 'the config.json under SEALKEEPER_HOME';
 export const envApiQuestion = (apiUrl: string, source: ApiSource): string =>
-  `${source === 'SEALKEEPER_API_URL' ? source : 'The config.json under SEALKEEPER_HOME'} points this sign in at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}, and your GitHub token would go there. Use it? [y/N] `;
+  `${source === 'SEALKEEPER_API_URL' ? source : 'The config.json under SEALKEEPER_HOME'} points this sign in at ${new URL(apiUrl).origin}, not ${DEFAULT_API_URL}, and the agent would register there. Use it? [y/N] `;
 export const envApiRefused = (apiUrl: string, source: ApiSource): string =>
-  `init stopped before the sign in. The API ${new URL(apiUrl).origin} comes only from ${sourceText(source)}, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run ${cli('init')} in a terminal.`;
+  `init stopped before the sign in. The API ${new URL(apiUrl).origin} comes only from ${sourceText(source)}, which a project's settings can set, and the agent would register there. There is no terminal to ask, so run ${cli('init')} in a terminal.`;
 export const envApiDeclined = (source: ApiSource): string =>
   `init stopped before the sign in, nothing was sent. Unset ${source} to sign in with ${DEFAULT_API_URL}.`;
 
@@ -324,8 +325,8 @@ export const movedOutLine = (dir: string): string =>
 export const NEXT_NPX =
   'Hooks point at this npx copy. For a stable path run npm i -g sealkeeper and then sealkeeper init.';
 
-// fetch and sleep are injectable so tests can drive GitHub and the API
-// without a network or real waits. stdin answers the hooks question, which is
+// fetch and sleep are injectable so tests can drive the API without a
+// network or real waits. stdin answers the hooks question, which is
 // never asked without it. claudeDir is the Claude Code config dir and
 // hookCommand the command the hooks run, both defaulting to this machine's
 // Claude Code and this CLI. scriptPath is the path node was given for this
@@ -468,10 +469,8 @@ export const operatorLine = (slug: string): string =>
 // One line per API error code the operator can act on. Anything else falls
 // back to the code and the message the API sent.
 const API_MESSAGES: Record<string, (message: string) => string> = {
-  account_too_new: (m) =>
-    `registration refused, your GitHub account is too new (${m})`,
   operator_cap_reached: (m) =>
-    `registration refused, your GitHub account has reached its agent limit (${m})`,
+    `registration refused, your account has reached its agent limit (${m})`,
   conflict: () =>
     `this key is already registered by another operator, run ${cli('init --force')} to create a new key`,
   // The API's message names the handle and a free name, as in
@@ -481,8 +480,10 @@ const API_MESSAGES: Record<string, (message: string) => string> = {
     `the API rejected the registration signature, check the key file or run ${cli('init --force')}`,
   wrong_audience: (m) =>
     `the API answers as another address, check the API URL, ${m}`,
-  github_token_rejected: () =>
-    `the API could not verify your GitHub login, run ${cli('init')} again`,
+  // The pairing ran out, or the API no longer has it.
+  pairing_not_found: () => PAIRING_EXPIRED,
+  // The API's message says how to upgrade.
+  cli_upgrade_required: (m) => m,
   // The merge of init --listed, which answers the same for an agent that
   // is not yours and one that does not exist.
   not_found: () =>
@@ -507,7 +508,7 @@ export function register(
   return parent
     .command('init')
     .description(
-      'Set up this agent, its key, the GitHub sign in, the hooks, the skill and slash commands, the game and the routine',
+      'Set up this agent, its key, the sign in, the hooks, the skill and slash commands, the game and the routine',
     )
     .option(
       '--name <name>',
@@ -529,6 +530,7 @@ export function register(
       'register with this Ed25519 private key instead of a new one, - reads it from stdin',
     )
     .action(async function (this: Command, options: InitOptions) {
+      warnUnpatchedNode();
       try {
         await init(this, options, deps, routineDeps);
       } catch (error) {
@@ -537,7 +539,6 @@ export function register(
         if (error instanceof InputClosed) this.error(INPUT_CLOSED);
         if (
           error instanceof ApiError ||
-          error instanceof DeviceFlowError ||
           error instanceof KeyError ||
           error instanceof ConfigError
         ) {
@@ -882,10 +883,6 @@ async function init(
   if (!Config.shape.apiUrl.safeParse(apiUrl).success) {
     cmd.error(`invalid API URL ${apiUrl}, ${INSECURE_API_URL}`);
   }
-  // After the checks of what was typed, so a build without the client id
-  // still names a bad flag first.
-  const clientId = githubClientId();
-  if (clientId === null) cmd.error(MISSING_CLIENT_ID);
   // Before the key and the old config are touched, so a no changes nothing.
   let welcomed = target.welcomed;
   const source = envApiSource(options, apiUrl, previous);
@@ -963,8 +960,6 @@ async function init(
   startStep(ui, 'sign-in');
   keyNotes(ui, backup, leftBehind);
 
-  let prompt: ((url: string, code: string) => void) | undefined;
-
   // The name and the runtime, asked where a person can answer, before the
   // sign in. Otherwise the suggestion, and the runtime only from --runtime,
   // since a detected one is only a hint until the operator confirms it.
@@ -994,14 +989,19 @@ async function init(
     runtime = (await askRuntime(terminal, detected, indent)) ?? undefined;
     askedRuntime = true;
   }
-  // The terms, right before the device code. On stderr with the device flow
-  // prompts, so --json output stays one object. Before them, the API the
-  // token goes to when it is not the SealKeeper one.
+  // The terms, right before the pairing code. On stderr with the code, so
+  // --json output stays one object. Before them, the API the agent registers
+  // with when it is not the SealKeeper one.
   const otherApi =
     new URL(apiUrl).origin === DEFAULT_API_URL ? null : otherApiLine(apiUrl);
+  let show: (pairing: PairingAnswer) => void;
   if (ui === null) {
     if (otherApi !== null) stderr(otherApi);
     stderr(CONSENT);
+    show = (pairing) => {
+      stderr(`Open ${pairing.url}`);
+      stderr(`Approve code ${pairing.code}`);
+    };
   } else {
     const s = ui.err;
     if (otherApi !== null) {
@@ -1011,27 +1011,28 @@ async function init(
     note();
     note(s.dim(CONSENT));
     note();
-    note(s.bold('Sign in with GitHub'));
-    // The URL and the code come from GitHub, so the style functions escape
+    note(s.bold('Sign in'));
+    // The URL and the code come from the API, so the style functions escape
     // them like any other text from outside.
-    prompt = (url, code) =>
-      note(s.line`Open ${s.cyan(url)} and enter ${s.bold(s.gold(code))}`);
+    show = (pairing) =>
+      note(
+        s.line`Open ${s.cyan(pairing.url)} and approve code ${s.bold(s.gold(pairing.code))}`,
+      );
   }
-  const githubToken = await deviceFlow({
-    clientId,
-    fetch: deps.fetch,
-    sleep: deps.sleep,
-    prompt,
-  });
 
   const api = createApiClient({ apiUrl, fetch: deps.fetch });
-  const registered = await registerNew(api, p, {
-    agentId,
-    githubToken,
-    name,
-    version: options.version,
-    runtime,
-  }).catch((error: unknown) => {
+  const registered = await pairAndRegister(
+    api,
+    p,
+    {
+      agentId,
+      name,
+      version: options.version,
+      runtime,
+    },
+    deps.sleep,
+    show,
+  ).catch((error: unknown) => {
     // A brought key is brought again by --force, so the conflict says what
     // to do instead.
     if (
@@ -1064,6 +1065,7 @@ async function init(
   const config = await writeConfig(
     {
       agentId: agent.id,
+      operatorSlug: slugOfAnswer(agent),
       operatorLogin: agent.operator.login,
       name: agent.name,
       version: agent.version,
@@ -1117,6 +1119,7 @@ async function init(
       JSON.stringify({
         agentId: config.agentId,
         handle,
+        operatorSlug: config.operatorSlug,
         operatorLogin: config.operatorLogin,
         name: config.name,
         version: config.version,
@@ -1140,11 +1143,11 @@ async function init(
     stderr(NOTHING_SENT);
     return;
   }
-  // The login comes back with the registration, so the sign in is confirmed
-  // here, beside it.
+  // The operator comes back with the registration, so the sign in is
+  // confirmed here, beside it.
   const s = ui.out;
-  say(s.line`${s.tick()} Signed in as ${s.bold(config.operatorLogin)}`);
-  finishStep(ui, 'sign-in', config.operatorLogin);
+  say(s.line`${s.tick()} Signed in as ${s.bold(operatorOf(config))}`);
+  finishStep(ui, 'sign-in', operatorOf(config));
   const hooks = await offerHooks(deps, ui, claudeCode);
   await offerNudge(hooks, deps, ui, p);
   const enabled = await askGame(api.apiUrl, deps, ui, p, terminal);
@@ -1204,23 +1207,44 @@ function keyNotes(
   }
 }
 
-// The registration of the key made above. runtime is sent as unknown when left
-// out. issuedAt is taken after the device flow, right before signing.
-async function registerNew(
+// Whether a registration poll that failed with error is tried again after
+// the next wait. Not approved yet, no answer, a 429 rate_limited or a server
+// error. Anything else ends the wait, a 429 with a code of its own, such as
+// registration_cap_reached, included.
+const pollsAgain = (error: ApiError): boolean =>
+  error.code === 'pairing_pending' ||
+  error.code === 'network_error' ||
+  (error.status === 429 && error.code === 'rate_limited') ||
+  error.status >= 500;
+
+/*
+ * The sign in and the registration of the key made above. The agent key signs
+ * a pairing request, and show prints the page and the code the API answers.
+ * Then the same payload, signed again under agent.register with a fresh
+ * issuedAt, polls the registration every interval the API sent, longer when a
+ * Retry-After asks for it but never past the code's life, until an operator
+ * approves the code on that page and the agent registers under them. A poll
+ * that pollsAgain refuses ends the wait with its error. Once the waits add up
+ * to the code's life, the expiry the API
+ * sent less the Date of its answer, or of this machine's clock without one,
+ * the wait ends with PAIRING_EXPIRED, which is what the API answers by then
+ * too. runtime is sent as unknown when left out. No browser is opened.
+ */
+async function pairAndRegister(
   api: ApiClient,
   p: Paths,
   reg: {
     agentId: string;
-    githubToken: string;
     name: string;
     version: string;
     runtime: Runtime | undefined;
   },
+  wait: Sleep,
+  show: (pairing: PairingAnswer) => void,
 ): Promise<Registered> {
   const { runtime } = reg;
-  const request: RegisterAgentRequest = {
+  const payload = (): PairingRequest => ({
     publicKey: reg.agentId,
-    githubToken: reg.githubToken,
     name: reg.name,
     version: reg.version,
     ...(runtime === undefined || runtime === 'unknown' ? {} : { runtime }),
@@ -1228,17 +1252,44 @@ async function registerNew(
     // as a settings change.
     gameEnabled: true,
     issuedAt: new Date().toISOString(),
-  };
-  const envelope = await signEnvelope(request, api.apiUrl, 'agent.register', p);
-  const agent = await api.registerAgent(envelope);
-  if (agent.id !== reg.agentId) {
-    throw new ApiError(
-      0,
-      'bad_response',
-      'the API registered a different agent id than the local key',
-    );
+  });
+  const pairing = await api.createPairing(
+    await signEnvelope(payload(), api.apiUrl, 'agent.pair', p),
+  );
+  show(pairing);
+  const lifeMs =
+    Date.parse(pairing.expiresAt) - (api.serverDate() ?? Date.now());
+  const intervalMs = pairing.interval * 1000;
+  let waitedMs = 0;
+  let nextMs = intervalMs;
+  while (waitedMs < lifeMs) {
+    await wait(nextMs);
+    waitedMs += nextMs;
+    nextMs = intervalMs;
+    const request: RegisterAgentRequest = payload();
+    try {
+      const agent = await api.registerAgent(
+        await signEnvelope(request, api.apiUrl, 'agent.register', p),
+      );
+      if (agent.id !== reg.agentId) {
+        throw new ApiError(
+          0,
+          'bad_response',
+          'the API registered a different agent id than the local key',
+        );
+      }
+      return agent;
+    } catch (error) {
+      if (!(error instanceof ApiError) || !pollsAgain(error)) throw error;
+      if (error.retryAfterSec !== null) {
+        nextMs = Math.min(
+          Math.max(intervalMs, error.retryAfterSec * 1000),
+          lifeMs - waitedMs,
+        );
+      }
+    }
   }
-  return agent;
+  throw new ApiError(0, 'pairing_not_found', PAIRING_EXPIRED);
 }
 
 // What the rest of init reads of the agent, from the registration, with
@@ -1354,6 +1405,7 @@ export function identityOf(config: Config, slug: string | null) {
   return {
     agentId: config.agentId,
     handle: handleOf(config, slug),
+    operatorSlug: config.operatorSlug,
     operatorLogin: config.operatorLogin,
     name: config.name,
     version: config.version,
@@ -1401,7 +1453,7 @@ async function initRegistered(
   const s = ui.out;
   const done = {
     key: { status: 'done', text: tildePath(p.key) },
-    'sign-in': { status: 'done', text: existing.operatorLogin },
+    'sign-in': { status: 'done', text: slug ?? operatorOf(existing) },
   } as const;
   if (target.welcomed) {
     // The choice drew the banner before it knew which agent, so the two

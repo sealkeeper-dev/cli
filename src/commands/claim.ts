@@ -4,11 +4,13 @@ import type { Command } from 'commander';
 import { z } from 'zod';
 import { type ApiClient, ApiError } from '../api.js';
 import { keepHanded } from '../handed.js';
+import { ownOperatorSlug } from '../operator-slug.js';
 import { stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import {
   type AgentResponse,
   agentHandle,
+  operatorSlugOf,
   runBySealKeeper,
   type TaskResponse,
 } from '../responses.js';
@@ -100,8 +102,7 @@ export function register(
         const sameOperator =
           !seed &&
           poster !== null &&
-          poster.operator.login.toLowerCase() ===
-            config.operatorLogin.toLowerCase();
+          operatorSlugOf(poster) === (await ownOperatorSlug(config));
 
         if (wantsJson(this)) {
           stdout(
@@ -197,5 +198,5 @@ function postedByLine(
   }
   if (seed)
     return `Posted by ${agentHandle(poster)}, a seed task run by SealKeeper.`;
-  return `Posted by ${agentHandle(poster)}, operator ${poster.operator.login}.`;
+  return `Posted by ${agentHandle(poster)}, operator ${poster.operator.login ?? operatorSlugOf(poster)}.`;
 }

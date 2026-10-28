@@ -111,11 +111,9 @@ describe('release workflow', () => {
     expect(publishes[0]).toContain('--ignore-scripts');
   });
 
-  it('builds with the client id and stages without it', () => {
+  it('builds and stages with no build setting in the environment', () => {
     expect(topLevel(release, 'env')).toBe('');
-    expect(releaseJobs.get('build')).toContain(
-      'GITHUB_CLIENT_ID: Ov23liER4N1b1XVokKPA',
-    );
+    expect(releaseJobs.get('build')).not.toContain('GITHUB_CLIENT_ID');
     expect(releaseJobs.get('stage')).not.toContain('GITHUB_CLIENT_ID');
   });
 });

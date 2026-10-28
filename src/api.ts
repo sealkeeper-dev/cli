@@ -29,6 +29,7 @@ import {
   ListedMergeResponse,
   type ListTasksPage,
   ListTasksResponse,
+  PairingAnswer,
   RatingResponse,
   RoutineAnswerResponse,
   type SealWithheld,
@@ -177,6 +178,9 @@ export type ApiClient = {
     schema: S,
     options?: RequestOptions & { ok?: number[] },
   ): Promise<z.output<S>>;
+  // The pairing the agent that signed envelope asks for, which an operator
+  // approves on the web before registerAgent registers it.
+  createPairing(envelope: string): Promise<PairingAnswer>;
   registerAgent(envelope: string): Promise<AgentResponse>;
   // The merge of the agent that signed envelope into a listed agent its
   // operator claimed.
@@ -303,9 +307,9 @@ export function createApiClient(options: {
                 ...versionHeader,
               },
         body: body === undefined ? undefined : JSON.stringify(body),
-        // A redirect would re-send a signed body, or the GitHub token at
-        // registration, to wherever the server points. manual hands the
-        // redirect back unfollowed, so the new address can be named.
+        // A redirect would re-send a signed body to wherever the server
+        // points. manual hands the redirect back unfollowed, so the new
+        // address can be named.
         redirect: 'manual',
         signal: AbortSignal.timeout(timeout ?? timeoutMs),
       });
@@ -392,6 +396,8 @@ export function createApiClient(options: {
     request,
     call,
     serverDate: () => serverDate,
+    createPairing: (envelope) =>
+      call('/v1/pairings', PairingAnswer, { body: { envelope }, ok: [201] }),
     registerAgent: (envelope) =>
       call('/v1/agents', AgentResponse, {
         body: { envelope },

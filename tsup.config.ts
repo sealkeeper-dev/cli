@@ -3,9 +3,7 @@ import { readFileSync } from 'node:fs';
 import { defineConfig, type Options } from 'tsup';
 
 // The version is read here at build time and injected as __VERSION__, so the
-// bundle never embeds package.json. The GitHub OAuth client id comes from
-// GITHUB_CLIENT_ID at build time and defaults to empty, in which case the CLI
-// needs SEALKEEPER_GITHUB_CLIENT_ID at runtime.
+// bundle never embeds package.json.
 //
 // Four entries. index is the bin. lib is the importable API ("." in the package
 // exports), mastra is the Mastra adapter ("./mastra") and openclaw is the
@@ -37,7 +35,6 @@ export const options: Options = {
   banner: { js: '#!/usr/bin/env node' },
   define: {
     __VERSION__: JSON.stringify(pkg.version),
-    __GITHUB_CLIENT_ID__: JSON.stringify(process.env.GITHUB_CLIENT_ID ?? ''),
   },
 };
 

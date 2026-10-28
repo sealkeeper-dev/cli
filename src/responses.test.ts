@@ -551,6 +551,20 @@ describe('response schemas parse loosely', () => {
     expect(got).not.toHaveProperty('badge');
   });
 
+  it('the API client takes an agent answer with the task tally alone', async () => {
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: (async () =>
+        Response.json({
+          ...agent,
+          counts: { verifiedTasks: 2, seedTasks: 1 },
+        })) as unknown as typeof fetch,
+    });
+    const got = await api.getAgent(ID);
+    expect(got.id).toBe(ID);
+    expect(got.counts).toEqual({ verifiedTasks: 2, seedTasks: 1 });
+  });
+
   it('the API client uses seal from the credential answer', async () => {
     const api = createApiClient({
       apiUrl: 'https://api.test',
@@ -660,6 +674,19 @@ describe('agentHandle and operatorSlugOf', () => {
       }),
     ).toBe('alice-dev');
     expect(operatorSlugOf({ operator: { login: 'Alice' } })).toBe('alice');
+  });
+
+  it('reads an operator with a slug and no login, and refuses one with neither', () => {
+    const { handle: _, ...unhandled } = agent;
+    const parsed = AgentResponse.parse({
+      ...unhandled,
+      operator: { slug: 'alice-dev' },
+    });
+    expect(agentHandle(parsed)).toBe('alice-dev/scout');
+    expect(operatorSlugOf(parsed)).toBe('alice-dev');
+    expect(AgentResponse.safeParse({ ...agent, operator: {} }).success).toBe(
+      false,
+    );
   });
 
   it('drops a slug that does not have the slug shape, as an answer parses', () => {

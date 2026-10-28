@@ -94,6 +94,42 @@ describe('savedApiUrl', () => {
   });
 });
 
+describe('createPairing', () => {
+  const PAIRING = {
+    code: 'ABCD-EFGH',
+    url: 'https://sealkeeper.run/pair?code=ABCD-EFGH',
+    expiresAt: '2026-10-28T10:10:00.000Z',
+    interval: 10,
+  };
+
+  it('posts the envelope to /v1/pairings and returns the code, page, expiry and interval', async () => {
+    const fetchFn = respond(
+      Response.json({ ...PAIRING, later: true }, { status: 201 }),
+    );
+    const api = createApiClient({ apiUrl: 'https://api.test', fetch: fetchFn });
+    // A key this CLI does not know is dropped, never refused.
+    expect(await api.createPairing('a.b.c')).toEqual(PAIRING);
+    expect(fetchFn).toHaveBeenCalledWith(
+      'https://api.test/v1/pairings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ envelope: 'a.b.c' }),
+      }),
+    );
+  });
+
+  it('throws bad_response for an answer without an interval', async () => {
+    const { interval: _, ...rest } = PAIRING;
+    const api = createApiClient({
+      apiUrl: 'https://api.test',
+      fetch: respond(Response.json(rest, { status: 201 })),
+    });
+    await expect(api.createPairing('a.b.c')).rejects.toMatchObject({
+      code: 'bad_response',
+    });
+  });
+});
+
 describe('registerAgent', () => {
   it('posts the envelope to /v1/agents and returns the agent', async () => {
     const fetchFn = respond(Response.json(AGENT, { status: 201 }));
@@ -700,6 +736,7 @@ describe('the CLI version header', () => {
   > = {
     request: (api) => api.request('/v1/x'),
     call: (api) => api.call('/v1/x', z.unknown()),
+    createPairing: (api) => api.createPairing('a.b.c'),
     registerAgent: (api) => api.registerAgent('a.b.c'),
     listedMerge: (api) => api.listedMerge('acme.ai', 'planner', 'a.b.c'),
     getAgent: (api) => api.getAgent(AGENT_ID),

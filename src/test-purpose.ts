@@ -5,6 +5,7 @@
 import { type RequestPurpose, readPurpose } from '@sealkeeper/schema';
 
 const ROUTES: [string, RegExp, RequestPurpose][] = [
+  ['POST', /^\/v1\/pairings$/, 'agent.pair'],
   ['POST', /^\/v1\/agents$/, 'agent.register'],
   ['PATCH', /^\/v1\/agents\/[^/]+$/, 'agent.update'],
   ['DELETE', /^\/v1\/agents\/[^/]+$/, 'agent.delete'],

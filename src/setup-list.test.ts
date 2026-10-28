@@ -79,7 +79,7 @@ describe('LiveList', () => {
     });
     expect(list.lines().map(stripStyle)).toEqual([
       '  ● 1  Key                       ~/.sealkeeper/key',
-      '  ○ 2  GitHub sign-in',
+      '  ○ 2  Sign in',
       '  ○ 3  Game                      on / off',
       '  ○ 4  Routine                   daily time / not installed',
     ]);
@@ -164,7 +164,7 @@ describe('LiveList', () => {
     ]);
     expect(list.lines().map(stripStyle)).toEqual([
       `  ◐ 1  Key                       ${KEY_GENERATING}`,
-      '  ○ 2  GitHub sign-in',
+      '  ○ 2  Sign in',
       '  ○ 3  Game                      on / off',
       '  ● 4  Routine                   08:00',
     ]);

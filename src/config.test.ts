@@ -20,11 +20,13 @@ import {
   boundHome,
   ConfigError,
   DEFAULT_API_URL,
+  handleOf,
   isSecureApiUrl,
   listMachineAgents,
   namedHome,
   OPENCLAW_MODEL_MAX,
   openclawModelOf,
+  operatorOf,
   paths,
   readConfig,
   readFolderMap,
@@ -119,6 +121,32 @@ describe('config', () => {
     await chmod(root, 0o755);
     await writeConfig(VALID, p);
     expect((await stat(root)).mode & 0o777).toBe(0o700);
+  });
+
+  it('reads a config with the login alone, with the slug alone, and refuses one with neither', async () => {
+    const p = paths(root);
+    await writeFile(p.config, JSON.stringify(VALID));
+    const older = await readConfig(p);
+    expect(older).toMatchObject({ operatorLogin: 'alice' });
+    expect(older).not.toHaveProperty('operatorSlug');
+    if (older === null) throw new Error('no config');
+    expect(operatorOf(older)).toBe('alice');
+    expect(handleOf(older)).toBe('alice/scout');
+
+    const { operatorLogin: _, ...slugOnly } = VALID;
+    await writeConfig({ ...slugOnly, operatorSlug: 'op-k7q2mx' }, p);
+    const newer = await readConfig(p);
+    if (newer === null) throw new Error('no config');
+    expect(operatorOf(newer)).toBe('op-k7q2mx');
+    expect(handleOf(newer)).toBe('op-k7q2mx/scout');
+    // The slug wins over the login when both are there.
+    expect(
+      operatorOf({ operatorSlug: 'alice-dev', operatorLogin: 'Alice' }),
+    ).toBe('alice-dev');
+
+    await writeFile(p.config, JSON.stringify(slugOnly));
+    await expect(readConfig(p)).rejects.toThrow(ConfigError);
+    await expect(writeConfig(slugOnly, p)).rejects.toThrow();
   });
 
   it('refuses to write an invalid config', async () => {

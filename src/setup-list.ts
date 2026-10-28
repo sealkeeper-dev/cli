@@ -28,7 +28,7 @@ export type SetupStep = {
 };
 export const SETUP_STEPS: readonly SetupStep[] = [
   { key: 'key', label: 'Key' },
-  { key: 'sign-in', label: 'GitHub sign-in' },
+  { key: 'sign-in', label: 'Sign in' },
   { key: 'hooks', label: 'Hooks', claudeCode: true },
   { key: 'skill', label: 'Skill and slash commands', claudeCode: true },
   { key: 'game', label: 'Game', note: 'on / off' },

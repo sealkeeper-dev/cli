@@ -787,6 +787,24 @@ describe('submit, release and the tasks commands', () => {
       expect(text.out).toContain(SAME_OPERATOR);
     });
 
+    it('compares the poster by slug, against the stored slug or the login of an older config', async () => {
+      api.agents.set(OTHER_AGENT, {
+        ...agentAnswer(OTHER_AGENT, 'x', 'helper'),
+        operator: { slug: 'alice-dev' },
+        handle: 'alice-dev/helper',
+      });
+      // The config names the operator by login alone, and nothing is stored.
+      const before = await run('claim', api.add({}).id, '--json');
+      expect(JSON.parse(before.out).poster.same_operator).toBe(false);
+      await saveOperatorSlug(agentId, 'alice-dev');
+      const after = await run('claim', api.add({}).id, '--json');
+      expect(JSON.parse(after.out).poster.same_operator).toBe(true);
+      const text = await run('claim', api.add({}).id);
+      expect(text.out).toContain(
+        'Posted by alice-dev/helper, operator alice-dev.',
+      );
+    });
+
     it('still claims when the poster cannot be looked up', async () => {
       api.agents.clear();
       api.anyAgent = false;

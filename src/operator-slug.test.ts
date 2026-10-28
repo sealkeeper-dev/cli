@@ -14,6 +14,7 @@ import {
 } from './config.js';
 import {
   currentOperatorSlug,
+  ownOperatorSlug,
   readOperatorSlug,
   refreshOperatorSlug,
   saveOperatorSlug,
@@ -151,6 +152,20 @@ describe('operator slug', () => {
     );
     expect(handleOf(CONFIG, null)).toBe('alice/scout');
     expect(handleOf(CONFIG)).toBe('alice/scout');
+  });
+
+  it("names this agent's own operator by the stored slug, else the config's slug, else its login", async () => {
+    const p = paths(home);
+    expect(
+      await ownOperatorSlug({ ...CONFIG, operatorLogin: 'Alice' }, p),
+    ).toBe('alice');
+    expect(
+      await ownOperatorSlug({ ...CONFIG, operatorSlug: 'alice-dev' }, p),
+    ).toBe('alice-dev');
+    await saveOperatorSlug(AGENT_ID, 'alice-2', new Date(), p);
+    expect(
+      await ownOperatorSlug({ ...CONFIG, operatorSlug: 'alice-dev' }, p),
+    ).toBe('alice-2');
   });
 
   it('leaves config.json readable by CLI 0.4.4', async () => {

@@ -41,6 +41,7 @@ import {
   readCursor,
   readDaysFrom,
 } from '../log.js';
+import { warnUnpatchedNode } from '../node-version.js';
 import { keepNudgeFresh } from '../nudge.js';
 import { readOperatorSlug } from '../operator-slug.js';
 import { stderr, stdout, wantsJson } from '../output.js';
@@ -150,6 +151,7 @@ export function register(
       this: Command,
       options: { show?: boolean },
     ): Promise<void> {
+      warnUnpatchedNode();
       const config = await requireConfig(this);
       const now = new Date();
       const p = paths();

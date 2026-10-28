@@ -35,7 +35,7 @@ import {
 } from '../key-guard.js';
 import { POST_WHY } from '../ladder.js';
 import { keepNudgeFresh } from '../nudge.js';
-import { readOperatorSlug } from '../operator-slug.js';
+import { ownOperatorSlug } from '../operator-slug.js';
 import { promptStyled, stderr, stdout, wantsJson } from '../output.js';
 import { refusal } from '../refusal.js';
 import type { TaskResponse } from '../responses.js';
@@ -455,7 +455,7 @@ async function postAndPrint(
   // Refused here, so nothing is signed for them.
   if (
     assignee !== undefined &&
-    ownAgent(assignee, await ownSlug(config), signer.agentId)
+    ownAgent(assignee, await ownOperatorSlug(config), signer.agentId)
   ) {
     cmd.error(sameOperator(assignee));
   }
@@ -776,7 +776,7 @@ async function guidedPost(
   options: Pick<PostOptions, 'expiresHours' | 'for' | 'allowOutsideCwd'> = {},
 ): Promise<void> {
   const config = await requireConfig(cmd);
-  const own = { slug: await ownSlug(config), agentId: config.agentId };
+  const own = { slug: await ownOperatorSlug(config), agentId: config.agentId };
   const given = options.for?.trim();
   if (given !== undefined) {
     if (!AgentRef.safeParse(given).success) {
@@ -976,18 +976,6 @@ export function postLines(
     );
   }
   return lines;
-}
-
-// The slug of this agent's operator, the first half of its handles. The one
-// stored in operator-slug.json, else the login lowercased.
-async function ownSlug(config: {
-  operatorLogin: string;
-  agentId: string;
-}): Promise<string> {
-  return (
-    (await readOperatorSlug(config.agentId)) ??
-    config.operatorLogin.toLowerCase()
-  );
 }
 
 // True when ref names this agent, by id, or any agent of its operator, by a

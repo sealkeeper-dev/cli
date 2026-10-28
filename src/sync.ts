@@ -28,6 +28,12 @@ import { declaredModel } from './model-name.js';
 import { stderr } from './output.js';
 import { isSent } from './taxonomy.js';
 
+export type Sleep = (ms: number) => Promise<void>;
+
+// The real wait, which tests replace with one that returns at once.
+export const sleep: Sleep = (ms) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 // Sends pending events from the local log to the API. Each round reads up to
 // MAX_BATCH_EVENTS pending events, drops the ones older than the accepted
 // window, skips the types this CLI never sends (UNSENT_TYPES in taxonomy.ts),

@@ -5,18 +5,20 @@ import { z } from 'zod';
 import {
   type Config,
   ensureHome,
+  operatorOf,
   type Paths,
   paths,
   writeFileAtomic,
 } from './config.js';
 import { type LiveAgent, readLiveAgent } from './live-agent.js';
 
-// The operator slug, the first half of the handle, which can differ from the
-// GitHub login. status, init, run and agent rename and delete build the handle
-// offline, so the last slug the API sent is kept in operator-slug.json. Not in
-// config.json, since CLI 0.4.4 and earlier read that file strictly. The file
-// names the agent it belongs to, so a new agent on the same machine never takes
-// the slug of the one before. The login stands in only while nothing is stored.
+// The operator slug, the first half of the handle, which can change after
+// registration. status, init, run and agent rename and delete build the handle
+// offline, so the last slug the API sent is kept in operator-slug.json. The
+// file names the agent it belongs to, so a new agent on the same machine never
+// takes the slug of the one before. The operator in config.json, the slug init
+// wrote or the login of an older config, stands in only while nothing is
+// stored.
 
 // seenAt is when this slug was first stored. The file is written again
 // only when the slug changes.
@@ -45,8 +47,19 @@ export async function readOperatorSlug(
   }
 }
 
+// This agent's operator slug, lower case, to tell its own operator's agents
+// apart. The stored slug, else the operator in config.json.
+export async function ownOperatorSlug(
+  config: Pick<Config, 'agentId' | 'operatorSlug' | 'operatorLogin'>,
+  p: Paths = paths(),
+): Promise<string> {
+  return (
+    (await readOperatorSlug(config.agentId, p)) ?? operatorOf(config)
+  ).toLowerCase();
+}
+
 // Stores the slug the API sent. Never throws, the worst case is the old
-// value, or the login, until the next answer.
+// value, or the operator in config.json, until the next answer.
 export async function saveOperatorSlug(
   agentId: string,
   slug: string,

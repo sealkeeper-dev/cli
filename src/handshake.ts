@@ -75,8 +75,11 @@ export class RecordError extends Error {
 
 // Reads the agent's current fingerprint hash of a setup from the agent answer
 // at apiUrl, fingerprint for the session and routineFingerprint for the
-// routine, null when the API holds none or has no such agent. Throws
-// RecordError when the API cannot be reached or answers anything else.
+// routine, for a SEAL that carries none of that setup. null when the answer
+// holds none or there is no such agent. The answer the CLI reads leaves both
+// out, so this reads null and the check says there is no record to compare
+// with. Throws RecordError when the API cannot be reached or answers anything
+// else.
 export function recordFromApi(apiUrl: string, fetchFn: typeof fetch) {
   return async (
     sub: string,

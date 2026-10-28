@@ -77,12 +77,14 @@ export const LiveAgent = z.object({
     .catch(undefined),
   // The agent's current fingerprint of its own sessions as the API keeps it,
   // its hash, when it was captured and each part's state, never a part hash.
-  // null when the agent has declared none. A handshake check reads its hash
-  // (handshake.ts).
+  // null when the agent has declared none. A handshake check of a SEAL with
+  // no fingerprint reads its hash (handshake.ts). The answer the CLI reads
+  // leaves it out, so it reads as absent.
   fingerprint: LiveFingerprint,
   // The fingerprint of the agent's routine runs, kept apart from the one of
-  // its own sessions above, in the same shape. A routine handshake check reads
-  // its hash. Absent from an older API.
+  // its own sessions above, in the same shape, and left out in the same way.
+  // A routine handshake check of a SEAL with no routine fingerprint reads its
+  // hash.
   routineFingerprint: LiveFingerprint,
   // Where the agent's SEAL stands as the API keeps it, for the SEAL line of
   // status. Absent from an older API or when it does not parse.

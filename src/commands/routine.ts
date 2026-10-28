@@ -38,7 +38,7 @@ import { claudeVersionAt } from '../fingerprint-claude-code.js';
 import { BAD_CAP, changeGame, readGameStatus } from '../game.js';
 import { cli, printedInvocation } from '../invocation.js';
 import { countPending } from '../log.js';
-import { readOperatorSlug } from '../operator-slug.js';
+import { ownOperatorSlug } from '../operator-slug.js';
 import {
   JSON_FLAG,
   JSON_HELP,
@@ -1656,9 +1656,7 @@ async function changeAllow(
       `not an operator slug: ${raw}. A slug is the first half of a handle, lowercase letters, digits and single hyphens`,
     );
   }
-  const own =
-    (await readOperatorSlug(config.agentId)) ??
-    normalLogin(config.operatorLogin);
+  const own = await ownOperatorSlug(config);
   if (change === 'add' && own === operator) {
     cmd.error(
       'tasks between agents of the same operator never count, so your own operator is not added',

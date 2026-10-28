@@ -50,12 +50,6 @@ import {
   writeConfig,
 } from '../config.js';
 import { tildePath } from '../files.js';
-import {
-  ACCESS_TOKEN_URL,
-  CODE_EXPIRED,
-  DEVICE_CODE_URL,
-  MISSING_CLIENT_ID,
-} from '../github-device.js';
 import { loadKey } from '../identity.js';
 import { appendEvent, countPending } from '../log.js';
 import { isManaged } from '../managed.js';
@@ -107,6 +101,7 @@ import {
   NUDGE_NOT_ON,
   nameQuestion,
   otherApiLine,
+  PAIRING_EXPIRED,
   ROUTINE_EARLIER_LINE,
   ROUTINE_NOT_INSTALLED,
   routinePresentLine,
@@ -127,7 +122,13 @@ import {
 } from './routine.js';
 import { AUTO_SYNC_OFF, AUTO_SYNC_ON } from './sync.js';
 
-const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
+// The pairing the fake API answers, made at PAIRED_AT by its own clock,
+// which it sends as the Date header, and good for ten minutes.
+const PAIRED_AT = Date.parse('2026-10-28T10:00:00.000Z');
+const PAIRING_LIFE_MS = 600_000;
+const PAIRING_INTERVAL_SEC = 10;
+const pairUrl = (code: string) =>
+  `http://localhost:3000/pair?code=${encodeURIComponent(code)}`;
 const HOOK_COMMAND = hookCommand(
   '/usr/local/bin/node',
   '/usr/local/lib/node_modules/sealkeeper/dist/index.js',
@@ -178,9 +179,13 @@ type RunResult = { code: number; out: string; err: string; all: string };
 type ApiReply = { status: number; body: unknown };
 
 type World = {
-  tokenResponses: unknown[];
+  // How many registration polls answer pairing_pending before api answers.
+  pending: number;
   api: (payload: Record<string, unknown>) => ApiReply;
   sleeps: number[];
+  // Every signed pairing request.
+  pairings: Record<string, unknown>[];
+  // Every registration poll past the pending ones, which api answered.
   registrations: Record<string, unknown>[];
   fetchUrls: string[];
   // The terminal the hooks question reads from. None means no stdin at all.
@@ -199,8 +204,11 @@ type World = {
   versionChanges: Record<string, unknown>[];
   // When set, a PATCH gets this refusal and nothing moves.
   versionRefusal?: { status: number; code: string; retryAfter?: string };
-  // The user code GitHub sends. ABCD-1234 when not set.
-  userCode?: string;
+  // The code the pairing answers with. ABCD-EFGH when not set.
+  pairingCode?: string;
+  // Stands in front of the fake API for init, when a test needs a request
+  // to fail on the way there.
+  fetch?: typeof fetch;
   // The verified count and level GET /v1/agents/:id answers with, for
   // Next. Needs serverVersion set, else the route fails.
   live?: { verifiedTasks: number; level: string; needs?: string | null };
@@ -300,7 +308,7 @@ function created(payload: Record<string, unknown>): ApiReply {
       id: payload.publicKey,
       name: payload.name,
       version: payload.version,
-      operator: { login: 'alice' },
+      operator: { login: 'alice', slug: 'alice' },
       createdAt: '2026-09-23T10:00:00.000Z',
     },
   };
@@ -310,23 +318,37 @@ function apiError(status: number, code: string, message: string): ApiReply {
   return { status, body: { error: { code, message } } };
 }
 
-// Stands in for GitHub and the SealKeeper API. The API side checks the envelope
-// signature against the kid, like the real one, before it answers.
+// Stands in for the SealKeeper API. It checks the envelope signature against
+// the kid, like the real one, before it answers. A pairing is approved once
+// world.pending polls of the registration have been answered pairing_pending.
 function fakeFetch(world: World): typeof fetch {
   return (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     world.fetchUrls.push(url);
-    if (url === DEVICE_CODE_URL) {
-      return Response.json({
-        device_code: 'dev-123',
-        user_code: world.userCode ?? 'ABCD-1234',
-        verification_uri: 'https://github.com/login/device',
-        expires_in: 900,
-        interval: 5,
-      });
-    }
-    if (url === ACCESS_TOKEN_URL) {
-      return Response.json(world.tokenResponses.shift());
+    if (url === `${API_URL}/v1/pairings`) {
+      const { envelope } = JSON.parse(String(init.body)) as {
+        envelope: string;
+      };
+      const { kid } = decodeHeader(envelope);
+      const payload = unsigned(
+        (await verify(envelope, base64urlDecode(kid))).payload,
+        init.method ?? 'POST',
+        url,
+      );
+      world.pairings.push(payload as Record<string, unknown>);
+      const code = world.pairingCode ?? 'ABCD-EFGH';
+      return Response.json(
+        {
+          code,
+          url: pairUrl(code),
+          expiresAt: new Date(PAIRED_AT + PAIRING_LIFE_MS).toISOString(),
+          interval: PAIRING_INTERVAL_SEC,
+        },
+        {
+          status: 201,
+          headers: { Date: new Date(PAIRED_AT).toUTCString() },
+        },
+      );
     }
     if (url === `${API_URL}/v1/agents`) {
       const { envelope } = JSON.parse(String(init.body)) as {
@@ -338,6 +360,11 @@ function fakeFetch(world: World): typeof fetch {
         init.method ?? 'POST',
         url,
       );
+      if (world.pending > 0) {
+        world.pending--;
+        const reply = apiError(409, 'pairing_pending', 'Not approved yet');
+        return Response.json(reply.body, { status: reply.status });
+      }
       const registration = payload as Record<string, unknown>;
       world.registrations.push(registration);
       const reply = world.api(registration);
@@ -471,7 +498,7 @@ async function run(world: World, ...args: string[]): Promise<RunResult> {
       : enterAtKeyQuestion(world.stdin, () => err);
   const program = createProgram({
     init: {
-      fetch: fakeFetch(world),
+      fetch: world.fetch ?? fakeFetch(world),
       sleep: async (ms) => {
         world.sleeps.push(ms);
       },
@@ -569,12 +596,10 @@ describe('sealkeeper init', () => {
 
   function newWorld(): World {
     return {
-      tokenResponses: [
-        { error: 'authorization_pending' },
-        { access_token: TOKEN },
-      ],
+      pending: 1,
       api: created,
       sleeps: [],
+      pairings: [],
       registrations: [],
       fetchUrls: [],
       versionChanges: [],
@@ -582,17 +607,9 @@ describe('sealkeeper init', () => {
     };
   }
 
-  async function expectNoTokenAnywhere(result: RunResult): Promise<void> {
-    expect(result.out).not.toContain(TOKEN);
-    expect(result.err).not.toContain(TOKEN);
-    expect(await readIfExists(paths(home).config)).not.toContain(TOKEN);
-    expect(await readIfExists(paths(home).key)).not.toContain(TOKEN);
-  }
-
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-init-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
-    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', 'client-abc');
     vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     // Never the real ~/.claude. Tests that want Claude Code create it.
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
@@ -607,7 +624,7 @@ describe('sealkeeper init', () => {
     await rm(home, { recursive: true, force: true });
   });
 
-  it('registers through the device flow and writes config and key', async () => {
+  it('pairs, polls the registration through a pending answer until it registers, and writes config and key', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
 
@@ -637,26 +654,29 @@ describe('sealkeeper init', () => {
     );
     expect(result.out).not.toContain(agentId);
     expect(result.err).toContain(
-      '  Open https://github.com/login/device and enter ABCD-1234\n',
+      '  Open http://localhost:3000/pair?code=ABCD-EFGH and approve code ABCD-EFGH\n',
     );
-    expect(world.sleeps).toEqual([5000, 5000]);
+    // One wait before the poll answered pending, one before the one that
+    // registered, each the interval the pairing named.
+    expect(world.sleeps).toEqual([10_000, 10_000]);
 
-    expect(world.registrations).toEqual([
-      {
-        publicKey: agentId,
-        githubToken: TOKEN,
-        name: 'scout',
-        version: '0.1.0',
-        // Nobody to ask, so the default.
-        gameEnabled: true,
-        // Taken after the device flow, so the API's window starts at the
-        // signature.
-        issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
-      },
-    ]);
+    const signed = {
+      publicKey: agentId,
+      name: 'scout',
+      version: '0.1.0',
+      // Nobody to ask, so the default.
+      gameEnabled: true,
+      // Taken right before each signature, so the API's window starts there.
+      issuedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+    };
+    // The pairing request and the poll carry the same payload, and no
+    // token of any kind.
+    expect(world.pairings).toEqual([signed]);
+    expect(world.registrations).toEqual([signed]);
     // The API URL came from SEALKEEPER_API_URL alone, so it is not saved.
     expect(await readConfig(paths(home))).toEqual({
       agentId,
+      operatorSlug: 'alice',
       operatorLogin: 'alice',
       name: 'scout',
       version: '0.1.0',
@@ -668,10 +688,153 @@ describe('sealkeeper init', () => {
     expect(await readFile(paths(home).promptSecret, 'utf8')).toMatch(
       /^[A-Za-z0-9_-]{43}\n$/,
     );
-    await expectNoTokenAnywhere(result);
   });
 
-  it('says registering accepts the terms and the privacy policy, right before the device code', async () => {
+  it('registers an operator the answer names by slug alone, with no login', async () => {
+    world.api = (payload) => {
+      const reply = created(payload);
+      const body = reply.body as Record<string, unknown>;
+      return { ...reply, body: { ...body, operator: { slug: 'op-k7q2mx' } } };
+    };
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    const config = await readConfig(paths(home));
+    expect(config?.operatorSlug).toBe('op-k7q2mx');
+    expect(config).not.toHaveProperty('operatorLogin');
+    expect(result.out).toContain('  ✓ Signed in as op-k7q2mx\n');
+    expect(result.out).toContain('  ✓ Registered op-k7q2mx/scout\n');
+  });
+
+  it('ends with the expired line when the API no longer has the pairing', async () => {
+    world.pending = 2;
+    world.api = () =>
+      apiError(404, 'pairing_not_found', 'No pairing for this key');
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(1);
+    expect(PAIRING_EXPIRED).toBe(
+      'the sign in code expired before it was approved, run npx sealkeeper init again',
+    );
+    expect(result.err.endsWith(`\n${PAIRING_EXPIRED}\n`)).toBe(true);
+    expect(world.sleeps).toEqual([10_000, 10_000, 10_000]);
+    expect(result.out).toBe('');
+    expect(await readConfig(paths(home))).toBeNull();
+  });
+
+  it('stops polling once the code has lived its ten minutes, by the API clock', async () => {
+    world.pending = Number.POSITIVE_INFINITY;
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(1);
+    expect(result.err.endsWith(`\n${PAIRING_EXPIRED}\n`)).toBe(true);
+    // Sixty waits of ten seconds, a poll after each, then no more.
+    expect(world.sleeps).toEqual(Array(60).fill(10_000));
+    expect(world.registrations).toEqual([]);
+    expect(await readConfig(paths(home))).toBeNull();
+  });
+
+  it('waits and polls again after a 429, a server error or no answer', async () => {
+    const replies: ApiReply[] = [
+      {
+        status: 429,
+        body: { error: { code: 'rate_limited', message: 'Slow down' } },
+      },
+      apiError(503, 'unavailable', 'Try again'),
+    ];
+    let unreachable = true;
+    const inner = fakeFetch(world);
+    const flaky = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if (String(input) === `${API_URL}/v1/agents` && unreachable) {
+        unreachable = false;
+        throw new TypeError('fetch failed');
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+    world.pending = 0;
+    world.api = (payload) => replies.shift() ?? created(payload);
+    world.fetch = flaky;
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    expect(world.sleeps).toEqual([10_000, 10_000, 10_000, 10_000]);
+    expect(result.out).toContain('  ✓ Registered alice/scout\n');
+  });
+
+  it('waits as long as Retry-After asks when it is longer than the interval', async () => {
+    world.pending = 0;
+    let first = true;
+    const inner = fakeFetch(world);
+    const limited = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if (String(input) === `${API_URL}/v1/agents` && first) {
+        first = false;
+        return Response.json(
+          { error: { code: 'rate_limited', message: 'Slow down' } },
+          { status: 429, headers: { 'Retry-After': '45' } },
+        );
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+    world.fetch = limited;
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    expect(world.sleeps).toEqual([10_000, 45_000]);
+  });
+
+  it('never waits past the life of the code for a Retry-After', async () => {
+    world.pending = 0;
+    const inner = fakeFetch(world);
+    const limited = (async (
+      input: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      if (String(input) === `${API_URL}/v1/agents`) {
+        return Response.json(
+          { error: { code: 'rate_limited', message: 'Slow down' } },
+          { status: 429, headers: { 'Retry-After': '3600' } },
+        );
+      }
+      return inner(input, init);
+    }) as typeof fetch;
+    world.fetch = limited;
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(1);
+    expect(result.err.endsWith(`\n${PAIRING_EXPIRED}\n`)).toBe(true);
+    // One interval, then the rest of the ten minutes, then no more.
+    expect(world.sleeps).toEqual([10_000, 590_000]);
+    expect(await readConfig(paths(home))).toBeNull();
+  });
+
+  it('ends at once on a 429 with a code of its own, such as the day cap', async () => {
+    world.pending = 0;
+    world.api = () => ({
+      status: 429,
+      body: {
+        error: {
+          code: 'registration_cap_reached',
+          message: 'An operator can register at most 20 new agents a UTC day',
+        },
+      },
+    });
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('registration_cap_reached');
+    expect(world.sleeps).toEqual([10_000]);
+    expect(await readConfig(paths(home))).toBeNull();
+  });
+
+  it('only prints the page and the code, and sends nothing but to the API', async () => {
+    const result = await run(world, 'init', '--name', 'scout');
+    expect(result.code).toBe(0);
+    expect(result.err).toContain(pairUrl('ABCD-EFGH'));
+    expect(world.fetchUrls.filter((url) => !url.startsWith(API_URL))).toEqual(
+      [],
+    );
+  });
+
+  it('says registering accepts the terms and the privacy policy, right before the pairing code', async () => {
     const result = await run(world, 'init', '--name', 'scout');
     expect(result.code).toBe(0);
     expect(CONSENT).toBe(
@@ -679,31 +842,24 @@ describe('sealkeeper init', () => {
     );
     const lines = result.err.split('\n');
     const consent = lines.indexOf(`  ${CONSENT}`);
-    const device = lines.findIndex((l) =>
-      l.includes('Open https://github.com/login/device'),
-    );
+    const code = lines.findIndex((l) => l.includes(`Open ${pairUrl('')}`));
     expect(consent).toBeGreaterThanOrEqual(0);
     // Only the blank line and the sign in heading sit between them.
-    expect(lines.slice(consent + 1, device)).toEqual([
-      '',
-      '  Sign in with GitHub',
-    ]);
+    expect(lines.slice(consent + 1, code)).toEqual(['', '  Sign in']);
     expect(result.err.split(CONSENT)).toHaveLength(2);
     expect(result.out).not.toContain(CONSENT);
   });
 
-  it('with --json says it on stderr before the device code and keeps it off stdout', async () => {
+  it('with --json says it on stderr before the pairing code and keeps it off stdout', async () => {
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out)).toMatchObject({ name: 'scout' });
     expect(result.out).not.toContain(CONSENT);
     const lines = result.err.split('\n');
     const consent = lines.indexOf(CONSENT);
-    const device = lines.findIndex((l) =>
-      l.includes('https://github.com/login/device'),
-    );
+    const code = lines.findIndex((l) => l.includes(pairUrl('')));
     expect(consent).toBeGreaterThanOrEqual(0);
-    expect(device).toBeGreaterThan(consent);
+    expect(code).toBeGreaterThan(consent);
   });
 
   it('says in short what leaves this machine on stderr and sends no events', async () => {
@@ -736,8 +892,8 @@ describe('sealkeeper init', () => {
     expect(
       result.err.endsWith(`${describeTaxonomy()}\n\n${NOTHING_SENT}\n`),
     ).toBe(true);
-    expect(result.err).toContain('Open https://github.com/login/device\n');
-    expect(result.err).toContain('Enter code ABCD-1234\n');
+    expect(result.err).toContain(`Open ${pairUrl('ABCD-EFGH')}\n`);
+    expect(result.err).toContain('Approve code ABCD-EFGH\n');
     expect(result.err).not.toContain('SealKeeper v');
   });
 
@@ -794,7 +950,7 @@ describe('sealkeeper init', () => {
   });
 
   // A project's .claude/settings.json can set SEALKEEPER_API_URL
-  // for every shell Claude Code starts, and the GitHub token goes to it.
+  // for every shell Claude Code starts, and the agent registers there.
   describe('an API from SEALKEEPER_API_URL alone', () => {
     beforeEach(() => {
       vi.stubEnv('SEALKEEPER_API_URL', REMOTE_API_URL);
@@ -815,7 +971,7 @@ describe('sealkeeper init', () => {
           `${envApiRefused(REMOTE_API_URL, 'SEALKEEPER_API_URL')}\n`,
         );
         expect(envApiRefused(REMOTE_API_URL, 'SEALKEEPER_API_URL')).toBe(
-          "init stopped before the sign in. The API https://api.example.org comes only from SEALKEEPER_API_URL, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
+          "init stopped before the sign in. The API https://api.example.org comes only from SEALKEEPER_API_URL, which a project's settings can set, and the agent would register there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
         );
         expect(world.fetchUrls).toEqual([]);
         expect(await readIfExists(paths(home).key)).toBe('');
@@ -841,29 +997,26 @@ describe('sealkeeper init', () => {
         expect(await readIfExists(paths(home).key)).toBe('');
       }
       expect(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL')).toBe(
-        'SEALKEEPER_API_URL points this sign in at https://api.example.org, not https://api.sealkeeper.run, and your GitHub token would go there. Use it? [y/N] ',
+        'SEALKEEPER_API_URL points this sign in at https://api.example.org, not https://api.sealkeeper.run, and the agent would register there. Use it? [y/N] ',
       );
     });
 
-    it('signs in there after a yes in a terminal, still naming the API before the device code', async () => {
+    it('signs in there after a yes in a terminal, still naming the API before the sign in', async () => {
       world.stdin = answeringEach(['y', '', '', '']);
       const result = await run(world, 'init', '--name', 'scout');
-      // The fake world answers only the local API, so the registration
-      // fails after the device flow, at the API the operator said yes to.
+      // The fake world answers only the local API, so the pairing fails at
+      // the API the operator said yes to.
       expect(result.code).toBe(1);
-      expect(world.fetchUrls).toContain(DEVICE_CODE_URL);
-      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+      expect(world.fetchUrls).toEqual([`${REMOTE_API_URL}/v1/pairings`]);
       const lines = result.err.split('\n');
       const asked = lines.findIndex((l) =>
         l.includes(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_API_URL')),
       );
       const warned = lines.indexOf(`  ${otherApiLine(REMOTE_API_URL)}`);
-      const device = lines.findIndex((l) =>
-        l.includes('Open https://github.com/login/device'),
-      );
+      const signIn = lines.indexOf('  Sign in');
       expect(asked).toBeGreaterThanOrEqual(0);
       expect(warned).toBeGreaterThan(asked);
-      expect(device).toBeGreaterThan(warned);
+      expect(signIn).toBeGreaterThan(warned);
       // One banner, before the question.
       expect(result.err.split(SETUP_TITLE)).toHaveLength(2);
       expect(result.err.indexOf(SETUP_TITLE)).toBeLessThan(
@@ -885,7 +1038,7 @@ describe('sealkeeper init', () => {
       );
       expect(result.err).not.toContain('comes only from SEALKEEPER_API_URL');
       expect(result.err).toContain(otherApiLine(REMOTE_API_URL));
-      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/pairings`);
     });
 
     it.each([
@@ -896,7 +1049,7 @@ describe('sealkeeper init', () => {
       vi.stubEnv('SEALKEEPER_API_URL', url);
       const result = await run(world, 'init', '--name', 'scout', '--json');
       expect(result.err).not.toContain('comes only from SEALKEEPER_API_URL');
-      expect(world.fetchUrls).toContain(DEVICE_CODE_URL);
+      expect(world.fetchUrls).toContain(`${url}/v1/pairings`);
     });
 
     // The config an earlier registration saved, which --force reads.
@@ -929,7 +1082,7 @@ describe('sealkeeper init', () => {
         '--json',
       );
       expect(result.err).not.toContain('comes only from');
-      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/agents`);
+      expect(world.fetchUrls).toContain(`${REMOTE_API_URL}/v1/pairings`);
 
       // Another API than the saved one is asked about, and the config of
       // the agent stays as it was.
@@ -985,7 +1138,7 @@ describe('sealkeeper init', () => {
         `${envApiRefused(REMOTE_API_URL, 'SEALKEEPER_HOME')}\n`,
       );
       expect(envApiRefused(REMOTE_API_URL, 'SEALKEEPER_HOME')).toBe(
-        "init stopped before the sign in. The API https://api.example.org comes only from the config.json under SEALKEEPER_HOME, which a project's settings can set, and your GitHub token would go there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
+        "init stopped before the sign in. The API https://api.example.org comes only from the config.json under SEALKEEPER_HOME, which a project's settings can set, and the agent would register there. There is no terminal to ask, so run npx sealkeeper init in a terminal.",
       );
       expect(world.fetchUrls).toEqual([]);
       expect((await readConfig(paths(home)))?.apiUrl).toBe(REMOTE_API_URL);
@@ -999,7 +1152,7 @@ describe('sealkeeper init', () => {
         `  ${envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_HOME')}`,
       );
       expect(envApiQuestion(REMOTE_API_URL, 'SEALKEEPER_HOME')).toBe(
-        'The config.json under SEALKEEPER_HOME points this sign in at https://api.example.org, not https://api.sealkeeper.run, and your GitHub token would go there. Use it? [y/N] ',
+        'The config.json under SEALKEEPER_HOME points this sign in at https://api.example.org, not https://api.sealkeeper.run, and the agent would register there. Use it? [y/N] ',
       );
       expect(asked.err.endsWith(`${envApiDeclined('SEALKEEPER_HOME')}\n`)).toBe(
         true,
@@ -1021,7 +1174,7 @@ describe('sealkeeper init', () => {
     expect((await readConfig(paths(home)))?.apiUrl).toBe(API_URL);
   });
 
-  it('names the API origin on stderr before the device code when it is not SealKeeper', async () => {
+  it('names the API origin on stderr before the pairing code when it is not SealKeeper', async () => {
     const result = await run(
       world,
       'init',
@@ -1033,15 +1186,13 @@ describe('sealkeeper init', () => {
     expect(result.code).toBe(0);
     const line = otherApiLine(API_URL);
     expect(line).toBe(
-      'This sign in sends your GitHub token to the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.',
+      'This sign in registers the agent with the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.',
     );
     const lines = result.err.split('\n');
     const warned = lines.indexOf(`  ${line}`);
-    const device = lines.findIndex((l) =>
-      l.includes('Open https://github.com/login/device'),
-    );
+    const code = lines.findIndex((l) => l.includes(`Open ${pairUrl('')}`));
     expect(warned).toBeGreaterThanOrEqual(0);
-    expect(warned).toBeLessThan(device);
+    expect(warned).toBeLessThan(code);
     expect(result.out).not.toContain(line);
 
     world = newWorld();
@@ -1054,11 +1205,11 @@ describe('sealkeeper init', () => {
 
   it('says nothing about the API when it is SealKeeper', async () => {
     vi.stubEnv('SEALKEEPER_API_URL', '');
-    // The fake world answers only the local API, so the registration fails after
-    // the device flow. The sign in is what this test looks at.
+    // The fake world answers only the local API, so the pairing fails. The
+    // lines before it are what this test looks at.
     const result = await run(world, 'init', '--name', 'scout', '--json');
     expect(result.err).toContain(CONSENT);
-    expect(result.err).not.toContain('This sign in sends your GitHub token');
+    expect(result.err).not.toContain('This sign in registers the agent');
   });
 
   it('signs the registration for the origin of --api-url', async () => {
@@ -1073,7 +1224,8 @@ describe('sealkeeper init', () => {
     );
     expect(result.code).toBe(0);
     expect(world.registrations).toHaveLength(1);
-    expect(auds).toEqual([API_URL]);
+    // The pairing, the poll that was pending and the one that registered.
+    expect(auds).toEqual([API_URL, API_URL, API_URL]);
   });
 
   it('prints JSON with --json after the command', async () => {
@@ -1084,45 +1236,16 @@ describe('sealkeeper init', () => {
     expect(printed.profileUrl).toBe(
       'https://sealkeeper.run/agents/alice/scout',
     );
-    await expectNoTokenAnywhere(result);
-  });
-
-  it('adds five seconds to the poll interval on slow_down', async () => {
-    world.tokenResponses = [
-      { error: 'slow_down' },
-      { error: 'authorization_pending' },
-      { access_token: TOKEN },
-    ];
-    const result = await run(world, 'init', '--name', 'scout');
-    expect(result.code).toBe(0);
-    expect(world.sleeps).toEqual([5000, 10000, 10000]);
-  });
-
-  it('exits 1 with a message when the GitHub code expires', async () => {
-    world.tokenResponses = [{ error: 'expired_token' }];
-    const result = await run(world, 'init', '--name', 'scout');
-    expect(result.code).toBe(1);
-    expect(result.err.endsWith(`${CODE_EXPIRED}\n`)).toBe(true);
-    expect(result.out).toBe('');
-    expect(await readConfig(paths(home))).toBeNull();
   });
 
   it.each([
     [
       apiError(
         403,
-        'account_too_new',
-        'GitHub account must be at least 30 days old',
-      ),
-      'registration refused, your GitHub account is too new (GitHub account must be at least 30 days old)',
-    ],
-    [
-      apiError(
-        403,
         'operator_cap_reached',
         'An operator can register at most 100 agents',
       ),
-      'registration refused, your GitHub account has reached its agent limit (An operator can register at most 100 agents)',
+      'registration refused, your account has reached its agent limit (An operator can register at most 100 agents)',
     ],
     [
       apiError(409, 'name_taken', 'alice/cli is taken, try cli-2'),
@@ -1137,8 +1260,12 @@ describe('sealkeeper init', () => {
       'the API rejected the registration signature, check the key file or run npx sealkeeper init --force',
     ],
     [
-      apiError(401, 'github_token_rejected', 'GitHub rejected the token'),
-      'the API could not verify your GitHub login, run npx sealkeeper init again',
+      apiError(
+        400,
+        'cli_upgrade_required',
+        'Upgrade the CLI with npm i -g sealkeeper@latest',
+      ),
+      'Upgrade the CLI with npm i -g sealkeeper@latest',
     ],
     [
       apiError(400, 'key_mismatch', 'publicKey must equal the kid'),
@@ -1151,7 +1278,6 @@ describe('sealkeeper init', () => {
     expect(result.out).toBe('');
     expect(result.err.endsWith(`\n${message}\n`)).toBe(true);
     expect(await readConfig(paths(home))).toBeNull();
-    await expectNoTokenAnywhere(result);
   });
 
   it('refuses a --name that is not a valid name before any request', async () => {
@@ -1192,7 +1318,7 @@ describe('sealkeeper init', () => {
   });
 
   it('keeps the key after a failed registration and reuses it next time', async () => {
-    world.api = () => apiError(403, 'account_too_new', 'too new');
+    world.api = () => apiError(403, 'operator_cap_reached', 'at the cap');
     expect((await run(world, 'init', '--name', 'scout')).code).toBe(1);
     const first = await readFile(paths(home).key, 'utf8');
 
@@ -1222,6 +1348,26 @@ describe('sealkeeper init', () => {
     ]);
     expect(await readFile(paths(home).key, 'utf8')).toBe(keyBefore);
     expect((await stat(paths(home).key)).mtimeMs).toBe(keyStat.mtimeMs);
+  });
+
+  it('a second init on a config from before slugs, with the login alone, keeps working', async () => {
+    expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
+    const config = await readConfig(paths(home));
+    if (config === null) throw new Error('no config');
+    const { operatorSlug: _, ...older } = config;
+    await writeFile(paths(home).config, JSON.stringify(older));
+    await rm(paths(home).operatorSlug, { force: true });
+
+    world = newWorld();
+    const result = await run(world, 'init', '--json');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toMatchObject({
+      handle: 'alice/scout',
+      operatorLogin: 'alice',
+    });
+    expect(JSON.parse(result.out)).not.toHaveProperty('operatorSlug');
+    expect(world.pairings).toEqual([]);
+    expect(await readConfig(paths(home))).toEqual(older);
   });
 
   it('a second init stops with one line and sends nothing when SEALKEEPER_API_URL names another API than the saved one', async () => {
@@ -1387,16 +1533,6 @@ describe('sealkeeper init', () => {
     expect((await readConfig(paths(home)))?.apiUrl).toBe(DEFAULT_API_URL);
   });
 
-  it('exits 1 naming the env var when there is no client id', async () => {
-    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
-    const result = await run(world, 'init', '--name', 'scout');
-    expect(result.code).toBe(1);
-    expect(result.err).toBe(`${MISSING_CLIENT_ID}\n`);
-    expect(result.err).toContain('SEALKEEPER_GITHUB_CLIENT_ID');
-    expect(world.fetchUrls).toEqual([]);
-    expect(await readIfExists(paths(home).key)).toBe('');
-  });
-
   it.each([
     [['--name', 'bad name!'], 'invalid agent name bad name!'],
     [['--name', 'scout', '--runtime', 'gpt'], 'invalid runtime gpt'],
@@ -1404,17 +1540,12 @@ describe('sealkeeper init', () => {
       ['--name', 'scout', '--api-url', 'http://api.example.com'],
       'invalid API URL http://api.example.com',
     ],
-  ])(
-    'names a bad flag %j before a missing client id',
-    async (flags, message) => {
-      vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', '');
-      const result = await run(world, 'init', ...flags);
-      expect(result.code).toBe(1);
-      expect(result.err).toContain(message);
-      expect(result.err).not.toContain(MISSING_CLIENT_ID);
-      expect(world.fetchUrls).toEqual([]);
-    },
-  );
+  ])('names a bad flag %j before any request', async (flags, message) => {
+    const result = await run(world, 'init', ...flags);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain(message);
+    expect(world.fetchUrls).toEqual([]);
+  });
   describe('version on a repeat init', () => {
     // Registered on 0.1.0, then the version on this machine moved to 2.0.0.
     async function registeredThenMoved(): Promise<void> {
@@ -4158,7 +4289,7 @@ describe('sealkeeper init', () => {
       world = newWorld();
     }
 
-    const signedIn = () => world.fetchUrls.includes(DEVICE_CODE_URL);
+    const signedIn = () => world.fetchUrls.includes(`${API_URL}/v1/pairings`);
     const folders = async () => (await readFolderMap(root)).folders;
 
     async function identity(p = paths(root)) {
@@ -4166,6 +4297,7 @@ describe('sealkeeper init', () => {
       return {
         agentId: config?.agentId,
         handle: `alice/${config?.name}`,
+        operatorSlug: 'alice',
         operatorLogin: 'alice',
         name: config?.name,
         version: '0.1.0',
@@ -4205,6 +4337,7 @@ describe('sealkeeper init', () => {
       expect(Object.keys(json)).toEqual([
         'agentId',
         'handle',
+        'operatorSlug',
         'operatorLogin',
         'name',
         'version',
@@ -4380,7 +4513,7 @@ describe('sealkeeper init', () => {
       const result = await run(world, 'init');
       expect(result.code).toBe(0);
       expect(
-        world.fetchUrls.filter((url) => url === DEVICE_CODE_URL),
+        world.fetchUrls.filter((url) => url === `${API_URL}/v1/pairings`),
       ).toHaveLength(1);
       expect(world.registrations).toMatchObject([{ name: 'billing' }]);
       const home = namedHome('billing', root);
@@ -4402,7 +4535,7 @@ describe('sealkeeper init', () => {
       // The name is asked once, in the choice, before the sign in.
       expect(result.err.split(nameQuestion('billing'))).toHaveLength(2);
       expect(result.err.indexOf(nameQuestion('billing'))).toBeLessThan(
-        result.err.indexOf('Sign in with GitHub'),
+        result.err.indexOf('\n  Sign in\n'),
       );
     });
 
@@ -4508,18 +4641,18 @@ describe('sealkeeper init', () => {
     });
 
     it('binds nothing when the registration fails', async () => {
-      world.api = () => apiError(403, 'account_too_new', 'created today');
+      world.api = () => apiError(403, 'operator_cap_reached', 'at the cap');
       world.cwd = app;
       expect((await run(world, 'init', '--name', 'app')).code).toBe(1);
       expect(await folders()).toEqual({});
 
       world = newWorld();
       await registerApp();
-      world.api = () => apiError(403, 'account_too_new', 'created today');
+      world.api = () => apiError(403, 'operator_cap_reached', 'at the cap');
       world.cwd = billing;
       const result = await run(world, 'init', '--name', 'billing');
       expect(result.code).toBe(1);
-      expect(result.err).toContain('your GitHub account is too new');
+      expect(result.err).toContain('your account has reached its agent limit');
       // The key stays in the named home for the next try, as in the root.
       expect(await loadKey(paths(namedHome('billing', root)))).not.toBeNull();
       expect(await readConfig(paths(namedHome('billing', root)))).toBeNull();
@@ -4595,7 +4728,7 @@ describe('sealkeeper init', () => {
           Setting up this agent · 6 steps
 
             ○ 1  Key
-            ○ 2  GitHub sign-in
+            ○ 2  Sign in
             ○ 3  Hooks
             ○ 4  Skill and slash commands
             ○ 5  Game                      on / off
@@ -4608,12 +4741,12 @@ describe('sealkeeper init', () => {
           What does this agent run in?
           1 Claude Code  2 Codex  3 Cursor  4 Gemini CLI  5 OpenClaw  6 Mastra  7 Other
           Number or name, Enter to skip 
-          This sign in sends your GitHub token to the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.
+          This sign in registers the agent with the API at http://127.0.0.1:8080, not https://api.sealkeeper.run.
 
           Registering this agent means you accept the terms (https://sealkeeper.run/terms) and the privacy policy (https://sealkeeper.run/privacy).
 
-          Sign in with GitHub
-          Open https://github.com/login/device and enter ABCD-1234
+          Sign in
+          Open http://localhost:3000/pair?code=ABCD-EFGH and approve code ABCD-EFGH
           ✓ Signed in as alice
 
           Claude Code
@@ -4668,7 +4801,7 @@ describe('sealkeeper init', () => {
           Setting up this agent · 6 steps
 
             ● 1  Key                       <home>/key
-            ● 2  GitHub sign-in            alice
+            ● 2  Sign in                   alice
             ○ 3  Hooks
             ○ 4  Skill and slash commands
             ○ 5  Game                      on / off
@@ -4719,8 +4852,8 @@ describe('sealkeeper init', () => {
         [
           `  ${CONSENT}`,
           '',
-          '  Sign in with GitHub',
-          '  Open https://github.com/login/device and enter ABCD-1234',
+          '  Sign in',
+          '  Open http://localhost:3000/pair?code=ABCD-EFGH and approve code ABCD-EFGH',
         ].join('\n'),
       );
       expect(plain).toContain(`  Mastra or OpenClaw  ${ADAPTERS_URL}`);
@@ -4747,7 +4880,7 @@ describe('sealkeeper init', () => {
           `  ${SETUP_TITLE} · 4 steps`,
           '',
           '    ○ 1  Key',
-          '    ○ 2  GitHub sign-in',
+          '    ○ 2  Sign in',
           '    ○ 3  Game                      on / off',
           '    ○ 4  Routine                   daily time / not installed',
           '',
@@ -4764,7 +4897,7 @@ describe('sealkeeper init', () => {
           `  ${SETUP_TITLE} · 6 steps`,
           '',
           '    ○ 1  Key',
-          '    ○ 2  GitHub sign-in',
+          '    ○ 2  Sign in',
           '    ○ 3  Hooks',
           '    ○ 4  Skill and slash commands',
           '    ○ 5  Game                      on / off',
@@ -4787,7 +4920,7 @@ describe('sealkeeper init', () => {
       expect(again.err).toContain(
         [
           `    ● 1  ${'Key'.padEnd(26)}${paths(home).key}`,
-          `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice`,
+          `    ● 2  ${'Sign in'.padEnd(26)}alice`,
           '    ○ 3  Game                      on / off',
           '    ○ 4  Routine                   daily time / not installed',
         ].join('\n'),
@@ -4796,7 +4929,7 @@ describe('sealkeeper init', () => {
       world = newWorld();
       const forced = await run(world, 'init', '--force', '--name', 'scout');
       expect(forced.code).toBe(0);
-      expect(forced.err).toContain('    ○ 1  Key\n    ○ 2  GitHub sign-in');
+      expect(forced.err).toContain('    ○ 1  Key\n    ○ 2  Sign in');
     });
 
     it('prints a Claude Code section only when the config folder exists', async () => {
@@ -4870,7 +5003,7 @@ describe('sealkeeper init', () => {
             `  ${SETUP_TITLE} · 6 steps`,
             '',
             '    ○ 1  Key',
-            '    ○ 2  GitHub sign-in',
+            '    ○ 2  Sign in',
             '    ○ 3  Hooks',
             '    ○ 4  Skill and slash commands',
             '    ○ 5  Game                      on / off',
@@ -4887,7 +5020,7 @@ describe('sealkeeper init', () => {
           `${ESC}7${ESC}[7A\r${ESC}[2K    ● 1  ${'Key'.padEnd(26)}${paths(home).key}${ESC}8`,
         );
         expect(all).toContain(
-          `\r${ESC}[2K    ● 2  ${'GitHub sign-in'.padEnd(26)}alice${ESC}8`,
+          `\r${ESC}[2K    ● 2  ${'Sign in'.padEnd(26)}alice${ESC}8`,
         );
         expect(all).toContain(
           `\r${ESC}[2K    ● 3  ${'Hooks'.padEnd(26)}${join(claudeDir(), 'settings.json')}${ESC}8`,
@@ -4945,9 +5078,7 @@ describe('sealkeeper init', () => {
         const again = await run(world, 'init');
         expect(again.code).toBe(0);
         expect(again.all).not.toContain(ESC);
-        expect(again.err).toContain(
-          `    ● 2  ${'GitHub sign-in'.padEnd(26)}alice\n`,
-        );
+        expect(again.err).toContain(`    ● 2  ${'Sign in'.padEnd(26)}alice\n`);
       });
 
       it('redraws the game step of a repeat run and prints why there is no routine under the list', async () => {
@@ -4991,15 +5122,15 @@ describe('sealkeeper init', () => {
     describe('untrusted text', () => {
       const ESC = String.fromCharCode(27);
       // A login with a colour code, an OSC 52 clipboard write and a bidi
-      // override, as a hostile API could send it, and a device code with
-      // a cursor move, as a hostile GitHub stand in could.
+      // override, and a pairing code with a cursor move, as a hostile API
+      // could send them.
       const LOGIN = `evil${ESC}[31m${ESC}]52;c;aGk=\u0007\u202eyx`;
       const LOGIN_SHOWN = 'evil\\u001b[31m\\u001b]52;c;aGk=\\u0007\\u202eyx';
       const CODE = `AB${ESC}[2J12`;
       const CODE_SHOWN = 'AB\\u001b[2J12';
 
       function hostile(): void {
-        world.userCode = CODE;
+        world.pairingCode = CODE;
         world.api = (payload) => {
           const reply = created(payload);
           return {
@@ -5021,18 +5152,18 @@ describe('sealkeeper init', () => {
         expect(text).not.toContain('\u0007');
       }
 
-      it('escapes a hostile login and device code in plain form', async () => {
+      it('escapes a hostile login and pairing code in plain form', async () => {
         hostile();
         const result = await run(world, 'init', '--name', 'scout');
         expect(result.code).toBe(0);
         expect(result.all).not.toContain(ESC);
         expect(result.out).toContain(`  ✓ Signed in as ${LOGIN_SHOWN}\n`);
         expect(result.out).toContain(`  ✓ Registered ${LOGIN_SHOWN}/scout\n`);
-        expect(result.err).toContain(`and enter ${CODE_SHOWN}\n`);
+        expect(result.err).toContain(`and approve code ${CODE_SHOWN}\n`);
         onlyOurCodes(result.all);
       });
 
-      it('escapes a hostile login and device code inside styled lines', async () => {
+      it('escapes a hostile login and pairing code inside styled lines', async () => {
         vi.stubEnv('FORCE_COLOR', '1');
         hostile();
         const result = await run(world, 'init', '--name', 'scout');
@@ -5041,7 +5172,9 @@ describe('sealkeeper init', () => {
         expect(stripStyle(result.out)).toContain(
           `  ✓ Signed in as ${LOGIN_SHOWN}\n`,
         );
-        expect(stripStyle(result.err)).toContain(`and enter ${CODE_SHOWN}\n`);
+        expect(stripStyle(result.err)).toContain(
+          `and approve code ${CODE_SHOWN}\n`,
+        );
         onlyOurCodes(result.all);
       });
 
@@ -5050,7 +5183,9 @@ describe('sealkeeper init', () => {
         expect((await run(world, 'init', '--name', 'scout')).code).toBe(0);
         const config = await readConfig(paths(home));
         if (config === null) throw new Error('no config');
-        await writeConfig({ ...config, operatorLogin: LOGIN }, paths(home));
+        // A config from before slugs, with the login alone.
+        const { operatorSlug: _, ...older } = config;
+        await writeConfig({ ...older, operatorLogin: LOGIN }, paths(home));
         world = newWorld();
         const result = await run(world, 'init');
         expect(result.code).toBe(0);

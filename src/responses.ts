@@ -8,6 +8,7 @@ import {
   Jws,
   Level,
   OperatorSlug,
+  PairingResponse,
   SEAL_FAILED_CHECKS,
   SEAL_MAX_TTL_SECONDS,
   SEAL_MCP_CHANGE_UNRESOLVED,
@@ -35,19 +36,25 @@ const Seconds = z.int().min(0);
 const Name = z.string().min(1).max(64);
 // slug when the answer sends it. The CLI keeps the last one for the handle
 // offline, see operator-slug.ts. A slug that does not have the OperatorSlug
-// shape reads as absent.
-const Operator = z.object({
-  login: z.string().min(1).max(39),
-  slug: OperatorSlug.optional().catch(undefined),
-});
+// shape reads as absent. login is the GitHub login, for an operator that
+// has one. An operator with neither does not parse.
+const Operator = z
+  .object({
+    login: z.string().min(1).max(39).optional(),
+    slug: OperatorSlug.optional().catch(undefined),
+  })
+  .refine(
+    (operator) => operator.slug !== undefined || operator.login !== undefined,
+  );
 
+// The agent's counts. Every count but verifiedTasks may be absent.
 const AgentCounts = z.object({
-  events: Count,
+  events: Count.optional(),
   verifiedTasks: Count,
   seedTasks: Count.optional(),
-  incidents: Count,
-  sessions: Count,
-  toolCalls: Count,
+  incidents: Count.optional(),
+  sessions: Count.optional(),
+  toolCalls: Count.optional(),
 });
 
 // GET /v1/agents/:id, the registration answer and the rename answer.
@@ -79,6 +86,12 @@ export const ListedMergeResponse = z.object({
 });
 export type ListedMergeResponse = z.infer<typeof ListedMergeResponse>;
 
+// POST /v1/pairings, the code init shows, the page that approves it, when
+// the code stops working and the seconds between polls of the registration.
+// The fields of the schema's answer, with unknown keys let through.
+export const PairingAnswer = z.object(PairingResponse.shape);
+export type PairingAnswer = z.infer<typeof PairingAnswer>;
+
 // The agent's handle, slug/name. When an answer does not send it, it is built
 // from the operator and the name, with operator.slug when the answer carries
 // one, else the login lowercased.
@@ -99,11 +112,12 @@ export function operatorSlugOf(
   const first = agent.handle?.split('/')[0];
   return first !== undefined && OperatorSlug.safeParse(first).success
     ? first
-    : agent.operator.login.toLowerCase();
+    : slugOrLogin(agent.operator);
 }
 
+// The parse refuses an operator with neither.
 const slugOrLogin = (operator: AgentResponse['operator']): string =>
-  operator.slug ?? operator.login.toLowerCase();
+  operator.slug ?? operator.login?.toLowerCase() ?? '';
 
 // True for an agent SealKeeper runs itself, such as the seed agent.
 export function runBySealKeeper(

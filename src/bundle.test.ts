@@ -525,10 +525,6 @@ describe('cli bundle', () => {
     expect(bundle).not.toContain('devDependencies');
   });
 
-  it('replaces the GitHub client id placeholder at build time', () => {
-    expect(bundle).not.toContain('__GITHUB_CLIENT_ID__');
-  });
-
   // The daily job runs a copy of this bin, so the copy says which
   // CLI sends each request, with the version the build injected.
   it("the routine's copy of the bin sends its version to the API", async () => {

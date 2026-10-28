@@ -6,7 +6,6 @@ import { SyncBusyError, withSyncLock } from '../background-sync.js';
 import { requireConfig } from '../cli-config.js';
 import { type Paths, readConfig, writeConfig } from '../config.js';
 import { refreshFingerprintQuietly } from '../fingerprint.js';
-import { type Sleep, sleep } from '../github-device.js';
 import { KeyError } from '../identity.js';
 import { cli } from '../invocation.js';
 import { CursorError, countPending, type LogPosition } from '../log.js';
@@ -17,7 +16,7 @@ import {
   readPreview,
   summaryLines,
 } from '../preview.js';
-import { SyncError, syncEvents } from '../sync.js';
+import { type Sleep, SyncError, sleep, syncEvents } from '../sync.js';
 
 // fetch and sleep are injectable so tests can stand in for the API and skip
 // real waits. emit and sync share them. stdin is where sync reads the answer

@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import { resolveApiUrl } from './api.js';
 import { sealkeeperHome } from './config.js';
 import { readEnv } from './env.js';
-import { githubClientId } from './github-device.js';
 
 describe('env vars', () => {
   it('reads the trimmed value', () => {
@@ -33,12 +32,5 @@ describe('env vars', () => {
     expect(
       resolveApiUrl({ config: 'http://c' }, { VOUCHED_API_URL: 'http://o' }),
     ).toBe('http://c');
-    expect(githubClientId({ VOUCHED_GITHUB_CLIENT_ID: 'old' })).toBeNull();
-  });
-
-  it('reads the GitHub client id trimmed', () => {
-    expect(githubClientId({ SEALKEEPER_GITHUB_CLIENT_ID: ' abc ' })).toBe(
-      'abc',
-    );
   });
 });

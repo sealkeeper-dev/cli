@@ -16,7 +16,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Input } from '../ask.js';
 import { paths, readConfig } from '../config.js';
 import { tildePath } from '../files.js';
-import { ACCESS_TOKEN_URL, DEVICE_CODE_URL } from '../github-device.js';
 import {
   createKey,
   KEY_FILE_INVALID,
@@ -33,9 +32,9 @@ import {
   keyFileDiffers,
 } from './init.js';
 
-const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const API_URL = 'http://127.0.0.1:8080';
 const REGISTER = `${API_URL}/v1/agents`;
+const PAIRINGS = `${API_URL}/v1/pairings`;
 
 // RFC 8032 section 7.1 tests 1 and 2, as the identity tests use them.
 const ONE = {
@@ -77,23 +76,24 @@ const created = (kid: string, payload: Record<string, unknown>): Reply => ({
   },
 });
 
-// Stands in for GitHub and the SealKeeper API. Only the device flow and the
-// registration answer, and the registration's signature is checked against
-// its kid as the API checks it. Every other route fails as an unreachable API.
+// Stands in for the SealKeeper API. Only the pairing, taken as approved at
+// once, and the registration answer, whose signature is checked against its
+// kid as the API checks it. Every other route fails as an unreachable API.
 function fakeFetch(world: World): typeof fetch {
   return (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     world.urls.push(url);
-    if (url === DEVICE_CODE_URL) {
-      return Response.json({
-        device_code: 'dev-123',
-        user_code: 'ABCD-1234',
-        verification_uri: 'https://github.com/login/device',
-        expires_in: 900,
-        interval: 5,
-      });
+    if (url === PAIRINGS && init.method === 'POST') {
+      return Response.json(
+        {
+          code: 'ABCD-EFGH',
+          url: 'http://localhost:3000/pair?code=ABCD-EFGH',
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          interval: 10,
+        },
+        { status: 201 },
+      );
     }
-    if (url === ACCESS_TOKEN_URL) return Response.json({ access_token: TOKEN });
     if (url === REGISTER && init.method === 'POST') {
       const { envelope } = JSON.parse(String(init.body)) as {
         envelope: string;
@@ -210,7 +210,6 @@ describe('sealkeeper init --key-file', () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-keyfile-'));
     dir = await mkdtemp(join(tmpdir(), 'sealkeeper-keyfile-src-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
-    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', 'client-abc');
     vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     vi.stubEnv('FORCE_COLOR', '');

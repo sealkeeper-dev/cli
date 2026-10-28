@@ -8,7 +8,6 @@ import { type Command, CommanderError } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { paths, readConfig, writeConfig } from '../config.js';
 import { tildePath } from '../files.js';
-import { ACCESS_TOKEN_URL, DEVICE_CODE_URL } from '../github-device.js';
 import { createKey, loadKey } from '../identity.js';
 import { createProgram } from '../program.js';
 import {
@@ -18,9 +17,9 @@ import {
   tookOverLine,
 } from './init.js';
 
-const TOKEN = 'gho_THIS_TOKEN_MUST_NEVER_LEAK_0123456789';
 const API_URL = 'http://127.0.0.1:8080';
 const REGISTER = `${API_URL}/v1/agents`;
+const PAIRINGS = `${API_URL}/v1/pairings`;
 const MERGE = `${API_URL}/v1/me/listed/acme.ai/planner/merge`;
 
 type Reply = { status: number; body: unknown };
@@ -41,24 +40,25 @@ async function readSigned(body: unknown): Promise<Signed> {
   return { kid, payload: payload as Record<string, unknown> };
 }
 
-// Stands in for GitHub and the SealKeeper API. Only the device flow, the
-// registration and the merge answer, every other route fails as an
-// unreachable API, so what init reads after them is the part that
+// Stands in for the SealKeeper API. Only the pairing, taken as approved at
+// once, the registration and the merge answer, every other route fails as
+// an unreachable API, so what init reads after them is the part that
 // already copes.
 function fakeFetch(world: World): typeof fetch {
   return (async (input: string | URL | Request, init: RequestInit = {}) => {
     const url = String(input);
     world.urls.push(url);
-    if (url === DEVICE_CODE_URL) {
-      return Response.json({
-        device_code: 'dev-123',
-        user_code: 'ABCD-1234',
-        verification_uri: 'https://github.com/login/device',
-        expires_in: 900,
-        interval: 5,
-      });
+    if (url === PAIRINGS && init.method === 'POST') {
+      return Response.json(
+        {
+          code: 'ABCD-EFGH',
+          url: 'http://localhost:3000/pair?code=ABCD-EFGH',
+          expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          interval: 10,
+        },
+        { status: 201 },
+      );
     }
-    if (url === ACCESS_TOKEN_URL) return Response.json({ access_token: TOKEN });
     if (url === REGISTER && init.method === 'POST') {
       const signed = await readSigned(init.body);
       world.registrations.push(signed);
@@ -71,7 +71,7 @@ function fakeFetch(world: World): typeof fetch {
           id: signed.kid,
           name: signed.payload.name,
           version: signed.payload.version,
-          operator: { login: 'alice' },
+          operator: { login: 'alice', slug: 'alice' },
           createdAt: '2026-10-13T10:00:00.000Z',
         },
         { status: repeat ? 200 : 201 },
@@ -165,7 +165,6 @@ describe('sealkeeper init --listed', () => {
   beforeEach(async () => {
     home = await mkdtemp(join(tmpdir(), 'sealkeeper-listed-'));
     vi.stubEnv('SEALKEEPER_HOME', home);
-    vi.stubEnv('SEALKEEPER_GITHUB_CLIENT_ID', 'client-abc');
     vi.stubEnv('SEALKEEPER_API_URL', API_URL);
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'claude'));
     vi.stubEnv('FORCE_COLOR', '');
@@ -189,17 +188,15 @@ describe('sealkeeper init --listed', () => {
     expect(result.code).toBe(0);
     const key = await loadKey(paths(home));
     expect(key).not.toBeNull();
-    // Registered under the listed agent's name, the token sent there only.
+    // Registered under the listed agent's name.
     expect(world.registrations).toHaveLength(1);
     expect(world.registrations[0]?.kid).toBe(key?.agentId);
     expect(world.registrations[0]?.payload).toMatchObject({
       publicKey: key?.agentId,
-      githubToken: TOKEN,
       name: 'planner',
       purpose: 'agent.register',
     });
-    // The merge is signed by the new key for the listed agent of the path,
-    // and carries no token.
+    // The merge is signed by the new key for the listed agent of the path.
     expect(world.merges).toHaveLength(1);
     expect(world.merges[0]?.kid).toBe(key?.agentId);
     expect(world.merges[0]?.payload).toMatchObject({
@@ -209,9 +206,9 @@ describe('sealkeeper init --listed', () => {
       aud: API_URL,
     });
     expect(typeof world.merges[0]?.payload.issuedAt).toBe('string');
-    expect(JSON.stringify(world.merges)).not.toContain(TOKEN);
     expect(await readConfig(paths(home))).toMatchObject({
       agentId: key?.agentId,
+      operatorSlug: 'alice',
       operatorLogin: 'alice',
       name: 'planner',
     });
@@ -221,9 +218,6 @@ describe('sealkeeper init --listed', () => {
       redirectFrom: 'acme.ai/planner',
       name: 'planner',
     });
-    for (const text of [result.out, result.err]) {
-      expect(text).not.toContain(TOKEN);
-    }
   });
 
   it('says it registered the agent and took the listed one over in the plain form', async () => {

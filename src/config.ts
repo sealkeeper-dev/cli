@@ -30,7 +30,7 @@ export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
 const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
-// The GitHub token and every signed request go to the API, so it must be https.
+// Every signed request goes to the API, so it must be https.
 // Plain http is allowed only to this machine, for a local API during
 // development.
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -61,13 +61,23 @@ export function isLoopbackUrl(url: string): boolean {
 export const INSECURE_API_URL =
   'expected an https URL, or http only to localhost';
 
-type Named = { operatorLogin: string; name: string };
+type Named = Pick<Config, 'operatorSlug' | 'operatorLogin' | 'name'>;
+
+// The operator as config.json names it, the slug init wrote, else the
+// GitHub login of a config written before slugs. The parse refuses a
+// config with neither.
+export function operatorOf(
+  config: Pick<Config, 'operatorSlug' | 'operatorLogin'>,
+): string {
+  return config.operatorSlug ?? config.operatorLogin ?? '';
+}
 
 // The agent's handle, slug/name. The CLI builds its own for status and the
 // other commands that work offline, from the operator slug the API last sent,
-// see operator-slug.ts. The login stands in only while no slug is known.
+// see operator-slug.ts. The operator in config.json stands in only while no
+// slug is stored.
 export function handleOf(config: Named, slug?: string | null): string {
-  return agentHandle(slug ?? config.operatorLogin, config.name);
+  return agentHandle(slug ?? operatorOf(config), config.name);
 }
 
 // The public profile page, at the handle.
@@ -228,23 +238,37 @@ export function defaultRoutineConfig(): RoutineConfig {
 // back with it. CLI 0.4.4 and earlier read this file strictly, so settings
 // added since then live in files of their own, nudge.json, routine.json and
 // operator-slug.json.
-export const Config = z.looseObject({
-  agentId: AgentId,
-  operatorLogin: z.string().min(1),
-  name: z.string().min(1),
-  version: z.string().min(1),
-  apiUrl: z
-    .url({ protocol: /^https?$/ })
-    .refine(isSecureApiUrl, INSECURE_API_URL)
-    .default(DEFAULT_API_URL),
-  registeredAt: z.iso.datetime({ offset: true }),
-  // Whether emit and the hook adapters send events on their own. Unset
-  // means no sync has been confirmed yet, and the first confirmed sync turns
-  // it on. false means the operator turned it off with config auto-sync
-  // off, so every sync previews and asks and it stays off. Only true sends
-  // on its own. A config written before this field existed reads as unset.
-  autoSync: z.boolean().optional(),
-});
+//
+// operatorSlug is the one exception, since an operator without a GitHub
+// login has nothing else to be named by here. It is the operator slug of
+// the registration answer, and operatorLogin the operator's GitHub login,
+// written when the answer carries one. operator-slug.json keeps the slug
+// current after that. A config from before slugs holds the login alone and
+// reads as before. Either is enough, and one must be there.
+export const Config = z
+  .looseObject({
+    agentId: AgentId,
+    operatorSlug: z.string().min(1).optional(),
+    operatorLogin: z.string().min(1).optional(),
+    name: z.string().min(1),
+    version: z.string().min(1),
+    apiUrl: z
+      .url({ protocol: /^https?$/ })
+      .refine(isSecureApiUrl, INSECURE_API_URL)
+      .default(DEFAULT_API_URL),
+    registeredAt: z.iso.datetime({ offset: true }),
+    // Whether emit and the hook adapters send events on their own. Unset
+    // means no sync has been confirmed yet, and the first confirmed sync turns
+    // it on. false means the operator turned it off with config auto-sync
+    // off, so every sync previews and asks and it stays off. Only true sends
+    // on its own. A config written before this field existed reads as unset.
+    autoSync: z.boolean().optional(),
+  })
+  .refine(
+    (config) =>
+      config.operatorSlug !== undefined || config.operatorLogin !== undefined,
+    { message: 'names no operator', path: ['operatorSlug'] },
+  );
 export type Config = z.infer<typeof Config>;
 type ConfigInput = z.input<typeof Config>;
 

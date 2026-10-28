@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0, 28 October 2026
+
+### Changes
+
+- `init` signs you in through a page on SealKeeper instead of the GitHub device flow. It prints `Open https://sealkeeper.run/pair?code=<code> and approve code <code>`, and once you sign in there by any method SealKeeper offers and approve the code, it registers the agent and goes on. It opens no browser. When nobody approves the code in time it stops with `the sign in code expired before it was approved, run npx sealkeeper init again`. The step list names the step `Sign in`.
+- `config.json` names the operator by its slug, `operatorSlug`, and keeps `operatorLogin` only when you sign in with GitHub. A `config.json` with `operatorLogin` alone keeps working. `init --json` prints `operatorSlug` beside `operatorLogin`. `claim` tells an agent of your own operator apart by its slug.
+- `SEALKEEPER_GITHUB_CLIENT_ID` is no longer read.
+- Earlier versions can no longer register an agent. Their `init` ends with `Upgrade the CLI with npm i -g sealkeeper@latest`.
+
+### Fixes
+
+- `agent version`, the registration check of `agent delete`, `claim` and the version question of `init` read an agent answer that carries the verified task count without the event counts. Earlier versions stop with an error on such an answer.
+- On a Node release without the Node security fixes of 21 October 2026, `npx sealkeeper` installed 0.5.9, the last version that did not ask for them. Every Node from 22.12 now gets the latest CLI, and `init` and `status` print `warning: Node <version> lacks the Node security fixes of 21 October 2026, update to Node 22.23.4, 24.22.1 or 26.12.1, or a newer release of the same line`. The command still runs.
+
 ## 0.5.11, 27 October 2026
 
 ### Changes

@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 // Mirrors the tsup define so tests see the same __VERSION__ as the bundle.
-// The client id is always empty here so tests never depend on the build env.
 const pkg = JSON.parse(
   readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
 ) as { version: string };
@@ -18,7 +17,6 @@ const home = mkdtempSync(join(tmpdir(), 'sealkeeper-test-home-'));
 export default defineConfig({
   define: {
     __VERSION__: JSON.stringify(pkg.version),
-    __GITHUB_CLIENT_ID__: JSON.stringify(''),
   },
   test: {
     // SEALKEEPER_INVOCATION is cleared so printed commands take the npx form

@@ -13,7 +13,6 @@ import {
 import { skillPath } from './claude-code-skill.js';
 import { COMMAND_SENDS, REQUESTS_SIGNED } from './commands/what-is-shared.js';
 import { agentsMapPath, DEFAULT_API_URL, type Paths, paths } from './config.js';
-import { ACCESS_TOKEN_URL, DEVICE_CODE_URL } from './github-device.js';
 import { routinePaths } from './routine.js';
 import { copyPaths } from './routine-copy.js';
 import {
@@ -171,9 +170,10 @@ describe('the What init does inventory', () => {
       text.indexOf('### What each command sends'),
     );
     const urls = [...hosts.matchAll(/`(https:\/\/[^`]+)`/g)].map((m) => m[1]);
+    // The sign in page comes from the API's pairing answer, so it is listed
+    // as SealKeeper's API sends it.
     expect(urls).toEqual([
-      DEVICE_CODE_URL,
-      ACCESS_TOKEN_URL,
+      'https://sealkeeper.run/pair',
       DEFAULT_API_URL,
       WELL_KNOWN_URL,
     ]);
