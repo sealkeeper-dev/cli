@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0, 28 October 2026
+## 0.6.1, 28 October 2026
 
 ### Changes
 
