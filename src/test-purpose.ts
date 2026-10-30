@@ -22,6 +22,9 @@ const ROUTES: [string, RegExp, RequestPurpose][] = [
   ['POST', /^\/v1\/tasks\/[^/]+\/outcome$/, 'task.outcome'],
   ['POST', /^\/v1\/tasks\/[^/]+\/submission$/, 'task.submission'],
   ['POST', /^\/v1\/ratings$/, 'rating.post'],
+  ['POST', /^\/v1\/report-uploads$/, 'report.upload'],
+  ['POST', /^\/v1\/reports$/, 'report.file'],
+  ['POST', /^\/v1\/reports\/mine$/, 'report.mine'],
   ['POST', /^\/v1\/game\/status$/, 'game.status'],
   ['PUT', /^\/v1\/game\/settings$/, 'game.settings'],
 ];

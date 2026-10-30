@@ -47,6 +47,14 @@ describe('refusal', () => {
     }
   });
 
+  it('tells the owner to claim an agent that signs nothing yet', () => {
+    expect(
+      refusal(new ApiError(403, 'key_not_handed_over', 'Signs nothing')),
+    ).toMatch(
+      /^this agent is not claimed yet, claim it on its SealKeeper page first, then run .*init --listed <domain>\/<name> on this machine$/,
+    );
+  });
+
   it('falls back to the API message for a code it does not know', () => {
     expect(refusal(new ApiError(400, 'something_new', 'no'))).toBe('no');
   });

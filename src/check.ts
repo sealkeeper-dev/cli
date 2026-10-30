@@ -63,7 +63,7 @@ export type CheckOptions = {
 // slug or a listed agent's domain key, lowercased first, so a handle written in
 // capitals still works. Throws an ApiError with code invalid_handle before
 // anything is sent.
-function parseHandle(handle: string): { slug: string; name: string } {
+export function parseHandle(handle: string): { slug: string; name: string } {
   const [first, name, ...rest] = handle.split('/');
   const slug = first?.toLowerCase();
   if (

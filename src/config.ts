@@ -29,7 +29,7 @@ export const DEFAULT_API_URL = 'https://api.sealkeeper.run';
 // The agent version init registers when --version is not given. emit also
 // uses it when there is no config yet.
 export const DEFAULT_AGENT_VERSION = '0.1.0';
-const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
+export const PROFILE_BASE_URL = 'https://sealkeeper.run/agents';
 // Every signed request goes to the API, so it must be https.
 // Plain http is allowed only to this machine, for a local API during
 // development.
@@ -323,6 +323,11 @@ export type Paths = {
   // Whether the spec of each duel or challenge task handed over asks for a
   // final line feed, for submit, see handed.ts.
   handed: string;
+  // The id of each report not confirmed as filed yet and the upload id of
+  // each file that went up before its report was filed, so report run again
+  // after a failure files once and sends only what is missing, see
+  // report-pending.ts.
+  reportPending: string;
   logFile(day: string): string;
 };
 
@@ -647,6 +652,7 @@ export function paths(home: string = sealkeeperHome()): Paths {
     fingerprintRoutine: join(home, 'fingerprint-routine.json'),
     fingerprintSources: join(home, 'fingerprint-sources.json'),
     handed: join(home, 'handed-tasks.json'),
+    reportPending: join(home, 'report-pending.json'),
     logFile: (day) => join(log, `${day}.jsonl`),
   };
 }

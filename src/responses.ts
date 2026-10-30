@@ -16,6 +16,7 @@ import {
   SEAL_NO_RECENT_CHECK,
   SEAL_PRICE_ABOVE_DECLARED,
   SEAL_WALLET_UNPROVEN_CHANGE,
+  SealSubjectKind,
   Sha256Hex,
   StoredVersion,
   TaskOutcome,
@@ -74,6 +75,16 @@ export const AgentResponse = z.object({
   level: Level.optional().catch(undefined),
 });
 export type AgentResponse = z.infer<typeof AgentResponse>;
+
+// Whether GET /v1/agents/:id or by handle answered for a service, read from
+// the listing a listed agent's answer carries. Only listing.subjectKind is
+// read, and a listing or a kind this CLI cannot read reads as an agent.
+export const AgentListingKind = z.object({
+  listing: z
+    .object({ subjectKind: SealSubjectKind.optional().catch(undefined) })
+    .optional()
+    .catch(undefined),
+});
 
 // POST /v1/me/listed/:domain/:name/merge, init --listed's merge of the agent it
 // registered into the listed agent. agentId is the agent init registered,
@@ -1019,3 +1030,55 @@ export const RoutineAnswerResponse = z.looseObject({
   }),
 });
 export type RoutineAnswerResponse = z.infer<typeof RoutineAnswerResponse>;
+
+// A report as the API stored it. status and category are text, so a value
+// added later still prints. disclosureAt is when a security report can be
+// published, null for every other.
+const ReportTarget = z.object({ kind: z.string(), id: z.string() });
+export const ReportAnswer = z.object({
+  id: z.uuid(),
+  status: z.string(),
+  category: z.string(),
+  target: ReportTarget,
+  createdAt: Timestamp,
+  disclosureAt: Timestamp.nullable().optional(),
+});
+export type ReportAnswer = z.infer<typeof ReportAnswer>;
+
+// POST /v1/report-uploads. The file goes once to upload.url with exactly
+// upload.headers, before expiresAt.
+export const ReportUploadAnswer = z.object({
+  uploadId: z.uuid(),
+  upload: z.object({
+    method: z.literal('PUT'),
+    url: z.url({ protocol: /^https$/ }),
+    headers: z.record(z.string(), z.string()),
+  }),
+  expiresAt: Timestamp,
+});
+export type ReportUploadAnswer = z.infer<typeof ReportUploadAnswer>;
+
+// POST /v1/reports/mine, one page of the agent's own reports, newest first,
+// each with its status and, once decided, the reason. publishedAt is when
+// an upheld report is public. nextCursor is null on the last page.
+export const MyReportsAnswer = z.object({
+  reports: z.array(
+    ReportAnswer.extend({
+      description: z.string(),
+      decisionReason: z.string().nullable().optional(),
+      decidedAt: Timestamp.nullable().optional(),
+      publishedAt: Timestamp.nullable().optional(),
+      evidence: z
+        .array(
+          z.object({
+            kind: z.string(),
+            refType: z.string(),
+            refValue: z.string(),
+          }),
+        )
+        .optional(),
+    }),
+  ),
+  nextCursor: z.string().nullable().optional(),
+});
+export type MyReportsAnswer = z.infer<typeof MyReportsAnswer>;

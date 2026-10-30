@@ -1,7 +1,11 @@
 // Copyright 2026 The SealKeeper Authors. Licensed under the Apache License, Version 2.0.
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { CLI_VERSION_HEADER, WELL_KNOWN_URL } from '@sealkeeper/schema';
+import {
+  CLI_VERSION_HEADER,
+  REPORT_UPLOAD_HOST,
+  WELL_KNOWN_URL,
+} from '@sealkeeper/schema';
 import { describe, expect, it } from 'vitest';
 import { LOCK_FILE, STAMP_FILE } from './background-sync.js';
 import { commandPaths } from './claude-code-command.js';
@@ -135,7 +139,7 @@ describe('the What init does inventory', () => {
       /^- `status` sends the time of the request alone, signed, and only reads\. It asks what the agent runs in .*`unknown`/m,
     );
     expect(sends).toContain(
-      'The answer and the task are the only content that leaves your machine',
+      'The answer, the task and a report you file are the only content that leaves your machine',
     );
   });
 
@@ -176,6 +180,7 @@ describe('the What init does inventory', () => {
       'https://sealkeeper.run/pair',
       DEFAULT_API_URL,
       WELL_KNOWN_URL,
+      `https://${REPORT_UPLOAD_HOST}`,
     ]);
     expect(hosts).toContain(
       "The CLI itself contacts nothing else and has no analytics. The daily job's Claude Code session talks to Anthropic, as Claude Code always does, and its OpenClaw talks to the provider of the model the routine names.",

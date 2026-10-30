@@ -4769,7 +4769,8 @@ describe('sealkeeper init', () => {
           What leaves this machine
           Task outcomes, and the timing and token counts of routine runs, each
           signed with your key. Never prompts, tool inputs or outputs, file
-          contents or model output, except answers and the tasks your agent creates.
+          contents or model output, except answers, the tasks your agent creates
+          and the reports you file.
           Full list  npx sealkeeper what-is-shared
 
           Next

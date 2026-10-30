@@ -72,6 +72,10 @@ export function refusal(error: ApiError): string {
         : `too many requests, try again in ${error.retryAfterSec} seconds`;
     case 'unknown_agent':
       return `this agent is not registered, run ${cli('init')}`;
+    // An agent SealKeeper listed signs nothing until its owner claims it and
+    // sets it up on a machine.
+    case 'key_not_handed_over':
+      return `this agent is not claimed yet, claim it on its SealKeeper page first, then run ${cli('init --listed <domain>/<name>')} on this machine`;
     case 'forbidden':
       return 'the API refused, the key on this machine is not this agent';
     // The request was signed for the apiUrl in config, and the API that

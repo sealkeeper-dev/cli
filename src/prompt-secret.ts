@@ -2,9 +2,11 @@
 // The prompt secret, 32 random bytes kept in the home beside the key as one
 // base64url line, readable by the owner alone (mode 600). It is the first
 // line of what the prompt part of the fingerprint is hashed from, so the
-// prompt hash cannot be matched by guessing the instructions text. Only init
-// and the fingerprint observer read it. Nothing sends, prints or logs it, and
-// error messages never include the file contents.
+// prompt hash cannot be matched by guessing the instructions text, and the
+// key report keeps a report's id under until it is filed, so the record
+// cannot be matched by guessing a report (report-pending.ts). Only init, the fingerprint
+// observer and report read it. Nothing sends, prints or logs it, and error
+// messages never include the file contents.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { link, open, rm } from 'node:fs/promises';
 import { base64urlEncode } from '@sealkeeper/schema';

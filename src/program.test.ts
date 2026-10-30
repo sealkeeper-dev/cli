@@ -70,6 +70,7 @@ const MORE = [
   'claim',
   'post',
   'outcome',
+  'report',
   'seal',
   'check',
   'agent',

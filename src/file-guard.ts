@@ -6,9 +6,10 @@ import { basename, dirname, relative, resolve, sep } from 'node:path';
 import { sealkeeperRoot } from './config.js';
 import { insideHome } from './key-guard.js';
 
-// Which files submit --file and post --input @file may read. What they read
-// leaves the machine as a submission or a spec, and the path may come from an
-// agent that a task spec told what to do.
+// Which files submit --file, post --input @file and report --file may read.
+// What they read leaves the machine as a submission, a spec or a report's
+// evidence, and the path may come from an agent that a task spec told what
+// to do.
 //
 // Every path is resolved with realpath first, so a symlink is judged by where
 // it points, and a symlink out of the answers folder is refused like the file
@@ -81,6 +82,7 @@ export type FileRules = {
 };
 
 export type FileRead = { text: string } | { error: string };
+export type BytesRead = { bytes: Buffer } | { error: string };
 
 // True when target is dir or inside it. Both are resolved paths.
 function within(dir: string, target: string): boolean {
@@ -128,8 +130,17 @@ export async function readGuardedFile(
   file: string,
   rules: FileRules,
 ): Promise<FileRead> {
+  const read = await readGuardedBytes(file, rules);
+  return 'error' in read ? read : { text: read.bytes.toString('utf8') };
+}
+
+// The bytes of file, by the same rules, for a file that need not be text.
+export async function readGuardedBytes(
+  file: string,
+  rules: FileRules,
+): Promise<BytesRead> {
   const { refusing, what } = rules;
-  const refuse = (why: string): FileRead => ({
+  const refuse = (why: string): BytesRead => ({
     error: `${refusing} ${file}, ${why}`,
   });
   const cwdGiven = rules.cwd ?? process.cwd();
@@ -195,7 +206,7 @@ export async function readGuardedFile(
   const limits = async (info: {
     isFile(): boolean;
     size: number;
-  }): Promise<FileRead | null> => {
+  }): Promise<BytesRead | null> => {
     if (!info.isFile()) return refuse('it is not a regular file');
     if (info.size > rules.maxBytes) {
       return refuse(
@@ -213,9 +224,13 @@ export async function readGuardedFile(
       (constants.O_NONBLOCK ?? 0);
     const handle = await open(target, flags);
     try {
-      const after = await limits(await handle.stat());
+      const info = await handle.stat();
+      const after = await limits(info);
       if (after !== null) return after;
-      const buffer = Buffer.alloc(rules.maxBytes + 1);
+      // Room for the size the open file has, at most maxBytes, and one byte
+      // more, so a small file holds no more memory than it needs and a file
+      // that grew after the check is caught below.
+      const buffer = Buffer.alloc(Math.min(info.size, rules.maxBytes) + 1);
       let length = 0;
       while (length < buffer.length) {
         const { bytesRead } = await handle.read(
@@ -227,10 +242,10 @@ export async function readGuardedFile(
         if (bytesRead === 0) break;
         length += bytesRead;
       }
-      if (length > rules.maxBytes) {
-        return refuse(`it is larger than ${rules.maxBytes} bytes`);
+      if (length > info.size) {
+        return refuse('it grew while it was read');
       }
-      return { text: buffer.subarray(0, length).toString('utf8') };
+      return { bytes: buffer.subarray(0, length) };
     } finally {
       await handle.close();
     }

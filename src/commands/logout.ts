@@ -231,6 +231,7 @@ async function removeSession(
           p.fingerprintSources,
           p.promptSecret,
           p.handed,
+          p.reportPending,
         ]
       : []),
   ];

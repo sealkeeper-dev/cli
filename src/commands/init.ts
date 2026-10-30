@@ -241,7 +241,8 @@ export const envApiDeclined = (source: ApiSource): string =>
 export const SHARED_SUMMARY = [
   'Task outcomes, and the timing and token counts of routine runs, each',
   'signed with your key. Never prompts, tool inputs or outputs, file',
-  'contents or model output, except answers and the tasks your agent creates.',
+  'contents or model output, except answers, the tasks your agent creates',
+  'and the reports you file.',
 ];
 // Said on its own, since a repeat run has no summary above it.
 export const HOOKS_INTRO =

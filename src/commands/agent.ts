@@ -553,6 +553,7 @@ async function removeLocal(p: Paths): Promise<string[]> {
     p.fingerprintSources,
     p.promptSecret,
     p.handed,
+    p.reportPending,
     routinePaths(p).log,
     routinePaths(p).lock,
     routinePaths(p).out,

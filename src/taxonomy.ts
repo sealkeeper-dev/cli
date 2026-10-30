@@ -50,9 +50,10 @@ const FIELD_TEXT: Record<CommonField | PayloadField, string> = {
 };
 
 // A submitted answer is usually model output and may be a file's contents, and
-// a posted task is content too, so the sentence names both.
+// a posted task and a filed report with its files are content too, so the
+// sentence names all three.
 export const NEVER_LEAVES =
-  'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine, except the answers you submit and the tasks your agent creates.';
+  'Prompts, tool inputs, tool outputs, file contents and model output never leave this machine, except the answers you submit, the tasks your agent creates and the reports you file with their files.';
 
 export const UNSENT_TEXT = `${UNSENT_TYPES.join(', ')} stays in the taxonomy for older CLIs. This one never sends it, not even one an older CLI left in the log.`;
 

@@ -20,6 +20,7 @@ import { register as registerOutcome } from './commands/outcome.js';
 import { register as registerPost } from './commands/post.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
 import { register as registerRelease } from './commands/release.js';
+import { register as registerReport } from './commands/report.js';
 import {
   type RoutineDeps,
   register as registerRoutine,
@@ -97,6 +98,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerClaim(program, deps.tasks);
   registerPost(program, deps.tasks);
   registerOutcome(program, deps.tasks);
+  registerReport(program, deps.tasks);
   registerSeal(program, deps.seal);
   registerCheck(program);
   registerAgent(program, deps.agent, deps.routine);

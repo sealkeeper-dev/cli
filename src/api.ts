@@ -29,8 +29,11 @@ import {
   ListedMergeResponse,
   type ListTasksPage,
   ListTasksResponse,
+  MyReportsAnswer,
   PairingAnswer,
   RatingResponse,
+  ReportAnswer,
+  ReportUploadAnswer,
   RoutineAnswerResponse,
   type SealWithheld,
   StatusAnswerResponse,
@@ -227,6 +230,15 @@ export type ApiClient = {
     envelope: string,
   ): Promise<TaskSubmissionResponse>;
   postRating(envelope: string): Promise<RatingResponse>;
+  // POST /v1/report-uploads, signed. The signed upload URL of one evidence
+  // file and its upload id.
+  reportUpload(envelope: string): Promise<ReportUploadAnswer>;
+  // POST /v1/reports, signed. 201 for a new report, 200 when a retry
+  // names one already filed.
+  fileReport(envelope: string): Promise<ReportAnswer>;
+  // POST /v1/reports/mine, signed over the page asked for. The agent's own
+  // reports.
+  myReports(envelope: string): Promise<MyReportsAnswer>;
   // PATCH /v1/agents/:id, which renames the agent, moves its version or
   // sets its runtime, whichever the signed payload asks for.
   patchAgent(agentId: string, envelope: string): Promise<AgentResponse>;
@@ -454,6 +466,15 @@ export function createApiClient(options: {
       }),
     postRating: (envelope) =>
       call('/v1/ratings', RatingResponse, { body: { envelope } }),
+    reportUpload: (envelope) =>
+      call('/v1/report-uploads', ReportUploadAnswer, {
+        body: { envelope },
+        ok: [201],
+      }),
+    fileReport: (envelope) =>
+      call('/v1/reports', ReportAnswer, { body: { envelope }, ok: [200, 201] }),
+    myReports: (envelope) =>
+      call('/v1/reports/mine', MyReportsAnswer, { body: { envelope } }),
     patchAgent: (agentId, envelope) =>
       call(agentPath(agentId), AgentResponse, {
         body: { envelope },
