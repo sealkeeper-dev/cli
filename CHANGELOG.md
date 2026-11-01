@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.3, 1 November 2026
+
+### Changes
+
+- `seal verify` and `seal show` read a version 9 SEAL, whose verified owner of a card or file claim may carry `proof`, the URL the claim's token is read at and the SHA-256 of that token. Earlier versions answer a version 9 SEAL as broken, unsupported version. `seal verify --json` prints the proof with the rest of the payload.
+- `seal verify` and `seal show` read a SEAL whose owner was verified by a DNS record, with `owner.method` `dns`. Earlier versions answer such a SEAL as broken, malformed.
+
 ## 0.6.2, 30 October 2026
 
 ### Changes

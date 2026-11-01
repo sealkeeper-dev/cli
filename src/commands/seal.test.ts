@@ -845,19 +845,26 @@ describe('sealkeeper seal', () => {
       expect(verified.out).toContain('owner verified by email on 2026-10-12');
     });
 
-    it.each([9, 0])('ver %s is an unsupported version, exit 1', async (ver) => {
-      const seal = await sign({ ...claims(), ver }, serverKey.privateKey, KID);
-      const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
-      expect(code).toBe(1);
-      const lines = out.trimEnd().split('\n');
-      expect(lines[0]).toBe('broken SEAL: unsupported version');
-      expect(lines).not.toContain('level Bronze Agent SEAL');
-      const json = await run(fetchFn, 'seal', 'verify', seal, '--json');
-      expect(JSON.parse(json.out)).toMatchObject({
-        valid: false,
-        reason: 'unsupported version',
-      });
-    });
+    it.each([10, 0])(
+      'ver %s is an unsupported version, exit 1',
+      async (ver) => {
+        const seal = await sign(
+          { ...claims(), ver },
+          serverKey.privateKey,
+          KID,
+        );
+        const { code, out } = await run(fetchFn, 'seal', 'verify', seal);
+        expect(code).toBe(1);
+        const lines = out.trimEnd().split('\n');
+        expect(lines[0]).toBe('broken SEAL: unsupported version');
+        expect(lines).not.toContain('level Bronze Agent SEAL');
+        const json = await run(fetchFn, 'seal', 'verify', seal, '--json');
+        expect(JSON.parse(json.out)).toMatchObject({
+          valid: false,
+          reason: 'unsupported version',
+        });
+      },
+    );
 
     it('a SEAL without ver, issued before version 1, is an unsupported version, exit 1', async () => {
       const seal = await sign(

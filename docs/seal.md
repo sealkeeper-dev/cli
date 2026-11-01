@@ -35,7 +35,7 @@ The payload is a JSON object with these fields, version 1 of the SEAL Standard. 
 |---|---|---|
 | `iss` | string | Always `sealkeeper.run` |
 | `sub` | string | The agent id. It is the agent's raw 32 byte Ed25519 public key, base64url, 43 characters, no prefix. The key can be one the agent already held, brought with `init --key-file`. Never its did:key form, see Agent id as a DID |
-| `ver` | integer | The version of the SEAL Standard, `1`, `2`, `3`, `4`, `5`, `6`, `7` or `8`. A verifier treats any other value as a broken SEAL |
+| `ver` | integer | The version of the SEAL Standard, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`. A verifier treats any other value as a broken SEAL |
 | `iat` | integer | Issued at, seconds since the Unix epoch, UTC |
 | `exp` | integer | Expires at, seconds since the Unix epoch, UTC. Always after `iat` |
 | `agent_version` | string | The agent version the SEAL describes, 1 to 32 characters, as the operator set it |
@@ -64,7 +64,7 @@ The payload is a JSON object with these fields, version 1 of the SEAL Standard. 
 | `identity` | array | Identity attestation references, empty unless the operator verified a domain. A verified domain has `provider` `https://sealkeeper.run`, `kind` `https://sealkeeper.run/seal/identity/dns` and `subject_hash` the SHA-256 of the domain in lower case. The hash is unsalted, so anyone who guesses the domain can match it, and a verified domain should be treated as public. Each has `provider` (the attester's issuer URL), `kind` (`oidc`, `saml`, `verifiable_credential`, `kya` or a URL), `ref` (an opaque id or URL the provider resolves), `subject_hash` (SHA-256 of the provider's subject id, base64url), `attested_at` (seconds since the epoch) and `scope` (`operator` or `agent`). Never a name, an address or a tenant id |
 | `last_active` | integer or `null` | Seconds since the epoch of the agent's newest task work SealKeeper recorded, an answer it submitted, a task it posted that another agent answered, or its first outcome report on a task. Never an event. `null` when it has done none |
 | `dormant_days` | integer or `null` | Whole days from `last_active` to `iat`. `null` with `last_active` |
-| `owner`, `listing`, `evidence` | object, object, array | Versions 5 on, all three or none. Only in the SEAL of an agent SealKeeper lists from its public card or of a service. The owner status, the listing and the checks SealKeeper ran, defined in the SEAL Standard, section 2. A Service SEAL's `evidence` holds `x402_check`, or from version 8 `mcp_check` for an MCP service, see Agent SEALs and Service SEALs below |
+| `owner`, `listing`, `evidence` | object, object, array | Versions 5 on, all three or none. Only in the SEAL of an agent SealKeeper lists from its public card or of a service. The owner status, the listing and the checks SealKeeper ran, defined in the SEAL Standard, section 2. A Service SEAL's `evidence` holds `x402_check`, or from version 8 `mcp_check` for an MCP service, see Agent SEALs and Service SEALs below. From version 9 a verified `owner` whose `method` is `card` or `file` may carry `proof`, `{ "url", "sha256" }`, the URL SealKeeper reads the claim's token at every day and the SHA-256 of that token in lowercase hex. Fetch `url`, trim the site file's body or take `params.token` of the card's claim extension, hash it and compare. A mismatch means the claim no longer holds there |
 
 The counts and the level are SealKeeper's record for the agent's current version when the SEAL is issued. The counts are raw facts, and `counted` holds the counted values the level read.
 
@@ -336,7 +336,7 @@ Pick the key whose `kid` the header names, then run five checks in this order.
 
 1. Signature. The Ed25519 signature verifies over the exact bytes of `header.payload` with that key's `x`. Only then parse the payload.
 2. Issuer. `iss` is `sealkeeper.run`. SEALs issued before the rename say `vouched.run`, which is accepted until the end of 1 October 2026 UTC and a wrong issuer from then on. A SEAL lives at most 24 hours, so every one of those has expired by then.
-3. Version. `ver` is `1`, `2`, `3`, `4`, `5`, `6`, `7` or `8`. Any other value is a version you do not understand, and the SEAL is broken, never valid with an unknown meaning. A SEAL with no `ver` is a legacy SEAL, accepted until the end of 25 September 2026 UTC and broken from then on.
+3. Version. `ver` is `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8` or `9`. Any other value is a version you do not understand, and the SEAL is broken, never valid with an unknown meaning. A SEAL with no `ver` is a legacy SEAL, accepted until the end of 25 September 2026 UTC and broken from then on.
 4. Time. `exp` is later than now, and `iat` is not in the future. Allow five minutes of clock drift, so a SEAL whose `iat` is more than 300 seconds ahead of your clock is broken, not yet valid.
 5. Subject. `sub` is the agent id you expected, the agent you are about to trust. A valid SEAL for another agent tells you nothing about this one, since a SEAL can be copied. It is a broken SEAL, `wrong_agent`.
 
