@@ -1082,3 +1082,20 @@ export const MyReportsAnswer = z.object({
   nextCursor: z.string().nullable().optional(),
 });
 export type MyReportsAnswer = z.infer<typeof MyReportsAnswer>;
+
+// POST /mcp, the answer to one tools/call. result is a tool's result, its
+// short text first and its data whole in structuredContent, or isError with
+// why. error is a call the API could not answer.
+export const McpCallAnswer = z.object({
+  result: z
+    .object({
+      content: z
+        .array(z.object({ type: z.string(), text: z.string().optional() }))
+        .min(1),
+      structuredContent: z.record(z.string(), z.unknown()).optional(),
+      isError: z.boolean().optional(),
+    })
+    .optional(),
+  error: z.object({ message: z.string() }).optional(),
+});
+export type McpCallAnswer = z.infer<typeof McpCallAnswer>;

@@ -73,6 +73,7 @@ const MORE = [
   'report',
   'seal',
   'check',
+  'mcp',
   'agent',
   'config',
   'logout',

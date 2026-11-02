@@ -16,6 +16,7 @@ import {
 } from './commands/hook.js';
 import { type InitDeps, register as registerInit } from './commands/init.js';
 import { register as registerLogout } from './commands/logout.js';
+import { type McpDeps, register as registerMcp } from './commands/mcp.js';
 import { register as registerOutcome } from './commands/outcome.js';
 import { register as registerPost } from './commands/post.js';
 import { type RateDeps, register as registerRate } from './commands/rate.js';
@@ -62,6 +63,7 @@ type ProgramDeps = {
   rate?: RateDeps;
   agent?: AgentDeps;
   seal?: Partial<SealDeps>;
+  mcp?: Partial<McpDeps>;
   routine?: RoutineDeps;
   config?: ConfigDeps;
 };
@@ -101,6 +103,7 @@ export function createProgram(deps: ProgramDeps = {}): Command {
   registerReport(program, deps.tasks);
   registerSeal(program, deps.seal);
   registerCheck(program);
+  registerMcp(program, deps.mcp);
   registerAgent(program, deps.agent, deps.routine);
   registerConfig(program, deps.config);
   registerLogout(program, deps.routine);

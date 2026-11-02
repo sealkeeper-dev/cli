@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4, 2 November 2026
+
+### Changes
+
+- `mcp` runs a local MCP server on stdio with three read only tools, `find_agents`, `get_trust` and `verify_seal`. Add it to Claude Code with `claude mcp add sealkeeper -- npx -y sealkeeper mcp`. `find_agents` and `get_trust` ask the SealKeeper API, and `verify_seal` checks a SEAL on this machine as `seal verify` does, with `--keys <file>` and `--offline`. It needs no key, no `init` and no account.
+- `what-is-shared` says what `mcp` sends.
+
 ## 0.6.3, 1 November 2026
 
 ### Changes

@@ -6,14 +6,12 @@ import {
   HANDSHAKE_NONCE_MAX,
   HandshakeAudience,
   HandshakeNonce,
-  SEAL_CLOCK_SKEW_SECONDS,
   SealCheckTime,
   type SealPayload,
   WELL_KNOWN_PATH,
 } from '@sealkeeper/schema';
 import type { Command } from 'commander';
 import { commandApiUrl } from '../cli-config.js';
-import { paths } from '../config.js';
 import {
   checkHandshakeLine,
   type HandshakeLine,
@@ -21,22 +19,17 @@ import {
   recordFromApi,
 } from '../handshake.js';
 import { stderr, stdout, wantsJson } from '../output.js';
-import type { WellKnown } from '../responses.js';
 import {
-  checkSeal,
-  expiresInText,
+  checkSealWith,
   KEYS_OFFLINE_MAX_AGE_MS,
   KeysError,
   keysOrigin,
-  keysSourceNote,
-  loadKeys,
-  readKeysFile,
   recordApiUrl,
   type SealCheck,
+  sealCheckAtMs,
+  sealCheckLines,
   sealIssuer,
-  sealKid,
   sealKindName,
-  sealSummary,
 } from '../seal.js';
 import { configApiUrl } from './check.js';
 import type { SealDeps } from './seal.js';
@@ -145,61 +138,40 @@ export function register(parent: Command, deps: SealDeps): Command {
       // --at checks the SEAL at that time in place of now. The same verifySeal
       // decides, this only parses the time. A handshake still reads nowMs,
       // since it is a live proof.
-      let atMs: number | undefined;
-      if (options.at !== undefined) {
-        if (!SealCheckTime.safeParse(options.at).success) {
-          this.error(
-            '--at must be an ISO 8601 date time, such as 2026-10-01T12:00:00Z',
-          );
-        }
-        atMs = Date.parse(options.at);
-        if (atMs > nowMs + SEAL_CLOCK_SKEW_SECONDS * 1000) {
-          this.error('--at must not be in the future');
-        }
+      if (
+        options.at !== undefined &&
+        !SealCheckTime.safeParse(options.at).success
+      ) {
+        this.error(
+          '--at must be an ISO 8601 date time, such as 2026-10-01T12:00:00Z',
+        );
       }
+      const atMs = sealCheckAtMs(options.at, nowMs);
+      if (atMs === null) this.error('--at must not be in the future');
       const seal = (input === '-' ? await deps.readStdin() : input).trim();
 
-      // A SEAL that is not even a JWS is broken without any keys.
-      const kid = sealKid(seal);
+      // Where the keys came from goes to stderr on every result, broken or
+      // valid.
       let result: SealCheck;
-      if (kid === null) {
-        result = await checkSeal(
+      try {
+        result = await checkSealWith(
           seal,
-          { keys: [] },
+          {
+            ...(options.keys === undefined ? {} : { keysFile: options.keys }),
+            offline: options.offline === true,
+            apiUrl: async () => commandApiUrl(this, await configApiUrl()),
+            fetch: deps.fetch,
+            note: stderr,
+          },
           nowMs,
           options.agent,
           atMs,
         );
-      } else {
-        let wellKnown: WellKnown;
-        // --keys wins over --offline, and neither touches the network.
-        try {
-          if (options.keys !== undefined) {
-            wellKnown = await readKeysFile(options.keys);
-          } else {
-            const apiUrl = commandApiUrl(this, await configApiUrl());
-            const iss = sealIssuer(seal);
-            // Pointed at another API than the production one, say where
-            // the keys came from on every result, broken or valid.
-            const note = keysSourceNote(apiUrl, iss);
-            if (note !== null) stderr(note);
-            wellKnown = await loadKeys({
-              apiUrl,
-              fetch: deps.fetch,
-              paths: paths(),
-              nowMs,
-              kid,
-              iss,
-              offline: options.offline === true,
-            });
-          }
-        } catch (error) {
-          if (error instanceof KeysError) {
-            this.error(error.message, { exitCode: EXIT_NO_KEYS });
-          }
-          throw error;
+      } catch (error) {
+        if (error instanceof KeysError) {
+          this.error(error.message, { exitCode: EXIT_NO_KEYS });
         }
-        result = await checkSeal(seal, wellKnown, nowMs, options.agent, atMs);
+        throw error;
       }
 
       // The kind is read from the payload only once the signature checked
@@ -264,28 +236,7 @@ export function register(parent: Command, deps: SealDeps): Command {
           ),
         );
       } else {
-        stdout(
-          !result.valid
-            ? `broken SEAL: ${result.reason}`
-            : result.at === undefined
-              ? `valid ${kind}`
-              : `valid ${kind} at ${result.at}`,
-        );
-        // What it says only for a valid SEAL. A broken one shows the raw
-        // payload and nothing that reads like a claim.
-        if (result.valid) {
-          for (const line of sealSummary(result.payload)) stdout(line);
-        }
-        if (result.payload !== null) {
-          stdout(JSON.stringify(result.payload, null, 2));
-        }
-        if (result.valid && result.expiresAt !== null) {
-          stdout(
-            result.lapsed === true
-              ? `expired since ${result.expiresAt}, valid at the time checked only`
-              : expiresInText(result.expiresAt, nowMs),
-          );
-        }
+        for (const line of sealCheckLines(result, nowMs, true)) stdout(line);
         for (const line of handshake?.lines ?? []) stdout(line);
       }
       if (!result.valid) process.exitCode = EXIT_BROKEN;

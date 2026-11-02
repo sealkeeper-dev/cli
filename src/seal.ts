@@ -6,6 +6,7 @@ import {
   decodeHeader,
   LEGACY_ISSUERS,
   MCP_NO_TOOL_NOTE,
+  SEAL_CLOCK_SKEW_SECONDS,
   type SealBrokenReason,
   utf8Decode,
   verifySeal,
@@ -20,6 +21,7 @@ import {
   DEFAULT_API_URL,
   ensureHome,
   type Paths,
+  paths,
   writeFileAtomic,
 } from './config.js';
 import { cli } from './invocation.js';
@@ -144,6 +146,97 @@ export async function checkSeal(
     };
   }
   return { valid: false, reason: WORDS[r.reason], payload, expiresAt, ...at };
+}
+
+// Where the keys for checkSealWith come from, as the flags of seal verify
+// and mcp say. keysFile is --keys, a saved copy of the keys document, and
+// offline is --offline, the cached keys only. apiUrl is the API the CLI
+// points at, read only when the keys are fetched or read from the cache.
+// note gets each line about where the keys came from.
+export type SealKeysSource = {
+  keysFile?: string;
+  offline: boolean;
+  apiUrl: () => Promise<string>;
+  fetch: typeof fetch;
+  note: (line: string) => void;
+};
+
+// Checks a SEAL against the keys source names, the one way seal verify and
+// the MCP server's verify_seal check one. A SEAL that is not even a JWS is
+// broken without any keys. --keys wins over --offline, and neither touches
+// the network. Pointed at another API than the production one, note says
+// where the keys came from. Throws KeysError when the keys could not be
+// loaded.
+export async function checkSealWith(
+  jws: string,
+  source: SealKeysSource,
+  nowMs: number,
+  agent?: string,
+  atMs?: number,
+): Promise<SealCheck> {
+  const kid = sealKid(jws);
+  if (kid === null) return checkSeal(jws, { keys: [] }, nowMs, agent, atMs);
+  if (source.keysFile !== undefined) {
+    const wellKnown = await readKeysFile(source.keysFile);
+    return checkSeal(jws, wellKnown, nowMs, agent, atMs);
+  }
+  const apiUrl = await source.apiUrl();
+  const iss = sealIssuer(jws);
+  const note = keysSourceNote(apiUrl, iss);
+  if (note !== null) source.note(note);
+  const wellKnown = await loadKeys({
+    apiUrl,
+    fetch: source.fetch,
+    paths: paths(),
+    nowMs,
+    kid,
+    iss,
+    offline: source.offline,
+    note: source.note,
+  });
+  return checkSeal(jws, wellKnown, nowMs, agent, atMs);
+}
+
+// The time to check a SEAL at, an ISO 8601 date time, in ms. undefined for
+// none, and null for a time more than SEAL_CLOCK_SKEW_SECONDS ahead of now,
+// which seal verify and verify_seal refuse.
+export function sealCheckAtMs(
+  at: string | undefined,
+  nowMs: number,
+): number | undefined | null {
+  if (at === undefined) return undefined;
+  const atMs = Date.parse(at);
+  return atMs > nowMs + SEAL_CLOCK_SKEW_SECONDS * 1000 ? null : atMs;
+}
+
+// What seal verify prints for a check, valid with its kind or broken with
+// the reason, then for a valid SEAL what it says and its time to expiry.
+// With payload, the payload as signed comes before the expiry, so a broken
+// SEAL shows the raw payload and nothing that reads like a claim.
+export function sealCheckLines(
+  result: SealCheck,
+  nowMs: number,
+  payload: boolean,
+): string[] {
+  const lines = [
+    !result.valid
+      ? `broken SEAL: ${result.reason}`
+      : result.at === undefined
+        ? `valid ${sealKindName(result.payload)}`
+        : `valid ${sealKindName(result.payload)} at ${result.at}`,
+  ];
+  if (result.valid) lines.push(...sealSummary(result.payload));
+  if (payload && result.payload !== null) {
+    lines.push(JSON.stringify(result.payload, null, 2));
+  }
+  if (result.valid && result.expiresAt !== null) {
+    lines.push(
+      result.lapsed === true
+        ? `expired since ${result.expiresAt}, valid at the time checked only`
+        : expiresInText(result.expiresAt, nowMs),
+    );
+  }
+  return lines;
 }
 
 // The expiry of a payload of any shape, when it carries one in Unix seconds.
